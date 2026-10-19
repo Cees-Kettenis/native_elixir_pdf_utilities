@@ -60,7 +60,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
       assert pdf == expected
     end
 
-    assert {:error, {:unsupported_html, %{stage: :style, source: "color"}}} =
+    assert {:ok, _} =
              HtmlToPdf.render("<input type=color style='width:5pt;height:5pt'>", forms: :static)
   end
 
@@ -290,7 +290,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
     end
   end
 
-  test "rounded image input carries a content clip and diagnoses unsupported unequal edges" do
+  test "rounded image input carries a content clip including unequal edges" do
     bytes = File.read!(@image)
 
     assert {:ok, dom} =
@@ -307,13 +307,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
     assert image.width == 120 and image.height == 30
 
     for css <- ["border-left:2pt solid black", "padding-left:2pt"] do
-      assert {:error, {:unsupported_html, diagnostic}} =
+      assert {:ok, _} =
                HtmlToPdf.render("<input type=image src=tile style='border-radius:6pt;#{css}'>",
                  forms: :static,
                  assets: %{"tile" => {:bytes, bytes}}
                )
-
-      assert diagnostic.stage == :style and diagnostic.source == "input/image"
     end
   end
 

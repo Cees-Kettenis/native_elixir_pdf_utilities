@@ -93,7 +93,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemporalContractTest do
     end
   end
 
-  test "rounded temporal paint clips uniform contours and diagnoses an omitted side" do
+  test "rounded temporal paint clips uniform contours and admits an omitted side" do
     base =
       "<input type=date readonly value=2026-10-13 style='display:block;border-radius:3pt;border:1pt inset red'>"
 
@@ -118,9 +118,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemporalContractTest do
     html =
       String.replace(base, "border:1pt inset red", "border:1pt inset red;border-top-style:none")
 
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, forms: :static)
-    assert diagnostic.stage == :style and diagnostic.operation == :compute
-    assert diagnostic.source == "date" and diagnostic.message =~ "uniform border"
+    assert {:ok, pdf} = HtmlToPdf.render(html, forms: :static)
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text =~ "2026-10-13"
   end
 
   test "table relief paint retains very-dark contrast, near-white light edges and ordinary colors" do

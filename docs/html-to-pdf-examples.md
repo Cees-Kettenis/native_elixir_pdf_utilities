@@ -1921,7 +1921,9 @@ the entire initial value. For example, `pattern="[[a-z]&&[^aeiou]]+"` accepts
 `bcdf` and rejects `bade`. Invalid pattern syntax is ignored by HTML. Constraint
 violations remain renderable form state. Initial URL input values use WHATWG
 parsing without a base, independently of resource loading and authorization.
-Compilation, native allocations, recursive depth and matching work are bounded
+Compilation, observed BEAM memory, recursive depth and matching work are bounded
 by `max_html_pattern_compile_work`, `max_html_form_value_memory_bytes`,
 `max_html_pattern_depth` and `max_html_pattern_match_work` in `Limits`. Exhaustion
-returns the shared resource diagnostic instead of a fabricated mismatch.
+returns a shared diagnostic instead of a fabricated mismatch. The GC-triggered
+worker heap cap excludes native regex allocation; see [the memory and work
+contract](resource-limits.md#initial-html-form-values).

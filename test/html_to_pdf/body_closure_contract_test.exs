@@ -358,12 +358,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BodyClosureContractTest do
     assert diagnostic.message =~ "HTML content cannot be omitted"
   end
 
-  test "canonical color sizing and corrupted initial color transport fail actionably" do
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlToPdf.render("<input type=color style='width:50%'>", forms: :static)
-
-    assert diagnostic.stage == :style and diagnostic.source == "color"
-    assert diagnostic.message =~ "fixed dimensions"
+  test "percentage color sizing succeeds and corrupted initial color transport fails actionably" do
+    assert {:ok, _} = HtmlToPdf.render("<input type=color style='width:50%'>", forms: :static)
     assert {:ok, dom} = HtmlParser.parse_detailed("<input type=color value='#ff0000'>")
     assert {:ok, tree} = Style.compute_detailed(dom, forms: :static)
     [node] = tree.children

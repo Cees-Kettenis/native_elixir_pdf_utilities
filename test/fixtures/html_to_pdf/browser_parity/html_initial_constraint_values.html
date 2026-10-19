@@ -3,6 +3,7 @@
 html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
 body {padding:12pt;}p {margin:0 0 3pt;}
 input {display:block;width:180pt;height:13.5pt;margin:0 0 6pt;padding:1.5pt 2.25pt;border:.75pt solid #777777;background:white;color:#222222;font-family:"DejaVu Sans Mono";font-size:10.5pt;line-height:13.5pt;}
+input:valid {border-color:#28613b;} input:invalid {border-color:#b53232;}
 </style></head><body>
 <p>Initial pattern and value state</p>
 <input id=intersection pattern="[[a-z]&amp;&amp;[^aeiou]]+" value=bcdf>
@@ -12,6 +13,8 @@ input {display:block;width:180pt;height:13.5pt;margin:0 0 6pt;padding:1.5pt 2.25
 <input id=anchored pattern="a" value=ba>
 <input id=backref pattern="([a-z]+)\1" value=abab>
 <input id=lookahead pattern="(?=abc)abc" value=abc>
+<input id=lookbehind pattern="a+(?&lt;=a+)b" value=aab>
+<input id=property_alias pattern="\p{Script_Extensions=Latin}+" value=Latin>
 <input id=invalid_pattern pattern="[" value=Unchanged>
 <input id=pattern_email type=email multiple pattern=".+@example\.test" value="a@example.test,b@example.test">
 <p>Initial email and absolute URL values</p>

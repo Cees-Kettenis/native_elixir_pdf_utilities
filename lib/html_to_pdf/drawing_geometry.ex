@@ -181,17 +181,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
 
           rounded =
             case existing do
-              %{inner_clip: %{border_radius: radius} = inner} when radius > 0 -> inner
-              %{border_radius: radius} when radius > 0 -> Map.delete(existing, :inner_clip)
-              _ -> nil
+              %{inner_clip: %{border_radii: _} = inner} ->
+                inner
+
+              %{border_radii: _} ->
+                Map.delete(existing, :inner_clip)
+
+              %{inner_clip: %{border_radius: radius} = inner} when radius > 0 ->
+                inner
+
+              %{border_radius: radius} when radius > 0 ->
+                Map.delete(existing, :inner_clip)
+
+              _ ->
+                if Map.get(clip, :border_radius, 0) > 0 or Map.has_key?(clip, :border_radii),
+                  do: Map.delete(clip, :inner_clip),
+                  else: nil
             end
 
           prepared =
             if rounded == nil, do: prepared, else: Map.put(prepared, :inner_clip, rounded)
 
-          if prepared.width > 0 and prepared.height > 0,
-            do: [Map.put(box, :clip, prepared)],
-            else: [overflow_group(box, Map.delete(prepared, :inner_clip))]
+          cond do
+            prepared.width <= 0 or prepared.height <= 0 ->
+              [overflow_group(box, Map.delete(prepared, :inner_clip))]
+
+            is_map(existing) and
+              (Map.get(existing, :border_radius, 0) > 0 or
+                 Map.has_key?(existing, :border_radii) or Map.has_key?(existing, :inner_clip)) and
+                (Map.get(clip, :border_radius, 0) > 0 or Map.has_key?(clip, :border_radii) or
+                   Map.has_key?(clip, :inner_clip)) ->
+              [overflow_group(box, clip)]
+
+            true ->
+              [Map.put(box, :clip, prepared)]
+          end
       end
     end)
   end
@@ -286,9 +310,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
         {x, y} = rounded_viewport_origin(clip.x, clip.y, clip.height, parent_height)
 
         # A CSS scrollport clip retains the source print matrix's edge ties.
-        if Map.get(group, :css_scrollport, false),
-          do: %{clip | x: x - @raster_boundary_bias, y: y + @raster_boundary_bias},
-          else: %{clip | x: x, y: y}
+        {x, y} =
+          if Map.get(group, :css_scrollport, false),
+            do: {x - @raster_boundary_bias, y + @raster_boundary_bias},
+            else: {x, y}
+
+        shifted = %{clip | x: x, y: y}
+
+        case Map.get(clip, :inner_clip) do
+          nil ->
+            shifted
+
+          inner ->
+            Map.put(shifted, :inner_clip, %{
+              inner
+              | x: inner.x + x - clip.x,
+                y: inner.y + y - clip.y
+            })
+        end
 
       true ->
         Map.get(group, :clip)
@@ -384,7 +423,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
         else: affine
 
     clip =
-      intersect_clip(inherited_clip, transform_clip(local_clip(group, parent_height), transform))
+      intersect_clip(
+        inherited_clip,
+        transform_box_clip(local_clip(group, parent_height), transform)
+      )
 
     # Overflow clipping adds no viewport or coordinate origin. Preserve the
     # containing paint frame for pixel rounding and descendant annotations.
@@ -435,15 +477,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
       %{x: x, y: y, width: width, height: height} ->
         [x, y, width, height] = Enum.map([x, y, width, height], &Float.round(&1 * 1.0, 4))
 
-        case transform do
-          {sx, sy, tx, ty} ->
-            {sx * x + tx, sy * y + ty, sx * (x + width) + tx, sy * (y + height) + ty}
+        if Map.get(clip, :border_radius, 0) > 0 or Map.has_key?(clip, :border_radii) do
+          {:intersection, [{:contour, edges}]} =
+            box_clip_expression(Map.delete(clip, :inner_clip), transform)
 
-          {_, _, _, _, _, _} ->
-            {:polygon,
-             Enum.map([{x, y}, {x + width, y}, {x + width, y + height}, {x, y + height}], fn
-               {x, y} -> transform_point(x, y, transform)
-             end)}
+          {:polygon, edges |> Enum.reverse() |> Enum.map(&elem(&1, 0))}
+        else
+          case transform do
+            {sx, sy, tx, ty} ->
+              {sx * x + tx, sy * y + ty, sx * (x + width) + tx, sy * (y + height) + ty}
+
+            {_, _, _, _, _, _} ->
+              {:polygon,
+               Enum.map([{x, y}, {x + width, y}, {x + width, y + height}, {x, y + height}], fn
+                 {x, y} -> transform_point(x, y, transform)
+               end)}
+          end
         end
     end
   end
@@ -535,9 +584,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
           [clip, Map.get(clip, :inner_clip)]
           |> Enum.reject(&is_nil/1)
           |> Enum.map(fn clip ->
-            if Map.get(clip, :border_radius, 0) > 0 do
+            if Map.get(clip, :border_radius, 0) > 0 or Map.has_key?(clip, :border_radii) do
               commands =
-                rounded_rect_commands(clip.x, clip.y, clip.width, clip.height, clip.border_radius)
+                case Map.get(clip, :border_radii) do
+                  nil ->
+                    rounded_rect_commands(
+                      clip.x,
+                      clip.y,
+                      clip.width,
+                      clip.height,
+                      clip.border_radius
+                    )
+
+                  radii ->
+                    elliptical_rect_commands(clip.x, clip.y, clip.width, clip.height, radii, 4)
+                end
                 |> Enum.map(fn {operation, coordinates} ->
                   coordinates =
                     coordinates
@@ -643,39 +704,106 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     end
   end
 
-  @doc "Builds validated per-corner elliptical contours from the same shared quarter-circle cubic commands."
-  @spec elliptical_rect_commands(number(), number(), number(), number(), map()) :: [
+  @doc "Builds validated elliptical contours using the source printer's float32 conic subdivision."
+  @spec elliptical_rect_commands(number(), number(), number(), number(), map(), 4 | 8) :: [
           {integer(), [number()]}
         ]
-  def elliptical_rect_commands(x, y, width, height, radii) do
-    right = x + width
-    top = y + height
+  def elliptical_rect_commands(x, y, width, height, radii, subdivisions) do
+    x = conic_float(x)
+    y = conic_float(y)
+    right = conic_float(x + conic_float(width))
+    top = conic_float(y + conic_float(height))
     {blx, bly} = radii.bottom_left
     {brx, bry} = radii.bottom_right
     {trx, try_} = radii.top_right
     {tlx, tly} = radii.top_left
-    unit = rounded_rect_commands(0, 0, 2, 2, 1)
-
-    corner = fn index, cx, cy, rx, ry ->
-      {operation, coordinates} = Enum.at(unit, index)
-
-      {operation,
-       coordinates
-       |> Enum.chunk_every(2)
-       |> Enum.flat_map(fn [ax, ay] -> [cx + (ax - 1) * rx, cy + (ay - 1) * ry] end)}
-    end
+    left_bottom = conic_float(x + conic_float(blx))
+    bottom_left = conic_float(y + conic_float(bly))
+    right_bottom = conic_float(right - conic_float(brx))
+    bottom_right = conic_float(y + conic_float(bry))
+    right_top = conic_float(right - conic_float(trx))
+    top_right = conic_float(top - conic_float(try_))
+    left_top = conic_float(x + conic_float(tlx))
+    top_left = conic_float(top - conic_float(tly))
+    weight = conic_float(:math.sqrt(0.5))
+    level = if subdivisions == 4, do: 2, else: 3
 
     [
-      {0, [x + blx, y]},
-      {1, [right - brx, y]},
-      corner.(2, right - brx, y + bry, brx, bry),
-      {1, [right, top - try_]},
-      corner.(4, right - trx, top - try_, trx, try_),
-      {1, [x + tlx, top]},
-      corner.(6, x + tlx, top - tly, tlx, tly),
-      {1, [x, y + bly]},
-      corner.(8, x + blx, y + bly, blx, bly),
+      {0, [left_bottom, y]},
+      {1, [right_bottom, y]},
+      conic_cubic_commands({right_bottom, y}, {right, y}, {right, bottom_right}, weight, level),
+      {1, [right, top_right]},
+      conic_cubic_commands({right, top_right}, {right, top}, {right_top, top}, weight, level),
+      {1, [left_top, top]},
+      conic_cubic_commands({left_top, top}, {x, top}, {x, top_left}, weight, level),
+      {1, [x, bottom_left]},
+      conic_cubic_commands({x, bottom_left}, {x, y}, {left_bottom, y}, weight, level),
       {4, []}
     ]
+    |> List.flatten()
+  end
+
+  # Adapted from SkConic::chop/subdivide and SkConvertQuadToCubic in Skia:
+  # https://github.com/google/skia/blob/main/src/core/SkGeometry.cpp
+  # The four/eight-piece counts are fixed source PDF contour rules. Every
+  # scalar operation rounds to float32, as in Skia's float2 calculations.
+  defp conic_cubic_commands({ax, ay} = a, {qx, qy}, {bx, by} = b, weight, level) do
+    if level == 0 do
+      scale = conic_float(2 / 3)
+
+      [
+        {3,
+         [
+           conic_float(ax + conic_float(conic_float(qx - ax) * scale)),
+           conic_float(ay + conic_float(conic_float(qy - ay) * scale)),
+           conic_float(bx + conic_float(conic_float(qx - bx) * scale)),
+           conic_float(by + conic_float(conic_float(qy - by) * scale)),
+           bx,
+           by
+         ]}
+      ]
+    else
+      scale = conic_float(1 / conic_float(1 + weight))
+      weighted_scale = conic_float(weight * scale)
+
+      [{lx, ly}, {mx, my}, {rx, ry}] =
+        Enum.zip([ax, ay], Enum.zip([qx, qy], [bx, by]))
+        |> Enum.map(fn {a, {q, b}} ->
+          t0 = conic_float(a * scale)
+          t1 = conic_float(q * weighted_scale)
+          t2 = conic_float(b * scale)
+
+          {
+            conic_float(t0 + t1),
+            conic_float(conic_float(conic_float(0.5 * t0) + t1) + conic_float(0.5 * t2)),
+            conic_float(t1 + t2)
+          }
+        end)
+        |> then(fn [{lx, mx, rx}, {ly, my, ry}] -> [{lx, ly}, {mx, my}, {rx, ry}] end)
+
+      # Each validated quarter ellipse has its control at an endpoint's Y.
+      # It is therefore monotonic before chopping. Preserve Skia's corrections
+      # for float rounding that can push a chopped point past its endpoints.
+      my =
+        if conic_float(conic_float(ay - my) * conic_float(by - my)) <= 0 do
+          my
+        else
+          if abs(conic_float(my - ay)) < abs(conic_float(my - by)), do: ay, else: by
+        end
+
+      ly = if conic_float(conic_float(ay - ly) * conic_float(my - ly)) <= 0, do: ly, else: ay
+      ry = if conic_float(conic_float(my - ry) * conic_float(by - ry)) <= 0, do: ry, else: by
+
+      new_weight = conic_float(:math.sqrt(conic_float(0.5 + conic_float(weight * 0.5))))
+      middle = {mx, my}
+
+      conic_cubic_commands(a, {lx, ly}, middle, new_weight, level - 1) ++
+        conic_cubic_commands(middle, {rx, ry}, b, new_weight, level - 1)
+    end
+  end
+
+  defp conic_float(value) do
+    <<rounded::float-size(32)>> = <<value * 1.0::float-size(32)>>
+    rounded
   end
 end

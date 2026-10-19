@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
@@ -55,6 +56,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
     if elem(Process.info(self(), :memory), 1) > limits.max_html_form_value_memory_bytes,
       do: throw({:form_limit, :max_html_form_value_memory_bytes})
 
+    # Install the GC cap only after the initial observation, so sub-minimum
+    # budgets return their named limit rather than an invalid BEAM option.
+    # Shared binaries count, but native :re allocations do not. BEAM permits
+    # no cap smaller than its minimum heap, and checks this cap during GC.
+    Process.flag(:max_heap_size, %{
+      size:
+        max(
+          div(limits.max_html_form_value_memory_bytes, :erlang.system_info(:wordsize)),
+          elem(:erlang.system_info(:min_heap_size), 1)
+        ),
+      kill: true,
+      error_logger: false,
+      include_shared_binaries: true
+    })
+
     {state, compile, match_work} =
       case request.operation do
         :url ->
@@ -69,7 +85,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
            ), work, 0}
 
         :pattern ->
-          case HtmlPatternSyntaxValidator.prepare(request.source, limits) do
+          case HtmlPatternSyntaxValidator.prepare_execution(request.source, limits) do
             :invalid_pattern ->
               {:invalid_pattern, byte_size(request.source), 0}
 
@@ -77,63 +93,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
               throw({:form_limit, limit})
 
             {:ok, expression, compile} ->
-              if byte_size(expression) > limits.max_html_form_value_memory_bytes,
+              expression_bytes =
+                if is_binary(expression),
+                  do: byte_size(expression),
+                  else: :erlang.external_size(expression)
+
+              if expression_bytes > limits.max_html_form_value_memory_bytes,
                 do: throw({:form_limit, :max_html_form_value_memory_bytes})
 
-              case :re.compile("(*NO_START_OPT)(*NO_AUTO_POSSESS)" <> expression, [:unicode]) do
-                {:ok, regex} ->
-                  {mismatch, work} =
-                    Enum.reduce(request.values, {false, 0}, fn value, {mismatch, used} ->
-                      used = used + byte_size(value) + 1
+              {mismatch, work} =
+                FormPatternMatcher.match_values(expression, request.values, limits)
 
-                      if used > limits.max_html_pattern_match_work,
-                        do: throw({:form_limit, :max_html_pattern_match_work})
-
-                      options = [
-                        :report_errors,
-                        {:capture, :none},
-                        {:match_limit, max(limits.max_html_pattern_match_work - used, 1)},
-                        {:match_limit_recursion, max(limits.max_html_pattern_depth, 1)}
-                      ]
-
-                      case :re.run(value, regex, options) do
-                        :match ->
-                          {mismatch, used}
-
-                        :nomatch ->
-                          {true, used}
-
-                        {:error, :match_limit} ->
-                          throw({:form_limit, :max_html_pattern_match_work})
-
-                        {:error, :match_limit_recursion} ->
-                          throw({:form_limit, :max_html_pattern_depth})
-                      end
-                    end)
-
-                  {if(mismatch, do: :mismatched, else: :matched), compile, work}
-
-                {:error, {message, _offset}} ->
-                  message = to_string(message)
-
-                  if String.contains?(message, [
-                       "too many capturing",
-                       "number too big",
-                       "regular expression is too large"
-                     ]) do
-                    throw({:unsupported_pattern, message})
-                  else
-                    {:invalid_pattern, compile, 0}
-                  end
-              end
+              {if(mismatch, do: :mismatched, else: :matched), compile, work}
           end
       end
 
     memory = elem(Process.info(self(), :memory), 1)
 
-    if memory > limits.max_html_form_value_memory_bytes,
-      do: throw({:form_limit, :max_html_form_value_memory_bytes})
-
+    # result/1 reserves this observation against the shared render allowance.
     {:ok, state, %{compile: compile, matches: match_work, memory: memory}}
   catch
     {:form_limit, limit} -> {:limit, limit}
@@ -166,13 +143,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
       {:unsupported_pattern, message} ->
         failure(
           :unsupported_html,
-          "the OTP pattern compiler cannot represent this pattern: #{message}; simplify the pattern. This is a fixed engine bound, not an invalid authored HTML pattern"
+          "the OTP pattern compiler reached a fixed engine bound for this valid ECMAScript pattern: #{message}; simplify the pattern or use a supported equivalent. This is not an invalid authored HTML pattern and the constraint was not ignored"
         )
 
       _ ->
         failure(
           :form_value_backend_unavailable,
-          "Elixir initial form-value worker failed; retry the operation and inspect the worker failure"
+          "Elixir initial form-value worker failed or was terminated by its GC-enforced BEAM heap limit; inspect the worker failure or increase max_html_form_value_memory_bytes. Native regex allocations are outside that heap limit"
         )
     end
   catch

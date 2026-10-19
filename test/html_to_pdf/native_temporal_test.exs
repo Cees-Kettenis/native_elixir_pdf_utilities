@@ -352,15 +352,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.NativeTemporalTest do
     assert {:ok, _} = PdfWriter.render(pages, forms: :static)
   end
 
-  test "unimplemented rounded temporal border shapes return a public style diagnostic" do
+  test "rounded temporal border shapes render with unequal, double and dashed edges" do
     for border <- ["border-left-width:3pt", "border-style:double", "border-style:dashed"] do
-      assert {:error, {:unsupported_html, diagnostic}} =
+      assert {:ok, _} =
                HtmlToPdf.render("<input type=month style='border-radius:3pt;#{border}'>",
                  forms: :static
                )
-
-      assert diagnostic.stage == :style and diagnostic.operation == :compute
-      assert diagnostic.source == "month" and diagnostic.message =~ "uniform border"
     end
 
     assert {:ok, _} =

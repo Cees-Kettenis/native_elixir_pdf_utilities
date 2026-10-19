@@ -216,7 +216,8 @@ Number inputs sanitize invalid lexical values to empty and retain valid authored
 values for display and PDF Text fields. Their canonical initial state includes
 parsed value, min/max, positive step or `any`, step base and applicable
 readonly/required/placeholder metadata. Out-of-range values still render.
-Full step-mismatch and constraint aggregation remain unfinished. Static and
+Initial bounds, step mismatch and candidate-based form/fieldset aggregation are
+recorded separately from rendering. Static and
 interactive artwork share original page geometry and clipped text; other Text
 appearances retain their existing path.
 
@@ -255,8 +256,8 @@ ordinary HTML tree. The last authored checked radio wins. Empty or absent names
 remain independent. Artwork and editable field values use that effective state;
 CSS attribute selectors still see the authored `checked` attributes. Independent
 owner groups sharing a PDF field name return `:unsupported_form`; use unique
-names or `forms: :static`. Broader selection modes, fieldsets,
-legends, optgroups, constraint states and shadow-tree integration remain open.
+names or `forms: :static`. Fieldsets use the first-legend disabledness exception. Optgroup disabledness,
+initial constraints and source-tree ownership survive shadow/slot/clone composition.
 
 Native initial controls retain their atomic used boxes when author CSS requests
 `display:inline`. Menus and listboxes carry the same measured host dimensions,
@@ -281,15 +282,15 @@ an authored height. Native dropdowns reset CSS line-height to the font's normal
 line height. Multiple and listbox controls retain all selected identities in
 source order, styled option/group flow, clipping and initial scroll artwork. PDF
 Choice fields retain complete option indices, scalar or array values, selection
-indices and an initial top index. Rich/custom controls, complete interactive
-disabled-option policy, constraints and shadow integration remain open.
+indices and an initial top index. Rich/custom controls and complete interactive
+disabled-option policy remain outside the supported initial-state profile.
 
 Supported text-entry, checkbox, radio and selection controls create editable AcroForm fields by default. Use
 `forms: :static` for static artwork. See [field naming and filling](pdf-forms.md). Links support `http://`, `https://`, and `mailto:` destinations.
 
 Search inputs use the text-field drawing and AcroForm path, with editable PDF
 text values and `TEXT` generated names. Their native browser theme, search
-activation, constraints and additional attributes remain incomplete.
+activation and complete native browser themes remain incomplete.
 
 Text, search and telephone inputs remove CR and LF from their initial value in both form modes, including
 when the type is omitted. Parsed attributes and CSS selectors retain the authored
@@ -303,20 +304,21 @@ with `:read_only_form_field`; flattening remains available. Readonly adds no
 disabled appearance to text controls. Their static artwork stays identical unless author CSS selects the
 attribute. Combined `readonly` and `disabled` set the read-only bit once and keep
 the textarea multiline bit. Other input states preserve `readonly` as inactive metadata; unsupported non-input control hosts still reject it.
-Constraints, ownership and complete native widget themes remain unfinished.
+Initial constraints and source ownership are retained; complete native widget
+themes remain unfinished.
 
 Telephone, URL and single-email inputs use the same text-field drawing, editable
 AcroForm values and `TEXT` generated names. URL/email values strip CR/LF and then
 trim leading/trailing ASCII whitespace. Non-ASCII whitespace and internal spaces
 remain intact. Telephone spacing and punctuation stay unchanged apart from CR/LF.
-Invalid URL/email initial values still render. Constraint selector states, IDN display conversion, further attributes and ownership
-remain unfinished; unsupported attributes return diagnostics.
+Invalid URL/email initial values still render. Initial constraint selectors and source ownership are retained. IDN display
+conversion and further attributes remain unfinished; unsupported attributes return diagnostics.
 
 Email inputs also accept boolean `multiple`, including `multiple="false"`.
 Initial comma-separated tokens trim ASCII edge whitespace and rejoin in order;
 empty tokens remain. Initial CR/LF are removed before token sanitation. The PDF field stays one text field whose value
-is a string. Invalid initial list tokens still render; complete constraint state
-and IDN display conversion remain unfinished. HTML select controls also support boolean `multiple`. Other input states retain
+is a string. Invalid initial list tokens still render and record their constraint
+state. IDN display conversion remains unfinished. HTML select controls also support boolean `multiple`. Other input states retain
 their own applicability rules.
 
 Password inputs remove initial CR/LF without trimming and display one bullet per
@@ -324,8 +326,8 @@ grapheme. Original attributes remain visible to CSS. Interactive output uses a
 Text field with the Password flag and retains the sanitized value; readonly and
 disabled still prevent filling. Filling generates masked artwork, and flattening
 uses current appearances. PDF field values and earlier revisions remain stored
-data. Masking and flattening do not redact them. Additional password attributes,
-constraints, ownership and complete native appearance remain unfinished.
+data. Masking and flattening do not redact them. Additional password attributes
+and complete native appearance remain unfinished.
 
 Submit, reset and button inputs render static button artwork in both form modes.
 Their authored value supplies the label, including empty values. Missing submit
@@ -940,3 +942,37 @@ system discovery option. Resvg receives only validated snapshots and never scans
 system font directories itself. Missing permitted glyph coverage returns an
 explicit diagnostic. Cache keys include the approved font bytes and resource
 scope.
+
+Initial validity uses the canonical source-tree state. `:valid` / `:invalid`
+apply to validation candidates and to form/fieldset aggregates. External form
+owners, logical unassigned controls, scoped radios and the first-legend exception
+contribute according to their real source ancestry. Initial minlength/maxlength
+checks never invent user-edited length failures. Invalid initial values remain
+renderable and preserve authored attributes for attribute selectors.
+
+HTML patterns support exact ECMAScript Unicode character-property aliases with
+pinned Unicode 17 data, finite Unicode string properties, v-set operations,
+UTF-16 escapes, whole-value matching, variable lookbehind, backwards captures and
+quantified capture resets. Capture names retain the existing ASCII identifier
+profile. Invalid authored syntax disables the constraint; valid execution or
+resource failures return diagnostics. [Work and memory limits](resource-limits.md#initial-html-form-values)
+are shared across values.
+
+Initial absolute URL validity is independent of resource permission. Special
+hosts use percent decoding, numeric IPv4/IPv6 and pinned Unicode 16 UTS46
+nontransitional mapping with Bidi/ContextJ checks. The [URL Standard of
+2026-10-07](https://url.spec.whatwg.org/#concept-domain-to-ascii) bypasses IDNA
+errors for ASCII domains, while Unicode hosts retain IDNA and decoded ACE checks.
+File, opaque-path and non-special authorities have separate admission rules.
+Chromium 154 differs from the standard for file drive-letter authorities and
+leading-zero embedded IPv4 inside IPv6; these cases retain standard admission
+in unit tests rather than changing reference markup.
+
+Static color controls resolve percentage, calculated and automatic dimensions
+through shared sizing and safely handle tiny hosts. Modern CSS color values
+convert to the documented opaque sRGB initial profile; alpha/colorspace metadata
+does not add a picker. Rounded image-submit and temporal hosts support unequal
+border/padding edges and shared elliptical content clipping. Temporal borders
+retain solid, dashed, dotted, double and relief paint. English/en-US temporal and
+file artwork remains the bounded locale profile. Pickers, submission and broader
+interactive field editing remain deferred.

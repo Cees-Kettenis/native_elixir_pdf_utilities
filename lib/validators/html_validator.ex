@@ -4368,6 +4368,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           "indeterminate" => :indeterminate,
           "required" => :required,
           "optional" => :optional,
+          "valid" => :valid,
+          "invalid" => :invalid,
           "read-only" => :read_only,
           "read-write" => :read_write,
           "popover-open" => :popover_open
@@ -4741,7 +4743,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   @doc false
   @spec control_state_matches?(
-          :enabled | :disabled | :checked | :required | :optional | :popover_open,
+          :enabled
+          | :disabled
+          | :checked
+          | :required
+          | :optional
+          | :popover_open
+          | :indeterminate
+          | :valid
+          | :invalid,
           map()
         ) ::
           boolean()
@@ -4750,6 +4760,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     attributes = Map.get(node, :attributes, %{})
 
     case state do
+      state when state in [:valid, :invalid] ->
+        NativeElixirPdfUtilities.Validators.HtmlConstraintValidator.matches_initial_state?(
+          state,
+          node
+        )
+
       :indeterminate ->
         html? and
           case Map.get(node, :tag) do

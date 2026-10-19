@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemporalArtwork do
   @moduledoc false
-  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, Font, PageGeometry}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @calendar_path Path.expand("../../priv/html_to_pdf/temporal/calendar_icon.svg", __DIR__)
@@ -109,6 +109,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemporalArtwork do
         do: glyphs,
         else: [glyph_group]
 
-    value ++ picker
+    if style.border_radius > 0 do
+      DrawingGeometry.clip_boxes(
+        value ++ picker,
+        PageGeometry.inset_rounded_clip(
+          %{x: x, y: y, width: width, height: height, border_radius: style.border_radius},
+          border
+        )
+      )
+    else
+      value ++ picker
+    end
   end
 end

@@ -133,10 +133,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IntegrationWave9Test do
     painted = Enum.find(hd(prepared.pages).boxes, &(&1.type == :text))
     refute Map.has_key?(painted, :link_url)
 
-    assert {:error, {:invalid_pdf_input, diagnostic}} =
+    assert {:ok, rounded_pdf} =
              PdfWriter.render([%{size: {200, 200}, boxes: [Map.put(group, :clip, text.clip)]}])
 
-    assert diagnostic.message =~ "drawing_group clip"
+    assert rounded_pdf =~ "/Annots"
 
     corrupt = put_in(text.clip.inner_clip.x, 1_000_000_000)
 

@@ -227,6 +227,26 @@ See [Text extraction](text-extraction.md).
 `NativeElixirPdfUtilities.Limits.defaults/0` returns built-in values.
 `NativeElixirPdfUtilities.Limits.effective/0` returns the active configuration.
 
+## Initial HTML form values
+
+Pattern and URL checks run in a disposable BEAM worker with an external deadline.
+`max_html_pattern_compile_work` charges syntax and property expansion.
+`max_html_pattern_match_work` is shared by all values in a request and across the
+render. Native assertion matching charges transitions and copied/scanned bytes.
+OTP does not expose successful regex step counts, so each run debits its entire
+granted engine allowance, including unsuccessful retries. A token never receives
+a fresh full allowance. `max_html_pattern_depth` bounds syntax and matching depth.
+
+`max_html_form_value_memory_bytes` checks observed worker memory before and after
+execution, checks expanded expressions, and configures a GC-triggered BEAM heap
+cap including shared binaries. BEAM checks that cap at garbage collection, with
+its platform minimum heap size. This is not an instantaneous allocation ceiling
+and excludes native regex allocations. An observed excess returns the named
+resource diagnostic. A GC heap kill and an unexpected external kill have the
+same exit reason, so both return the worker failure diagnostic with heap-limit
+advice. Caller flags and unrelated mailbox messages are preserved.
+`max_html_form_value_timeout_ms` independently terminates a stalled worker.
+
 ## Forms and attachments
 
 | Setting | Default | Applies to |

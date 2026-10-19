@@ -1,22 +1,83 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
   @moduledoc false
-  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeStringProperty
+  alias NativeElixirPdfUtilities.HtmlToPdf.{UnicodeCharacterProperty, UnicodeStringProperty}
 
   @doc "Admits ECMAScript Unicode-v syntax and produces an OTP regular expression."
   @spec prepare(binary(), map()) ::
           {:ok, binary(), non_neg_integer()} | :invalid_pattern | {:limit, atom()}
   def prepare(source, limits) do
+    case prepare_source(source, limits, false) do
+      {:ok, expression, work, _native_required?} -> {:ok, expression, work}
+      result -> result
+    end
+  end
+
+  @doc "Prepares an OTP expression or native tree for backwards assertions and quantified capture resets."
+  @spec prepare_execution(binary(), map()) ::
+          {:ok, binary() | map(), non_neg_integer()} | :invalid_pattern | {:limit, atom()}
+  def prepare_execution(source, limits) do
+    native? = String.contains?(source, ["(?<=", "(?<!"])
+
+    case prepare_source(source, limits, native?) do
+      {:ok, _expression, work, true} when not native? ->
+        # Only patterns needing ECMAScript capture resets pay for a second
+        # syntax pass. Charge both passes against the immutable request budget.
+        remaining = %{
+          limits
+          | max_html_pattern_compile_work: limits.max_html_pattern_compile_work - work
+        }
+
+        case prepare_source(source, remaining, true) do
+          {:ok, tree, extra_work, _} -> {:ok, tree, work + extra_work}
+          result -> result
+        end
+
+      {:ok, expression, work, _} ->
+        {:ok, expression, work}
+
+      result ->
+        result
+    end
+  end
+
+  defp prepare_source(source, limits, native?) do
     key = {__MODULE__, :budget}
     previous = Process.put(key, {0, limits})
+    state_key = {__MODULE__, :syntax}
+
+    previous_state =
+      Process.put(state_key, %{
+        native?: native?,
+        native_required?: false,
+        captures: 0,
+        names: %{},
+        refs: []
+      })
 
     try do
       {expression, ""} = expression(source, [], 0)
-      {:ok, "\\A(?:" <> expression <> ")\\z", elem(Process.get(key), 0)}
+      state = Process.get(state_key)
+
+      if Enum.any?(state.refs, fn ref ->
+           if is_integer(ref), do: ref > state.captures, else: not Map.has_key?(state.names, ref)
+         end),
+         do: throw(:invalid_pattern)
+
+      prepared =
+        if native?,
+          do: %{tree: expression, names: state.names, captures: state.captures},
+          else: "\\A(?:" <> expression <> ")\\z"
+
+      {:ok, prepared, elem(Process.get(key), 0), state.native_required?}
     catch
       :invalid_pattern -> :invalid_pattern
       {:pattern_limit, limit} -> {:limit, limit}
     after
       if is_nil(previous), do: Process.delete(key), else: Process.put(key, previous)
+
+      if is_nil(previous_state),
+        do: Process.delete(state_key),
+        else: Process.put(state_key, previous_state)
     end
   end
 
@@ -26,19 +87,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
     case source do
       "" ->
         if depth > 0, do: throw(:invalid_pattern)
-        {output |> Enum.reverse() |> IO.iodata_to_binary(), ""}
+        {join_output(output), ""}
 
       <<"[", rest::binary>> ->
         {set, rest} = class(rest, depth + 1)
-        {atom, rest} = quantified(set_regex(set), rest)
+        {atom, rest} = quantified(if(native?(), do: {:set, set}, else: set_regex(set)), rest)
         expression(rest, [atom | output], depth)
 
       <<"\\", rest::binary>> ->
         {escaped, rest} = escape(rest, false, depth)
-        {atom, rest} = quantified(escaped, rest)
+
+        {atom, rest} =
+          if escaped in ["\\b", "\\B", {:boundary, true}, {:boundary, false}],
+            do: {escaped, rest},
+            else: quantified(escaped, rest)
+
         expression(rest, [atom | output], depth)
 
       <<"(?", rest::binary>> ->
+        previous_captures = Process.get({__MODULE__, :syntax}).captures
+
         {prefix, rest} =
           case rest do
             <<c, rest::binary>> when c in [?:, ?=, ?!] ->
@@ -65,23 +133,52 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
               throw(:invalid_pattern)
           end
 
+        capture =
+          if String.starts_with?(prefix, "(?<") and prefix not in ["(?<=", "(?<!"],
+            do: capture(String.slice(prefix, 3, byte_size(prefix) - 4)),
+            else: nil
+
         {inside, tail} = group(rest, depth + 1)
 
+        node =
+          if native?() do
+            case prefix do
+              "(?:" -> inside
+              "(?=" -> {:assert, 1, true, inside}
+              "(?!" -> {:assert, 1, false, inside}
+              "(?<=" -> {:assert, -1, true, inside}
+              "(?<!" -> {:assert, -1, false, inside}
+              _ -> {:capture, capture, inside}
+            end
+          else
+            prefix <> inside <> ")"
+          end
+
         {atom, tail} =
-          if prefix == "(?:" or
-               (String.starts_with?(prefix, "(?<") and prefix not in ["(?<=", "(?<!"]),
-             do: quantified(prefix <> inside <> ")", tail),
-             else: {prefix <> inside <> ")", tail}
+          if prefix == "(?:" or not is_nil(capture),
+            do:
+              quantified(
+                node,
+                tail,
+                Process.get({__MODULE__, :syntax}).captures - previous_captures
+              ),
+            else: {node, tail}
 
         expression(tail, [atom | output], depth)
 
       <<"(", rest::binary>> ->
+        previous_captures = Process.get({__MODULE__, :syntax}).captures
+        capture = capture(nil)
         {inside, rest} = group(rest, depth + 1)
-        {atom, rest} = quantified("(" <> inside <> ")", rest)
+        node = if native?(), do: {:capture, capture, inside}, else: "(" <> inside <> ")"
+
+        {atom, rest} =
+          quantified(node, rest, Process.get({__MODULE__, :syntax}).captures - previous_captures)
+
         expression(rest, [atom | output], depth)
 
       <<")", rest::binary>> when depth > 0 ->
-        {output |> Enum.reverse() |> IO.iodata_to_binary(), rest}
+        {join_output(output), rest}
 
       <<c, _::binary>> when c in [?), ?]] ->
         throw(:invalid_pattern)
@@ -98,6 +195,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
             ?| -> "|"
           end
 
+        assertion =
+          if native?(),
+            do:
+              case(c,
+                do: (
+                  ?^ -> :start
+                  ?$ -> :end
+                  ?| -> :or
+                )
+              ),
+            else: assertion
+
         expression(rest, [assertion | output], depth)
 
       <<c, _::binary>> when c in [?*, ?+, ??, ?{, ?}] ->
@@ -111,7 +220,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
 
   defp group(source, depth), do: expression(source, [], depth)
 
-  defp quantified(atom, source) do
+  defp quantified(atom, source, captures \\ 0) do
     {quantifier, rest} =
       case source do
         <<c, rest::binary>> when c in [?*, ?+, ??] ->
@@ -149,9 +258,54 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
           {"", source}
       end
 
-    case rest do
-      <<"?", rest::binary>> when quantifier != "" -> {atom <> quantifier <> "?", rest}
-      _ -> {atom <> quantifier, rest}
+    {lazy?, rest} =
+      case rest do
+        <<"?", rest::binary>> when quantifier != "" -> {true, rest}
+        _ -> {false, rest}
+      end
+
+    if quantifier != "" and captures > 0 do
+      key = {__MODULE__, :syntax}
+      Process.put(key, %{Process.get(key) | native_required?: true})
+    end
+
+    if native?() do
+      atom = if is_binary(atom), do: {:chars, atom}, else: atom
+
+      node =
+        case quantifier do
+          "" ->
+            atom
+
+          "*" ->
+            {:repeat, atom, 0, :infinity, lazy?}
+
+          "+" ->
+            {:repeat, atom, 1, :infinity, lazy?}
+
+          "?" ->
+            {:repeat, atom, 0, 1, lazy?}
+
+          _ ->
+            counts =
+              quantifier
+              |> String.trim_leading("{")
+              |> String.trim_trailing("}")
+              |> String.split(",")
+
+            {minimum, maximum} =
+              case counts do
+                [n] -> {String.to_integer(n), String.to_integer(n)}
+                [n, ""] -> {String.to_integer(n), :infinity}
+                [n, m] -> {String.to_integer(n), String.to_integer(m)}
+              end
+
+            {:repeat, atom, minimum, maximum, lazy?}
+        end
+
+      {node, rest}
+    else
+      {atom <> quantifier <> if(lazy?, do: "?", else: ""), rest}
     end
   end
 
@@ -162,7 +316,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
       <<"u{", rest::binary>> ->
         case String.split(rest, "}", parts: 2) do
           [hex, tail] ->
+            if not Regex.match?(~r/\A[0-9A-Fa-f]+\z/, hex), do: throw(:invalid_pattern)
+
             case Integer.parse(hex, 16) do
+              {n, ""} when n in 0xD800..0xDFFF -> {"(?!)", tail}
               {n, ""} when n in 0..0x10FFFF -> {"\\x{" <> hex <> "}", tail}
               _ -> throw(:invalid_pattern)
             end
@@ -172,11 +329,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
         end
 
       <<"u", hex::binary-size(4), tail::binary>> ->
-        case Integer.parse(hex, 16) do
-          {n, ""} when n not in 0xD800..0xDFFF ->
+        if not Regex.match?(~r/\A[0-9A-Fa-f]{4}\z/, hex), do: throw(:invalid_pattern)
+
+        {codepoint, ""} = Integer.parse(hex, 16)
+
+        case codepoint do
+          n when n not in 0xD800..0xDFFF ->
             {"\\x{" <> hex <> "}", tail}
 
-          {high, ""} when high in 0xD800..0xDBFF ->
+          high when high in 0xD800..0xDBFF ->
             case tail do
               <<"\\u", low_hex::binary-size(4), rest::binary>> ->
                 case Integer.parse(low_hex, 16) do
@@ -193,11 +354,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
                 {"(?!)", tail}
             end
 
-          {low, ""} when low in 0xDC00..0xDFFF ->
+          _low ->
             {"(?!)", tail}
-
-          _ ->
-            throw(:invalid_pattern)
         end
 
       <<kind, "{", rest::binary>> when kind in [?p, ?P] ->
@@ -205,14 +363,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
           [name, tail] ->
             case UnicodeStringProperty.strings(name) do
               nil ->
-                if not Regex.match?(~r/\A[A-Za-z_]+(?:=[A-Za-z_]+)?\z/, name),
-                  do: throw(:invalid_pattern)
+                case UnicodeCharacterProperty.expression(name, kind == ?P) do
+                  nil ->
+                    throw(:invalid_pattern)
 
-                {"\\" <> <<kind>> <> "{" <> name <> "}", tail}
+                  regex ->
+                    charge(byte_size(regex), depth)
+                    {regex, tail}
+                end
 
               strings when kind == ?p ->
                 charge(Enum.reduce(strings, 0, &(byte_size(&1) + &2)), depth)
-                {strings_regex(strings), tail}
+
+                {if(native?(), do: {:set, from_strings(strings)}, else: strings_regex(strings)),
+                 tail}
 
               _ ->
                 throw(:invalid_pattern)
@@ -237,6 +401,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
             ?b when in_class? ->
               "\\x{8}"
 
+            ?B when in_class? ->
+              throw(:invalid_pattern)
+
+            c when c in [?b, ?B] ->
+              if native?(), do: {:boundary, c == ?b}, else: "\\" <> <<c>>
+
             _ ->
               "\\" <> <<c>>
           end
@@ -250,19 +420,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
       <<c, _::binary>> when c in ?1..?9 ->
         if in_class?, do: throw(:invalid_pattern)
         [_, number, rest] = Regex.run(~r/\A([1-9][0-9]*)(.*)\z/s, source)
-        {"(?(" <> number <> ")\\g{" <> number <> "}|)", rest}
+        ref = String.to_integer(number)
+        reference(ref)
+
+        {if(native?(), do: {:backref, ref}, else: "(?(" <> number <> ")\\g{" <> number <> "}|)"),
+         rest}
 
       <<"k<", rest::binary>> when not in_class? ->
         case String.split(rest, ">", parts: 2) do
-          [name, tail] -> {"(?(<" <> name <> ">)\\k<" <> name <> ">|)", tail}
-          _ -> throw(:invalid_pattern)
+          [name, tail] ->
+            reference(name)
+
+            {if(native?(),
+               do: {:backref, name},
+               else: "(?(<" <> name <> ">)\\k<" <> name <> ">|)"
+             ), tail}
+
+          _ ->
+            throw(:invalid_pattern)
         end
 
       <<"x", hex::binary-size(2), rest::binary>> ->
-        case Integer.parse(hex, 16) do
-          {_n, ""} -> {"\\x" <> hex, rest}
-          _ -> throw(:invalid_pattern)
-        end
+        if not Regex.match?(~r/\A[0-9A-Fa-f]{2}\z/, hex), do: throw(:invalid_pattern)
+
+        {"\\x" <> hex, rest}
 
       <<"c", letter, rest::binary>> when letter in ?A..?Z or letter in ?a..?z ->
         {"\\x{" <> Integer.to_string(rem(letter, 32), 16) <> "}", rest}
@@ -345,10 +526,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
         end
 
       <<c::utf8, "-", rest::binary>> when c not in ~c"[]\\-" ->
+        if c in ~c"(){}/|", do: throw(:invalid_pattern)
         {last, tail} = range_endpoint(rest, depth)
 
         {%{
-           chars: "[\\x{" <> Integer.to_string(c, 16) <> "}-" <> last <> "]",
+           chars: range_expression(c, last),
            strings: MapSet.new()
          }, tail}
 
@@ -357,21 +539,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
 
         case tail do
           <<"-", rest::binary>> ->
-            if String.starts_with?(escaped, [
-                 "\\d",
-                 "\\D",
-                 "\\s",
-                 "\\S",
-                 "\\w",
-                 "\\W",
-                 "\\p",
-                 "\\P",
-                 "(?"
-               ]),
-               do: throw(:invalid_pattern)
-
+            first = range_escape_scalar(source)
             {last, tail} = range_endpoint(rest, depth)
-            {%{chars: "[" <> escaped <> "-" <> last <> "]", strings: MapSet.new()}, tail}
+            {%{chars: range_expression(first, last), strings: MapSet.new()}, tail}
 
           _ ->
             {%{chars: escaped, strings: MapSet.new()}, tail}
@@ -394,29 +564,69 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
   defp range_endpoint(source, depth) do
     case source do
       <<"\\", rest::binary>> ->
-        {escaped, tail} = escape(rest, true, depth)
+        {_escaped, tail} = escape(rest, true, depth)
+        {range_escape_scalar(source), tail}
 
-        if String.starts_with?(escaped, [
-             "\\d",
-             "\\D",
-             "\\s",
-             "\\S",
-             "\\w",
-             "\\W",
-             "\\p",
-             "\\P",
-             "(?"
-           ]),
-           do: throw(:invalid_pattern)
-
-        {escaped, tail}
-
-      <<c::utf8, rest::binary>> when c not in ~c"[]\\-" ->
-        {"\\x{" <> Integer.to_string(c, 16) <> "}", rest}
+      <<c::utf8, rest::binary>> when c not in ~c"()[]{}/|\\-" ->
+        {c, rest}
 
       _ ->
         throw(:invalid_pattern)
     end
+  end
+
+  # Character-class ranges require single character endpoints even when a
+  # property expression happens to contain only one character. Surrogates are
+  # valid ECMAScript code points, but cannot occur in the admitted UTF-8 values.
+  defp range_escape_scalar(source) do
+    case source do
+      <<"\\u{", rest::binary>> ->
+        [hex | _] = String.split(rest, "}", parts: 2)
+        String.to_integer(hex, 16)
+
+      <<"\\u", hex::binary-size(4), tail::binary>> ->
+        first = String.to_integer(hex, 16)
+
+        case tail do
+          <<"\\u", low::binary-size(4), _::binary>> when first in 0xD800..0xDBFF ->
+            # read_escape already consumed this pair only after validating
+            # the trailing low surrogate as part of the one range endpoint.
+            last = String.to_integer(low, 16)
+            0x10000 + (first - 0xD800) * 1024 + last - 0xDC00
+
+          _ ->
+            first
+        end
+
+      <<"\\x", hex::binary-size(2), _::binary>> ->
+        String.to_integer(hex, 16)
+
+      <<"\\c", letter, _::binary>> ->
+        rem(letter, 32)
+
+      <<"\\", c, _::binary>> when c in ~c"bfnrtv0" ->
+        Map.fetch!(%{?b => 8, ?f => 12, ?n => 10, ?r => 13, ?t => 9, ?v => 11, ?0 => 0}, c)
+
+      <<"\\", c::utf8, _::binary>> when c in ~c"^$\\.*+?()[]{}|/-!#%&,:;<=>@`~" ->
+        c
+
+      _ ->
+        throw(:invalid_pattern)
+    end
+  end
+
+  defp range_expression(first, last) do
+    if first > last, do: throw(:invalid_pattern)
+
+    # The surrogate interval is a format invariant, not a configurable limit.
+    ranges =
+      [{first, min(last, 0xD7FF)}, {max(first, 0xE000), last}]
+      |> Enum.filter(fn {start, stop} -> start <= stop end)
+      |> Enum.map_join(fn {start, stop} ->
+        "\\x{" <> Integer.to_string(start, 16) <> "}-\\x{" <> Integer.to_string(stop, 16) <> "}"
+      end)
+
+    if ranges == "", do: "(?!)", else: "[" <> ranges <> "]"
   end
 
   defp from_strings(strings) do
@@ -499,6 +709,48 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
       end
 
     if Map.has_key?(groups, "") and alternatives != [], do: "(?:" <> body <> ")?", else: body
+  end
+
+  defp native?(), do: Process.get({__MODULE__, :syntax}).native?
+
+  defp capture(name) do
+    key = {__MODULE__, :syntax}
+    state = Process.get(key)
+    if not is_nil(name) and Map.has_key?(state.names, name), do: throw(:invalid_pattern)
+    index = state.captures + 1
+    names = if is_nil(name), do: state.names, else: Map.put(state.names, name, index)
+    Process.put(key, %{state | captures: index, names: names})
+    index
+  end
+
+  defp reference(ref) do
+    key = {__MODULE__, :syntax}
+    state = Process.get(key)
+    Process.put(key, %{state | refs: [ref | state.refs]})
+  end
+
+  defp join_output(output) do
+    output = Enum.reverse(output)
+
+    if native?() do
+      # Empty alternatives participate in the language, including a leading or
+      # trailing empty branch. Split explicitly rather than dropping separators.
+      {branches, current} =
+        Enum.reduce(output, {[], []}, fn node, {branches, current} ->
+          if node == :or,
+            do: {[{:sequence, Enum.reverse(current)} | branches], []},
+            else: {branches, [node | current]}
+        end)
+
+      branches = Enum.reverse([{:sequence, Enum.reverse(current)} | branches])
+
+      case branches do
+        [one] -> one
+        many -> {:alternate, many}
+      end
+    else
+      IO.iodata_to_binary(output)
+    end
   end
 
   defp charge(work, depth) do

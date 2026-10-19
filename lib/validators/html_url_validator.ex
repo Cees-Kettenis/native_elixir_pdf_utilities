@@ -45,30 +45,40 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
       [_, scheme, rest] ->
         scheme = String.downcase(scheme, :ascii)
 
-        if scheme in ~w(http https ftp ws wss) do
-          # Special URL schemes treat backslashes as slashes before host parsing.
-          rest = rest |> String.replace("\\", "/") |> String.trim_leading("/")
+        cond do
+          scheme in ~w(http https ftp ws wss) ->
+            # Special schemes accept missing slashes and treat backslashes as
+            # slashes. Authority syntax is WHATWG, not URI.new/1's RFC grammar.
+            rest = rest |> String.replace("\\", "/") |> String.trim_leading("/")
+            valid_input_authority?(hd(String.split(rest, ["/", "?", "#"], parts: 2)), :special)
 
-          case URI.new(
-                 scheme <> "://" <> URI.encode(rest, &(&1 == ?% or URI.char_unescaped?(&1)))
-               ) do
-            {:ok, %URI{host: host, port: port}} when is_binary(host) and host != "" ->
-              decoded = URI.decode(host)
-              valid_host? = not Regex.match?(~r/[\x00-\x20<>\\#\/?@^|%]/u, decoded)
+          scheme == "file" ->
+            rest = String.replace(rest, "\\", "/")
 
-              address? =
-                if String.contains?(host, ":"),
-                  do: match?({:ok, _}, :inet.parse_ipv6_address(String.to_charlist(host))),
-                  else: valid_numeric_host?(decoded)
+            case rest do
+              "//" <> authority_path ->
+                authority = hd(String.split(authority_path, ["/", "?", "#"], parts: 2))
 
-              valid_host? and address? and (is_nil(port) or port in 0..65_535)
+                # A Windows drive-letter authority is reparsed as a path.
+                Regex.match?(~r/\A[A-Za-z][:|]\z/, authority) or
+                  (not String.contains?(authority, "@") and
+                     valid_input_authority?(authority, :file))
 
-            _ ->
-              false
-          end
-        else
-          # Non-special URLs may have opaque paths, including mailto: and data:.
-          if scheme == "file", do: not Regex.match?(~r/\A\/\/[^\/]*[:@]/, rest), else: true
+              _ ->
+                true
+            end
+
+          String.starts_with?(rest, "//") ->
+            authority = rest |> binary_part(2, byte_size(rest) - 2)
+
+            valid_input_authority?(
+              hd(String.split(authority, ["/", "?", "#"], parts: 2)),
+              :opaque
+            )
+
+          true ->
+            # Opaque paths, including mailto: and data:, have no authority.
+            true
         end
 
       _ ->
@@ -76,6 +86,101 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
     end
   rescue
     ArgumentError -> false
+  end
+
+  defp valid_input_authority?(authority, kind) do
+    host_port = authority |> String.split("@") |> List.last()
+    credentials? = String.contains?(authority, "@")
+
+    {host, port} =
+      if String.starts_with?(host_port, "[") do
+        case String.split(host_port, "]", parts: 2) do
+          [address, ""] -> {address <> "]", nil}
+          [address, ":" <> port] -> {address <> "]", port}
+          _ -> {nil, nil}
+        end
+      else
+        case String.split(host_port, ":", parts: 2) do
+          [host] -> {host, nil}
+          [host, port] -> {host, port}
+        end
+      end
+
+    port_valid? =
+      case port do
+        nil ->
+          true
+
+        "" ->
+          kind != :file
+
+        port ->
+          # Fixed 16-bit network-port invariant, not a resource ceiling.
+          digits = String.trim_leading(port, "0")
+
+          kind != :file and Regex.match?(~r/\A[0-9]+\z/, port) and
+            (digits == "" or
+               (byte_size(digits) <= 5 and String.to_integer(digits) <= 65_535))
+      end
+
+    cond do
+      is_nil(host) or not port_valid? ->
+        false
+
+      host == "" ->
+        kind != :special and not credentials? and is_nil(port)
+
+      String.starts_with?(host, "[") ->
+        address = binary_part(host, 1, byte_size(host) - 2)
+
+        # OTP accepts IP literals. Enforce the URL parser's decimal spelling
+        # for embedded IPv4 explicitly, including its ban on leading zeros.
+        decimal_tail? =
+          if String.contains?(address, ".") do
+            tail = address |> String.split(":") |> List.last()
+            pieces = String.split(tail, ".")
+
+            length(pieces) == 4 and
+              Enum.all?(pieces, fn piece ->
+                Regex.match?(~r/\A(?:0|[1-9][0-9]{0,2})\z/, piece) and
+                  String.to_integer(piece) <= 255
+              end)
+          else
+            true
+          end
+
+        decimal_tail? and String.contains?(address, ":") and
+          Regex.match?(~r/\A[0-9A-Fa-f:.]+\z/, address) and
+          match?({:ok, _}, :inet.parse_ipv6_address(String.to_charlist(address)))
+
+      kind == :opaque ->
+        # Opaque hosts preserve percent escapes, including malformed escapes.
+        # Unlike domain hosts they are neither percent decoded nor IDNA mapped.
+        not Regex.match?(~r/[\x00\x20<>\\#\/?@\[\]\^|:]/u, host)
+
+      true ->
+        decoded = URI.decode(host)
+
+        domain_result =
+          if Regex.match?(~r/\A[\x00-\x7f]*\z/, decoded) do
+            # The URL Standard's 2026-10-07 domain parser admits ASCII hosts
+            # regardless of UTS #46 errors, including malformed ACE labels.
+            # Forbidden domain characters and numeric-host parsing still apply.
+            # https://url.spec.whatwg.org/#concept-domain-to-ascii
+            {:ok, String.downcase(decoded, :ascii)}
+          else
+            NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator.domain(decoded)
+          end
+
+        case domain_result do
+          {:ok, domain} ->
+            domain != "" and not Regex.match?(~r/[\x00-\x20\x7f<>\\#\/?@\[\]\^|%:]/u, domain) and
+              valid_numeric_host?(domain)
+
+          :error ->
+            false
+        end
+    end
   end
 
   # URL Standard host parsing treats a numeric final label as an IPv4 address,

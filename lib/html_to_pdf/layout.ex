@@ -2618,6 +2618,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       )
 
     cond do
+      Map.has_key?(style, :_color_state) ->
+        {:ok, [], max(10.5 - vertical_box_size(style), 0.0)}
+
       Map.has_key?(style, :embedded_document) ->
         surface = style.embedded_document
 
@@ -11000,6 +11003,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{_inline_content_width: width} ->
         width
 
+      %{style: %{_color_state: _} = style} ->
+        inline_content_size(
+          style,
+          :width,
+          available_width,
+          max(37.5 - horizontal_box_size(style), 0.0)
+        )
+
       %{style: %{svg_scene: _} = style} ->
         {width, _height} = svg_content_size(style, available_width)
         width
@@ -11107,6 +11118,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     {intrinsic_height, first_baseline, baseline, lines} =
       case run do
+        %{style: %{_color_state: _}} ->
+          {max(10.5 - vertical_box_size(style), 0.0), nil, nil, nil}
+
         %{style: %{_file_display: display}} ->
           {display.intrinsic_height, display.baseline, display.baseline, nil}
 
@@ -11708,13 +11722,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               {118 / 255, 118 / 255, 118 / 255,
                if(Map.get(style, :_color_disabled, false), do: 0.3, else: 1.0)}
 
-            %{
-              rect
-              | border_radius: 1.875,
-                stroke_width: if(border_visible?, do: @css_pixel_points, else: 0.0),
-                stroke_color: color,
-                border_colors: edges(color)
-            }
+            # NativeThemeBase::PaintButton paints only a solid fill below
+            # its fixed 5 CSS-pixel minimum for rounded button decoration.
+            if width < 3.75 or height < 3.75 do
+              %{
+                rect
+                | border_radius: 0.0,
+                  stroke_width: 0.0,
+                  border_widths: edges(0.0),
+                  border_styles: edges(:none),
+                  stroke_color: nil,
+                  border_colors: edges(nil)
+              }
+            else
+              %{
+                rect
+                | border_radius: 1.875,
+                  fill_color: {239 / 255, 239 / 255, 239 / 255},
+                  stroke_width: if(border_visible?, do: @css_pixel_points, else: 0.0),
+                  stroke_color: color,
+                  border_colors: edges(color)
+              }
+            end
             |> Map.put(:role, :native_color_button)
 
           Map.get(style, :_native_menu, false) and style.border_radius == 0 ->
@@ -11767,6 +11796,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           Map.has_key?(style, :_temporal_display) and style.border_radius > 0 ->
             Map.put(rect, :role, :temporal_host)
+
+          (Map.has_key?(style, :_image_input_state) or Map.has_key?(style, :_color_state)) and
+              style.border_radius > 0 ->
+            Map.put(rect, :role, :css_control_host)
 
           Map.get(style, :form_kind) == :select ->
             Map.put(rect, :role, :css_menu)
@@ -11910,18 +11943,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               box
           end
 
-        # Image inputs retain their content clip after issued SVG document paint.
+        # Replaced content follows the content-edge curve after subtracting
+        # each actual border and padding edge from the host radius.
         if Map.has_key?(style, :_image_input_state) and style.border_radius > 0 do
-          inset = style.border_widths.left + style.padding.left
+          insets =
+            Map.new(style.border_widths, fn {side, border} ->
+              {side, border + Map.fetch!(style.padding, side)}
+            end)
 
           [
-            Map.put(box, :clip, %{
-              x: x,
-              y: y,
-              width: width,
-              height: height,
-              border_radius: max(style.border_radius - inset, 0.0)
-            })
+            Map.put(
+              box,
+              :clip,
+              PageGeometry.inset_rounded_clip(
+                %{
+                  x: x - insets.left,
+                  y: y - insets.bottom,
+                  width: width + insets.left + insets.right,
+                  height: height + insets.top + insets.bottom,
+                  border_radius: style.border_radius
+                },
+                insets
+              )
+            )
           ]
         else
           [box]

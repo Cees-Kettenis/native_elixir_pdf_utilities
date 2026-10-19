@@ -167,7 +167,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           |> Enum.reverse()
           |> Enum.map(fn item ->
             owner =
-              if item.tag in ~w(progress meter datalist) do
+              if item.tag in ~w(form progress meter datalist) do
                 nil
               else
                 case Map.fetch(item.attributes, "form") do
@@ -641,28 +641,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
       Map.get(style, :_html_content_skipped, false) ->
         {:ok, style}
 
-      type == "image" and style.border_radius > 0 and
-          Enum.uniq(Map.values(style.border_widths)) |> length() > 1 ->
-        Diagnostics.error(
-          :style,
-          :unsupported_html,
-          "Rounded image inputs currently require uniform border widths; use equal edges for the content clip",
-          module: __MODULE__,
-          operation: :compute,
-          source: "input/image"
-        )
-
-      type == "image" and style.border_radius > 0 and
-          Enum.uniq(Map.values(style.padding)) |> length() > 1 ->
-        Diagnostics.error(
-          :style,
-          :unsupported_html,
-          "Rounded image inputs currently require uniform padding; use equal edges for the content clip",
-          module: __MODULE__,
-          operation: :compute,
-          source: "input/image"
-        )
-
       type == "image" and Keyword.get(opts, :forms, :interactive) == :interactive and
         not state.disabled and not Map.has_key?(node, :_html_inert) ->
         Diagnostics.error(
@@ -675,35 +653,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         )
 
       type == "color" ->
-        cond do
-          not is_number(style.width) or not is_number(style.height) ->
-            Diagnostics.error(
-              :style,
-              :unsupported_html,
-              "Color swatches currently require explicit or initial point width and height; use fixed dimensions",
-              module: __MODULE__,
-              operation: :compute,
-              source: "color"
-            )
+        # Preserve authored percentages and calculations for the shared used-size
+        # resolver. Automatic dimensions retain the native control's footprint.
+        style =
+          Enum.reduce([width: 9.0, height: 10.5], style, fn {axis, intrinsic}, style ->
+            if Map.get(style, axis) in [nil, :auto],
+              do: Map.put(style, axis, intrinsic),
+              else: style
+          end)
 
-          style.width <
-            style.border_widths.left + style.border_widths.right + style.padding.left +
-              style.padding.right + 4.5 or
-              style.height <
-                style.border_widths.top + style.border_widths.bottom + style.padding.top +
-                  style.padding.bottom + 7.5 ->
-            Diagnostics.error(
-              :style,
-              :unsupported_html,
-              "Color host is too small for the native swatch wrapper and border; increase its width or height",
-              module: __MODULE__,
-              operation: :compute,
-              source: "color"
-            )
-
-          true ->
-            {:ok, style}
-        end
+        {:ok, style}
 
       true ->
         {:ok, style}
@@ -1412,7 +1371,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
          label_ref \\ nil,
          ancestor_disabled? \\ false,
          in_datalist? \\ false,
-         parent_scope \\ nil
+         parent_scope \\ nil,
+         fieldsets \\ []
        ) do
     Enum.each(nodes, fn node ->
       case node do
@@ -1420,14 +1380,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           html? = Map.get(node, :namespace, :html) == :html
           scope = {Map.get(node, :document_id), Map.get(node, :tree_scope_id)}
 
-          {form_owner, label_ref, ancestor_disabled?, in_datalist?} =
+          {form_owner, label_ref, ancestor_disabled?, in_datalist?, fieldsets} =
             if parent_scope != nil and scope != parent_scope,
-              do: {nil, nil, false, false},
-              else: {form_owner, label_ref, ancestor_disabled?, in_datalist?}
+              do: {nil, nil, false, false, []},
+              else: {form_owner, label_ref, ancestor_disabled?, in_datalist?, fieldsets}
 
-          if node.tag in ~w(input select textarea button label fieldset progress meter output datalist) or
+          if node.tag in ~w(form input select textarea button label fieldset progress meter output datalist) or
                Map.has_key?(node.attributes, "id") do
-            register_initial_node(node, form_owner, label_ref, ancestor_disabled?, in_datalist?)
+            register_initial_node(
+              node,
+              form_owner,
+              label_ref,
+              ancestor_disabled?,
+              in_datalist?,
+              fieldsets
+            )
           end
 
           next_owner =
@@ -1441,6 +1408,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               else: label_ref
 
           next_datalist = in_datalist? or (html? and node.tag == "datalist")
+
+          next_fieldsets =
+            if html? and node.tag == "fieldset",
+              do: [node._selector_id | fieldsets],
+              else: fieldsets
 
           if html? and node.tag == "fieldset" and Map.has_key?(node.attributes, "disabled") do
             # Only this fieldset's own disabling is exempted. An outer disabled
@@ -1459,7 +1431,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 next_label,
                 ancestor_disabled? or not exempt?,
                 next_datalist,
-                scope
+                scope,
+                next_fieldsets
               )
             end)
           else
@@ -1469,7 +1442,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               next_label,
               ancestor_disabled?,
               next_datalist,
-              scope
+              scope,
+              next_fieldsets
             )
           end
 
@@ -1481,13 +1455,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
   # Metadata is already assigned. Collect only the ID/control facts needed
   # to resolve forward references, label targets and initial radio groups.
-  defp register_initial_node(node, form_owner, label_ref, ancestor_disabled?, in_datalist?) do
+  defp register_initial_node(
+         node,
+         form_owner,
+         label_ref,
+         ancestor_disabled?,
+         in_datalist?,
+         fieldsets
+       ) do
     attributes = initial_control_attributes(node)
     namespace = Map.get(node, :namespace, :html)
 
     relevant? =
       namespace == :html and
-        node.tag in ~w(input select textarea button label fieldset progress meter output datalist)
+        node.tag in ~w(form input select textarea button label fieldset progress meter output datalist)
 
     if relevant? or Map.get(attributes, "id", "") != "" do
       context = Process.get(@initial_context)
@@ -1507,10 +1488,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         input_type: input_type,
         order: node._document_order,
         ancestor_owner: form_owner,
+        fieldsets: fieldsets,
         in_datalist: in_datalist?,
         placeholder_option: nil,
         disabled:
-          node.tag != "datalist" and
+          node.tag not in ~w(form datalist) and
             (ancestor_disabled? or Map.has_key?(attributes, "disabled"))
       }
 
@@ -1568,7 +1550,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             %{context | labels: [item | context.labels]}
 
           {:html, tag}
-          when tag in ~w(input select textarea button fieldset progress meter output datalist) ->
+          when tag in ~w(form input select textarea button fieldset progress meter output datalist) ->
             %{context | controls: [item | context.controls]}
 
           _ ->

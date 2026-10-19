@@ -5174,6 +5174,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              :checked,
              :required,
              :optional,
+             :valid,
+             :invalid,
              :popover_open,
              :indeterminate
            ] ->

@@ -150,20 +150,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackendClosureTest do
     assert diagnostic.message =~ "max_html_pattern_compile_work"
   end
 
-  test "the compiled expression is charged against the form-value memory ceiling" do
-    # The worker survives its entry memory check but the escaped expression is
-    # three times the authored source and exceeds the ceiling.
+  test "expanded expression compilation remains bounded by observed memory or GC heap termination" do
+    # Either the observed-memory check reports the limit or BEAM terminates
+    # the worker at GC before the expanded expression can be returned.
     Limits.install(%{Limits.effective() | max_html_form_value_memory_bytes: 30_000})
 
     assert {:ok, request} =
              HtmlFormValueValidator.prepare(:pattern, String.duplicate("\\v", 10_000), [])
 
-    assert {:limit, :max_html_form_value_memory_bytes} = result = FormValueBackend.run(request)
+    result = FormValueBackend.run(request)
+    assert result in [{:limit, :max_html_form_value_memory_bytes}, :unavailable]
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+    assert {:error, {reason, diagnostic}} =
              HtmlFormValueValidator.result(result)
 
-    assert diagnostic.stage == :html
+    assert reason in [:resource_limit_exceeded, :form_value_backend_unavailable]
+    assert diagnostic.reason == reason and diagnostic.stage == :html
     assert diagnostic.operation == :initial_form_value
     assert diagnostic.message =~ "max_html_form_value_memory_bytes"
   end
@@ -182,5 +184,90 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackendClosureTest do
     assert diagnostic.stage == :html
     assert diagnostic.operation == :initial_form_value
     assert diagnostic.message =~ "max_html_pattern_depth"
+  end
+
+  test "every value shares the OTP work allowance including costly successful matches" do
+    value = String.duplicate("a", 8) <> "z"
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a{0,8}a{8}z", [value])
+    assert {:ok, :matched, %{matches: work}} = FormValueBackend.run(request)
+    # The full granted engine allowance is charged because OTP does not expose
+    # its consumed successful-match count. This exceeds mere value-byte work.
+    assert work > 3 * byte_size(value)
+    limits = %{request.limits | max_html_pattern_match_work: work * 2}
+    assert {:ok, :matched, _} = FormValueBackend.run(%{request | limits: limits})
+
+    assert {:limit, :max_html_pattern_match_work} =
+             result =
+             FormValueBackend.run(%{request | limits: limits, values: List.duplicate(value, 6)})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlFormValueValidator.result(result)
+
+    assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.operation == :initial_form_value
+    assert diagnostic.message =~ "max_html_pattern_match_work"
+  end
+
+  test "native backwards matching shares one charged transition budget across values" do
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a+(?<=a+)b", ["aaaab"])
+    assert {:ok, :matched, %{matches: work}} = FormValueBackend.run(request)
+    limits = %{request.limits | max_html_pattern_match_work: work * 2}
+    assert {:ok, :matched, _} = FormValueBackend.run(%{request | limits: limits})
+
+    assert {:limit, :max_html_pattern_match_work} =
+             FormValueBackend.run(%{request | limits: limits, values: List.duplicate("aaaab", 4)})
+  end
+
+  test "worker heap enforcement counts shared binaries without changing caller flags" do
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a+", ["aaa"])
+    caller = Process.info(self(), :max_heap_size)
+
+    task =
+      Task.async(fn ->
+        result = HtmlFormValueValidator.evaluate(request)
+        {result, Process.info(self(), :max_heap_size)}
+      end)
+
+    assert {{:ok, :matched, _}, {:max_heap_size, heap}} = Task.await(task)
+
+    assert heap.size ==
+             div(request.limits.max_html_form_value_memory_bytes, :erlang.system_info(:wordsize))
+
+    assert heap.kill and heap.include_shared_binaries and not heap.error_logger
+    assert Process.info(self(), :max_heap_size) == caller
+  end
+
+  test "expanded character properties stop at the byte check or GC heap cap" do
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "\\p{Assigned}", [])
+    limits = %{request.limits | max_html_form_value_memory_bytes: 8_000}
+
+    result = FormValueBackend.run(%{request | limits: limits})
+    # GC can terminate the worker before the explicit expanded-byte check.
+    assert result in [{:limit, :max_html_form_value_memory_bytes}, :unavailable]
+  end
+
+  test "matcher restores an enclosing budget after observed-memory exhaustion" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher
+    limits = Limits.effective()
+    key = {FormPatternMatcher, :work}
+    previous = {7, limits}
+    Process.put(key, previous)
+
+    assert catch_throw(
+             FormPatternMatcher.match_values("a", ["a"], %{
+               limits
+               | max_html_form_value_memory_bytes: 1
+             })
+           ) == {:form_limit, :max_html_form_value_memory_bytes}
+
+    assert Process.get(key) == previous
+  end
+
+  test "uncaptured recursive OTP matching retains its engine depth diagnostic" do
+    assert {:ok, request} =
+             HtmlFormValueValidator.prepare(:pattern, "(?:(?:a+)+)b", [String.duplicate("a", 20)])
+
+    limits = %{request.limits | max_html_pattern_depth: 5}
+    assert {:limit, :max_html_pattern_depth} = FormValueBackend.run(%{request | limits: limits})
   end
 end

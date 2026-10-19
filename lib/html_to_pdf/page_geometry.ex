@@ -40,6 +40,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
     Float.floor(value / @css_pixel_points + 0.5) * @css_pixel_points
   end
 
+  @doc "Returns the content or padding edge clip after subtracting each edge from a validated rounded host."
+  @spec inset_rounded_clip(map(), map()) :: map()
+  def inset_rounded_clip(host, insets) do
+    radius = min(host.border_radius, min(host.width, host.height) / 2)
+
+    clip = %{
+      x: host.x + insets.left,
+      y: host.y + insets.bottom,
+      width: max(host.width - insets.left - insets.right, 0.0),
+      height: max(host.height - insets.top - insets.bottom, 0.0),
+      border_radius: max(radius - insets.left, 0.0)
+    }
+
+    if length(Enum.uniq(Map.values(insets))) == 1 do
+      clip
+    else
+      # CSS edge curves retain Blink's fixed 1/64 CSS-pixel LayoutUnit
+      # precision before the enclosing rectangle is snapped for paint.
+      insets =
+        Map.new(insets, fn {side, extent} ->
+          {side, Float.floor(extent / @css_pixel_points * 64) / 64 * @css_pixel_points}
+        end)
+
+      Map.put(clip, :border_radii, %{
+        bottom_left: {max(radius - insets.left, 0.0), max(radius - insets.bottom, 0.0)},
+        bottom_right: {max(radius - insets.right, 0.0), max(radius - insets.bottom, 0.0)},
+        top_right: {max(radius - insets.right, 0.0), max(radius - insets.top, 0.0)},
+        top_left: {max(radius - insets.left, 0.0), max(radius - insets.top, 0.0)}
+      })
+    end
+  end
+
   @doc false
   @spec rounded_border_contours(map(), number()) :: [map()] | nil
   def rounded_border_contours(box, page_height) do
@@ -57,6 +89,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
     if Map.get(box, :role) in [:native_listbox, :css_menu, :temporal_host] and
          box.border_radius > 0 and
+         length(Enum.uniq(Map.values(Map.get(box, :border_widths, %{all: box.stroke_width})))) ==
+           1 and
          solid? do
       inner = %{
         box
@@ -101,6 +135,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
     insets = [
       Map.new(widths, fn {side, _} -> {side, 0} end),
       widths,
+      # Chromium CenterOutsets constructs integer edge widths before snapping.
       Map.new(widths, fn {side, extent} -> {side, trunc(extent * 0.5)} end)
     ]
 
@@ -133,17 +168,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
     tr = {outer.x + outer.width, outer.y}
     bl = {outer.x, outer.y + outer.height}
     br = {outer.x + outer.width, outer.y + outer.height}
-    itl = {inner.x, inner.y}
-    itr = {inner.x + inner.width, inner.y}
-    ibl = {inner.x, inner.y + inner.height}
-    ibr = {inner.x + inner.width, inner.y + inner.height}
 
-    sides = %{
-      top: [tl, tr, itr, itl],
-      right: [tr, br, ibr, itr],
-      bottom: [br, bl, ibl, ibr],
-      left: [bl, tl, itl, ibl]
-    }
+    # Each side's miter rays continue through the curved corners.
+    # An isolated group already clips outside edge ties.
+    bias = if Map.has_key?(box, :css_border_surface), do: 0, else: 0.0001
+
+    sides =
+      [
+        {:top, tl, tr, {widths.left, widths.top}, {-widths.right, widths.top}, outer.height / 2,
+         outer.width, widths.left + widths.right},
+        {:right, tr, br, {-widths.right, widths.top}, {-widths.right, -widths.bottom},
+         outer.width / 2, outer.height, widths.top + widths.bottom},
+        {:bottom, br, bl, {-widths.right, -widths.bottom}, {widths.left, -widths.bottom},
+         outer.height / 2, outer.width, widths.left + widths.right},
+        {:left, bl, tl, {widths.left, -widths.bottom}, {widths.left, widths.top}, outer.width / 2,
+         outer.height, widths.top + widths.bottom}
+      ]
+      |> Map.new(fn {side, {ax, ay}, {bx, by}, {dx, dy}, {ex, ey}, depth, extent, adjacent} ->
+        fraction = if widths[side] > 0, do: depth / widths[side], else: 0.0
+        fraction = if adjacent > 0, do: min(fraction, extent / adjacent), else: fraction
+
+        # Keep hard side clips on the interior side of source raster ties.
+        {ax, ay, bx, by} =
+          case side do
+            :top -> {ax, ay + bias, bx, by + bias}
+            :right -> {ax - bias, ay, bx - bias, by}
+            :bottom -> {ax, ay - bias, bx, by - bias}
+            :left -> {ax + bias, ay, bx + bias, by}
+          end
+
+        {side,
+         Enum.uniq([
+           {ax, ay},
+           {bx, by},
+           {bx + ex * fraction, by + ey * fraction},
+           {ax + dx * fraction, ay + dy * fraction}
+         ])}
+      end)
 
     %{
       outer: outer,

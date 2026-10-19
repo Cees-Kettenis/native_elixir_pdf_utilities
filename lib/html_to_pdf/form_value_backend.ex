@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend do
   @moduledoc false
   alias NativeElixirPdfUtilities.Validators.HtmlFormValueValidator
 
-  @doc "Runs admitted form-value work in a monitored Elixir process with a deadline."
+  @doc "Runs admitted form-value work with an external deadline and a GC-enforced BEAM heap cap."
   @spec run(map()) ::
           {:ok, atom(), map()}
           | {:limit, atom()}

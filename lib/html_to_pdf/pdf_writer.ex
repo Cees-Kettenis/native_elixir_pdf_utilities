@@ -728,8 +728,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             nil ->
               ""
 
-            %{x: x, y: y, width: width, height: height} ->
-              Enum.map_join([x, y, width, height], " ", &format_number/1) <> " re W n"
+            clip ->
+              clip_rectangle_stream(clip) |> IO.iodata_to_binary()
           end
 
         "q " <> matrix <> " cm " <> clip
@@ -768,7 +768,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
             content_clip =
               if is_map(clip) and
-                   (Map.has_key?(clip, :inner_clip) or Map.has_key?(clip, :border_radius)),
+                   (Map.has_key?(clip, :inner_clip) or
+                      (Map.has_key?(clip, :border_radius) or Map.has_key?(clip, :border_radii))),
                  do: clip,
                  else: nil
 
@@ -1574,39 +1575,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp curved_border_stream(box, page_height, _border_style, states) do
     geometry = WriterValidator.prepare_curved_border_paint(box, page_height)
 
-    commands = fn contour ->
-      radii = Map.values(contour.radii)
-
-      if length(Enum.uniq(radii)) == 1 and elem(hd(radii), 0) == elem(hd(radii), 1) do
-        radius = min(elem(hd(radii), 0), min(contour.width, contour.height) / 2)
-
-        DrawingGeometry.rounded_rect_commands(
-          contour.x,
-          contour.y,
-          contour.width,
-          contour.height,
-          radius
-        )
-      else
-        DrawingGeometry.elliptical_rect_commands(
-          contour.x,
-          contour.y,
-          contour.width,
-          contour.height,
-          contour.radii
-        )
-      end
-    end
-
-    path = fn contour ->
-      commands.(contour)
+    path = fn contour, subdivisions ->
+      DrawingGeometry.elliptical_rect_commands(
+        contour.x,
+        contour.y,
+        contour.width,
+        contour.height,
+        contour.radii,
+        subdivisions
+      )
       |> Enum.map_join(" ", fn {operation, coordinates} ->
         case operation do
           4 ->
             "h"
 
           _ ->
-            Enum.map_join(coordinates, " ", &format_number/1) <>
+            Enum.map_join(coordinates, " ", &format_number(&1, 8)) <>
               " " <> Enum.at(["m", "l", "", "c"], operation)
         end
       end)
@@ -1619,7 +1603,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     inner =
       if geometry.inner.width > 0 and geometry.inner.height > 0,
-        do: [path.(geometry.inner)],
+        do: [path.(geometry.inner, 4)],
         else: []
 
     outer =
@@ -1627,28 +1611,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
            Map.has_key?(box, :css_border_surface),
          do:
            "#{format_number(geometry.outer.x)} #{format_number(geometry.outer.y)} #{format_number(geometry.outer.width)} #{format_number(geometry.outer.height)} re",
-         else: path.(geometry.outer)
+         else: path.(geometry.outer, 4)
 
     common =
       [
         "q",
         "#{:erlang.float_to_binary(geometry.canvas.point_scale, decimals: 8)} 0 0 -#{:erlang.float_to_binary(geometry.canvas.point_scale, decimals: 8)} 0 #{format_number(geometry.canvas.height)} cm",
-        "#{format_number(geometry.canvas.css_scale)} 0 0 #{format_number(geometry.canvas.css_scale)} 0 0 cm",
-        outer
-      ] ++ inner ++ ["W* n"]
+        "#{format_number(geometry.canvas.css_scale)} 0 0 #{format_number(geometry.canvas.css_scale)} 0 0 cm"
+      ]
 
     uniform? =
-      uniform_width? and
+      (uniform_width? or uniform_border_style(box) == :solid) and
         not side_specific_border_colors?(Map.get(box, :border_colors), box.stroke_color) and
         length(Enum.uniq(Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)))) ==
           1
 
+    uniform? = uniform? and uniform_border_style(box) not in [:inset, :outset, :groove, :ridge]
     sides = if uniform?, do: [:top], else: [:top, :right, :bottom, :left]
 
     strokes =
       Enum.flat_map(sides, fn side ->
         width = geometry.widths[side]
         style = border_side_style(box, side)
+        # CSS border paint uses solid edges when there is no room for the
+        # requested stripe detail. These are fixed paint rules, not limits.
+        style =
+          if (style == :double and width < 3) or
+               (style in [:groove, :ridge] and width <= 1),
+             do: :solid,
+             else: style
+
         color = border_side_color(box, side)
 
         if width > 0 and style not in [:none, :hidden] and color != nil do
@@ -1667,6 +1659,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           parts = ["q"] ++ clip
 
           if style in [:dashed, :dotted] do
+            parts = parts ++ [outer] ++ inner ++ ["W* n"]
+
             adjacent =
               case side do
                 side when side in [:top, :bottom] -> [:left, :right]
@@ -1689,8 +1683,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               |> Kernel.++(
                 Enum.flat_map(paths, fn {:dot, {x, y}} ->
                   radius = width / 2
-                  [rounded_rect_path(x - radius, y - radius, width, width, radius), "f"]
-                end) ++ ["Q"]
+
+                  [
+                    path.(
+                      %{
+                        x: x - radius,
+                        y: y - radius,
+                        width: width,
+                        height: width,
+                        radii:
+                          Map.new(
+                            [:bottom_left, :bottom_right, :top_left, :top_right],
+                            &{&1, {radius, radius}}
+                          )
+                      },
+                      4
+                    )
+                  ]
+                end) ++ ["f", "Q"]
               )
             else
               parts
@@ -1701,7 +1711,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                   Enum.flat_map(paths, fn {:stroke, commands} ->
                     [
                       Enum.map_join(commands, " ", fn {operation, coords} ->
-                        Enum.map_join(coords, " ", &format_number/1) <>
+                        Enum.map_join(coords, " ", &format_number(&1, 8)) <>
                           " " <> Enum.at(["m", "l", "", "c"], operation)
                       end),
                       "S"
@@ -1710,15 +1720,104 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               )
             end
           else
-            # Solid curved sides fill the actual border band already limited by
-            # the outer/inner contour and the source corner miter polygon.
-            parts
-            |> put_opacity(color, :fill, states)
-            |> put_fill_color(color)
-            |> Kernel.++([
-              "#{format_number(geometry.outer.x)} #{format_number(geometry.outer.y)} #{format_number(geometry.outer.width)} #{format_number(geometry.outer.height)} re f",
-              "Q"
-            ])
+            if style in [:double, :groove, :ridge, :inset, :outset] do
+              parts = parts ++ [outer] ++ inner ++ ["W* n"]
+
+              bands =
+                case style do
+                  :double ->
+                    [{0.0, 1 / 3, color}, {2 / 3, 1.0, color}]
+
+                  relief when relief in [:groove, :ridge] ->
+                    {outer, inner} = relief_pair(color, side, relief, Map.get(box, :role))
+                    [{0.0, 1.0, outer}, {0.5, 1.0, inner}]
+
+                  relief when relief in [:inset, :outset] ->
+                    [{0.0, 1.0, relief_color(color, side, relief, Map.get(box, :role))}]
+                end
+
+              parts ++
+                Enum.flat_map(bands, fn {start, finish, color} ->
+                  contours =
+                    Enum.map([start, finish], fn fraction ->
+                      case fraction do
+                        +0.0 ->
+                          geometry.outer
+
+                        1.0 ->
+                          geometry.inner
+
+                        0.5 ->
+                          geometry.center
+
+                        _ ->
+                          widths =
+                            Map.new(box.border_widths, fn {edge, extent} ->
+                              {edge,
+                               Float.floor(extent / @css_pixel_points * fraction + 0.5) *
+                                 @css_pixel_points}
+                            end)
+
+                          WriterValidator.prepare_curved_border_paint(
+                            %{
+                              box
+                              | border_widths: widths,
+                                stroke_width: box.stroke_width * fraction
+                            },
+                            page_height
+                          ).inner
+                      end
+                    end)
+
+                  # The annulus already clips the true outer and inner edges.
+                  # Stripe boundaries add one clip, then paint a rectangle, as
+                  # Blink does. Filling the same curved edge again compounds AA.
+                  band_clip =
+                    case {start, finish} do
+                      {+0.0, 1.0} ->
+                        []
+
+                      {+0.0, _} ->
+                        [
+                          "#{format_number(geometry.outer.x)} #{format_number(geometry.outer.y)} #{format_number(geometry.outer.width)} #{format_number(geometry.outer.height)} re",
+                          path.(List.last(contours), 4),
+                          "W* n"
+                        ]
+
+                      {_, 1.0} ->
+                        [path.(hd(contours), 4), "W n"]
+                    end
+
+                  (["q"] ++ band_clip)
+                  |> put_opacity(color, :fill, states)
+                  |> put_fill_color(color)
+                  |> Kernel.++([
+                    "#{format_number(geometry.outer.x)} #{format_number(geometry.outer.y)} #{format_number(geometry.outer.width)} #{format_number(geometry.outer.height)} re f",
+                    "Q"
+                  ])
+                end) ++ ["Q"]
+            else
+              solid_paint =
+                if uniform? do
+                  [path.(geometry.outer, 8)] ++
+                    if(geometry.inner.width > 0 and geometry.inner.height > 0,
+                      do: [path.(geometry.inner, 8)],
+                      else: []
+                    ) ++ ["f*"]
+                else
+                  [outer] ++
+                    inner ++
+                    [
+                      "W* n",
+                      "#{format_number(geometry.outer.x)} #{format_number(geometry.outer.y)} #{format_number(geometry.outer.width)} #{format_number(geometry.outer.height)} re f"
+                    ]
+                end
+
+              parts
+              |> put_opacity(color, :fill, states)
+              |> put_fill_color(color)
+              |> Kernel.++(solid_paint ++ ["Q"])
+            end
           end
         else
           []
@@ -1743,28 +1842,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp clip_rectangle_stream(clip) do
     path =
-      if Map.get(clip, :border_radius, 0.0) > 0 do
-        [
-          rounded_rect_path(
+      if Map.has_key?(clip, :border_radii) do
+        commands =
+          DrawingGeometry.elliptical_rect_commands(
             clip.x,
             clip.y,
             clip.width,
             clip.height,
-            clip.border_radius
-          ),
+            clip.border_radii,
+            4
+          )
+
+        [
+          Enum.map_join(commands, " ", fn {operation, coordinates} ->
+            case operation do
+              4 ->
+                "h"
+
+              _ ->
+                Enum.map_join(coordinates, " ", &format_number(&1, 8)) <>
+                  " " <> Enum.at(["m", "l", "", "c"], operation)
+            end
+          end),
           " W n "
         ]
       else
-        [
-          format_number(clip.x),
-          " ",
-          format_number(clip.y),
-          " ",
-          format_number(clip.width),
-          " ",
-          format_number(clip.height),
-          " re W n "
-        ]
+        if Map.get(clip, :border_radius, 0.0) > 0 do
+          [
+            rounded_rect_path(
+              clip.x,
+              clip.y,
+              clip.width,
+              clip.height,
+              clip.border_radius
+            ),
+            " W n "
+          ]
+        else
+          [
+            format_number(clip.x),
+            " ",
+            format_number(clip.y),
+            " ",
+            format_number(clip.width),
+            " ",
+            format_number(clip.height),
+            " re W n "
+          ]
+        end
       end
 
     case Map.get(clip, :inner_clip) do
@@ -1792,16 +1917,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     image_resource = Map.fetch!(image_resources, box.image_resource_key)
 
+    paint = WriterValidator.prepare_image_paint(box, page_height)
+
     clip =
       case Map.get(box, :clip) do
         nil ->
           []
 
         clip ->
-          clip_rectangle_stream(clip)
+          if paint && paint.content_clips, do: [], else: clip_rectangle_stream(clip)
       end
-
-    paint = WriterValidator.prepare_image_paint(box, page_height)
 
     matrix =
       case paint do
@@ -1819,6 +1944,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             format_number(canvas.height),
             " cm ",
             clip_rectangle_stream(canvas.clip),
+            Enum.map(canvas.content_clips || [], &clip_rectangle_stream/1),
             Enum.map_join(canvas.transform, " ", &format_number/1)
           ]
       end
@@ -2024,15 +2150,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       end
 
     stroke_parts =
-      if box.border_radius > 0 and
-           Enum.all?(
-             Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)),
-             &(&1 in [:none, :hidden, :solid, :dotted, :dashed])
-           ) and
-           Enum.any?(
-             Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)),
-             &(&1 in [:dotted, :dashed])
-           ) do
+      if (Map.get(box, :role) in [:temporal_host, :css_control_host] and box.border_radius > 0 and
+            (length(Enum.uniq(Map.values(box.border_widths))) > 1 or
+               Enum.any?(
+                 Map.values(box.border_styles),
+                 &(&1 not in [:solid, :inset, :outset, :none, :hidden])
+               ))) or
+           (box.border_radius > 0 and
+              Enum.all?(
+                Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)),
+                &(&1 in [:none, :hidden, :solid, :dotted, :dashed])
+              ) and
+              Enum.any?(
+                Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)),
+                &(&1 in [:dotted, :dashed])
+              )) do
         curved_border_stream(box, box.raster_page_height, :dashed, graphics_state_resources)
       else
         box.border_widths
@@ -2334,6 +2466,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     # by lightening once for the shadow and twice for the lighter edge.
     adjusted =
       if role in [
+           :temporal_host,
            :iframe_border,
            :table_cell_background,
            :table_separate_background,
@@ -2370,7 +2503,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       end
 
     adjusted =
-      if role in [:fieldset, :temporal_host] and not dark? do
+      if role == :fieldset and not dark? do
         # Chromium 152's CalculateInsetOutsetColor keeps the original lighter
         # edge unless its contrast against Color::Dark is below 1.75.
         dark =
@@ -3439,7 +3572,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     |> String.pad_leading(10, "0")
   end
 
-  defp format_number(number) do
+  defp format_number(number, decimals \\ 4) do
     case number do
       integer when is_integer(integer) ->
         Integer.to_string(integer)
@@ -3448,14 +3581,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         Integer.to_string(trunc(number))
 
       number ->
-        rounded = Float.round(number, 4)
+        rounded = Float.round(number, decimals)
 
         case rounded == trunc(rounded) do
           true ->
             Integer.to_string(trunc(rounded))
 
           false ->
-            :erlang.float_to_binary(rounded, [:compact, decimals: 4])
+            :erlang.float_to_binary(rounded, [:compact, decimals: decimals])
         end
     end
   end

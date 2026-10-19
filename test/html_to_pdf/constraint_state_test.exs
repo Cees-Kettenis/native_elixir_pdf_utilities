@@ -270,6 +270,99 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ConstraintStateTest do
     assert diagnostic.message =~ "max_html_pattern_compile_work"
   end
 
+  test "form ownership and fieldset ancestry aggregate only candidate failures" do
+    states =
+      initial(
+        "<form id=owner></form><form id=other><fieldset id=group><input id=external form=owner required></fieldset><input type=email value=bad readonly></form><input form=missing required><fieldset id=empty></fieldset><form id=none></form>"
+      )
+
+    refute states["owner"].aggregate_valid
+    assert states["other"].aggregate_valid
+    refute states["group"].aggregate_valid
+    assert states["group"].constraint_validation.valid
+    refute states["group"].constraint_validation.will_validate
+
+    assert Enum.all?(states["group"].constraint_validation.checks, fn {_, flag} ->
+             flag == false
+           end)
+
+    assert states["empty"].aggregate_valid and states["none"].aggregate_valid
+    assert states["external"].owner != nil
+
+    for {legend, valid} <- [
+          {"<legend><input required></legend>", false},
+          {"<legend>First</legend><legend><input required></legend>", true},
+          {"<legend><input required disabled></legend>", true}
+        ] do
+      states =
+        initial("<form id=f><fieldset id=g disabled>#{legend}<input required></fieldset></form>")
+
+      assert states["f"].aggregate_valid == valid
+      assert states["g"].aggregate_valid == valid
+      assert states["g"].constraint_validation.valid
+    end
+  end
+
+  test "validity selectors delegate candidacy and aggregate semantics while source attributes remain authored" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    alias NativeElixirPdfUtilities.Validators.{HtmlConstraintValidator, HtmlValidator}
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<style>:valid{color:green}:invalid{color:red}</style><form><input required value=Ready></form><input id=invalid required><input id=barred type=email readonly value=bad><fieldset><input required></fieldset><output id=result>Ready</output>"
+             )
+
+    assert {:ok, %{children: children}} = Style.compute_detailed(dom, forms: :static)
+    nodes = Enum.filter(children, &(Map.get(&1, :tag) != "style"))
+    [form, invalid, barred, fieldset, output] = nodes
+
+    for node <- [form, hd(form.children)],
+        do: assert_in_delta(elem(node.style.color, 1), 128 / 255, 1.0e-9)
+
+    for node <- [invalid, fieldset], do: assert(node.style.color == {1.0, 0.0, 0.0})
+
+    for node <- [barred, output] do
+      refute HtmlValidator.control_state_matches?(:valid, node)
+      refute HtmlValidator.control_state_matches?(:invalid, node)
+    end
+
+    assert barred.attributes["value"] == "bad"
+    prepared_invalid = %{tag: "input", initial_state: initial("<input id=x required>")["x"]}
+    assert HtmlConstraintValidator.matches_initial_state?(:invalid, prepared_invalid)
+
+    refute HtmlConstraintValidator.matches_initial_state?(
+             :valid,
+             Map.put(prepared_invalid, :namespace, :svg)
+           )
+
+    refute HtmlConstraintValidator.matches_initial_state?(:invalid, %{tag: "div"})
+
+    refute HtmlConstraintValidator.matches_initial_state?(:valid, %{
+             tag: "input",
+             initial_state: %{}
+           })
+
+    assert HtmlValidator.parse_css_simple_pseudo_class(":VaLiD") == {:ok, :valid, ""}
+    assert HtmlValidator.parse_css_simple_pseudo_class(":invalid") == {:ok, :invalid, ""}
+    assert HtmlConstraintValidator.valid_transported_state?(initial("<form id=f></form>")["f"])
+
+    refute HtmlConstraintValidator.valid_transported_state?(%{
+             initial("<form id=f></form>")["f"]
+             | aggregate_valid: nil
+           })
+  end
+
+  test "authored initial text lengths never invent user edited minlength or maxlength failures" do
+    for type <- ~w(text search tel url email password), value <- ["x", "abcdef"] do
+      source = "<input id=control type=#{type} minlength=3 maxlength=4 value='#{value}'>"
+      state = initial(source)["control"]
+      assert state.value == value
+      refute state.constraint_validation.checks.too_long
+      refute state.constraint_validation.checks.too_short
+      assert {:ok, _} = NativeElixirPdfUtilities.HtmlToPdf.render(source, forms: :static)
+    end
+  end
+
   defp initial(html) do
     {:ok, dom} = HtmlParser.parse_detailed(html)
     nodes = HtmlFormValidator.prepare_initial_nodes(dom.children)

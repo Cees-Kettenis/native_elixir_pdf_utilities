@@ -33,7 +33,7 @@ radio export values are strings.
 
 ## HTML field names and compatibility
 
-Text/search/telephone/URL/email inputs, textareas, checkboxes, radio buttons and single-selection selects
+Text/search/telephone/URL/email inputs, textareas, checkboxes, radio buttons and supported single/multiple-selection selects
 become interactive fields. Button elements and submit/reset/button inputs remain static artwork. Use
 `HtmlToPdf.render(html, forms: :static)` for the pre-0.18 behavior.
 
@@ -117,8 +117,10 @@ the font's normal line height rather than an authored CSS line-height. Authored
 values, complete option exports, actual owners and widget rectangles survive
 filling and flattening. Disabled native select page paint and widget appearances
 use one isolated transparency Form with the pinned UA opacity.
-Multiple/listbox sizing, rich/custom controls, interactive disabled-option policy,
-constraints and shadow integration remain unfinished.
+Multiple selects and listboxes retain selected values, option indices and initial
+scroll state. Logical shadow/slot/clone trees preserve source ownership and
+disabledness. Rich/custom controls and complete interactive disabled-option
+policy remain unfinished.
 
 Generated names can change when pagination changes. Supply `name` for keys
 used by application code. Controls cannot span pages or repeat with the same
@@ -133,8 +135,7 @@ All members of a radio group must be enabled or all disabled. Interactive
 rendering rejects mixed groups with `:unsupported_form` because PDF read-only
 status applies to the whole field. Use `forms: :static` to render mixed groups
 as artwork without interactive fields.
-The HTML parser still supports its documented subset; HTML listboxes and
-multiple-selection selects are not implemented.
+The HTML parser retains its documented supported subset.
 
 Initial appearances are native Form XObjects with shared font, image and graphics-state resources. Temporary appearance frames use the appearance limits rather than the actual-page limits. Default-limit tests cover rendering, filling and flattening 1,000 controls; document content must still fit the field, object, byte and font budgets.
 
@@ -285,3 +286,15 @@ load resources.
 Ordinary controls use inline-block flow inside HTML ancestry. Normalized
 standalone control fragments keep their established root block layout. Authored
 CSS can override either default. Clipped text editors retain their text baseline.
+
+Initial constraint state includes required, email/absolute-URL type, Unicode-v
+pattern, numeric/temporal bounds and step checks. Initial authored values have no
+user-edit dirty state, so minlength/maxlength do not set length failures.
+`:valid` and `:invalid` match validation candidates. Forms aggregate their owned
+candidates, including external controls; fieldsets aggregate same-tree descendant
+candidates. A fieldset is itself barred and retains its own valid, empty
+ValidityState even when its aggregate selector is invalid. Disabled, readonly and
+other barred failures do not invalidate an aggregate. Constraint-invalid initial
+values still render and retain their canonical PDF values. Filling a PDF does
+not rerun these HTML initial-state checks. Submission and user interaction remain
+outside this static profile.

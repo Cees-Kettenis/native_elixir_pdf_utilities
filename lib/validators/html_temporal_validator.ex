@@ -401,21 +401,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
           source: kind
         )
 
-      style.border_radius > 0 and
-          (length(Enum.uniq(Map.values(style.border_widths))) > 1 or
-             Enum.any?(
-               Map.values(style.border_styles),
-               &(&1 not in [:solid, :inset, :outset, :none, :hidden])
-             )) ->
-        Diagnostics.error(
-          :style,
-          :unsupported_html,
-          "Rounded temporal hosts require uniform border widths and solid, inset or outset paint; use a uniform border or supply static artwork for this border shape",
-          module: __MODULE__,
-          operation: :compute,
-          source: kind
-        )
-
       not native_range? ->
         Diagnostics.error(
           :style,

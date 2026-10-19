@@ -218,8 +218,54 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           height: box.height * pixels * device
         }
 
+        # Rounded image content clips are painted in the printer's device
+        # plane. Moving them through a point-space clip loses raster edge ties.
+        source_clips =
+          case Map.get(box, :clip) do
+            nil -> []
+            content -> [content, Map.get(content, :inner_clip)] |> Enum.reject(&is_nil/1)
+          end
+
+        content_clips =
+          if Enum.any?(source_clips, &Map.has_key?(&1, :border_radii)) do
+            scale = pixels * device
+
+            swap = %{
+              bottom_left: :top_left,
+              bottom_right: :top_right,
+              top_left: :bottom_left,
+              top_right: :bottom_right
+            }
+
+            Enum.map(source_clips, fn content ->
+              radii =
+                Map.get_lazy(content, :border_radii, fn ->
+                  radius = Map.get(content, :border_radius, 0)
+                  Map.new(Map.keys(swap), &{&1, {radius, radius}})
+                end)
+
+              %{
+                x: content.x * scale,
+                y: (page_height - content.y - content.height) * scale,
+                width: content.width * scale,
+                height: content.height * scale,
+                border_radii:
+                  Map.new(swap, fn {corner, source} ->
+                    {rx, ry} = radii[source]
+                    {corner, {rx * scale, ry * scale}}
+                  end)
+              }
+            end)
+          end
+
+        clip_values =
+          Enum.flat_map(content_clips || [], fn content ->
+            Map.values(Map.take(content, [:x, :y, :width, :height])) ++
+              Enum.flat_map(Map.values(content.border_radii), &Tuple.to_list/1)
+          end)
+
         try do
-          Enum.each(transform ++ Map.values(clip) ++ [page_height], fn value ->
+          Enum.each(transform ++ Map.values(clip) ++ clip_values ++ [page_height], fn value ->
             HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(value), :writer)
           end)
         catch
@@ -236,7 +282,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             )
         end
 
-        canvas |> Map.put(:transform, transform) |> Map.put(:clip, clip)
+        canvas
+        |> Map.put(:transform, transform)
+        |> Map.put(:clip, clip)
+        |> Map.put(:content_clips, content_clips)
 
       _ ->
         nil
@@ -389,7 +438,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                                        Map.get(box, :shape, :rectangle) == :rectangle and
                                        Map.get(box, :snap_to_css_pixel_grid, false) and
                                        Map.get(box, :border_radius, 0) > 0 and
-                                       is_nil(Map.get(box, :form_owner)) and
+                                       (is_nil(Map.get(box, :form_owner)) or
+                                          Map.get(box, :role) in [
+                                            :temporal_host,
+                                            :css_control_host
+                                          ]) and
                                        Enum.any?(styles, &(&1 in [:dotted, :dashed])) do
                                     Map.put(box, :css_border_surface, %{
                                       alpha: 1.0,
@@ -691,6 +744,12 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             if composition == nil,
               do: parent_height,
               else: elem(DrawingGeometry.composition_parts(composition), 2)
+
+          box =
+            case Map.get(box, :clip) do
+              nil -> box
+              clip -> Map.put(box, :clip, normalize_clip_rectangle(clip, parent_height, false))
+            end
 
           transform = DrawingGeometry.local_group_transform(box, parent_height)
 
@@ -1154,9 +1213,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
               "drawing_group affine matrix must remain nondegenerate at the writer's four-decimal PDF precision"
             )
 
-          not valid_group_clip?(clip) ->
+          not valid_clip_rectangle?(clip, true) ->
             drawing_group_error(
-              "drawing_group clip requires bounded numeric x/y and non-negative width/height"
+              "drawing_group clip requires bounded numeric x/y, non-negative width/height and valid rounded corners"
             )
 
           not is_nil(Map.get(box, :form_control)) ->
@@ -1175,6 +1234,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             drawing_group_error("drawing_group links belong on child text boxes")
 
           true ->
+            box =
+              if is_map(clip),
+                do: Map.put(box, :clip, normalize_clip_rectangle(clip, parent_height, false)),
+                else: box
+
             parent =
               case parent_transform do
                 {sx, sy, tx, ty} -> {sx, sy, tx, ty, nil, parent_height}
@@ -1329,20 +1393,6 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     is_number(value) and abs(value) <= Limits.get(:max_pdf_numeric_magnitude)
   end
 
-  defp valid_group_clip?(clip) do
-    case clip do
-      nil ->
-        true
-
-      %{x: x, y: y, width: width, height: height} when map_size(clip) == 4 ->
-        Enum.all?([x, y, width, height], &bounded_number?/1) and width >= 0 and height >= 0 and
-          bounded_number?(x + width) and bounded_number?(y + height)
-
-      _ ->
-        false
-    end
-  end
-
   defp valid_group_geometry?(box, transform, page_height) do
     width = Map.get(box, :annotation_width, Map.get(box, :width, 0))
 
@@ -1377,7 +1427,6 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     Enum.all?(dimensions, &bounded_number?/1) and width >= 0 and height >= 0 and
       Enum.all?(corners, fn {x, y} -> bounded_number?(x) and bounded_number?(y) end) and
       valid_prepared_box_clips?(box, page_height) and
-      valid_group_clip?(Map.get(box, :link_rect)) and
       Enum.all?(
         [Map.get(box, :link_rect)] ++
           case Map.get(box, :clip) do
@@ -1389,7 +1438,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 normalize_clip_rectangle(
                   clip,
                   page_height,
-                  Map.get(box, :snap_to_css_pixel_grid, false) and Map.has_key?(clip, :inner_clip)
+                  Map.get(box, :snap_to_css_pixel_grid, false) and
+                    (Map.has_key?(clip, :inner_clip) or Map.has_key?(clip, :border_radii))
                 )
 
               [prepared, Map.get(prepared, :inner_clip)]
@@ -1428,9 +1478,29 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             normalize_clip_rectangle(
               clip,
               page_height,
-              Map.get(box, :snap_to_css_pixel_grid, false) and Map.has_key?(clip, :inner_clip)
+              Map.get(box, :snap_to_css_pixel_grid, false) and
+                (Map.has_key?(clip, :inner_clip) or Map.has_key?(clip, :border_radii))
             )
           )
+      end
+
+    composition =
+      case composition do
+        {sx, sy, tx, ty, clip, height} ->
+          content_clip = Map.get(box, :clip)
+
+          if match?({:polygon, _}, clip) or
+               (is_map(content_clip) and
+                  (Map.has_key?(content_clip, :border_radii) or
+                     Map.get(content_clip, :border_radius, 0) > 0 or
+                     Map.has_key?(content_clip, :inner_clip))) do
+            %{transform: {sx, 0, 0, sy, tx, ty}, clip: clip, height: height}
+          else
+            composition
+          end
+
+        _ ->
+          composition
       end
 
     box =
@@ -1539,22 +1609,6 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 DrawingGeometry.transform_box_clip(Map.get(box, :clip), {sx, sy, tx, ty})
               )
 
-        rect =
-          case Map.get(box, :clip) do
-            content_clip when is_map(content_clip) ->
-              if Map.has_key?(content_clip, :inner_clip) or
-                   Map.has_key?(content_clip, :border_radius),
-                 do:
-                   DrawingGeometry.intersect_clip(
-                     rect,
-                     DrawingGeometry.transform_box_clip(content_clip, {sx, sy, tx, ty})
-                   ),
-                 else: rect
-
-            _ ->
-              rect
-          end
-
         {left, bottom, right, top} = DrawingGeometry.intersect_clip(rect, clip)
 
         if right > left and top > bottom do
@@ -1602,7 +1656,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       not Map.has_key?(box, :link_rect) or
         (is_map(content_clip) and
            (Map.has_key?(content_clip, :inner_clip) or
-              Map.has_key?(content_clip, :border_radius)))
+              (Map.has_key?(content_clip, :border_radius) or
+                 Map.has_key?(content_clip, :border_radii))))
 
     clip =
       if use_content_clip,
@@ -1753,12 +1808,36 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{x: x, y: y, width: width, height: height} ->
         allowed =
           if rounded?,
-            do: [:x, :y, :width, :height, :border_radius, :inner_clip],
+            do: [:x, :y, :width, :height, :border_radius, :border_radii, :inner_clip],
             else: [:x, :y, :width, :height]
 
         radius = Map.get(clip, :border_radius, 0.0)
 
-        Enum.all?(Map.keys(clip), &(&1 in allowed)) and
+        radii_valid? =
+          case Map.get(clip, :border_radii) do
+            nil ->
+              true
+
+            radii when is_map(radii) ->
+              Enum.sort(Map.keys(radii)) == [:bottom_left, :bottom_right, :top_left, :top_right] and
+                Enum.all?(radii, fn {_corner, pair} ->
+                  case pair do
+                    {rx, ry} ->
+                      Enum.all?([rx, ry], fn value ->
+                        is_number(value) and value >= 0 and
+                          match?({:ok, _}, HtmlValidator.normalize_geometry_number(value))
+                      end)
+
+                    _ ->
+                      false
+                  end
+                end)
+
+            _ ->
+              false
+          end
+
+        radii_valid? and Enum.all?(Map.keys(clip), &(&1 in allowed)) and
           Enum.all?(
             [x, y, width, height, radius],
             &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
@@ -1801,7 +1880,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
               normalize_clip_rectangle(
                 clip,
                 page_height,
-                Map.get(box, :snap_to_css_pixel_grid, false) and Map.has_key?(clip, :inner_clip)
+                Map.get(box, :snap_to_css_pixel_grid, false) and
+                  (Map.has_key?(clip, :inner_clip) or Map.has_key?(clip, :border_radii))
               ),
               true
             )
@@ -1838,6 +1918,37 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       if Map.has_key?(clip, :border_radius),
         do: Map.update!(clip, :border_radius, &min(&1, min(clip.width, clip.height) / 2)),
         else: clip
+
+    clip =
+      case Map.get(clip, :border_radii) do
+        nil ->
+          clip
+
+        radii ->
+          {blx, bly} = radii.bottom_left
+          {brx, bry} = radii.bottom_right
+          {tlx, tly} = radii.top_left
+          {trx, try_} = radii.top_right
+
+          factor =
+            [
+              {clip.width, blx + brx},
+              {clip.width, tlx + trx},
+              {clip.height, bly + tly},
+              {clip.height, bry + try_}
+            ]
+            |> Enum.reduce(1.0, fn {extent, sum}, factor ->
+              if sum > 0, do: min(factor, extent / sum), else: factor
+            end)
+
+          Map.put(
+            clip,
+            :border_radii,
+            Map.new(radii, fn {corner, {rx, ry}} ->
+              {corner, {rx * factor, ry * factor}}
+            end)
+          )
+      end
 
     case Map.fetch(clip, :inner_clip) do
       {:ok, inner} ->

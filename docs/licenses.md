@@ -313,3 +313,11 @@ provided by `regress` 0.12 under its
 [MIT license](../priv/licenses/unicode-string-properties-MIT.txt).
 Both are immutable data used by Elixir code. Their Rust implementations are not
 included in this library.
+
+Unicode 17 character-property tables and Unicode 16 UTS46 host-admission tables
+retain the [Unicode License v3](../priv/licenses/unicode-character-properties-UNICODE-3.0.txt).
+The generated modules record the original Unicode data URLs and SHA-256 hashes.
+
+Rounded native control contours adapt Skia's conic subdivision and quadratic
+conversion algorithms under its [BSD 3-Clause license](../priv/licenses/skia-BSD-3-Clause.txt).
+Source references and adaptation notes are retained in `DrawingGeometry`.

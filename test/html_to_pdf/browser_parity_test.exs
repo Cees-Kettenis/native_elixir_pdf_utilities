@@ -460,6 +460,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
        max_changed_ratio: 0.01,
        max_average_delta: 0.01
      ]},
+    {"html_special_control_geometry.html",
+     [
+       native_renderer: &__MODULE__.render_embedded_fixture/2,
+       chromium_transform: &__MODULE__.local_iframe_reference/1,
+       render_opts: [
+         forms: :static,
+         fonts: [
+           %{
+             family: "DejaVu Sans",
+             path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf"),
+             weight: 400,
+             style: :normal
+           },
+           %{
+             family: "DejaVu Sans Mono",
+             path: Path.expand("priv/fonts/dejavu/DejaVuSansMono.ttf"),
+             weight: 400,
+             style: :normal
+           }
+         ],
+         system_font_discovery: false
+       ],
+       regions:
+         [
+           {"percentage color", {11, 11, 102, 40}},
+           {"auto color", {11, 59, 40, 23}},
+           {"indefinite color", {11, 95, 102, 23}},
+           {"small color", {11, 131, 27, 6}},
+           {"unequal image", {11, 155, 76, 42}}
+         ] ++
+           for(
+             {name, index} <-
+               Enum.with_index([
+                 "solid",
+                 "dashed",
+                 "dotted",
+                 "double",
+                 "groove",
+                 "ridge",
+                 "inset",
+                 "outset"
+               ]),
+             do: {name, {11 + 144 * rem(index, 2), 209 + 42 * div(index, 2), 128, 32}}
+           ),
+       max_changed_ratio: 0.01,
+       max_average_delta: 0.01
+     ]},
+    {"html_constraint_aggregation.html",
+     [
+       render_opts: [
+         forms: :static,
+         fonts: [
+           %{
+             family: "DejaVu Sans",
+             path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf"),
+             weight: 400,
+             style: :normal
+           },
+           %{
+             family: "DejaVu Sans Mono",
+             path: Path.expand("priv/fonts/dejavu/DejaVuSansMono.ttf"),
+             weight: 400,
+             style: :normal
+           }
+         ],
+         system_font_discovery: false
+       ],
+       regions: [
+         {"external owner", {11, 11, 122, 50}},
+         {"barred values", {11, 77, 122, 48}},
+         {"valid initial", {11, 143, 122, 48}},
+         {"descendant fieldset", {155, 11, 122, 48}},
+         {"other owner", {155, 77, 122, 30}},
+         {"disabled fieldset", {155, 143, 122, 48}}
+       ],
+       max_changed_ratio: 0.01,
+       max_average_delta: 0.01
+     ]},
     {"html_initial_constraint_values.html",
      [
        render_opts: [
@@ -2687,6 +2765,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserParityTest do
         "html_paragraph_orphans_widows.html",
         "html_native_temporal_family.html",
         "html_initial_constraint_values.html",
+        "html_special_control_geometry.html",
+        "html_constraint_aggregation.html",
         "html_output_initial_state.html",
         "html_datalist_initial_associations.html",
         "html_color_initial_swatches.html",
@@ -4725,6 +4805,12 @@ for group <- 0..7 do
     end
 
     for {fixture_name, thresholds} <- @fixture_thresholds do
+      if fixture_name in [
+           "html_special_control_geometry.html",
+           "html_constraint_aggregation.html"
+         ],
+         do: @tag(:wave2)
+
       if fixture_name == "html_popover_initial.html", do: @tag(:initial_popovers)
       if fixture_name == "html_fragment_link_decoration_fonts.html", do: @tag(:shadow_fragments)
       if fixture_name == "html_shadow_document_fragments.html", do: @tag(:shadow_fragments)

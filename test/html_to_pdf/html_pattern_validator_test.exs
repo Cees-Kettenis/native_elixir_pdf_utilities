@@ -103,12 +103,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
              HtmlPatternValidator.initial_pattern("a+", ["aaa"])
   end
 
-  test "Unicode string-property compilation charges its actual native allocations" do
+  test "Unicode string-property compilation is bounded by worker memory enforcement" do
     Limits.install(Map.put(Limits.effective(), :max_html_form_value_memory_bytes, 50_000))
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+    assert {:error, {reason, diagnostic}} =
              HtmlPatternValidator.initial_pattern("\\p{RGI_Emoji}", ["👩‍👩‍👧‍👦"])
 
+    assert reason in [:resource_limit_exceeded, :form_value_backend_unavailable]
+    assert diagnostic.reason == reason and diagnostic.stage == :html
     assert diagnostic.message =~ "max_html_form_value_memory_bytes"
   end
 

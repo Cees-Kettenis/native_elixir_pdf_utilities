@@ -2,7 +2,7 @@
 
 Routine SVG acceptance follows the document-to-PNG workflow. It covers representative SVG behavior and mixed MathML/template documents
 that contain SVG. A separate comparison contract test
-verifies that the Chrome PNG reference detects deliberate regressions. The total browser suite has 380 test
+verifies that the Chrome PNG reference detects deliberate regressions. The total browser suite has 382 test
 registrations. The [SVG browser audit](svg-browser-workflow-audit.md) lists the
 27 specialized or redundant cases removed from routine acceptance and the
 coverage retained in their place. Two unstable intrinsic-flex-embed Chrome
@@ -495,3 +495,14 @@ Elixir 1.19 reaches parity and fails the eight SVG samples in 59.4 seconds.
 Elixir 1.20 stops at two performance reduction guards; supplemental Dialyzer
 passes, and its separate browser check fails the same eight samples in 58.6
 seconds. The full matrix therefore remains FAIL.
+
+## Initial control constraints and geometry
+
+The original-source `html_initial_constraint_values.html` comparison includes
+Unicode property patterns, variable lookbehind and `:valid` / `:invalid` styling.
+`html_constraint_aggregation.html` compares form ownership, external controls,
+fieldset descendants, barred controls and disabled fieldsets in six independent
+regions. `html_special_control_geometry.html` compares percentage, calculated,
+auto and small color controls, unequal rounded image edges and eight rounded
+temporal border styles. Every region retains the standard strict one-percent
+changed-pixel and mean-delta ceilings with the same bundled fonts.

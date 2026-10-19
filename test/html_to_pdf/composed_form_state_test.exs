@@ -82,6 +82,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedFormStateTest do
     assert find(nodes, "clone")._initial_form_state.owner == find(nodes, "f")._selector_id
     refute find(nodes, "clone")._initial_form_state.checked
     assert find(nodes, "original")._initial_form_state.checked
+    assert find(nodes, "clone")._initial_form_state.constraint_validation.valid
+    assert find(nodes, "original")._initial_form_state.constraint_validation.valid
+    assert find(nodes, "f")._initial_form_state.aggregate_valid
+
+    scalar = %{
+      original
+      | node_id: make_ref(),
+        parent_id: destination.node_id,
+        attributes: %{"id" => "scalar", "required" => ""}
+    }
+
+    destination = %{destination | children: [clone, scalar]}
+    projection = [%{form | children: [destination, original]}]
+
+    registry = %{
+      destination.node_id => destination,
+      clone.node_id => clone,
+      scalar.node_id => scalar
+    }
+
+    nodes =
+      HtmlValidator.with_render_budget(fn ->
+        HtmlFormValidator.prepare_composed_initial_nodes(dom, %{}, projection, registry)
+      end)
+
+    assert find(nodes, "scalar")._initial_form_state.owner == find(nodes, "f")._selector_id
+    refute find(nodes, "scalar")._initial_form_state.constraint_validation.valid
+    refute find(nodes, "f")._initial_form_state.aggregate_valid
+    assert find(nodes, "original")._initial_form_state.constraint_validation.valid
+  end
+
+  test "aggregate validity follows logical fieldset ancestry including hidden and projected nodes" do
+    nodes =
+      prepared(
+        "<form id=f><fieldset id=lightgroup><div><template shadowrootmode=open><fieldset id=shadowgroup><slot name=visible></slot></fieldset><input id=shadow required></template><input id=light slot=visible><input required></div></fieldset></form>"
+      )
+
+    refute find(nodes, "f")._initial_form_state.aggregate_valid
+    refute find(nodes, "lightgroup")._initial_form_state.aggregate_valid
+    assert find(nodes, "shadowgroup")._initial_form_state.aggregate_valid
+    assert find(nodes, "shadow")._initial_form_state.owner == nil
+    assert find(nodes, "light")._initial_form_state.owner == find(nodes, "f")._selector_id
   end
 
   test "composed inertness survives transfer of logical facts" do
