@@ -99,7 +99,7 @@ Run from the repository root:
 ./scripts/quality-matrix
 ```
 
-The helper requires Docker, `jq` and Bash 4 or newer, with Docker running. Linux
+The helper requires Docker, Git, `tar`, `jq` and Bash 4 or newer, with Docker running. Linux
 can use Docker directly. macOS needs Docker Desktop and Bash 4+. Windows uses
 WSL2 with Docker Desktop integration; native PowerShell and Command Prompt are
 not supported by this helper. The checkout and `.quality/` must be writable by
@@ -117,22 +117,55 @@ The images include Chromium, Poppler, qpdf and fonts. The runner pulls missing
 images and resolves tags to immutable image IDs for the run. Update an existing
 local image deliberately with `docker pull <image>`.
 
-Each runtime gets one container and isolated build, dependency and tool caches
-under `.quality/`. The matrix cleans the application build before compiling, then
-checks compilation, formatting, unused dependencies, 100% test coverage,
-performance, Dialyzer and browser parity. Formatting runs on the canonical
-runtime only. A failed stage skips later stages for that runtime; the other
-runtime still runs.
+The runner freezes tracked and non-ignored untracked source bytes, including
+uncommitted changes, in `.quality/logs/<run>/source.tar`. Each runtime receives a
+separate copy with its own writable test outputs. Dependency, build and tool
+caches remain isolated by runtime under `.quality/`. The application build is
+cleaned before compilation.
+
+| Check | Every supported minor | Latest minor only |
+| --- | --- | --- |
+| Compile with warnings as errors | Yes | |
+| Full ordinary test suite | Yes | |
+| Full Chromium browser parity | Yes | |
+| 100% coverage, during the ordinary suite | | Yes |
+| Formatting and unused dependencies | | Yes |
+| Dialyzer | | Yes |
+| Documentation with warnings as errors | | Yes |
+| Performance guards and report | | Yes |
+
+The canonical runtime must be the newest supported minor. Its coverage command
+already runs the ordinary suite, so that suite is not repeated. Documentation
+uses a separate dev build. No browser cases or performance thresholds are relaxed.
+A failed stage skips later stages for that runtime; other runtimes continue.
+
+Two correctness lanes run concurrently by default. Set `QUALITY_MATRIX_JOBS=1`
+to run serially on a small host, or increase it for more supported runtimes when
+resources allow. Latest-runtime performance starts only after all correctness
+containers exit, so concurrent validation does not distort its timing. A lock
+prevents two matrix runs from sharing caches. If a terminated run leaves
+`.quality/matrix.lock`, inspect its `pid` and owned `pdf-quality-<run>-*` containers
+and remove the lock only after confirming that run has stopped.
+
+CI uses independent runners for each minor and the same check policy. Each
+runner finishes its correctness checks before performance. CI and the local
+runner share configuration validation through `./scripts/quality-matrix --matrix-json`.
+Host-side orchestration integration checks exercise concurrency, source/output
+isolation, failure reporting, the performance barrier and future-runtime policy
+without starting containers. Both the local matrix and CI's setup job run them.
 
 Support moves to a rolling three-minor window when an Elixir 1.21 container is
-available. Add measured performance baselines when admitting a runtime and keep
-one runtime marked canonical for formatting.
+available. Add it to the runtime matrix, make it canonical and measure its
+performance baseline. Older minors retain the ordinary tests and browser parity.
 
 ### Results and warnings
 
 The runner prints stage logs under `.quality/logs/<run>/`. Its `results.tsv`
-records runtime, stage, result, warning count and log path. Each runtime also
-retains complete output in `container.log`.
+records runtime, stage, result, warning count, log path and elapsed seconds. Each
+runtime retains `container-checks.log`, and the canonical runtime also retains
+`container-performance.log` and `performance.json`. The source archive, runtime
+configuration and immutable image IDs identify what was validated. Workspace
+outputs remain under each runtime's log directory.
 
 | Result | Action |
 | --- | --- |
@@ -140,7 +173,7 @@ retains complete output in `container.log`.
 | `FAIL` | Inspect its log and resolve the failure. |
 | `WARN` | Resolve project warnings. Identify third-party warnings and any available upstream fix in the pull request. |
 | `SKIP` | Resolve the earlier failure that prevented this check. |
-| `N/A` | Expected for formatting outside the canonical runtime. |
+| `N/A` | Expected for latest-only checks on older minors, or the separate ordinary-test stage already included in canonical coverage. |
 
 A successful exit can include warnings, so inspect every `FAIL` and `WARN` entry.
 Include the commands, runtime versions, results and unresolved issues in your
@@ -150,7 +183,8 @@ affected checks. The complete matrix must pass before the pull request is ready.
 ## Browser parity
 
 Visible HTML, CSS, image, font, layout or pagination changes need focused unit
-coverage and a Chromium comparison fixture. Run:
+coverage and a Chromium comparison fixture. The full matrix runs browser parity
+on every supported runtime. For focused feedback or host/container diagnosis, run:
 
 ```bash
 CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity

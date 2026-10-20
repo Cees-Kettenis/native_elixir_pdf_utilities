@@ -6,7 +6,8 @@ See [Contributing](../../CONTRIBUTING.md) for setup and
 
 | Path | Purpose |
 | --- | --- |
-| `quality-matrix` | Rebuild and validate on both supported runtime images |
+| `quality-matrix` | Validate supported runtimes in parallel, then measure latest-runtime performance |
+| `test-quality-matrix` | Exercise matrix orchestration with simulated containers and Mix commands |
 | `performance-regression.exs` | Measure the existing guarded workloads and compare a fixed capture |
 | `benchmarks/` | Focused HTML-rendering and image benchmarks |
 | `fixtures/` | Rebuild browser sheets, reference fonts, PNG/PDF cases and Math reference inputs |
@@ -17,10 +18,17 @@ Common commands:
 
 ```bash
 ./scripts/quality-matrix
+QUALITY_MATRIX_JOBS=1 ./scripts/quality-matrix
+./scripts/quality-matrix --matrix-json
 mise exec -- mix test.performance
 MIX_ENV=test mise exec -- mix run scripts/fixtures/build-browser-sheets.exs
 mise exec -- mix run scripts/examples/generate-html-to-pdf.exs
 ```
+
+The default is two concurrent runtime lanes. Use `QUALITY_MATRIX_JOBS=1` on a
+memory-constrained host, or raise it when admitting another supported runtime.
+`--matrix-json` validates and prints the runtime configuration without Docker;
+CI uses the same validation.
 
 Read a generator's header before rebuilding its checked-in inputs. Some require
 pinned source fonts, FontTools or explicitly selected upstream data. Regeneration

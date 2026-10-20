@@ -80,9 +80,11 @@ Keep reusable contributor guidance in `docs/contributing/`. Plans, work records,
 audits and experimental outputs go under ignored `tmp/`; validation logs and runtime caches
 go under ignored `.quality/`.
 
-The quality matrix cleans the application build for each isolated runtime before
-compiling. It reuses dependency and tool caches while rebuilding application
-modules from the current source.
+The quality matrix snapshots the current maintained source, including uncommitted
+changes, into a separate workspace for each runtime. Runtime checks run in parallel
+with separate test outputs, build paths and tool caches. Each lane cleans the
+application build before compiling. The latest runtime runs performance checks
+after all correctness lanes finish.
 
 Large owners such as `Layout`, `Style` and `HtmlValidator` still contain several
 related features. Extract a component when it has a clear responsibility and

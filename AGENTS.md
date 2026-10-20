@@ -93,8 +93,9 @@ Use case/cond/with or clearly named private functions instead of hidden branchin
   parser, style, layout, pagination, or PDF writer tests.
 - If the feature changes visible rendering, add or update a browser parity
   fixture so the native output is compared against Chromium.
-- Browser parity work must pass with:
-  `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity`
+- Browser parity work must pass on every supported runtime through the quality
+  matrix. Use `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity`
+  for focused host feedback or to investigate a host/container discrepancy.
 
 ## Quality Gates
 
@@ -104,6 +105,10 @@ work complete or push it unless the matrix succeeds. Inspect every `FAIL` or
 third-party warning explicitly when handing work back. Do not substitute
 host-only Mix commands for the matrix. Platform setup, output interpretation,
 and the supported-version policy are documented in `docs/contributing/testing.md`.
+Every supported runtime runs compilation, ordinary tests and browser parity.
+The newest supported runtime is canonical and also owns formatting, dependency
+hygiene, 100% coverage, Dialyzer, documentation and performance. Local correctness
+lanes use isolated source snapshots in parallel; performance runs after they finish.
 
 ## Project structure and workspace
 

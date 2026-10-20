@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# Host-side integration checks for the matrix coordinator, without real containers.
+set -euo pipefail
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+for command in jq git tar; do command -v "$command" >/dev/null; done
+directory="$(mktemp -d "${TMPDIR:-/tmp}/pdf-quality-matrix.XXXXXXXX")"
+trap 'rm -rf "$directory"' EXIT
+original_path="$PATH"
+
+fail() {
+  echo "QUALITY_MATRIX_TEST_FAIL $*" >&2
+  [[ ! -f "$project/output" ]] || cat "$project/output" >&2
+  exit 1
+}
+
+check() {
+  "$@" || fail "assertion=$*"
+}
+
+prepare_fixture() {
+  project="$directory/$1/project"
+  bin="$directory/$1/bin"
+  export MOCK_TRACE="$directory/$1/trace" MOCK_COUNT=3 QUALITY_MATRIX_JOBS=3
+  unset MOCK_FAIL_PARITY
+  export PATH="$bin:$original_path"
+  mkdir -p "$project/scripts" "$project/ci" "$bin" "$MOCK_TRACE"
+  cp "$repository_root/scripts/quality-matrix" "$project/scripts/quality-matrix"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$project/scripts/test-quality-matrix"
+  printf '.quality/\noutput\n' > "$project/.gitignore"
+  printf original > "$project/source.txt"
+  git init -q "$project"
+  git -C "$project" add source.txt
+  printf 'pending change' > "$project/source.txt"
+  printf 'new input' > "$project/untracked.txt"
+  cat > "$project/ci/runtime-matrix.json" <<'JSON'
+{"include":[
+  {"elixir":"1.19","image":"test:1.19","canonical":false},
+  {"elixir":"1.20","image":"test:1.20","canonical":false},
+  {"elixir":"1.21","image":"test:1.21","canonical":true}
+]}
+JSON
+  cat > "$bin/docker" <<'MOCK_DOCKER'
+#!/usr/bin/env bash
+set -eu
+case "$1" in
+  info|pull|rm) exit 0 ;;
+  image) echo sha256:mock; exit 0 ;;
+  run) shift ;;
+  *) exit 90 ;;
+esac
+workspace= quality= envs=()
+while (($#)); do
+  case "$1" in
+    --rm) shift ;;
+    --user|--name|--workdir) shift 2 ;;
+    --mount)
+      source="${2#*source=}"; source="${source%,target=*}"
+      case "$2" in
+        *,target=/workspace) workspace="$source" ;;
+        *,target=/workspace/.quality) quality="$source" ;;
+      esac
+      shift 2 ;;
+    --env) envs+=("$2"); shift 2 ;;
+    *) shift; break ;;
+  esac
+done
+[[ -L "$workspace/.quality" ]] || ln -s "$quality" "$workspace/.quality"
+for setting in "${envs[@]}"; do
+  if [[ "$setting" == *=* ]]; then
+    key="${setting%%=*}"; value="${setting#*=}"
+    export "$key=${value//\/workspace/$workspace}"
+  fi
+done
+export MOCK_RUNTIME="${MIX_BUILD_PATH#*elixir-}"
+export MOCK_RUNTIME="${MOCK_RUNTIME%%/*}"
+cd "$workspace"
+exec "$@"
+MOCK_DOCKER
+  cat > "$bin/mix" <<'MOCK_MIX'
+#!/usr/bin/env bash
+set -eu
+printf '%s\t%s\t%s\n' "$MOCK_RUNTIME" "$*" "$MIX_ENV" >> "$MOCK_TRACE/commands"
+case "$1" in
+  test)
+    [[ "$(cat source.txt)" == 'pending change' && "$(cat untracked.txt)" == 'new input' ]]
+    echo "$MOCK_RUNTIME" > source.txt
+    mkdir -p tmp/browser_parity
+    echo "$MOCK_RUNTIME" > tmp/browser_parity/output
+    touch "$MOCK_TRACE/started-$MOCK_RUNTIME"
+    ready=false
+    for ((attempt=0; attempt<200; attempt++)); do
+      if [[ "$(find "$MOCK_TRACE" -name 'started-*' | wc -l)" -eq "$MOCK_COUNT" ]]; then
+        ready=true; break
+      fi
+      sleep 0.01
+    done
+    "$ready" ;;
+  test.browser_parity)
+    [[ "$(cat source.txt)" == "$MOCK_RUNTIME" ]]
+    touch "$MOCK_TRACE/done-$MOCK_RUNTIME"
+    if [[ "$MOCK_RUNTIME" == "${MOCK_FAIL_PARITY:-}" ]]; then exit 3; fi ;;
+  test.performance)
+    [[ "$(find "$MOCK_TRACE" -name 'done-*' | wc -l)" -eq "$MOCK_COUNT" ]]
+    echo '{}' > "$PERFORMANCE_REPORT" ;;
+esac
+MOCK_MIX
+  cat > "$bin/elixir" <<'MOCK_ELIXIR'
+#!/usr/bin/env bash
+echo "Elixir ${MOCK_RUNTIME}.0"
+MOCK_ELIXIR
+  for tool in chromium pdftoppm pdftotext pdffonts qpdf fc-match; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/$tool"
+  done
+  chmod +x "$bin"/*
+}
+
+run_matrix() {
+  status=0
+  (cd "$project" && bash scripts/quality-matrix "$@") > "$project/output" 2>&1 || status=$?
+}
+
+prepare_fixture parallel
+run_matrix
+check test "$status" -eq 0
+check grep -Fq 'QUALITY_MATRIX_SUMMARY status=PASS' "$project/output"
+check test "$(cat "$project/source.txt")" = 'pending change'
+check test ! -e "$project/tmp/browser_parity/output"
+for version in 1.19 1.20 1.21; do
+  check grep -Fq "$version"$'\ttest.browser_parity --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
+  if [[ "$version" == 1.21 ]]; then
+    check grep -Fq "$version"$'\ttest --cover --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
+    check grep -Fq "$version"$'\tdialyzer --no-compile\ttest' "$MOCK_TRACE/commands"
+    check grep -Fq "$version"$'\tdocs --warnings-as-errors\tdev' "$MOCK_TRACE/commands"
+    check grep -Fq "$version"$'\ttest.performance\ttest' "$MOCK_TRACE/commands"
+  else
+    check grep -Fq "$version"$'\ttest --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
+    for extra in 'test --cover' dialyzer docs test.performance; do
+      if grep -Fq "$version"$'\t'"$extra" "$MOCK_TRACE/commands"; then
+        fail "unexpected_extra=$version:$extra"
+      fi
+    done
+  fi
+done
+check test ! -e "$project/.quality/matrix.lock"
+echo 'QUALITY_MATRIX_TEST_PASS parallel_source_isolation_latest_policy_and_performance_barrier'
+
+prepare_fixture failed-parity
+export MOCK_FAIL_PARITY=1.19
+run_matrix
+check test "$status" -eq 1
+check grep -Fq 'runtime=1.19 stage=parity status=FAIL' "$project/output"
+check grep -Fq 'runtime=1.21 stage=performance status=PASS' "$project/output"
+check grep -Fq 'QUALITY_MATRIX_SUMMARY status=FAIL' "$project/output"
+artifacts=("$project"/.quality/logs/*/elixir-1.19/browser-parity-artifacts/output)
+check test "$(cat "${artifacts[0]}")" = 1.19
+check test ! -e "$project/.quality/matrix.lock"
+echo 'QUALITY_MATRIX_TEST_PASS failure_propagation_other_lanes_and_artifact_retention'
+
+prepare_fixture invalid-config
+jq '.include |= map(.canonical = (.elixir == "1.19"))' "$project/ci/runtime-matrix.json" > "$directory/invalid.json"
+cp "$directory/invalid.json" "$project/ci/runtime-matrix.json"
+run_matrix --matrix-json
+check test "$status" -eq 2
+check grep -Fq one_canonical_latest_runtime_required "$project/output"
+echo 'QUALITY_MATRIX_TEST_PASS reject_older_canonical'
+
+prepare_fixture existing-lock
+mkdir -p "$project/.quality/matrix.lock"
+echo 'another run' > "$project/.quality/matrix.lock/pid"
+run_matrix
+check test "$status" -eq 2
+check grep -Fq matrix_already_running_or_stale_lock "$project/output"
+check test "$(cat "$project/.quality/matrix.lock/pid")" = 'another run'
+echo 'QUALITY_MATRIX_TEST_PASS preserve_existing_lock'

@@ -18,16 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Test quality matrix orchestration
+        run: ./scripts/test-quality-matrix
+
       - name: Load supported runtimes
         id: runtimes
         run: |
-          jq -e '
-            .include as $runtimes |
-            ($runtimes | type == "array" and length > 0) and
-            (($runtimes | map(select(.canonical == true)) | length) == 1) and
-            (($runtimes | map(.elixir) | unique | length) == ($runtimes | length))
-          ' ci/runtime-matrix.json >/dev/null
-          echo "matrix=$(jq -c . ci/runtime-matrix.json)" >> "${GITHUB_OUTPUT}"
+          matrix="$(./scripts/quality-matrix --matrix-json)"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
 
   supported-elixir:
     name: Elixir ${{ matrix.elixir }}
@@ -78,29 +76,44 @@ jobs:
       - name: Compile project with warnings as errors
         run: mix compile --warnings-as-errors
 
-      # Formatting is checked on one canonical runtime because formatter output
-      # may intentionally change between Elixir releases.
+      # The newest supported minor owns the extra checks. Every minor still runs
+      # the full ordinary suite and browser comparisons on independent runners.
       - name: Check formatting and dependencies
         if: matrix.canonical
         run: |
           mix format --check-formatted
           mix deps.unlock --check-unused
 
+      - name: Run tests on compatibility runtimes
+        if: ${{ !matrix.canonical }}
+        run: mix test --warnings-as-errors
+
       - name: Run tests and enforce 100% coverage
+        if: matrix.canonical
         run: mix test --cover --warnings-as-errors
 
-      - name: Check performance against recorded baselines
-        run: mix test.performance
-
       - name: Run Dialyzer
+        if: matrix.canonical
         run: mix dialyzer --no-compile
 
       - name: Run Chromium browser parity tests
         id: browser-parity
         run: mix test.browser_parity --warnings-as-errors
 
+      - name: Build documentation with warnings as errors
+        if: matrix.canonical
+        env:
+          MIX_ENV: dev
+        run: |
+          mix deps.compile
+          mix docs --warnings-as-errors
+
+      - name: Check performance against recorded baselines
+        if: matrix.canonical
+        run: mix test.performance
+
       - name: Upload coverage report
-        if: always()
+        if: always() && matrix.canonical
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report-elixir-${{ matrix.elixir }}
