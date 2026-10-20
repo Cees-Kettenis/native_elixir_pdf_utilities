@@ -85,7 +85,6 @@ mise exec -- mix test test/html_to_pdf/tables/atomic_table_overflow_test.exs
 | Coverage | `mise exec -- mix test --cover --warnings-as-errors` |
 | Performance | `mise exec -- mix test.performance` |
 | Dialyzer | `MIX_ENV=test mise exec -- mix dialyzer` |
-| Documentation | `mise exec -- mix docs --warnings-as-errors` |
 
 If Elixir and Erlang are already on your PATH, the `mix` commands can run without
 `mise exec --`. Focused host checks give feedback during development. The full
@@ -131,12 +130,11 @@ cleaned before compilation.
 | 100% coverage, during the ordinary suite | | Yes |
 | Formatting and unused dependencies | | Yes |
 | Dialyzer | | Yes |
-| Documentation with warnings as errors | | Yes |
 | Performance guards and report | | Yes |
 
 The canonical runtime must be the newest supported minor. Its coverage command
-already runs the ordinary suite, so that suite is not repeated. Documentation
-uses a separate dev build. No browser cases or performance thresholds are relaxed.
+already runs the ordinary suite, so that suite is not repeated.
+No browser cases or performance thresholds are relaxed.
 A failed stage skips later stages for that runtime; other runtimes continue.
 
 Two correctness lanes run concurrently by default. Set `QUALITY_MATRIX_JOBS=1`
@@ -179,6 +177,19 @@ A successful exit can include warnings, so inspect every `FAIL` and `WARN` entry
 Include the commands, runtime versions, results and unresolved issues in your
 pull request. When a check fails, read its log, fix the cause and rerun the
 affected checks. The complete matrix must pass before the pull request is ready.
+
+## Publishing documentation
+
+Build documentation when preparing a package for publishing, on the latest
+supported runtime:
+
+```bash
+MIX_ENV=dev mise exec -- mix deps.compile
+MIX_ENV=dev mise exec -- mix docs --warnings-as-errors
+```
+
+Resolve documentation errors before publishing. The documentation build runs
+as a publishing check; it is excluded from the routine quality matrix and CI.
 
 ## Browser parity
 

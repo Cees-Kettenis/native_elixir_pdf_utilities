@@ -107,8 +107,10 @@ host-only Mix commands for the matrix. Platform setup, output interpretation,
 and the supported-version policy are documented in `docs/contributing/testing.md`.
 Every supported runtime runs compilation, ordinary tests and browser parity.
 The newest supported runtime is canonical and also owns formatting, dependency
-hygiene, 100% coverage, Dialyzer, documentation and performance. Local correctness
+hygiene, 100% coverage, Dialyzer and performance. Local correctness
 lanes use isolated source snapshots in parallel; performance runs after they finish.
+Build documentation with warnings as errors when preparing a package for publishing,
+rather than during routine matrix or CI checks.
 
 ## Project structure and workspace
 

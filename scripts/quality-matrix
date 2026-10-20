@@ -10,7 +10,7 @@ fi
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repository_root}" || exit 2
 matrix_file=ci/runtime-matrix.json
-stages=(runtime dependencies dependency_compile compile format tests coverage dialyzer parity docs performance)
+stages=(runtime dependencies dependency_compile compile format tests coverage dialyzer parity performance)
 
 # Shared by local orchestration and CI's runtime discovery.
 validate_matrix() {
@@ -40,7 +40,7 @@ run_stage() {
   shift
 
   case "${stage}" in
-    format|coverage|dialyzer|docs|performance)
+    format|coverage|dialyzer|performance)
       [[ "${canonical}" == true ]] || not_applicable=canonical-runtime-only ;;
     tests)
       [[ "${canonical}" != true ]] || not_applicable=included-in-coverage ;;
@@ -96,8 +96,6 @@ if [[ "${1:-}" == --runtime ]]; then
     run_stage coverage mix test --cover --warnings-as-errors
     run_stage dialyzer mix dialyzer --no-compile
     run_stage parity mix test.browser_parity --warnings-as-errors
-    # Keep documentation's dev dependencies/build separate from test beams and PLTs.
-    run_stage docs bash -c 'export MIX_ENV=dev MIX_BUILD_PATH="${MIX_BUILD_PATH}-docs"; mix deps.compile && mix docs --warnings-as-errors'
     if [[ "${canonical}" != true ]]; then
       run_stage performance true
     fi

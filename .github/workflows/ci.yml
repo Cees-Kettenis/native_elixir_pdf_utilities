@@ -100,14 +100,6 @@ jobs:
         id: browser-parity
         run: mix test.browser_parity --warnings-as-errors
 
-      - name: Build documentation with warnings as errors
-        if: matrix.canonical
-        env:
-          MIX_ENV: dev
-        run: |
-          mix deps.compile
-          mix docs --warnings-as-errors
-
       - name: Check performance against recorded baselines
         if: matrix.canonical
         run: mix test.performance

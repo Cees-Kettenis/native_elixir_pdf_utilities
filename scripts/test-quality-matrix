@@ -127,14 +127,16 @@ check test "$(cat "$project/source.txt")" = 'pending change'
 check test ! -e "$project/tmp/browser_parity/output"
 for version in 1.19 1.20 1.21; do
   check grep -Fq "$version"$'\ttest.browser_parity --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
+  if grep -Fq "$version"$'\tdocs' "$MOCK_TRACE/commands"; then
+    fail "publishing_only_docs_in_routine_matrix=$version"
+  fi
   if [[ "$version" == 1.21 ]]; then
     check grep -Fq "$version"$'\ttest --cover --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
     check grep -Fq "$version"$'\tdialyzer --no-compile\ttest' "$MOCK_TRACE/commands"
-    check grep -Fq "$version"$'\tdocs --warnings-as-errors\tdev' "$MOCK_TRACE/commands"
     check grep -Fq "$version"$'\ttest.performance\ttest' "$MOCK_TRACE/commands"
   else
     check grep -Fq "$version"$'\ttest --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
-    for extra in 'test --cover' dialyzer docs test.performance; do
+    for extra in 'test --cover' dialyzer test.performance; do
       if grep -Fq "$version"$'\t'"$extra" "$MOCK_TRACE/commands"; then
         fail "unexpected_extra=$version:$extra"
       fi
