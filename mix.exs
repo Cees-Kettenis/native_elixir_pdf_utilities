@@ -51,7 +51,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
       {:ex_doc, "~> 0.37", only: :dev, runtime: false},
       {:resvg,
        git: "https://github.com/Cees-Kettenis/resvg_nif.git",
-       ref: "850f23d690bd8cce9276d35e2ab43de6f487d4d5"}
+       ref: "7664016fa855bac495ccf595e346a0d2c8631a60"}
     ]
   end
 

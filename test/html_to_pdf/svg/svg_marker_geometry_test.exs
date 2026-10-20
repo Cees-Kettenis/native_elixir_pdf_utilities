@@ -154,20 +154,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgMarkerGeometryTest do
     end
   end
 
-  test "automatic marker directions use the raw segment tangent the converter derives" do
-    # Chromium orients a degenerate start tangent with the first nonzero cubic
-    # derivative (pointing down for M50 30C50 30 50 60 90 30) and orients both
-    # markers of a closed join with the incoming/outgoing bisector (pointing
-    # up for M50 30C80 10 85 55 80 60Z, verified with /usr/bin/chromium
-    # print-to-pdf at 96 dpi). resvg orients every marker with the raw segment
-    # tangent instead: the degenerate start renders horizontally and the
-    # closed join keeps the separate incoming and outgoing tangents, so these
-    # expectations assert the converter's actual directions.
+  test "automatic marker directions use nonzero curve tangents and closed-join bisectors" do
+    # Degenerate curve endpoints use the first nonzero derivative. Both markers
+    # at a closed join use the incoming/outgoing direction bisector.
     for {path, position, inside, outside} <- [
-          {"M50 30C50 30 50 60 90 30", "start", {56, 30}, {50, 36}},
+          {"M50 30C50 30 50 60 90 30", "start", {50, 36}, {56, 30}},
           {"M10 30C70 30 50 30 50 30", "end", {44, 30}, {56, 30}},
-          {"M50 30C80 10 85 55 80 60Z", "end", {44, 30}, {50, 24}},
-          {"M50 30C80 10 85 55 80 60Z", "start", {53, 28}, {46, 26}}
+          {"M50 30C80 10 85 55 80 60Z", "end", {50, 24}, {44, 30}},
+          {"M50 30C80 10 85 55 80 60Z", "start", {50, 24}, {50, 36}}
         ] do
       source =
         "<svg width='110' height='90'><defs><marker id='m' markerUnits='userSpaceOnUse' markerWidth='24' markerHeight='24' refX='12' refY='12' orient='auto'><path d='M12 8L23 12L12 16Z' fill='#174a86'/></marker></defs><path d='#{path}' fill='none' stroke='black' marker-#{position}='url(#m)'/></svg>"

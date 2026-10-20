@@ -25,7 +25,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientModesTest do
     offset = 20 * image.width_px + 50
     <<r, g, b>> = binary_part(image.data, 3 * offset, 3)
     alpha = :binary.at(image.alpha_data, offset)
-    assert r in 127..129 and g == r and b == r
+    assert r in 187..189 and g == r and b == r
     assert alpha in 126..129
 
     composite =
@@ -48,7 +48,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientModesTest do
              )
 
     <<r, g, b>> = binary_part(image.data, 3 * offset, 3)
-    assert r in 190..193 and g in 63..65 and b == g
+    assert r in 220..223 and g in 93..95 and b == g
 
     html =
       "<svg width='100' height='40'><defs><linearGradient id='g' color-interpolation='linearRGB'><stop offset='0'/><stop offset='1' stop-color='white'/></linearGradient><filter id='f'><feGaussianBlur stdDeviation='1'/></filter></defs><rect width='100' height='40' fill='url(#g)' filter='url(#f)'/></svg>"

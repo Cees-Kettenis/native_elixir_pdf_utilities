@@ -334,6 +334,11 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_render_support(node, active?, mode \\ :render) do
     case node do
+      %{namespace: :svg} when mode == :prepare_svg ->
+        # Canonical SVG XML has already resolved namespaces during source
+        # admission. HTML's foreign-content recovery rules do not apply to it.
+        validate_static_input(:svg, node.tag, node.attributes)
+
       %{namespace: :mathml} when active? ->
         # Element layout support depends on computed visibility. Unselected
         # semantics/maction annotations still undergo all static validation;

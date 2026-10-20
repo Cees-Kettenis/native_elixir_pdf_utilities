@@ -2273,6 +2273,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     ruby_cjk_default_wrap.html
     ruby_cjk_long_group.html
     ruby_decoration_scopes.html
+    svg_xml_entry_paths.html
     svg_document_font_relative_viewport.html
     svg_document_selected_glyphs.html
     svg_image_selected_host_font.html

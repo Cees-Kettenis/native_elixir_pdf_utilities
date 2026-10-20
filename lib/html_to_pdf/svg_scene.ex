@@ -106,9 +106,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
         end
       end)
 
+    name = Map.get(node, :xml_name, node.tag)
+
     if Map.get(node, :namespace, :html) == :html and HtmlValidator.html_void_tag?(node.tag),
-      do: "<#{node.tag} #{attrs}/>",
-      else: "<#{node.tag} #{attrs}>#{children}</#{node.tag}>"
+      do: "<#{name} #{attrs}/>",
+      else: "<#{name} #{attrs}>#{children}</#{name}>"
   end
 
   @doc "Extracts the selected host cascade and authorized image bytes for the existing SVG converter."
@@ -216,7 +218,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     attributes =
       node.attributes
       |> Map.drop(
-        ["style", "marker", "xmlns", "xmlns:xlink"] ++
+        ["style", "marker"] ++
           Enum.flat_map(properties, fn {_, property} ->
             if SvgStyleValidator.presentation_property?(node, property), do: [property], else: []
           end)
@@ -225,11 +227,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     attributes =
       if root?, do: Map.drop(attributes, ["width", "height", "x", "y"]), else: attributes
 
-    attributes = Map.put(attributes, "xmlns", "http://www.w3.org/2000/svg")
+    attributes = Map.put_new(attributes, "xmlns", "http://www.w3.org/2000/svg")
 
     attributes =
       if root?,
-        do: Map.put(attributes, "xmlns:xlink", "http://www.w3.org/1999/xlink"),
+        do: Map.put_new(attributes, "xmlns:xlink", "http://www.w3.org/1999/xlink"),
         else: attributes
 
     attributes =
@@ -333,17 +335,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       attributes
       |> Map.put("display", if(node.style.display == :none, do: "none", else: "inline"))
 
-    # Host CSS has already selected the final presentation values. XML names
-    # with different case are inert to SVG painting; do not emit a second
-    # spelling beside a projected property and turn it into an HTML duplicate.
-    projected_names = Map.values(properties) ++ ~w(width height x y)
-
-    attributes =
-      Map.reject(attributes, fn {name, _} ->
-        canonical = String.downcase(name, :ascii)
-        name != canonical and canonical in projected_names and Map.has_key?(attributes, canonical)
-      end)
-
     children =
       Enum.map_join(node.children, "", fn child ->
         case child do
@@ -362,16 +353,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
       end)
 
     children =
-      if node.tag == "svg",
-        do: "<g opacity=\"#{node.style.svg_opacity}\">#{children}</g>",
-        else: children
+      if node.tag == "svg" do
+        namespace =
+          if attributes["xmlns"] == "http://www.w3.org/2000/svg",
+            do: "",
+            else: " xmlns=\"http://www.w3.org/2000/svg\""
+
+        "<g opacity=\"#{node.style.svg_opacity}\"#{namespace}>#{children}</g>"
+      else
+        children
+      end
 
     attrs =
       Enum.map_join(Enum.sort(attributes), " ", fn {key, value} ->
         key <> "=\"" <> escape(value) <> "\""
       end)
 
-    "<#{node.tag} #{attrs}>#{children}</#{node.tag}>"
+    name = Map.get(node, :xml_name, node.tag)
+    "<#{name} #{attrs}>#{children}</#{name}>"
   end
 
   defp property_value(value, style, reference? \\ false) do

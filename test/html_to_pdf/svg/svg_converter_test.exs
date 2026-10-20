@@ -130,7 +130,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
   end
 
   test "document root failures use the canonical extraction diagnostic" do
-    for source <- ["<p>Text</p>", "<svg></svg><svg></svg>"] do
+    for {source, message} <- [
+          {"<p>Text</p>", "svg root"},
+          {"<svg></svg><svg></svg>", "trailing content"}
+        ] do
       assert {:error, {:invalid_document, diagnostic}} =
                SvgScene.extract(
                  source,
@@ -139,7 +142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
                )
 
       assert diagnostic.source == "SVG"
-      assert diagnostic.message =~ "exactly one complete SVG"
+      assert diagnostic.message =~ message
     end
   end
 

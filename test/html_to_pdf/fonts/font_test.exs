@@ -18,6 +18,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     :ok
   end
 
+  test "cold bundled math and monospace loads return shared resource diagnostics" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+
+    for {family, relative} <- [
+          {"STIX Two Math", "priv/fonts/stix/STIXTwoMath-Regular.ttf"},
+          {"DejaVu Sans Mono", "priv/fonts/dejavu/DejaVuSansMono.ttf"}
+        ] do
+      path = Application.app_dir(:native_elixir_pdf_utilities, relative)
+
+      :sys.replace_state(NativeElixirPdfUtilities.HtmlToPdf.FontCache, fn state ->
+        :ets.delete(state.table, Path.expand(path))
+        state
+      end)
+
+      Limits.install(%{Limits.effective() | max_font_math_work: 1})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               Font.resolve(family, 400, :normal, registry)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.message =~ "max_font_math_work"
+    end
+  end
+
   describe "configured font isolation and internal family identity" do
     test "independent text image defaults resolve the permitted serif bytes" do
       assert {:ok, registry} = Font.load_registry(system_font_discovery: true)

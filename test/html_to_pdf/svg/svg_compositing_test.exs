@@ -63,8 +63,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
     end
   end
 
-  test "direct print gradients and graphics use encoded RGB independently of source modes" do
-    for {gradient_mode, expected} <- [{"sRGB", 64}, {"linearRGB", 64}] do
+  test "gradients honor source interpolation before encoded RGB compositing" do
+    for {gradient_mode, expected} <- [{"sRGB", 64}, {"linearRGB", 94}] do
       image =
         raster(
           "<defs><linearGradient id='g' color-interpolation='#{gradient_mode}'><stop stop-color='black'/><stop offset='1' stop-color='white'/></linearGradient></defs><rect width='3' height='1' fill='black'/><rect width='3' height='1' fill='url(#g)' fill-opacity='.5' color-interpolation='linearRGB'/>"
@@ -78,11 +78,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
   test "mask luminance and alpha use rendered mask channels and independent transfer" do
     for {mode, kind, color, expected} <- [
           {"sRGB", "luminance", "#808080", 128},
-          # Chromium 152 linearizes mask channels before the luminance weighted
-          # sum when the mask carries color-interpolation='linearRGB', so the
-          # #808080 luminance mask yields alpha 55; resvg weights the raw sRGB
-          # channels and yields 128. Documented resvg divergence.
-          {"linearRGB", "luminance", "#808080", 128},
+          # Linearize sRGB channels before calculating linearRGB luminance.
+          {"linearRGB", "luminance", "#808080", 55},
           {"linearRGB", "alpha", "black", 255}
         ] do
       image =
@@ -184,7 +181,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
 
     assert {:ok, png} = SvgRasterizer.rasterize(used, [], nil)
     assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
-    assert abs(:binary.at(image.data, 3) - 128) <= 1
+    assert abs(:binary.at(image.data, 3) - 188) <= 1
 
     assert {:ok, pdf} =
              NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(used, [], %{mode: :inline})

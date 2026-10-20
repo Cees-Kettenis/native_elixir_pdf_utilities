@@ -111,7 +111,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
               _ ->
                 {:ok, resource.bytes}
             end),
-         {:ok, dom} <- HtmlParser.parse_document_detailed(html),
+         {:ok, dom} <-
+           if(resource.kind == :svg,
+             do:
+               NativeElixirPdfUtilities.Validators.SvgConverterValidator.prepare_extraction(html),
+             else: HtmlParser.parse_document_detailed(html)
+           ),
          document <- %{context: resource.context, source: resource.source, html: html, dom: dom},
          {:ok, document, urls} <-
            EmbeddedViewportValidator.prepare_document_context(document, context),

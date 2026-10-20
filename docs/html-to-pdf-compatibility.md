@@ -106,9 +106,18 @@ Embedded PDF rendering and general browser frameset behavior are unsupported.
 
 SVG artwork uses Resvg and is embedded as PNG. SVG text is rasterized and internal
 SVG links are inert; an ordinary HTML link around the image remains active.
+Standalone SVG XML keeps case-sensitive names and namespace bindings, including
+attributes such as `width` and `WIDTH` on the same element. Inline SVG in HTML
+uses HTML attribute admission rules. Images and backgrounds retain authored
+`viewBox` and `preserveAspectRatio` behavior at their CSS viewport dimensions.
 `foreignObject`, non-scaling strokes and SVG2 inline `textPath` path data return
 `unsupported_html`. Use a same-document path reference for supported `textPath`
-content. Other SVG features may differ from browser rendering. See
+content. Fractional pattern repeat spacing, `linearRGB` gradients and luminance
+masks, automatic marker directions and thin strokes on small rasters are supported.
+Filter inputs outside the filter region are clipped as required by the published
+[Filter Effects specification](https://www.w3.org/TR/filter-effects-1/#FilterPrimitiveSubRegion),
+which differs from Chromium in some offset chains. Other SVG features may differ
+from browser rendering. See
 [Images](image-processing.md) for image behavior and restrictions.
 
 ### Forms

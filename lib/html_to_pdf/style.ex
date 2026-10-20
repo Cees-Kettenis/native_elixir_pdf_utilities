@@ -5686,25 +5686,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     font_options = Keyword.take(opts, [:system_font_discovery])
 
     loader = fn ->
-      with {:ok, png} <-
-             SvgRasterizer.rasterize(
+      with {:ok, png, viewport} <-
+             SvgRasterizer.rasterize_image(
                svg,
                raster_options,
                image_budget,
                fonts,
-               %{mode: :image},
                font_options
              ),
            {:ok, image} <- PngDecoder.decode(png, image_budget, false) do
         # Raster density changes pixel storage, not the replaced image's
         # natural CSS dimensions or the background tile's physical size.
-        {:ok, %{image | width: image.width / scale, height: image.height / scale}}
+        {:ok,
+         image
+         |> Map.merge(%{width: image.width / scale, height: image.height / scale})
+         |> Map.put(:svg_viewport, viewport)}
       end
     end
 
+    owner =
+      case ResourceContext.current() do
+        nil -> nil
+        context -> {context.document_id, context.tree_scope_id}
+      end
+
     RenderCache.fetch(
       Keyword.fetch!(opts, :__render_cache__),
-      {:rasterized_svg, svg, raster_options, fonts, font_options},
+      {:rasterized_svg, owner, svg, raster_options, fonts, font_options},
       loader,
       fn _image ->
         case SvgValidator.validate(svg, raster_options, image_budget) do

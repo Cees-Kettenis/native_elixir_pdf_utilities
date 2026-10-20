@@ -1032,21 +1032,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   defp bundled_math_font do
     FontValidator.memo(:bundled_math, fn ->
-      {:ok, font} =
-        load_font(%{
-          family: "STIX Two Math",
-          path: [
-            Application.app_dir(
-              :native_elixir_pdf_utilities,
-              "priv/fonts/stix/STIXTwoMath-Regular.ttf"
-            )
-          ],
-          weight: 400,
-          style: :normal,
-          source: :bundled
-        })
-
-      font
+      load_bundled_font(%{
+        family: "STIX Two Math",
+        path: [
+          Application.app_dir(
+            :native_elixir_pdf_utilities,
+            "priv/fonts/stix/STIXTwoMath-Regular.ttf"
+          )
+        ],
+        weight: 400,
+        style: :normal,
+        source: :bundled
+      })
     end)
   end
 
@@ -1062,22 +1059,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           _ -> ""
         end
 
-      {:ok, font} =
-        load_font(%{
-          family: "DejaVu Sans Mono",
-          path: [
-            Application.app_dir(
-              :native_elixir_pdf_utilities,
-              "priv/fonts/dejavu/DejaVuSansMono#{suffix}.ttf"
-            )
-          ],
-          weight: weight,
-          style: style,
-          source: :bundled
-        })
-
-      font
+      load_bundled_font(%{
+        family: "DejaVu Sans Mono",
+        path: [
+          Application.app_dir(
+            :native_elixir_pdf_utilities,
+            "priv/fonts/dejavu/DejaVuSansMono#{suffix}.ttf"
+          )
+        ],
+        weight: weight,
+        style: style,
+        source: :bundled
+      })
     end)
+  end
+
+  defp load_bundled_font(configuration) do
+    case load_font(configuration) do
+      {:ok, font} ->
+        font
+
+      {:error, {:resource_limit_exceeded, _diagnostic}} = error ->
+        throw({:font_resource_limit, error})
+    end
   end
 
   defp discover_system_family(family, weight, style, registry) do

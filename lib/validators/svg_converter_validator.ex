@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, SvgScene, PngDecoder}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, SvgScene, PngDecoder}
 
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
     SvgValidator,
     SvgImageValidator,
     SvgSceneValidator,
+    SvgReferenceValidator,
     SvgViewportValidator
   }
 
@@ -21,26 +22,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   @doc "Returns the parsed extraction document and its actual canonical XML summary."
   @spec prepare_extraction_details(term()) :: {:ok, map(), map()} | {:error, {atom(), map()}}
   def prepare_extraction_details(source) do
-    parsed =
-      case HtmlParser.parse_detailed(source) do
-        {:ok, _} = result ->
-          result
-
-        error ->
-          # An XML document failure must keep the canonical XML diagnostic,
-          # even when the HTML-oriented tokenizer fails first.
-          with {:ok, _} <- SvgValidator.validate_processing(source, %{mode: :inline}), do: error
-      end
-
-    with {:ok, document} <- parsed,
-         {:ok, root} <- SvgSceneValidator.extraction_root(document),
-         {:ok, summary} <-
-           SvgValidator.validate_processing(source, %{
-             mode: :inline,
-             resources: SvgImageValidator.pending_references(root)
-           }),
+    with {:ok, summary} <- SvgValidator.validate_extraction(source),
          :ok <- validate_capabilities(summary),
-         {:ok, document} <- SvgSceneValidator.align_xml_source(document, summary),
+         document = summary.document,
          {:ok, root} <- SvgSceneValidator.extraction_root(document),
          :ok <- SvgSceneValidator.validate_source_tree(root) do
       {:ok, document, summary}
@@ -71,7 +55,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
            {:ok, source, summary, fonts} <-
              prepare_source(source, context, budget, 0, image_font_options),
            {:ok, dimensions} <- SvgValidator.validate_dimensions(summary.root, options, budget),
-           {:ok, source} <- stretch_raster_source(source, summary.root, dimensions, context),
+           {:ok, source} <-
+             stretch_raster_source(source, summary.root, dimensions, options, context),
            :ok <-
              HtmlValidator.reserve_render_resource(
                :max_aggregate_svg_surface_pixels,
@@ -97,7 +82,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
               )
           end
 
-        {:ok, %{source: source, options: options, fonts: fonts}}
+        {:ok,
+         %{
+           source: source,
+           options: options,
+           fonts: fonts,
+           view_box?: Map.has_key?(summary.source_root, "viewBox")
+         }}
       end
     end)
     |> case do
@@ -194,9 +185,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   defp sized_root(source, size, context) do
     with {:ok, summary} <- SvgValidator.validate_processing(source, context),
          {:ok, {width, height}} <- viewport_size(size),
-         {:ok, document} <- HtmlParser.parse_detailed(source),
-         {:ok, document} <- SvgSceneValidator.align_xml_source(document, summary),
-         {:ok, root} <- SvgSceneValidator.extraction_root(document) do
+         {:ok, root} <- SvgSceneValidator.extraction_root(summary.document) do
       root = %{
         root
         | attributes:
@@ -217,12 +206,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   # An explicit two-dimensional raster target stretches the authored canvas per
   # CSS default object-fit fill; resvg would otherwise fit the smaller
   # dimension and letterbox the artwork inside the requested canvas.
-  defp stretch_raster_source(source, root_attributes, dimensions, context) do
+  defp stretch_raster_source(source, root_attributes, dimensions, options, context) do
+    scale = Keyword.get(options, :scale, 1)
+
     with {:ok, overrides} <-
            SvgValidator.stretch_viewport_attributes(
              root_attributes,
-             Keyword.get(dimensions, :width),
-             Keyword.get(dimensions, :height)
+             div(Keyword.fetch!(dimensions, :width), scale),
+             div(Keyword.fetch!(dimensions, :height), scale)
            ) do
       case overrides do
         nil ->
@@ -234,9 +225,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                    source,
                    Map.take(context, [:mode, :parent_mode, :fonts, :resources])
                  ),
-               {:ok, document} <- HtmlParser.parse_detailed(source),
-               {:ok, document} <- SvgSceneValidator.align_xml_source(document, summary),
-               {:ok, root} <- SvgSceneValidator.extraction_root(document) do
+               {:ok, root} <- SvgSceneValidator.extraction_root(summary.document) do
             {:ok,
              SvgScene.authored_source(%{root | attributes: Map.merge(root.attributes, overrides)})}
           end
@@ -265,9 +254,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
            ),
          :ok <- SvgImageValidator.validate_descriptors(context.resources),
          :ok <- validate_capabilities(summary),
-         {:ok, dom} <- HtmlParser.parse_detailed(source),
-         {:ok, dom} <- SvgSceneValidator.align_xml_source(dom, summary),
-         {:ok, root} <- SvgSceneValidator.extraction_root(dom),
+         {:ok, root} <- SvgSceneValidator.extraction_root(summary.document),
          :ok <- SvgSceneValidator.validate_source_tree(root),
          occurrences =
            Map.new(Enum.with_index(SvgSceneValidator.tree_nodes(root), 1), fn {{node, _}, index} ->
@@ -406,7 +393,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   defp embed_resources(node, context, budget, depth, occurrences, image_font_options, fonts) do
     href =
       if node.tag in ~w(image feImage),
-        do: Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href")),
+        do: Map.get(node.attributes, SvgReferenceValidator.href_attribute(node)),
         else: nil
 
     result =
@@ -431,7 +418,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                  ) do
             attrs =
               node.attributes
-              |> Map.delete("xlink:href")
+              |> Map.delete(SvgReferenceValidator.href_attribute(node))
               |> Map.put("href", "data:#{mime};base64,#{Base.encode64(data)}")
 
             {:ok, %{node | attributes: attrs}, Enum.uniq_by(fonts ++ resource_fonts, & &1.data)}

@@ -51,8 +51,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
     end
   end
 
-  test "direct print gradients retain their source mode and interpolate encoded stop channels" do
-    for {mode, expected} <- [{"sRGB", 128}, {"linearRGB", 128}] do
+  test "direct print gradients honor their source interpolation mode" do
+    for {mode, expected} <- [{"sRGB", 128}, {"linearRGB", 188}] do
       image =
         raster_image(
           "<svg width='3' height='1'><defs><linearGradient id='g' color-interpolation='#{mode}'><stop stop-color='black'/><stop offset='1' stop-color='white'/></linearGradient></defs><rect width='3' height='1' fill='url(#g)'/></svg>"
@@ -65,7 +65,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
     end
   end
 
-  test "print stop colors retain independent alpha before encoded raster premultiplication" do
+  test "linearRGB stop colors retain independent alpha before raster premultiplication" do
     image =
       raster_image(
         "<svg width='3' height='1'><defs><linearGradient id='g' color-interpolation='linearRGB'><stop stop-color='black' stop-opacity='.5'/><stop offset='1' stop-color='white' stop-opacity='.5'/></linearGradient></defs><rect width='3' height='1' fill='url(#g)'/></svg>"
@@ -76,42 +76,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
     assert image.data
            |> binary_part(3, 3)
            |> :binary.bin_to_list()
-           |> Enum.all?(&(abs(&1 - 128) <= 2))
+           |> Enum.all?(&(abs(&1 - 188) <= 2))
   end
 
-  test "print gradient contexts preserve filter and mask input transfer, alpha and resources" do
+  test "gradient contexts honor inherited interpolation, alpha and resources" do
     gradient =
       "<linearGradient id='g' color-interpolation='linearRGB'><stop stop-color='black'/><stop offset='1' stop-color='white'/></linearGradient>"
 
     rect = "<rect width='3' height='1' fill='url(#g)'/>"
 
     sources = [
-      {"<defs>#{gradient}</defs>#{rect}", {128, 128, 128}, nil},
+      {"<defs>#{gradient}</defs>#{rect}", {188, 188, 188}, nil},
       {"<defs>#{String.replace(gradient, "color-interpolation='linearRGB'", "")}</defs><style>linearGradient{color-interpolation:linearRGB}</style>#{rect}",
-       {128, 128, 128}, nil},
+       {188, 188, 188}, nil},
       {"<defs color-interpolation='linearRGB'>#{String.replace(gradient, "color-interpolation='linearRGB'", "")}</defs>#{rect}",
-       {128, 128, 128}, nil},
+       {188, 188, 188}, nil},
       {"<defs><radialGradient id='g' gradientUnits='userSpaceOnUse' cx='0' cy='0.5' r='3' color-interpolation='linearRGB'><stop stop-color='black'/><stop offset='1' stop-color='white'/></radialGradient></defs>#{rect}",
-       {128, 128, 128}, nil},
+       {188, 188, 188}, nil},
       {"<defs>#{gradient}<pattern id='p' patternUnits='userSpaceOnUse' width='3' height='1'>#{rect}</pattern></defs><rect width='3' height='1' fill='url(#p)'/>",
-       {128, 128, 128}, nil},
+       {188, 188, 188}, nil},
       {
         "<defs>#{gradient}<filter id='f' x='0' y='0' width='1' height='1'><feOffset dx='0' dy='0'/></filter></defs><g filter='url(#f)'>#{rect}</g>",
-        # Chromium 152 honors the gradient's color-interpolation='linearRGB' when
-        # painting it into the filter input (midpoint 187); resvg interpolates
-        # gradient stops in sRGB regardless, so the transported midpoint is 128.
-        {128, 128, 128},
+        # The gradient is painted in linearRGB before entering the filter.
+        {188, 188, 188},
         nil
       },
       {
         "<defs>#{gradient}<mask id='m' maskUnits='userSpaceOnUse' x='0' y='0' width='3' height='1'>#{rect}</mask></defs><rect width='3' height='1' fill='red' mask='url(#m)'/>",
         {255, 0, 0},
-        # Chromium renders the linearRGB gradient into the mask and yields mask
-        # alpha 188 at the midpoint; resvg's sRGB gradient interpolation gives 128.
-        128
+        # The linearRGB gradient supplies the luminance mask's midpoint.
+        188
       },
       {"<defs>#{String.replace(gradient, "<stop", "<stop stop-opacity='0.5'")}</defs><rect width='3' height='1' fill='red'/>#{rect}",
-       {191, 64, 64}, nil}
+       {221, 94, 94}, nil}
     ]
 
     for {body, expected, alpha} <- sources do

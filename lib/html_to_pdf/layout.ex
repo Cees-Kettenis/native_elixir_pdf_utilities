@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end)
   end
 
-  @doc "Loads issued lazy image candidates only from the surviving final layout boxes."
+  @doc "Resolves issued lazy image candidates and SVG viewports from the surviving final layout boxes."
   @spec resolve_images(layout_tree()) :: {:ok, layout_tree()} | {:error, {atom(), map()}}
   def resolve_images(layout) do
     with {:ok, boxes} <- resolve_image_boxes(layout.boxes), do: {:ok, %{layout | boxes: boxes}}
@@ -87,6 +87,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 end
 
               resolve_image_boxes(Enum.map(paint, &Map.merge(&1, metadata)))
+            end
+
+          %{type: :image, image: %{svg_viewport: descriptor}} when is_map(descriptor) ->
+            with {:ok, image} <-
+                   NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer.resize_image(
+                     box.image,
+                     box.width,
+                     box.height
+                   ) do
+              resolve_image_boxes([%{box | image: image}])
             end
 
           %{type: :image, _image_map_geometry: geometry} ->
@@ -8749,6 +8759,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           end
 
         content = if inside?, do: markers ++ gap ++ content, else: content
+
+        content =
+          case {inside?, Map.get(style, :list_style_image)} do
+            {false, %{height: height}} when height > 0 ->
+              # An outside image marker participates in the first line's height
+              # without consuming any of the list item's inline width.
+              [
+                %{
+                  type: :element,
+                  tag: "span",
+                  children: [],
+                  style:
+                    Map.merge(marker_style, %{display: :inline_block, width: 0.0, height: height})
+                }
+                | content
+              ]
+
+            _ ->
+              content
+          end
 
         block_style = Map.put(style, :display, :block)
 

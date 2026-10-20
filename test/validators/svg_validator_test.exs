@@ -744,14 +744,10 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     assert {:ok, marker_image} =
              PngDecoder.decode(painted, HtmlValidator.new_image_budget(), false)
 
-    # Chromium paints the single 1 CSS px canvas fully red (verified with
-    # /usr/bin/chromium print-to-pdf at 96 dpi): the 1-unit diagonal stroke
-    # covers the only pixel while the fitted 1x1 marker viewport moves its
-    # rect outside the canvas with the reference offset. resvg drops width-1
-    # strokes when the canvas is at most 2 device pixels, so the native
-    # converter retains the genuine empty 1x1 paint here.
-    assert marker_image.data == <<0, 0, 0>>
-    assert marker_image.alpha_data == <<0>>
+    # The diagonal stroke covers the only pixel. The marker viewport places
+    # its rectangle outside the canvas; the stroke still renders fully red.
+    assert marker_image.data == <<255, 0, 0>>
+    assert is_nil(marker_image[:alpha_data])
 
     for content <- ["<text>Missing face</text>", "<image href='missing.png'/>"] do
       assert {:error, {reason, diagnostic}} =

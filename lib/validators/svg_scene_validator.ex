@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
     SvgStyleValidator,
+    SvgReferenceValidator,
     SvgViewportValidator
   }
 
@@ -32,54 +33,6 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
       _ ->
         invalid("SVG extraction requires a parsed document", "SVG")
     end
-  end
-
-  @doc "Preserves canonical XML attribute spelling before HTML-oriented style projection."
-  @spec align_xml_source(map(), map()) :: {:ok, map()} | {:error, {atom(), map()}}
-  def align_xml_source(document, summary) do
-    sources = Enum.sort_by(summary.source_nodes, & &1.index)
-    {children, remaining} = align_xml_children(document.children, sources)
-
-    if remaining == [],
-      do: {:ok, %{document | children: children}},
-      else: invalid("SVG XML source and parsed extraction tree have different structures", "SVG")
-  catch
-    :svg_xml_structure ->
-      invalid("SVG XML source and parsed extraction tree have different structures", "SVG")
-  end
-
-  defp align_xml_children(children, sources) do
-    Enum.map_reduce(children, sources, fn child, sources ->
-      case {child, sources} do
-        {%{type: :element}, [source | sources]} ->
-          qualified =
-            Map.filter(child.attributes, fn {name, _} ->
-              name == "xmlns" or String.contains?(name, ":")
-            end)
-
-          attributes = Map.merge(qualified, source.attributes)
-          {children, sources} = align_xml_children(child.children, sources)
-
-          spellings =
-            Map.new(source.attributes, fn {name, _} -> {String.downcase(name, :ascii), name} end)
-
-          order =
-            Enum.map(Map.get(child, :attribute_order, Map.keys(child.attributes)), fn name ->
-              if Map.has_key?(qualified, name),
-                do: name,
-                else: Map.get(spellings, String.downcase(name, :ascii), name)
-            end)
-
-          child = %{child | tag: source.tag, attributes: attributes, children: children}
-          {Map.put(child, :attribute_order, order), sources}
-
-        {%{type: :element}, []} ->
-          throw(:svg_xml_structure)
-
-        _ ->
-          {child, sources}
-      end
-    end)
   end
 
   @doc false
@@ -119,7 +72,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
   def validate_structure(node) do
     cond do
       node.tag == "textPath" and
-          not Enum.any?(~w(href xlink:href path), &Map.has_key?(node.attributes, &1)) ->
+          not Enum.any?(
+            [SvgReferenceValidator.href_attribute(node), "path"],
+            &Map.has_key?(node.attributes, &1)
+          ) ->
         invalid("SVG textPath requires a same-scene #id href or inline path", "textPath href")
 
       node.tag in ~w(rect circle ellipse line polyline polygon path) and

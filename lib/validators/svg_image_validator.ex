@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     AssetLoader,
+    RenderCache,
     ResourceContext,
     SvgScene
   }
@@ -12,8 +13,72 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
     HtmlValidator,
     ResourceValidator,
     SvgSceneValidator,
+    SvgConverterValidator,
+    SvgReferenceValidator,
     SvgViewportValidator
   }
+
+  @doc "Prepares an image and retains its approved bytes for its eventual CSS viewport."
+  @spec prepare_viewport_source(term(), term(), term(), term(), term()) ::
+          {:ok, map(), map() | nil} | {:error, {atom(), map()}}
+  def prepare_viewport_source(source, options, budget, fonts, font_options) do
+    with {:ok, request} <-
+           SvgConverterValidator.prepare(
+             source,
+             options,
+             budget,
+             fonts,
+             %{mode: :image},
+             font_options
+           ) do
+      descriptor =
+        case ResourceContext.current() do
+          nil ->
+            nil
+
+          context ->
+            id = make_ref()
+
+            RenderCache.fetch(context.scope, {__MODULE__, context.document_id, id}, fn ->
+              %{
+                source: source,
+                fonts: Enum.map(request.fonts, &%{data: &1}),
+                budget: budget,
+                view_box?: request.view_box?
+              }
+            end)
+
+            %{id: id, context: context}
+        end
+
+      {:ok, request, descriptor}
+    end
+  end
+
+  @doc "Resolves an issued image viewport without accepting substituted source or font bytes."
+  @spec viewport_request(term(), term(), term()) ::
+          {:ok, map(), map()} | {:error, {atom(), map()}}
+  def viewport_request(descriptor, width, height) do
+    with %{id: id, context: context} <- descriptor,
+         true <- is_reference(id),
+         :ok <- ResourceValidator.validate_context(context),
+         {:ok, width} <- HtmlValidator.normalize_geometry_number(width),
+         {:ok, height} <- HtmlValidator.normalize_geometry_number(height),
+         true <- width > 0 and height > 0,
+         request when is_map(request) <-
+           RenderCache.fetch(context.scope, {__MODULE__, context.document_id, id}, fn -> nil end) do
+      {:ok, Map.merge(request, %{width: width, height: height}), context}
+    else
+      {:error, _} = error ->
+        error
+
+      _ ->
+        invalid(
+          "SVG image viewport requires its issued source scope and positive dimensions",
+          "SVG"
+        )
+    end
+  end
 
   @doc "Collects authored image references for XML policy inspection without loading them."
   @spec pending_references(map()) :: map()
@@ -22,12 +87,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
       for {image, _} <- SvgSceneValidator.tree_nodes(node),
           image.tag in ~w(image feImage),
           not String.starts_with?(
-            Map.get(image.attributes, "href", Map.get(image.attributes, "xlink:href", "")),
+            Map.get(image.attributes, SvgReferenceValidator.href_attribute(image), ""),
             "#"
           ),
           do:
-            {Map.get(image.attributes, "href", Map.get(image.attributes, "xlink:href", "")),
-             :pending}
+            {Map.get(image.attributes, SvgReferenceValidator.href_attribute(image), ""), :pending}
     )
   end
 
@@ -35,7 +99,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
   @spec validate_node(map()) :: :ok | {:error, {atom(), map()}}
   def validate_node(node) do
     if node.tag in ~w(image feImage) do
-      href = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", ""))
+      href = Map.get(node.attributes, SvgReferenceValidator.href_attribute(node), "")
 
       cond do
         node.tag == "feImage" and is_binary(href) and String.starts_with?(href, "#") ->
@@ -204,7 +268,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
     definition? = definition? and not referenced?
     visible? = visible? and Map.get(node.style, :display) != :none
 
-    reference = Map.get(node.attributes, "href", Map.get(node.attributes, "xlink:href", ""))
+    reference = Map.get(node.attributes, SvgReferenceValidator.href_attribute(node), "")
     external_input? = node.tag in ~w(image feImage) and not String.starts_with?(reference, "#")
 
     if external_input? do
@@ -217,7 +281,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
               (:crypto.hash(:sha256, :erlang.term_to_binary({reference, descriptor}))
                |> Base.encode16(case: :lower))
 
-          attrs = node.attributes |> Map.delete("xlink:href") |> Map.put("href", key)
+          attrs =
+            node.attributes
+            |> Map.delete(SvgReferenceValidator.href_attribute(node))
+            |> Map.put("href", key)
 
           {:ok, %{node | attributes: attrs},
            Map.merge(resources, nested_resources) |> Map.put(key, descriptor),

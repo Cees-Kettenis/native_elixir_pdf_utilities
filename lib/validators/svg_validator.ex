@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlTree
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
@@ -10,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
 
   @typedoc "Internal bounded XML summary issued by validate_processing/2, including original document geometry metadata."
   @type document_summary :: %{
+          required(:document) => NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.dom_tree(),
           required(:source_root) => %{String.t() => String.t()},
           required(:source_nodes) => [
             %{
@@ -140,13 +142,25 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   def validate_processing(svg, context) do
     with {:ok, context} <- validate_context(context),
          :ok <- validate_source(svg) do
-      HtmlValidator.reserve_render_resource(
-        :max_aggregate_svg_source_bytes,
-        byte_size(svg),
-        :style
-      )
-
       validate_structure(svg, context)
+    end
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      {:error,
+       {reason,
+        Diagnostics.with_context(diagnostic,
+          source: "SVG",
+          module: __MODULE__,
+          operation: :prepare
+        )}}
+  end
+
+  @doc "Admits original XML before resolving its pending image resources."
+  @spec validate_extraction(term()) :: {:ok, document_summary()} | {:error, {atom(), map()}}
+  def validate_extraction(svg) do
+    with {:ok, context} <- validate_context(%{mode: :inline}),
+         :ok <- validate_source(svg) do
+      validate_structure(svg, Map.put(context, :pending_resources?, true))
     end
   catch
     {:render_resource_limit, {:error, {reason, diagnostic}}} ->
@@ -232,6 +246,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   defp validate_structure(svg, context) do
+    HtmlValidator.reserve_render_resource(:max_aggregate_svg_source_bytes, byte_size(svg), :style)
+
     # Reject both DTD events because a bare DOCTYPE emits only endDTD in xmerl.
     state = %{
       depth: 0,
@@ -257,6 +273,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       text: [],
       geometry: [],
       source_nodes: [],
+      xml_tree: HtmlTree.new(%{text: svg, line: 1, column: 1}),
+      namespace_declarations: %{},
       opacity_layers: 0,
       nested_viewports: 0,
       clip_references: 0,
@@ -279,7 +297,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
     case result do
       {:ok, %{root: attributes} = summary, rest} when is_map(attributes) ->
         if Regex.match?(~r/\A(?:[ \t\r\n]|<!--(?:[^-]|-(?!-))*-->)*\z/u, rest) do
-          validate_expansion(summary)
+          validate_expansion(
+            summary
+            |> Map.put(:document, HtmlTree.fetch(summary.xml_tree, summary.xml_tree.root))
+            |> Map.drop([:xml_tree, :namespace_declarations])
+          )
         else
           Diagnostics.error(
             :style,
@@ -332,7 +354,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       :endDTD ->
         reject("SVG resource references are not authorized; remove DTD/entity declarations", line)
 
-      {:startElement, uri, local, _name, attributes} ->
+      {:startPrefixMapping, prefix, uri} ->
+        key = if prefix == [], do: "xmlns", else: "xmlns:" <> to_string(prefix)
+
+        %{
+          state
+          | namespace_declarations: Map.put(state.namespace_declarations, key, to_string(uri))
+        }
+
+      {:startElement, uri, local, {prefix, _local}, attributes} ->
         name = to_string(local)
         attribute_names = Enum.map(attributes, fn {uri, _prefix, key, _value} -> {uri, key} end)
 
@@ -438,7 +468,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         end
 
         hrefs =
-          for {_uri, _prefix, key, value} <- attributes,
+          for {uri, _prefix, key, value} <- attributes,
+              to_string(uri) in ["", "http://www.w3.org/1999/xlink"],
               to_string(key) == "href",
               do: String.trim(to_string(value))
 
@@ -474,7 +505,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                not String.starts_with?(value, "#") and
                  (name not in ["image", "feImage"] or
                     not state.context.external_resources? or
-                    not Map.has_key?(state.context.resources, value))
+                    (not Map.get(state.context, :pending_resources?, false) and
+                       not Map.has_key?(state.context.resources, value)))
              end) do
           reject(
             "SVG resource references are not authorized; use self-contained shapes and internal #id references",
@@ -482,20 +514,21 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           )
         end
 
-        Enum.each(attributes, fn {_uri, _prefix, key, value} ->
-          if to_string(key) in [
-               "style",
-               "fill",
-               "stroke",
-               "filter",
-               "clip-path",
-               "mask",
-               "marker",
-               "marker-start",
-               "marker-mid",
-               "marker-end",
-               "cursor"
-             ] do
+        Enum.each(attributes, fn {uri, _prefix, key, value} ->
+          if uri == [] and
+               to_string(key) in [
+                 "style",
+                 "fill",
+                 "stroke",
+                 "filter",
+                 "clip-path",
+                 "mask",
+                 "marker",
+                 "marker-start",
+                 "marker-mid",
+                 "marker-end",
+                 "cursor"
+               ] do
             validate_css_references(to_string(value), line)
           end
         end)
@@ -503,7 +536,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         if Enum.any?(
              Enum.reject(
                resource_hrefs,
-               &(Map.get(state.context.resources, &1) == :pending and
+               &((Map.get(state.context, :pending_resources?, false) or
+                    Map.get(state.context.resources, &1) == :pending) and
                    not Regex.match?(~r/^(?:javascript|vbscript):/i, &1))
              ),
              &Regex.match?(~r/^(?:javascript|vbscript|data|file|https?):|^\/\//i, &1)
@@ -542,6 +576,45 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             if(name == "textPath", do: byte_size(Map.get(attrs, "path", "")), else: 0)
 
         index = state.nodes + 1
+
+        xml_attributes =
+          Map.new(attributes, fn {_uri, prefix, key, value} ->
+            name =
+              if prefix == [],
+                do: to_string(key),
+                else: to_string(prefix) <> ":" <> to_string(key)
+
+            {name, to_string(value)}
+          end)
+          |> Map.merge(state.namespace_declarations)
+
+        attribute_namespaces =
+          Map.new(
+            for {uri, prefix, key, _value} <- attributes, uri != [] do
+              name = to_string(prefix) <> ":" <> to_string(key)
+
+              {name,
+               %{prefix: to_string(prefix), local_name: to_string(key), namespace: to_string(uri)}}
+            end
+          )
+
+        {xml_tree, xml_id} =
+          HtmlTree.insert(
+            state.xml_tree,
+            if(parent, do: parent.xml_id, else: state.xml_tree.root),
+            %{
+              type: :element,
+              namespace: namespace,
+              tag: name,
+              xml_name: if(prefix == [], do: name, else: to_string(prefix) <> ":" <> name),
+              attributes: xml_attributes,
+              attribute_namespaces: attribute_namespaces,
+              attribute_order: Map.keys(xml_attributes),
+              source: %{text: "", line: line, column: 1},
+              children: []
+            }
+          )
+
         id = Map.get(attrs, "id")
         if id != nil and Map.has_key?(state.ids, id), do: reject("SVG IDs must be unique", line)
         graph = Map.put(state.graph, index, [])
@@ -563,7 +636,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
 
         state = %{
           state
-          | stack: [%{namespace: namespace, name: name, index: index} | state.stack],
+          | stack: [
+              %{namespace: namespace, name: name, index: index, xml_id: xml_id} | state.stack
+            ],
+            xml_tree: xml_tree,
+            namespace_declarations: %{},
             converter_features:
               if(
                 namespace == :svg and
@@ -678,7 +755,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             filters: state.filters + if(String.starts_with?(name, "fe"), do: 1, else: 0),
             references: state.references + length(hrefs) + length(paint_hrefs),
             root:
-              state.root || Map.new(attrs, fn {key, value} -> {String.downcase(key), value} end)
+              state.root ||
+                Map.put(Map.delete(attrs, "viewbox"), "viewbox", Map.get(attrs, "viewBox"))
         }
 
         for {key, count} <- [
@@ -725,12 +803,33 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
             state.styles
           end
 
-        %{state | depth: state.depth - 1, styles: styles, stack: tl(state.stack)}
+        {xml_tree, _node} = HtmlTree.close(state.xml_tree, hd(state.stack).xml_id)
+
+        %{
+          state
+          | depth: state.depth - 1,
+            styles: styles,
+            stack: tl(state.stack),
+            xml_tree: xml_tree
+        }
 
       {:processingInstruction, target, _data} ->
         reject("SVG processing instructions are not supported: #{to_string(target)}", line)
 
       {:characters, characters} ->
+        {xml_tree, _id} =
+          HtmlTree.insert(
+            state.xml_tree,
+            hd(state.stack).xml_id,
+            %{
+              type: :text,
+              text: to_string(characters),
+              source: %{text: "", line: line, column: 1}
+            }
+          )
+
+        state = %{state | xml_tree: xml_tree}
+
         state =
           if Enum.any?(state.stack, &(&1.namespace == :svg and &1.name == "text")) do
             [%{index: index} | _] = state.stack
@@ -1001,9 +1100,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   @doc """
-  Returns root attribute overrides that stretch the authored canvas to an
-  explicit two-dimensional raster target, matching CSS default object-fit fill
-  semantics for replaced SVG images.
+  Returns root attribute overrides for an explicit two-dimensional image
+  viewport. Authored viewBox and preserveAspectRatio retain SVG fitting rules;
+  an image without a viewBox stretches its intrinsic canvas under object-fit fill.
 
   Returns `:ok` with `nil` overrides when the target aspect already matches the
   intrinsic canvas within device-pixel rounding, so unchanged sources keep
@@ -1023,6 +1122,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
 
             abs(width * intrinsic_height - height * intrinsic_width) <= max(width, height) ->
               {:ok, nil}
+
+            Map.has_key?(attributes, "viewBox") ->
+              {:ok, %{"width" => Integer.to_string(width), "height" => Integer.to_string(height)}}
 
             true ->
               {:ok,

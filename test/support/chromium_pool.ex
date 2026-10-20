@@ -98,6 +98,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
 
       state =
         if reference do
+          # Print pages have no outer scrolling gutter. Screenshot capture
+          # otherwise removes that gutter temporarily, reflowing percentage
+          # tables after their crop coordinates have already been measured.
+          {_, state} = command(state, "Emulation.setScrollbarsHidden", %{hidden: true}, session)
+
           {_, state} =
             command(
               state,

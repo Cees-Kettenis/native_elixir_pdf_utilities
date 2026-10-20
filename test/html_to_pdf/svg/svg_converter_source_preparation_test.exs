@@ -17,6 +17,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest d
     :ok
   end
 
+  test "qualified image references retain approved PNG bytes across XML transport" do
+    png = PngFixture.build(2, 1, 2, 8, 0, fn _, _ -> [10, 20, 30] end)
+
+    source = """
+    <s:svg xmlns:s="http://www.w3.org/2000/svg" xmlns:q="http://www.w3.org/1999/xlink" width="2" WIDTH="8" height="1">
+      <s:image q:href="svg-resource:tile" width="2" height="1"/>
+    </s:svg>
+    """
+
+    context = %{
+      mode: :inline,
+      resources: %{"svg-resource:tile" => %{data: png, media_type: "image/png"}}
+    }
+
+    assert {:ok, request} = SvgConverterValidator.prepare(source, [], nil, [], context)
+    assert request.source =~ "data:image/png;base64,#{Base.encode64(png)}"
+    assert request.source =~ ~s(xmlns:q="http://www.w3.org/1999/xlink")
+    refute request.source =~ "svg-resource:tile"
+    assert {:ok, rendered} = SvgRasterizer.rasterize(source, [], nil, [], context)
+    assert {:ok, image} = PngDecoder.decode(rendered, nil, false)
+    assert image.data == :binary.copy(<<10, 20, 30>>, 2)
+  end
+
+  test "extraction charges XML source before building its canonical tree" do
+    Limits.install(Map.put(Limits.effective(), :max_aggregate_svg_source_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               SvgConverterValidator.prepare_extraction("<svg/>")
+             end)
+
+    assert diagnostic.source == "SVG" and diagnostic.message =~ "max_aggregate_svg_source_bytes"
+  end
+
   test "extracted scenes support optional budgets and independently discovered text fonts" do
     source = "<svg width='24' height='24'><text y='18'>A</text></svg>"
     assert {:ok, scene, [_ | _] = fonts} = SvgScene.extract(source, nil, [], [])
