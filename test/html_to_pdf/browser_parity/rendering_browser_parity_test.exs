@@ -841,6 +841,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
        max_average_delta: 0.01
      ]},
     {"mathml_fractions_ordinary.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
+    # Native preserves MathML Core row italic correction and STIX ssty script forms.
+    # Chromium 154 omits that correction and uses ordinary fraction digit forms.
+    # Ordinary STIX prose GPOS kerning is a separate native limitation.
+    # Original mismatch: 1.0664%; simulating only Chromium's missing row gap: 0.9790%.
+    # User-approved 1.2% changed-pixel exception; retain the 1% mean-delta ceiling.
+    # https://www.w3.org/TR/mathml-core/#layout-of-mrow
+    # https://github.com/w3c/mathml-core/issues/135
+    {"mathml_token_fraction_stix_text.html", [max_changed_ratio: 0.012, max_average_delta: 0.01]},
     {"mathml_radicals.html",
      [
        max_changed_ratio: 0.01,
@@ -2060,6 +2068,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
           "inline_svg_filter_text_inputs.html" -> 0.03
           "inline_svg_text_paint_servers.html" -> 0.02
           "inline_svg_text_font_attributes.html" -> 0.02
+          "mathml_token_fraction_stix_text.html" -> 0.012
           _ -> 0.01
         end
 
@@ -2074,7 +2083,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
         when fixture in [
                "inline_svg_filter_text_inputs.html",
                "inline_svg_text_paint_servers.html",
-               "inline_svg_text_font_attributes.html"
+               "inline_svg_text_font_attributes.html",
+               "mathml_token_fraction_stix_text.html"
              ] ->
           assert Keyword.fetch!(thresholds, :max_average_delta) == 0.01
 

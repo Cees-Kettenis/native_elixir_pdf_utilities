@@ -436,6 +436,13 @@ other font contents and other sizes retain design metrics, which can differ
 from hinted browser measurements. PDF glyph paint retains the selected font
 outlines in either case.
 
+The decorated-token and inline-fraction comparison with STIX surrounding text
+has a documented 1.2% changed-pixel allowance, with the 1% mean-delta limit
+retained. Native rendering preserves MathML row italic correction and selected
+script forms that Chromium handles differently. Ordinary STIX prose kerning
+also contributes to the difference. This case is an exception to the usual
+1% changed-pixel target.
+
 See [MathML examples](html-to-pdf-examples.md#mathml-equations).
 
 ## Pagination
