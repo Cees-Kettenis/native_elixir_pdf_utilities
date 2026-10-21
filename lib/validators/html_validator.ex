@@ -3344,7 +3344,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :source,
           :document_id,
           :tree_scope_id,
-          :parent_id
+          :parent_id,
+          :composed_parent_id,
+          :shadow_scope_id,
+          :shadow_host_id
         ]
 
         String.valid?(target) and String.valid?(data) and

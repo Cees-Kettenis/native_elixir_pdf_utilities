@@ -91,8 +91,18 @@ bytes. Inherited font families keep the scope where the declaration originated.
 Chromium currently ignores shadow `@font-face` definitions, a
 [documented browser limitation](https://issues.chromium.org/issues/41085401).
 
+Processing-instruction markers can appear inside shadow content without painting
+anything. Nested roots retain their own slot assignments and fallback content.
+For a template carrying both attributes, a valid `shadowrootmode="open"` or
+`"closed"` takes priority over `for`. It attempts shadow composition and does not
+consume a replacement marker, even if the host is ineligible or already has a
+root. With an absent or invalid shadow mode, `for` retains replacement semantics.
+
 Parser-time `<template for="name">` replacement supports earlier named markers
-and ranges. Original content is validated before mutation, including removed
+and ranges, including within a shadow root's own content. Marker names use quoted
+processing-instruction pseudo-attributes, such as `<?marker name="label">`.
+Replacement stays within its insertion scope. Original content is validated before
+mutation, including removed
 text, controls, hidden backgrounds, conditional fallback and responsive images.
 Supply authorized resources for that original content as well as the inserted
 tree. Original validation shares the render's resource and work limits.

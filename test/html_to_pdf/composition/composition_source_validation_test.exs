@@ -4,18 +4,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionSourceValidationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlComposition, HtmlParser}
   alias NativeElixirPdfUtilities.Validators.{HtmlCompositionValidator, TemplateExecutionValidator}
 
-  test "composition rejects replacement attributes with an actionable shared diagnostic" do
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlCompositionValidator.validate_attributes(%{
-               "for" => "A",
-               "shadowrootmode" => "open"
-             })
+  test "template semantics prioritize a valid shadow mode before replacement" do
+    for mode <- ["open", "closed", "OpEn"] do
+      assert HtmlCompositionValidator.template_mode(%{"for" => "A", "shadowrootmode" => mode}) ==
+               :shadow
+    end
 
-    assert diagnostic.stage == :html
-    assert diagnostic.module == HtmlCompositionValidator
-    assert diagnostic.operation == :compose
-    assert diagnostic.source == "template"
-    assert diagnostic.message =~ "cannot be combined"
+    assert HtmlCompositionValidator.template_mode(%{"for" => "A", "shadowrootmode" => "invalid"}) ==
+             :replacement
+
+    assert HtmlCompositionValidator.template_mode(%{
+             "for" => "A",
+             "shadowrootdelegatesfocus" => ""
+           }) == :replacement
+
+    assert HtmlCompositionValidator.template_mode(%{"shadowrootmode" => "invalid"}) == :inert
+    assert HtmlCompositionValidator.template_mode(%{}) == :inert
   end
 
   test "processing instructions stay logical and cannot be assigned to an initial slot" do

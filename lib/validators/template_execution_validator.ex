@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
+    HtmlCompositionValidator,
     HtmlValidator,
     ResourceValidator,
     TemplatePatchValidator,
@@ -25,7 +26,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     :data,
     :source
   ]
-  @shadow ~w(shadowrootmode shadowrootdelegatesfocus shadowrootserializable shadowrootslotassignment shadowrootclonable shadowrootcustomelementregistry)
 
   @doc false
   @spec prepare_source(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
@@ -73,7 +73,10 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
               else: []
 
           templates =
-            Enum.filter(nodes, &match?(%{tag: "template", attributes: %{"for" => _}}, &1))
+            Enum.filter(nodes, fn node ->
+              Map.get(node, :tag) == "template" and
+                HtmlCompositionValidator.template_mode(node.attributes) == :replacement
+            end)
 
           if templates == [] do
             prepare_runtime_view(original, opts, image_budget)
@@ -226,7 +229,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
   def inert_source_view?(attributes, context) do
     case Process.get(@key) do
       %{mode: mode, source: source} = frame ->
-        not Enum.any?(@shadow, &Map.has_key?(attributes, &1)) and
+        HtmlCompositionValidator.template_mode(attributes) == :replacement and
           (context == nil or
              (mode == :original and
                 match?(

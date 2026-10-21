@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlTree, HtmlParser, ResourceContext}
 
   alias NativeElixirPdfUtilities.Validators.{
+    HtmlCompositionValidator,
     HtmlCssSourceValidator,
     HtmlMetadataValidator,
     HtmlTreeValidator,
@@ -16,7 +17,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
     TemplateCandidateValidator
   }
 
-  @composition_attributes ~w(for shadowrootmode shadowrootdelegatesfocus shadowrootserializable shadowrootslotassignment shadowrootclonable shadowrootcustomelementregistry)
   @pending_checks [
     :original_source_policy,
     :insertion_content_model,
@@ -54,13 +54,9 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   @spec validate_attributes(map(), nil | {HtmlTree.t(), reference(), map()}) ::
           :ok | {:error, {atom(), map()}}
   def validate_attributes(attributes, context \\ nil) do
-    # The first recognized attribute is "for" whenever it is present.
-    # All other recognized attributes therefore have only shadow-root semantics.
-    case Enum.find(@composition_attributes, &Map.has_key?(attributes, &1)) do
-      nil ->
-        :ok
-
-      "for" ->
+    # HTML checks a valid shadow mode before attempting content replacement.
+    case HtmlCompositionValidator.template_mode(attributes) do
+      :replacement ->
         cond do
           NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.inert_source_view?(
             attributes,
@@ -68,12 +64,11 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
           ) ->
             :ok
 
-          context == nil or
-              Enum.any?(tl(@composition_attributes), &Map.has_key?(attributes, &1)) ->
+          context == nil ->
             Diagnostics.error(
               :html,
               :unsupported_html,
-              "template replacement and declarative shadow attributes require validated parser composition contexts",
+              "template replacement requires validated parser composition contexts",
               module: __MODULE__
             )
 
@@ -88,9 +83,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
         end
 
       _ ->
-        NativeElixirPdfUtilities.Validators.HtmlCompositionValidator.validate_attributes(
-          attributes
-        )
+        :ok
     end
   end
 

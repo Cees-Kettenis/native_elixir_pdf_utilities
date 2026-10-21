@@ -172,10 +172,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlCompositionTest do
     assert diagnostic.operation == :compose
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlCompositionValidator
     assert diagnostic.message =~ "document"
-
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlParser.parse_detailed("<template for=A shadowrootmode=open></template>")
-
-    assert diagnostic.message =~ "composition"
   end
 end

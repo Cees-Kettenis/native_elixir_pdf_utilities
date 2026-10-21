@@ -8,19 +8,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCompositionValidator do
   @hosts ~w(article aside blockquote body div footer h1 h2 h3 h4 h5 h6 header main nav p section span)
 
   @doc false
-  @spec validate_attributes(map()) :: :ok | {:error, {atom(), map()}}
-  def validate_attributes(attributes) do
-    if Map.has_key?(attributes, "for") do
-      Diagnostics.error(
-        :html,
-        :unsupported_html,
-        "template replacement and declarative shadow composition cannot be combined",
-        module: __MODULE__,
-        operation: :compose,
-        source: "template"
-      )
-    else
-      :ok
+  @spec template_mode(map()) :: :shadow | :replacement | :inert
+  def template_mode(attributes) do
+    cond do
+      String.downcase(Map.get(attributes, "shadowrootmode", ""), :ascii) in ["open", "closed"] ->
+        :shadow
+
+      Map.has_key?(attributes, "for") ->
+        :replacement
+
+      true ->
+        :inert
     end
   end
 
@@ -34,7 +32,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCompositionValidator do
     if Map.get(host, :namespace, :html) == :html and
          (host_tag in @hosts or HtmlValidator.custom_html_tag?(host_tag)) and
          Map.get(template, :namespace, :html) == :html and
-         Map.get(template, :tag) == "template" and mode in ["open", "closed"] do
+         Map.get(template, :tag) == "template" and template_mode(attributes) == :shadow do
       %{
         mode: mode,
         slot_assignment:

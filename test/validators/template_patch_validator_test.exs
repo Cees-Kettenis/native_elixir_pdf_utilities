@@ -332,10 +332,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
       assert diagnostic.message =~ "no original source has been discarded"
     end
 
-    assert {:error, {:unsupported_html, diagnostic}} =
+    assert {:ok, _dom} =
              HtmlParser.parse_detailed("<template for='A' shadowrootmode='open'></template>")
-
-    assert diagnostic.message =~ "declarative shadow"
   end
 
   test "planning handles bind the original tree and budget and reject reuse alteration forgery and expiry" do

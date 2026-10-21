@@ -28,6 +28,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
 
       valid? =
         valid? and
+          (not Map.has_key?(node, :composed_parent_id) or
+             is_nil(node.composed_parent_id) or is_reference(node.composed_parent_id)) and
+          case Map.take(node, [:shadow_scope_id, :shadow_host_id]) do
+            metadata when map_size(metadata) == 0 ->
+              true
+
+            %{shadow_scope_id: scope, shadow_host_id: host} ->
+              is_reference(scope) and is_reference(host) and
+                (not canonical? or scope == node.tree_scope_id)
+
+            _ ->
+              false
+          end
+
+      valid? =
+        valid? and
           case {canonical?, Map.get(node, :type), Map.fetch(node, :source)} do
             {false, :processing_instruction, {:ok, %{text: text}}} when is_binary(text) ->
               HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(text), :html)
@@ -324,6 +340,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
                   not MapSet.member?(seen, node.node_id)))
         end
 
+      # Composition ancestry belongs to the renderer's projection, not to an
+      # authored processing instruction supplied through public DOM transport.
+      consistent? =
+        consistent? and
+          (Map.get(node, :type) != :processing_instruction or
+             not Enum.any?(
+               [:composed_parent_id, :shadow_scope_id, :shadow_host_id],
+               &Map.has_key?(node, &1)
+             ))
+
       if consistent? do
         seen = if Map.has_key?(node, :node_id), do: MapSet.put(seen, node.node_id), else: seen
         children = Map.get(node, :children, [])
@@ -367,7 +393,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
       else
         metadata_error(
           node,
-          "HTML identity transport must cover the complete tree with unique node IDs and matching parent, document and tree-scope relationships; do not mix canonical and metadata-free nodes"
+          "HTML identity transport must cover the complete tree with unique node IDs and matching parent, document and tree-scope relationships; do not mix canonical and metadata-free nodes or supply composition ancestry on authored processing instructions"
         )
       end
     end
