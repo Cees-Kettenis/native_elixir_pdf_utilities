@@ -821,8 +821,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         if ordinary_box? do
           margin = Map.get(style, :margin, edges(0.0))
           edges_width = horizontal_box_size(style) + margin.left + margin.right
-          minimum = fieldset_content_width(node.children, style, :min)
-          maximum = fieldset_content_width(node.children, style, :max)
+          minimum = intrinsic_content_width(node.children, style, :min)
+          maximum = intrinsic_content_width(node.children, style, :max)
 
           {resolved_content_size(style, :width, nil, minimum) + edges_width,
            resolved_content_size(style, :width, nil, maximum) + edges_width}
@@ -1975,7 +1975,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     minimum =
       if Map.has_key?(style, :min_width),
         do: 0.0,
-        else: fieldset_content_width(block.children, style, :min)
+        else: intrinsic_content_width(block.children, style, :min)
 
     content_width =
       max(
@@ -2116,8 +2116,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       %{style: style} ->
         margin = Map.get(style, :margin, edges(0.0))
-        intrinsic = fieldset_content_width(legend.children, style, :max)
-        minimum = fieldset_content_width(legend.children, style, :min)
+        intrinsic = intrinsic_content_width(legend.children, style, :max)
+        minimum = intrinsic_content_width(legend.children, style, :min)
 
         content_width =
           max(
@@ -2178,7 +2178,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp fieldset_content_width(children, style, kind) do
+  defp intrinsic_content_width(children, style, kind) do
     case inline_runs(children, style) do
       {:ok, runs} ->
         case kind do
@@ -2203,10 +2203,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 flex_child_intrinsic_width(child)
 
               %{style: child_style, children: nested} ->
-                intrinsic = fieldset_content_width(nested, child_style, kind)
+                intrinsic = intrinsic_content_width(nested, child_style, kind)
+
+                margin = Map.get(child_style, :margin, edges(0.0))
 
                 resolved_content_size(child_style, :width, nil, intrinsic) +
-                  horizontal_box_size(child_style)
+                  horizontal_box_size(child_style) + margin.left + margin.right
 
               _ ->
                 flex_child_intrinsic_width(child)
@@ -2350,8 +2352,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{style: %{width: :fit_content, display: display} = style, children: children}
       when display != :image ->
         available = max(available_width - horizontal_box_size(style), 0.0)
-        minimum = fieldset_content_width(children, style, :min)
-        maximum = fieldset_content_width(children, style, :max)
+        minimum = intrinsic_content_width(children, style, :min)
+        maximum = intrinsic_content_width(children, style, :max)
 
         style =
           style
@@ -6660,7 +6662,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             column_count,
             column_grid_width,
             table_layout,
-            border_collapse
+            border_collapse,
+            horizontal_spacing
           )
 
         %{
@@ -7482,7 +7485,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          column_count,
          table_width,
          table_layout,
-         border_collapse
+         border_collapse,
+         horizontal_spacing
        ) do
     column_preferred =
       0..(column_count - 1)
@@ -7596,6 +7600,71 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         _ -> table_minimum_column_widths(rows, column_count)
       end
 
+    {minimum, preferred} =
+      if table_layout == :auto do
+        rows
+        |> Enum.flat_map(& &1.cells)
+        |> Enum.filter(&(&1.colspan > 1))
+        |> Enum.sort_by(&{&1.colspan, &1.column})
+        |> Enum.reduce({minimum, preferred}, fn %{cell: cell, column: index, colspan: span},
+                                                {minimum, preferred} ->
+          span_minimum = Enum.slice(minimum, index, span)
+
+          span_preferred =
+            preferred
+            |> Enum.slice(index, span)
+            |> Enum.zip_with(span_minimum, fn width, minimum -> max(width || 0.0, minimum) end)
+
+          inner_spacing = horizontal_spacing * (span - 1)
+          cell_minimum = max(table_cell_minimum_width(cell) - inner_spacing, 0.0)
+
+          cell_preferred =
+            max(
+              table_cell_preferred_width(
+                cell,
+                table_width,
+                percentage_widths_fill_table?,
+                table_layout,
+                border_collapse
+              ) - inner_spacing,
+              cell_minimum
+            )
+
+          # A span that already fits must not rewrite percentage preferences
+          # with min-content floors before the final table allocation.
+          if cell_minimum > Enum.sum(span_minimum) or
+               cell_preferred > Enum.sum(span_preferred) do
+            distributed_minimum =
+              table_span_column_widths(span_preferred, span_minimum, cell_minimum)
+
+            distributed_preferred =
+              span_preferred
+              |> Enum.zip_with(distributed_minimum, &max/2)
+              |> table_span_column_widths(distributed_minimum, cell_preferred)
+              |> Enum.zip_with(span_preferred, &max/2)
+
+            minimum =
+              Enum.reduce(Enum.with_index(distributed_minimum, index), minimum, fn {width, column},
+                                                                                   widths ->
+                List.replace_at(widths, column, width)
+              end)
+
+            preferred =
+              Enum.reduce(Enum.with_index(distributed_preferred, index), preferred, fn {width,
+                                                                                        column},
+                                                                                       widths ->
+                List.replace_at(widths, column, width)
+              end)
+
+            {minimum, preferred}
+          else
+            {minimum, preferred}
+          end
+        end)
+      else
+        {minimum, preferred}
+      end
+
     # An automatic table cannot squeeze its columns below min-content.
     # CSS width is a lower bound when indivisible cell contents require more.
     table_width = max(table_width, Enum.sum(minimum))
@@ -7691,6 +7760,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  # Spanning cells constrain the same tracks as their nonspanning peers. Grow
+  # beyond max-content proportionally; interpolate toward min-content otherwise.
+  defp table_span_column_widths(preferred, minimum, target) do
+    total = Enum.sum(preferred)
+    target = max(target, Enum.sum(minimum))
+
+    if target <= total do
+      shrink_columns_to_width(preferred, minimum, target)
+    else
+      extra = target - total
+      count = length(preferred)
+
+      Enum.map(preferred, fn width ->
+        width + extra * if(total > 0, do: width / total, else: 1 / count)
+      end)
+    end
+  end
+
   defp table_column_preferred_width(width, table_width) do
     case width do
       {:percent, ratio} when is_number(ratio) -> table_width * ratio
@@ -7715,24 +7802,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp table_cell_minimum_width(%{style: style, children: children}) do
-    case inline_runs(children, style) do
-      {:ok, runs} ->
-        padding = Map.get(style, :padding, edges(0.0))
+    padding = Map.get(style, :padding, edges(0.0))
 
-        border_widths =
-          case Map.get(style, :_collapsed_borders) do
-            nil -> Map.get(style, :border_widths, edges(0.0))
-            borders -> Map.new(borders, fn {edge, value} -> {edge, value / 2} end)
-          end
+    border_widths =
+      case Map.get(style, :_collapsed_borders) do
+        nil -> Map.get(style, :border_widths, edges(0.0))
+        borders -> Map.new(borders, fn {edge, value} -> {edge, value / 2} end)
+      end
 
-        content_width = inline_minimum_content_width(runs)
+    content_width = intrinsic_content_width(children, style, :min)
 
-        content_width + padding.left + padding.right + border_widths.left +
-          border_widths.right
-
-      {:error, _reason} ->
-        0.0
-    end
+    content_width + padding.left + padding.right + border_widths.left +
+      border_widths.right
   end
 
   # Min-content measures complete unbroken words, including styled fragments.
@@ -7915,7 +7996,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case cell do
       %{style: %{width: {:percent, ratio}} = style} when is_number(ratio) ->
         table_width * ratio +
-          if(percentage_widths_fill_table?,
+          if(table_layout == :auto or percentage_widths_fill_table?,
             do: 0.0,
             else: table_cell_horizontal_box_size(style, border_collapse)
           )
@@ -7974,7 +8055,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 )
 
               _ ->
-                nil
+                intrinsic_content_width(children, style, :max) +
+                  table_cell_horizontal_box_size(style, border_collapse)
             end
         end
 

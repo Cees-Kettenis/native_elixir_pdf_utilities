@@ -266,6 +266,13 @@ page rules still return errors.
 | Headers across pages | Rows in `<thead>` repeat when the table continues on another page |
 | Keeping row groups together | Set `break-inside: avoid` on each `<tbody>` that should stay together; groups too tall for a page split between rows |
 
+Automatic columns measure inline text and block children, including child widths,
+min/max widths, padding, borders and margins. Stacked blocks contribute their
+widest child. Spanning cells constrain the columns they cover; indivisible content
+can expand a table beyond its authored width. Percentage columns reserve their
+share of the table width. Use `table-layout: fixed` for allocation based on column
+hints and the first row instead of later cell contents.
+
 ### Table page breaks
 
 Table width/height, spacing, cell padding, background color and supported

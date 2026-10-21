@@ -13,7 +13,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TablePercentageBaselineTest do
           "<div style='height:50%'><div style='height:50%;min-height:20pt'></div><span>Nested</span></div>"
         ] do
       html =
-        "<body style='margin:0;font-family:DejaVu Sans;font-size:10pt;line-height:16pt'><div style='display:inline-block'><table style='height:80pt;width:160pt;border-collapse:collapse'><tr><td style='padding:0;vertical-align:baseline'>#{content}</td><td style='padding:0;vertical-align:baseline'>Peer</td></tr></table></div></body>"
+        "<body style='margin:0;font-family:DejaVu Sans;font-size:10pt;line-height:16pt'><div style='display:inline-block'><table style='height:80pt;width:160pt;border-collapse:collapse'><tr><td style='width:100pt;padding:0;vertical-align:baseline'>#{content}</td><td style='padding:0;vertical-align:baseline'>Peer</td></tr></table></div></body>"
 
       assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
       assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
