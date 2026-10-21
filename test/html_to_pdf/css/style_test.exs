@@ -6080,7 +6080,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "color: rgb()",
       "color: rgb(nope, 0, 0)",
       "color: rgba(0, 0, 0, nope)",
-      "vertical-align: super",
+      "vertical-align: sideways",
       "line-break: strict",
       "color: #0000007",
       "aspect-ratio: 0 / 1",

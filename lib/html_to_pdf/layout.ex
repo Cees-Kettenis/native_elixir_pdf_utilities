@@ -8962,12 +8962,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           if baseline_depth / @css_pixel_points !=
                Float.floor(baseline_depth / @css_pixel_points) and
                Enum.any?(line_runs, fn run ->
-                 (Map.has_key?(run.style, :_math_box) or
-                    Map.get(run, :_inline_bottom_baseline, false) or
-                    Map.has_key?(run.style, :_temporal_display) or
-                    Map.has_key?(run.style, :_file_display)) and
-                   Map.fetch!(run, :_inline_baseline_depth) +
-                     Map.get(run.style, :margin, edges(0.0)).top == baseline_depth
+                 Map.get(run, :_inline_strut_ascent) == baseline_depth or
+                   case Map.get(run, :_split_inline_alignment) do
+                     shift when is_number(shift) and shift != 0 ->
+                       shifted_depth =
+                         case run do
+                           %{_inline_baseline_depth: depth} ->
+                             depth + Map.get(run.style, :margin, edges(0.0)).top + shift
+
+                           _ ->
+                             text_baseline_depth(run.style) + shift
+                         end
+
+                       shifted_depth == baseline_depth
+
+                     _ ->
+                       (Map.has_key?(run.style, :_math_box) or
+                          Map.get(run, :_inline_bottom_baseline, false) or
+                          Map.has_key?(run.style, :_temporal_display) or
+                          Map.has_key?(run.style, :_file_display)) and
+                         Map.fetch!(run, :_inline_baseline_depth) +
+                           Map.get(run.style, :margin, edges(0.0)).top == baseline_depth
+                   end
                end) do
             Map.put(line_metadata, :baseline_snap_depth, baseline_depth)
           else
@@ -9411,14 +9427,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         else: Map.update!(metadata, :line_baseline_depth, &(&1 - shift))
 
     metadata =
-      if shift == 0,
-        do: metadata,
-        else:
-          Map.put(
-            metadata,
-            :baseline_snap_depth,
-            -shift - Float.floor(-shift / @css_pixel_points) * @css_pixel_points
-          )
+      if shift == 0 do
+        metadata
+      else
+        # Preserve the line's fractional baseline before adding a nested shift.
+        depth = Map.get(metadata, :baseline_snap_depth, 0.0) - shift
+
+        Map.put(
+          metadata,
+          :baseline_snap_depth,
+          depth - Float.floor(depth / @css_pixel_points) * @css_pixel_points
+        )
+      end
 
     boxes =
       case run do
@@ -10434,7 +10454,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     if line_runs != [] and
          Enum.all?(
            line_runs,
-           &match?(%{type: :inline_positioning_marker, html_target_ids: _}, &1)
+           &(match?(%{type: :inline_positioning_marker, html_target_ids: _}, &1) or
+               Map.get(&1, :_empty_inline_strut, false))
          ) do
       0.0
     else
@@ -10448,30 +10469,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       {ascent, descent} =
         Enum.reduce(line_runs, {parent_depth, parent_height - parent_depth}, fn run,
                                                                                 {above, below} ->
-          case run do
-            %{type: type, style: %{vertical_align: align}}
-            when align in [:top, :bottom] and
-                   type in [:inline_block, :inline_image] ->
-              {above, below}
+          {above, below} =
+            case run do
+              %{type: type, style: %{vertical_align: align}}
+              when align in [:top, :bottom] and
+                     type in [:inline_block, :inline_image] ->
+                {above, below}
 
-            %{type: type, _inline_baseline_depth: depth, style: style} = run
-            when type in [:inline_block, :inline_image] ->
-              margin = Map.get(style, :margin, edges(0.0))
-              height = Map.fetch!(run, :_inline_content_height) + vertical_box_size(style)
-              {max(above, margin.top + depth), max(below, height + margin.bottom - depth)}
+              %{type: type, _inline_baseline_depth: depth, style: style} = run
+              when type in [:inline_block, :inline_image] ->
+                margin = Map.get(style, :margin, edges(0.0))
+                height = Map.fetch!(run, :_inline_content_height) + vertical_box_size(style)
 
-            %{style: style} ->
-              depth = text_baseline_depth(style)
+                shift =
+                  case Map.get(run, :_split_inline_alignment, 0.0) do
+                    shift when is_number(shift) -> shift
+                    _ -> 0.0
+                  end
 
-              case Map.get(run, :_split_inline_alignment, 0.0) do
-                {_side, _depth, _height} ->
-                  {above, below}
+                {max(above, margin.top + depth + shift),
+                 max(below, height + margin.bottom - depth - shift)}
 
-                shift ->
-                  {max(above, depth + shift),
-                   max(below, Map.fetch!(style, :line_height) - depth - shift)}
-              end
-          end
+              %{style: style} ->
+                depth = text_baseline_depth(style)
+
+                case Map.get(run, :_split_inline_alignment, 0.0) do
+                  {_side, _depth, _height} ->
+                    {above, below}
+
+                  shift ->
+                    {max(above, depth + shift),
+                     max(below, Map.fetch!(style, :line_height) - depth - shift)}
+                end
+            end
+
+          {max(above, Map.get(run, :_inline_strut_ascent, above)),
+           max(below, Map.get(run, :_inline_strut_descent, below))}
         end)
 
       Enum.reduce(line_runs, ascent + descent, fn run, height ->
@@ -10502,23 +10535,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     depth =
       Enum.reduce(line_runs, text_baseline_depth, fn run, depth ->
-        case run do
-          %{type: type, style: %{vertical_align: align}}
-          when align in [:top, :bottom] and
-                 type in [:inline_block, :inline_image] ->
-            depth
+        depth =
+          case run do
+            %{type: type, style: %{vertical_align: align}}
+            when align in [:top, :bottom] and
+                   type in [:inline_block, :inline_image] ->
+              depth
 
-          %{type: type, _inline_baseline_depth: baseline, style: style}
-          when type in [:inline_block, :inline_image] ->
-            margin = Map.get(style, :margin, edges(0.0))
-            max(depth, margin.top + baseline)
+            %{type: type, _inline_baseline_depth: baseline, style: style} = run
+            when type in [:inline_block, :inline_image] ->
+              margin = Map.get(style, :margin, edges(0.0))
 
-          %{style: style} ->
-            case Map.get(run, :_split_inline_alignment, 0.0) do
-              {_side, _depth, _height} -> depth
-              shift -> max(depth, text_baseline_depth(style) + shift)
-            end
-        end
+              shift =
+                case Map.get(run, :_split_inline_alignment, 0.0) do
+                  shift when is_number(shift) -> shift
+                  _ -> 0.0
+                end
+
+              max(depth, margin.top + baseline + shift)
+
+            %{style: style} ->
+              case Map.get(run, :_split_inline_alignment, 0.0) do
+                {_side, _depth, _height} -> depth
+                shift -> max(depth, text_baseline_depth(style) + shift)
+              end
+          end
+
+        max(depth, Map.get(run, :_inline_strut_ascent, depth))
       end)
 
     bottom_runs =
@@ -10590,6 +10633,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 (content_height + vertical_box_size(style) + margin.top + margin.bottom +
                    run._inline_parent_x_height) / 2 - margin.top
 
+              shift when is_number(shift) ->
+                content_height + vertical_box_size(style) + margin.bottom + shift
+
               _ ->
                 content_height + vertical_box_size(style) + margin.bottom
             end
@@ -10601,7 +10647,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             |> Map.put(:_inline_baseline_depth, depth)
             |> Map.put(
               :_inline_bottom_baseline,
-              Map.get(style, :vertical_align, :baseline) == :baseline
+              Map.get(style, :vertical_align, :baseline) == :baseline or
+                is_number(Map.get(style, :vertical_align))
             )
 
           append_inline_atomic(lines, run, width)
@@ -11370,6 +11417,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       %{type: :element, style: %{display: :inline} = style, children: children} = element
       when is_list(children) ->
+        style = inline_script_alignment(style, parent_style)
+
         style =
           Map.put(
             style,
@@ -11382,12 +11431,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             split_context = List.first(Map.get(element, :split_inline_contexts, []))
 
             child_runs =
-              if child_runs == [] and split_context != nil do
+              if child_runs == [] and
+                   (split_context != nil or is_number(Map.get(style, :vertical_align))) do
                 [
                   %{
                     type: :inline_positioning_marker,
                     text: "",
                     style: text_style(style),
+                    _empty_inline_strut: split_context == nil,
                     inline_positioning_contexts: []
                   }
                 ]
@@ -11538,8 +11589,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               end
 
             child_runs =
-              if Map.get(style, :_split_inline_fragment, false) and
-                   Map.get(style, :vertical_align, :baseline) != :baseline do
+              if Map.get(style, :vertical_align, :baseline) != :baseline do
                 depth = text_baseline_depth(style)
                 height = style.line_height
 
@@ -11556,7 +11606,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                       shift
                   end
 
-                Enum.map(child_runs, &Map.put(&1, :_split_inline_alignment, alignment))
+                Enum.map(child_runs, fn run ->
+                  # Retain the wrapper's font strut even when it has only atomic
+                  # or further-shifted descendants. It occupies no horizontal space.
+                  run =
+                    if is_number(alignment) do
+                      run
+                      |> Map.put(
+                        :_inline_strut_ascent,
+                        max(
+                          depth + alignment,
+                          Map.get(run, :_inline_strut_ascent, depth) + alignment
+                        )
+                      )
+                      |> Map.put(
+                        :_inline_strut_descent,
+                        max(
+                          height - depth - alignment,
+                          Map.get(run, :_inline_strut_descent, height - depth) - alignment
+                        )
+                      )
+                    else
+                      run
+                    end
+
+                  Map.update(run, :_split_inline_alignment, alignment, fn child_alignment ->
+                    case {alignment, child_alignment} do
+                      {{side, depth, height}, shift} when is_number(shift) ->
+                        {side, depth - shift, height}
+
+                      {shift, child_shift} when is_number(shift) and is_number(child_shift) ->
+                        shift + child_shift
+
+                      {_alignment, child_alignment} ->
+                        child_alignment
+                    end
+                  end)
+                end)
               else
                 child_runs
               end
@@ -11595,6 +11681,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       %{type: :element, style: %{display: display} = style, children: children} = element
       when display in [:inline_block, :inline_flex, :inline_grid] and is_list(children) ->
+        style = inline_script_alignment(style, parent_style)
+
         style =
           Map.put(style, :_containing_height, Map.get(parent_style, :_inline_available_height))
 
@@ -11701,6 +11789,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {:ok, runs ++ [run]}
 
       %{type: :element, style: %{display: :image, image_display: :inline} = style} ->
+        style = inline_script_alignment(style, parent_style)
+
         parent_x_height =
           if Map.get(style, :vertical_align, :baseline) == :middle do
             HtmlValidator.text_x_height(parent_style) |> propagate_error()
@@ -11732,6 +11822,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       _ ->
         {:error, :invalid_layout}
+    end
+  end
+
+  # Reuse the same parent-font baseline rule for ordinary text, atomic boxes and images.
+  defp inline_script_alignment(style, parent_style) do
+    case Map.get(style, :vertical_align) do
+      alignment when alignment in [:sub, :super] ->
+        # Blink resolves these parent-relative shifts in 1/64 CSS pixels.
+        parent_pixels = trunc(parent_style.font_size / @css_pixel_points * 64)
+
+        shift =
+          if alignment == :sub,
+            do: -(div(parent_pixels, 5) + 64) / 64 * @css_pixel_points,
+            else: (div(parent_pixels, 3) + 64) / 64 * @css_pixel_points
+
+        Map.put(style, :vertical_align, shift)
+
+      _ ->
+        style
     end
   end
 
@@ -12150,13 +12259,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp append_whitespace_collapsed_run(runs, %{text: text} = run) do
     previous =
-      case List.last(runs) do
-        %{type: :soft_break} ->
-          Enum.find(Enum.reverse(runs), &(Map.get(&1, :type) != :soft_break))
-
-        previous ->
-          previous
-      end
+      runs
+      |> Enum.reverse()
+      |> Enum.find(fn previous ->
+        Map.get(previous, :type) != :soft_break and
+          not Map.get(previous, :_empty_inline_strut, false)
+      end)
 
     text =
       case previous do

@@ -2678,6 +2678,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "small" ->
           %{display: :inline, font_size: inherited_font_size / 1.2}
 
+        tag when tag in ["sub", "sup"] ->
+          %{
+            display: :inline,
+            font_size: inherited_font_size / 1.2,
+            vertical_align: if(tag == "sub", do: :sub, else: :super)
+          }
+
         "q" ->
           %{display: :inline, _quote_shaping: true}
 

@@ -375,7 +375,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert HtmlValidator.parse_gauge_appearance(" none ") == {:ok, :none}
     assert HtmlValidator.parse_gauge_appearance("button") == :error
 
-    for value <- ~w(baseline top middle bottom),
+    for value <- ~w(baseline sub super top middle bottom),
         do: assert(HtmlValidator.parse_vertical_align(value, 10) == {:ok, String.to_atom(value)})
 
     assert HtmlValidator.parse_vertical_align("-0.2em", 10) == {:ok, -2.0}

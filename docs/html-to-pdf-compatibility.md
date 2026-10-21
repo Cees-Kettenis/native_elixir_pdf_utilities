@@ -14,7 +14,7 @@ fetch remote resources, or simulate clicks, scrolling, submission or navigation.
 | Content | Supported elements and behavior |
 | --- | --- |
 | Document | `html`, `head`, `body`, `title`, supported `meta`, `style`, and an HTML doctype |
-| Sections and text | Headings, paragraphs, ordinary section containers, preformatted text, inline emphasis, quotations and character references |
+| Sections and text | Headings, paragraphs, ordinary section containers, preformatted text, inline emphasis, `sub`/`sup`, quotations and character references |
 | Lists | Ordered, unordered and description lists, including nested lists and authored numbering |
 | Tables | Captions, column groups, row groups, spanning cells and repeated headings. See [tables](#tables). |
 | Images | PNG, JPEG and SVG; supported `picture`, `srcset` and `sizes` source selection. See [images](#images-and-backgrounds). |
@@ -43,6 +43,11 @@ Preformatted text preserves spaces, line breaks and default eight-space tab
 stops. `pre`, `listing`, `code`, `samp`, `kbd` and `tt` use the bundled monospace
 family by default. Author CSS can change the font.
 
+`sub` and `sup` print smaller text below or above the surrounding baseline, as
+in `H<sub>2</sub>O` and `10 m<sup>2</sup>`. Scripts can nest and wrap across
+lines and pages. They inherit the surrounding font family, weight and color;
+author CSS can override their font size, line height and vertical alignment.
+
 Ordered lists support `start`, `reversed`, per-item `value` and decimal,
 alphabetic or Roman markers. Nested unordered lists use disc, circle and square
 markers. Supported CSS marker types include decimal-leading-zero and `none`.
@@ -53,7 +58,7 @@ and thickness. Decorations follow wrapping, relative positioning and pagination.
 Interrupted inline fragments preserve backgrounds, borders, padding and links
 around nested blocks. Inline blocks use their last normal-flow baseline; empty
 or clipped inline blocks use the bottom margin edge. Supported vertical alignment
-includes top, middle, bottom and numeric offsets.
+includes sub, super, top, middle, bottom and numeric offsets.
 
 The first nonempty HTML title supplies the PDF title. Head author, description
 and keyword metadata supply corresponding PDF information unless caller metadata

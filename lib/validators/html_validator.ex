@@ -22,7 +22,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details fieldset dialog)
   @block_tags @flow_container_tags ++
                 ~w(p h1 h2 h3 h4 h5 h6 ul ol menu dir dl dt pre listing xmp plaintext table img picture hr summary legend)
-  @text_inline_tags ~w(map area basefont bgsound iframe object embed label output datalist noscript noembed canvas slot selectedcontent u s strong b em i span a br wbr nobr abbr acronym q font blink keygen cite dfn data time code samp kbd tt var big small mark ins del strike ruby rb rt rp rtc)
+  @text_inline_tags ~w(map area basefont bgsound iframe object embed label output datalist noscript noembed canvas slot selectedcontent u s strong b em i span a br wbr nobr abbr acronym q font blink keygen cite dfn data time code samp kbd tt var big small sub sup mark ins del strike ruby rb rt rp rtc)
   @form_control_tags ~w(input select textarea button)
   @text_input_types ~w(text search tel url email password)
   @button_input_types ~w(button reset submit)
@@ -6289,6 +6289,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       "baseline" ->
         {:ok, :baseline}
 
+      "sub" ->
+        {:ok, :sub}
+
+      "super" ->
+        {:ok, :super}
+
       "top" ->
         {:ok, :top}
 
@@ -7601,7 +7607,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                     alignment = Map.get(style, :vertical_align, :baseline)
 
                     if Map.get(node, :positioned_children, []) == [] and
-                         (alignment in [:baseline, :top, :middle, :bottom] or
+                         (alignment in [:baseline, :sub, :super, :top, :middle, :bottom] or
                             (is_number(alignment) and
                                abs(alignment) <= Limits.get(:max_css_numeric_magnitude))) and
                          Enum.all?([:padding, :margin, :border_widths], fn key ->
