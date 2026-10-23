@@ -547,22 +547,41 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
   @spec resolve_pages([map()], term(), [map()], [map()]) ::
           {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve_pages(pages, root_scope, expected_targets \\ [], document_targets \\ []) do
+    resolve_pages(pages, root_scope, expected_targets, document_targets, nil)
+  end
+
+  @doc false
+  @spec resolve_pages([map()], term(), [map()], [map()], destination() | nil) ::
+          {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def resolve_pages(
+        pages,
+        root_scope,
+        expected_targets,
+        document_targets,
+        page_origin
+      ) do
     if root_scope == nil and
          Enum.all?(pages, fn page ->
            Enum.all?(page.boxes, &(Map.get(&1, :type) not in [:drawing_group, :glyph_group]))
          end) do
       {:ok, pages}
     else
-      document_positions = Map.new(document_targets, &{&1.identity, {:xyz, 1, &1.x, &1.y}})
+      # A separately placed document, such as one running header, begins on its
+      # actual PDF page. Its targets and nested child documents use that number.
+      page_origin = page_origin || {:xyz, 1, 0, elem(hd(pages).size, 1)}
+      {:xyz, first_page, _x, _y} = page_origin
+
+      document_positions =
+        Map.new(document_targets, &{&1.identity, {:xyz, first_page, &1.x, &1.y}})
 
       beginnings =
         if root_scope == nil,
           do: %{},
-          else: %{root_scope => {:xyz, 1, 0, elem(hd(pages).size, 1)}}
+          else: %{root_scope => page_origin}
 
       {positions, beginnings, expected, requested} =
         pages
-        |> Enum.with_index(1)
+        |> Enum.with_index(first_page)
         |> Enum.reduce({document_positions, beginnings, expected_targets, MapSet.new()}, fn {page,
                                                                                              number},
                                                                                             acc ->

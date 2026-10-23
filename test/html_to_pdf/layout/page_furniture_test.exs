@@ -393,6 +393,262 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
     end
   end
 
+  test "lazy automatic images resolve their final candidates in both running margins" do
+    image =
+      NativeElixirPdfUtilities.TestSupport.PngFixture.build(120, 40, 2, 8, 0, fn _x, _y ->
+        [0, 128, 64]
+      end)
+
+    template = """
+    <div style="height:18pt"><img loading="lazy" sizes="auto" width="40" height="20"
+      src="unused.png" srcset="selected.png 120w" style="display:block;width:40pt;height:18pt"></div>
+    """
+
+    for position <- [:header, :footer] do
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+        assert {:ok, decorated} =
+                 PageFurniture.decorate(pages(2), layout_tree(),
+                   page_furniture: [{position, template}],
+                   asset_resolver: fn request ->
+                     assert request.reference == "selected.png"
+                     send(self(), :selected_furniture_image)
+                     {:ok, image}
+                   end
+                 )
+
+        for page <- decorated do
+          assert [%{type: :image, image: %{width_px: 120, height_px: 40}}] =
+                   Enum.filter(page.boxes, &(&1.type == :image))
+
+          refute Enum.any?(page.boxes, &(&1[:role] == :responsive_image))
+        end
+
+        assert_received :selected_furniture_image
+        assert {:ok, _pdf} = PdfWriter.render(decorated)
+      end)
+
+      assert {:ok, _pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [{position, template}],
+                 assets: %{"selected.png" => {:bytes, image}}
+               )
+    end
+  end
+
+  test "placed transforms preserve horizontal and vertical offsets in headers and footers" do
+    for position <- [:header, :footer] do
+      template = """
+      <div style="height:16pt;font-size:8pt;line-height:10pt;transform:translate(40pt,2pt)">
+        <a href="https://example.com">Shifted</a>
+      </div>
+      """
+
+      assert {:ok, decorated} =
+               PageFurniture.decorate(pages(2), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      for page <- decorated do
+        [group] = Enum.filter(page.boxes, &(&1.type == :drawing_group))
+        assert group.role == :css_transform_plane
+        {a, b, c, d, dx, dy} = group.transform
+        assert {a, b, c, d} == {1, 0, 0, 1}
+        assert_in_delta dx, 40, 0.0001
+        assert_in_delta dy, -2, 0.0001
+        assert Enum.any?(group.boxes, &(&1[:text] == "Shifted"))
+      end
+
+      assert {:ok, pdf} = PdfWriter.render(decorated, compress_streams: false)
+      assert pdf =~ "/Subtype /Link"
+      assert pdf =~ "1 0 0 1 40 -2 cm"
+    end
+  end
+
+  test "fragment destinations stay in each template and use the current final page" do
+    template = fn label ->
+      """
+      <div style="font-size:8pt;line-height:10pt;height:18pt">
+        <a href="#same">#{label} jump</a><span id="same">#{label} target</span>
+        <a href="#">#{label} start</a><a href="#missing">Missing</a>
+      </div>
+      """
+    end
+
+    assert {:ok, decorated} =
+             PageFurniture.decorate(pages(2), layout_tree(),
+               page_furniture: [header: template.("H"), footer: template.("F")]
+             )
+
+    for {page, number} <- Enum.with_index(decorated, 1),
+        {label, top} <- [{"H", 100.0}, {"F", 20.0}] do
+      jump = Enum.find(page.boxes, &(&1[:text] == "#{label} jump"))
+      target = Enum.find(page.boxes, &(&1[:text] == "#{label} target"))
+      {:xyz, ^number, x, y} = jump.link_destination
+      assert_in_delta x, target.x, 0.0001
+      assert y <= top and y >= top - 18
+
+      assert Enum.find(page.boxes, &(&1[:text] == "#{label} start")).link_destination ==
+               {:xyz, number, 20.0, top}
+
+      assert Enum.all?(Enum.filter(page.boxes, &(&1[:text] == "Missing")), fn box ->
+               not Map.has_key?(box, :link_destination)
+             end)
+    end
+
+    assert {:ok, pdf} = PdfWriter.render(decorated)
+    assert pdf =~ "/Dest ["
+  end
+
+  test "transformed fragment targets resolve after placement and preserve validation failures" do
+    for position <- [:header, :footer] do
+      template = """
+      <div style="font-size:8pt;line-height:10pt;height:16pt;transform:translateX(30pt)">
+        <a href="#here">Jump</a><span id="here">Here</span>
+      </div>
+      """
+
+      assert {:ok, decorated} =
+               PageFurniture.decorate(pages(2), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      for {page, number} <- Enum.with_index(decorated, 1) do
+        [group] = Enum.filter(page.boxes, &(&1.type == :drawing_group))
+        target = Enum.find(group.boxes, &(&1[:text] == "Here"))
+        jump = Enum.find(group.boxes, &(&1[:text] == "Jump"))
+        {:xyz, ^number, x, _y} = jump.link_destination
+        assert_in_delta x, target.x + 30, 0.0001
+      end
+
+      assert {:ok, _pdf} = PdfWriter.render(decorated)
+
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [
+                   {position, String.replace(template, "translateX(30pt)", "translateX(500pt)")}
+                 ]
+               )
+
+      assert diagnostic.stage == :pagination
+      assert diagnostic.reason == :unsupported_html
+      assert diagnostic.source == "here"
+      assert diagnostic.message =~ "no representable destination"
+    end
+  end
+
+  test "document-root and nested child links retain the page of each running copy" do
+    templates = [
+      """
+      <html id="root"><body style="margin:0;font-size:8pt;line-height:10pt">
+      <div style="height:18pt"><a href="#root">Root</a><a href="#top">Start</a></div>
+      </body></html>
+      """,
+      """
+      <iframe style="display:block;width:150pt;height:18pt;border:0"
+        srcdoc='<body style="margin:0;font-size:8pt;line-height:10pt"><a href="#here">Jump</a><span id="here">Here</span><a href="#">Start</a></body>'></iframe>
+      """
+    ]
+
+    for template <- templates, position <- [:header, :footer] do
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+        assert {:ok, decorated} =
+                 PageFurniture.decorate(pages(2), layout_tree(),
+                   page_furniture: [{position, template}]
+                 )
+
+        assert {:ok, pdf} = PdfWriter.render(decorated)
+        assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+
+        destinations =
+          for {_ref, %{value: %{"Subtype" => {:name, "Link"}, "Dest" => destination}}} <-
+                context.document.objects,
+              do: destination
+
+        for page <- context.pages do
+          own = Enum.filter(destinations, &(hd(&1) == {:ref, page.ref}))
+          assert length(own) == 2
+          {bottom, top} = if position == :header, do: {80.0, 100.0}, else: {0.0, 20.0}
+
+          for [_, {:name, "XYZ"}, _x, y, nil] <- own do
+            assert y >= bottom and y <= top
+          end
+        end
+      end)
+    end
+  end
+
+  test "lazy furniture image failures retain the canonical resource diagnostic" do
+    template = """
+    <img loading="lazy" sizes="auto" width="40" height="20"
+      src="unused.png" srcset="selected.png 120w" style="display:block;width:40pt;height:18pt">
+    """
+
+    for position <- [:header, :footer] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [{position, template}],
+                 asset_resolver: fn request ->
+                   assert request.reference == "selected.png"
+                   {:error, :enoent}
+                 end
+               )
+
+      assert diagnostic.stage == :asset
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.operation == :decorate_pages
+      assert diagnostic.source == "selected.png"
+      assert diagnostic.message =~ "asset resolver could not resolve"
+    end
+  end
+
+  test "body and running-template targets with the same ID retain independent destinations" do
+    body = """
+    <style>html,body{margin:0;font-size:8pt;line-height:10pt}section{height:30pt;break-after:page}section:last-child{break-after:auto}</style>
+    <section><a href="#same">Body jump</a><span id="same">Body target</span></section>
+    <section><a href="#same">Later body jump</a></section>
+    """
+
+    template = """
+    <div style="font-size:8pt;line-height:10pt;height:18pt">
+      <a href="#same">Jump</a><span id="same">Target</span>
+    </div>
+    """
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(body,
+               page_size: @page_size,
+               margin: @margin,
+               page_furniture: [header: template, footer: template]
+             )
+
+    assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+    assert [first, second] = context.pages
+
+    destinations =
+      for {_ref, %{value: %{"Subtype" => {:name, "Link"}, "Dest" => destination}}} <-
+            context.document.objects,
+          do: destination
+
+    assert length(destinations) == 6
+
+    for page <- [first, second], {bottom, top} <- [{80, 100}, {0, 20}] do
+      assert Enum.any?(destinations, fn [{:ref, ref}, {:name, "XYZ"}, _x, y, nil] ->
+               # Public rendering snaps page geometry to the CSS pixel grid.
+               ref == page.ref and y >= bottom - 0.375 and y <= top + 0.375
+             end)
+    end
+
+    assert Enum.count(destinations, fn [{:ref, ref}, {:name, "XYZ"}, _x, y, nil] ->
+             ref == first.ref and y > 20.375 and y < 80
+           end) == 2
+  end
+
   test "embedded viewport transforms and clips move into headers and footers on every page" do
     template = """
     <iframe style="display:block;width:99pt;height:18pt;border:0"

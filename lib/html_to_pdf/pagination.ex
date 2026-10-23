@@ -41,9 +41,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
             layout_tree.page_size,
             layout_tree.boxes,
             margins,
-            Map.get(layout_tree, :link_scope),
-            Map.get(layout_tree, :link_expected_targets, []),
-            Map.get(layout_tree, :link_document_targets, []),
+            layout_tree,
             opts
           )
 
@@ -55,13 +53,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
+  @doc "Prepares validated placed pages for writing without paginating their content again."
+  @spec finalize([page()], map(), [render_option()]) ::
+          {:ok, [page()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def finalize(pages, layout_tree, opts) do
+    with {:ok, pages} <-
+           NativeElixirPdfUtilities.Validators.CssTransformValidator.materialize(pages, opts) do
+      NativeElixirPdfUtilities.Validators.HtmlLinkValidator.resolve_pages(
+        pages,
+        Map.get(layout_tree, :link_scope),
+        Map.get(layout_tree, :link_expected_targets, []),
+        Map.get(layout_tree, :link_document_targets, []),
+        Map.get(layout_tree, :link_page_origin)
+      )
+    end
+  end
+
   defp paginate_boxes(
          page_size,
          boxes,
          margins,
-         link_scope,
-         expected_targets,
-         document_targets,
+         layout_tree,
          opts
        ) do
     {_page_width, page_height} = page_size
@@ -178,25 +190,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end)
 
     with {:ok, pages} <-
-           NativeElixirPdfUtilities.Validators.CssTransformValidator.materialize(
-             pages,
-             Keyword.put(opts, :css_fragmentation_margins, margins)
-           ) do
-      with {:ok, pages} <-
-             NativeElixirPdfUtilities.Validators.HtmlLinkValidator.resolve_pages(
-               pages,
-               link_scope,
-               expected_targets,
-               document_targets
-             ) do
-        {:ok,
-         Enum.map(pages, fn page ->
-           %{
-             page
-             | boxes: Enum.reject(page.boxes, &(Map.get(&1, :role) == :explicit_block_space))
-           }
-         end)}
-      end
+           finalize(pages, layout_tree, Keyword.put(opts, :css_fragmentation_margins, margins)) do
+      {:ok,
+       Enum.map(pages, fn page ->
+         %{
+           page
+           | boxes: Enum.reject(page.boxes, &(Map.get(&1, :role) == :explicit_block_space))
+         }
+       end)}
     end
   end
 

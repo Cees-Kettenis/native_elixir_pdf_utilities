@@ -587,6 +587,8 @@ The first page has its body title and no running header. Later pages get the hea
 
 Reserve enough margin for each template. Page furniture is laid out separately from the body, so include its styles in the template or pass shared `:stylesheets`. To number an existing PDF, use [Stamp.page_numbers/2](pdf-stamping.md#page-numbers).
 
+Templates support responsive images and static 2D transforms through the normal rendering pipeline. Fragment links resolve within each header or footer copy on its final page. They do not select targets in the body or another template. An empty fragment or unmatched `#top` points to that copy's beginning in the margin.
+
 ### Purchase order with a measured repeating header
 
 This follows the approach used for SigPortal's purchase orders: measure the company/address header, reserve that space on every page, and paginate complete item tables using their actual row heights.

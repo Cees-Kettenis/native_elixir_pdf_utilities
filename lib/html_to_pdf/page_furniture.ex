@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Validators.FontValidator
@@ -269,10 +270,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
                  styled_tree,
                  Keyword.get(furniture_opts, :unsupported_glyphs, :replace)
                ) do
-          case apply(Layout, :layout, [styled_tree, furniture_opts]) do
-            {:ok, furniture_layout} ->
-              place(position, furniture_layout.boxes, page_size, margins)
-
+          with {:ok, furniture_layout} <- apply(Layout, :layout, [styled_tree, furniture_opts]),
+               {:ok, furniture_layout} <- Layout.resolve_images(furniture_layout),
+               {:ok, furniture_layout} <-
+                 place(position, furniture_layout, page_size, margins, page_number),
+               {:ok, [page]} <-
+                 Pagination.finalize(
+                   [%{size: page_size, boxes: furniture_layout.boxes}],
+                   furniture_layout,
+                   furniture_opts
+                 ) do
+            {:ok, page.boxes}
+          else
             {:error, {reason, diagnostic}} ->
               {:error,
                {reason,
@@ -286,13 +295,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end
   end
 
-  defp place(position, boxes, {_page_width, page_height}, margins) do
-    drawable_boxes = Enum.reject(boxes, &match?(%{type: :page_break}, &1))
+  defp place(position, layout, {_page_width, page_height}, margins, page_number) do
+    drawable_boxes = Enum.reject(layout.boxes, &match?(%{type: :page_break}, &1))
     bounds = Enum.map(drawable_boxes, &PageGeometry.box_vertical_bounds/1)
 
     case bounds do
       [] ->
-        {:ok, []}
+        {:ok, %{layout | boxes: []}}
 
       bounds ->
         top = bounds |> Enum.map(&elem(&1, 0)) |> Enum.max()
@@ -303,7 +312,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
         case HtmlValidator.validate_furniture_fit(position, height, available_margin) do
           :ok ->
             target_top = if position == :header, do: page_height, else: margins.bottom
-            {:ok, DrawingGeometry.translate_boxes(drawable_boxes, 0, target_top - top)}
+            delta_y = target_top - top
+
+            {:ok,
+             layout
+             |> Map.put(:boxes, DrawingGeometry.translate_boxes(drawable_boxes, 0, delta_y))
+             |> Map.put(:link_page_origin, {:xyz, page_number, margins.left, target_top})
+             |> Map.update(:link_document_targets, [], fn targets ->
+               Enum.map(targets, &%{&1 | y: &1.y + delta_y})
+             end)}
 
           {:error, {reason, diagnostic}} ->
             {:error,
