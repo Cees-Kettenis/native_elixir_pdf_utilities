@@ -100,6 +100,7 @@ render limits return `:resource_limit_exceeded`.
 | `max_svg_depth` | 128 | SVG element nesting, including the root |
 | `max_svg_path_bytes` | 1,000,000 | Aggregate decoded `d` and `points` attribute bytes |
 | `max_svg_filter_primitives` | 256 | SVG elements whose local name starts with `fe` |
+| `max_svg_turbulence_octaves` | 16 | Maximum authored `numOctaves` per SVG `feTurbulence`, checked before native conversion; omitted values use 1 |
 | `max_svg_references` | 1,000 | SVG `href` attributes, including namespaced references such as `xlink:href` |
 | `max_svg_output_bytes` | 10,000,000 | Returned SVG PNG bytes, checked after native conversion |
 | `max_svg_bytes` | 5,000,000 | Encoded SVG source |
@@ -136,6 +137,14 @@ not expanded reference work or native allocations. SVG output is checked after
 conversion and then validated and decoded through the PNG pipeline. Returned
 converter errors become diagnostics, but native resource exhaustion and all
 renderer warnings cannot be recovered through that contract.
+
+The turbulence octave limit rejects oversized requests with a
+`:resource_limit_exceeded` diagnostic. Counts must be finite nonnegative unitless
+numbers within the shared numeric bounds. The limit applies to the authored
+number before converter rounding, including fractional counts. It bounds one
+primitive's octave count, not total filter CPU time; image size, repeated artwork
+and filter count still affect rendering cost. It does not change native converter
+scheduling.
 
 See [render options and supported formats](html-to-pdf-compatibility.md) and
 [image processing and recovery](image-processing.md).

@@ -98,6 +98,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_svg_depth: 128,
     max_svg_path_bytes: 1_000_000,
     max_svg_filter_primitives: 256,
+    max_svg_turbulence_octaves: 16,
     max_svg_references: 1_000,
     max_svg_output_bytes: 10_000_000,
     max_svg_bytes: 5_000_000,
@@ -247,6 +248,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_svg_depth
           | :max_svg_path_bytes
           | :max_svg_filter_primitives
+          | :max_svg_turbulence_octaves
           | :max_svg_references
           | :max_svg_output_bytes
           | :max_svg_bytes

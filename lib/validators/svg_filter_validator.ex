@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
   @moduledoc false
-  alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.{Diagnostics, Limits}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @primitives ~w(feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDropShadow feFlood feGaussianBlur feImage feMerge feMorphology feOffset feSpecularLighting feTile feTurbulence)
@@ -13,6 +13,43 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
   @spec validate_source_attributes(term(), term()) :: :ok | {:error, {atom(), map()}}
   def validate_source_attributes(tag, attributes) do
     case {tag, attributes} do
+      {"feTurbulence", attributes} when is_map(attributes) ->
+        value = Map.get(attributes, "numOctaves", "1")
+
+        parsed =
+          if is_binary(value),
+            do:
+              value |> HtmlValidator.trim_ascii_whitespace() |> HtmlValidator.parse_css_number(),
+            else: :error
+
+        case parsed do
+          {number, ""} when number >= 0 ->
+            maximum = Limits.get(:max_svg_turbulence_octaves)
+
+            if number <= maximum do
+              :ok
+            else
+              Diagnostics.error(
+                :limits,
+                :resource_limit_exceeded,
+                "feTurbulence numOctaves #{inspect(value)} exceeds max_svg_turbulence_octaves (#{maximum}); reduce numOctaves or raise the configured limit",
+                module: __MODULE__,
+                operation: :prepare,
+                source: "feTurbulence"
+              )
+            end
+
+          _ ->
+            Diagnostics.error(
+              :layout,
+              :invalid_document,
+              "feTurbulence numOctaves requires a finite nonnegative unitless number; got #{inspect(value)}",
+              module: __MODULE__,
+              operation: :prepare,
+              source: "feTurbulence"
+            )
+        end
+
       {"feGaussianBlur", attributes} when is_map(attributes) ->
         value = Map.get(attributes, "stdDeviation", "0")
 
