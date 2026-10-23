@@ -1,10 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
   @moduledoc "Geometry for validator-prepared image maps, with ordered masks, even-odd polygons and clipped PDF quadrilaterals."
   alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
-
-  # Native layout's fixed 1/64 CSS-pixel precision also bounds circle sagitta.
-  @circle_precision 0.75 / 64
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ImageMapValidator}
 
   @doc false
   @spec regions(map(), map(), map()) :: [map()]
@@ -145,12 +142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
         points
 
       {:circle, x, y, radius} ->
-        point_radius = radius * 0.75
-
-        count =
-          max(4, ceil(:math.pi() / :math.acos(max(-1.0, 1 - @circle_precision / point_radius))))
-
-        HtmlValidator.check_render_resource(:max_image_map_geometry_work, count * count, :layout)
+        count = ImageMapValidator.circle_segments(radius)
 
         for index <- 0..(count - 1) do
           angle = index * 2 * :math.pi() / count

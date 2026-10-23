@@ -3,6 +3,31 @@ defmodule NativeElixirPdfUtilities.Validators.ImageMapValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  # Fixed native layout precision, not a configurable resource ceiling.
+  # Circle polygons use the same 1/64 CSS-pixel bound for their sagitta.
+  @circle_precision 0.75 / 64
+
+  @doc false
+  @spec circle_segments(number()) :: pos_integer()
+  def circle_segments(radius) do
+    point_radius = radius * 0.75
+
+    count =
+      if point_radius <= @circle_precision do
+        4
+      else
+        # acos(1 - precision/radius) loses precision for large radii.
+        # The half-angle identity keeps that subtraction out of the plan.
+        max(
+          4,
+          ceil(:math.pi() / (2 * :math.asin(:math.sqrt(@circle_precision / point_radius / 2))))
+        )
+      end
+
+    HtmlValidator.check_render_resource(:max_image_map_geometry_work, count * count, :layout)
+    count
+  end
+
   @doc "Indexes the first named map in each authored document/tree scope, excluding inert templates."
   @spec prepare([map()], map()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare(children, links) do

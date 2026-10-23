@@ -20,6 +20,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
 
   @image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
 
+  test "circle approximation keeps subnormal radii and the fixed sagitta precision bounded" do
+    for radius <- [5.0e-324, 1.0e-320, 1.0e-200, 0.015625, 0.015626] do
+      assert ImageMapValidator.circle_segments(radius) == 4
+    end
+
+    for radius <- [0.02, 0.05, 0.1, 1.0, 8.0, 100.0] do
+      count = ImageMapValidator.circle_segments(radius)
+      assert count >= 4
+      assert radius * 0.75 * (1 - :math.cos(:math.pi() / count)) <= 0.75 / 64 + 1.0e-12
+
+      if count > 4 do
+        assert radius * 0.75 * (1 - :math.cos(:math.pi() / (count - 1))) > 0.75 / 64
+      end
+    end
+  end
+
+  test "tiny positive circle areas render without losing the following default region" do
+    for radius <- ["5e-324", "1e-320", "1e-200", "0.015625", "0.015626"] do
+      html =
+        "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='5,5,#{radius}' href='https://example.com/tiny'><area shape=default href='https://example.com/default'></map>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      image = Enum.find(styled.children, &(&1.tag == "img"))
+      assert {:circle, 5.0, 5.0, actual_radius} = hd(image.style._image_map.areas).shape
+      assert actual_radius > 0
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, compress_streams: false)
+      assert pdf =~ "/Subtype /Image"
+      assert pdf =~ "https://example.com/default"
+    end
+  end
+
+  test "circle plans retain work-limit diagnostics even beyond the old cancellation range" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_image_map_geometry_work, 16))
+    assert ImageMapValidator.circle_segments(1.0e-320) == 4
+    Limits.install(Map.put(original, :max_image_map_geometry_work, 15))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapValidator.circle_segments(1.0e-320)
+             end)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_image_map_geometry_work"
+
+    Limits.install(Map.put(original, :max_css_numeric_magnitude, 1_000_000_000_000_000_000))
+
+    html =
+      "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='5,5,1e18' href='https://example.com/large'></map>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :layout
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_image_map_geometry_work"
+  end
+
   test "map association, permissive shapes and first-area masks use authored nodes" do
     html =
       "<img src='#{@image}' usemap='#regions' width=80 height=40><map name='regions'><area coords='10,10,20,20'><area shape=circ coords='30;20;8;99' href='https://example.com/circle'><area shape=polygon coords='40,0,70,0,55,30,999' href='https://example.com/poly'><area coords='30,30,0,0,99' href='https://example.com/rect'><area shape=default href='https://example.com/default'></map><map name='regions'><area shape=default href='https://example.com/duplicate'></map>"
