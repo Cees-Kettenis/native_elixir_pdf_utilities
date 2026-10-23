@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgViewport, Layout}
   alias NativeElixirPdfUtilities.Validators.{SvgStyleValidator, SvgViewportValidator}
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.TestSupport.{Paths, PdfVisualCompare}
 
   setup do
     limits = Limits.effective()
@@ -282,6 +283,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
     assert {css.width, css.height} == {30.0, 50.0}
   end
 
+  test "zero inherited font metrics preserve fixed outer and nested SVG viewports" do
+    for style <- [
+          %{font_size: 0, _root_font_size: 12},
+          %{font_size: 12, _root_font_size: 0},
+          %{font_size: 0, _root_font_size: 0}
+        ],
+        nested <- [false, true] do
+      assert {:ok, measured} =
+               SvgViewport.measure(
+                 %{"width" => "40", "height" => "20", "viewBox" => "0 0 40 20"},
+                 style,
+                 %{width: 200, height: 100, nested: nested}
+               )
+
+      assert {measured.width, measured.height} ==
+               if(nested, do: {40, 20}, else: {30, 15})
+
+      assert measured.paint?
+      assert measured.user_viewport == {40, 20}
+    end
+  end
+
+  test "zero em and rem viewport dimensions retain ordinary zero-area behavior" do
+    for {style, expected} <- [
+          {%{font_size: 0, _root_font_size: 12}, {0, 12}},
+          {%{font_size: 12, _root_font_size: 0}, {24, 0}},
+          {%{font_size: 0, _root_font_size: 0}, {0, 0}}
+        ],
+        nested <- [false, true] do
+      assert {:ok, measured} =
+               SvgViewport.measure(
+                 %{"x" => "1em", "y" => "1rem", "width" => "2em", "height" => "1rem"},
+                 style,
+                 %{width: 200, height: 100, nested: nested}
+               )
+
+      {width, height} = expected
+      scale = if nested, do: 1 / 0.75, else: 1
+      assert_in_delta measured.width, width * scale, 0.0001
+      assert_in_delta measured.height, height * scale, 0.0001
+      refute measured.paint?
+      assert measured.layout_extent == {0, 0, measured.width, measured.height}
+    end
+  end
+
+  test "public rendering accepts fixed SVG shapes and positive text overrides under zero fonts" do
+    for html <- [
+          "<div style='font-size:0'><svg width='40' height='20'><rect width='40' height='20' fill='red'/></svg></div>",
+          "<html style='font-size:0'><body><svg width='40' height='20'><rect width='40' height='20' fill='red'/></svg></body></html>",
+          "<div style='font-size:0'><svg width='120' height='24'><text x='0' y='18' font-size='16'>Visible</text></svg></div>"
+        ] do
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+      assert length(context.pages) == 1
+
+      assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf)
+    end
+  end
+
+  @tag :browser_parity
+  test "zero-font SVG shapes text overrides and relative dimensions match Chromium" do
+    fixture = Paths.fixture("html_to_pdf/browser_parity/inline_svg_zero_font.html")
+
+    stats =
+      PdfVisualCompare.assert_browser_match!(fixture,
+        artifact_dir: "tmp/browser_parity/inline_svg_zero_font",
+        regions: [
+          {"zero root font", {9, 9, 270, 42}},
+          {"zero inherited font", {9, 51, 270, 42}},
+          {"zero relative geometry", {9, 135, 270, 42}}
+        ],
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.page_count == 1
+  end
+
   test "invalid viewports and grammar return actionable diagnostics without allocating" do
     for attrs <- [
           %{"viewBox" => "0 0 -1 2"},
@@ -311,8 +390,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
       assert {:error, {:invalid_document, _}} = SvgViewport.measure(%{}, %{}, host)
     end
 
-    assert {:error, {:invalid_document, _}} =
-             SvgViewport.measure(%{}, %{font_size: 0}, %{width: 1, height: nil})
+    for style <- [
+          %{font_size: -1},
+          %{_root_font_size: -1},
+          %{font_size: :bad},
+          %{_root_font_size: :bad}
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               SvgViewport.measure(%{}, style, %{width: 1, height: nil})
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.source == "svg viewport"
+      assert diagnostic.module == SvgViewportValidator
+      assert diagnostic.operation == :measure
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.message =~ "nonnegative font sizes"
+    end
 
     assert {:error, {:invalid_document, _}} =
              SvgViewport.measure(%{}, %{overflow: :bad}, %{width: 1, height: nil})

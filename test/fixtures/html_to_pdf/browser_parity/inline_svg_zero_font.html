@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page {size:400px 260px;margin:12px}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:0}
+.row {height:56px;font-size:12px;line-height:20px}
+p {margin:0}
+svg {display:block}
+.zero {font-size:0}
+</style></head><body>
+<div class="row">
+<p>Zero root font with fixed artwork</p>
+<svg width="80" height="24"><rect width="80" height="24" fill="#174a86"/></svg>
+</div>
+<div class="row">
+<p>Zero inherited font with fixed artwork</p>
+<div class="zero"><svg width="80" height="24"><rect width="80" height="24" fill="#168250"/></svg></div>
+</div>
+<div class="row">
+<p>Positive text overrides a zero parent font</p>
+<div class="zero"><svg width="180" height="24"><text x="0" y="18" font-size="16" fill="#174a86">SVG</text></svg></div>
+</div>
+<div class="row">
+<p>Zero em and rem dimensions skip artwork</p>
+<div class="zero"><svg width="2em" height="24"><rect width="80" height="24" fill="red"/></svg><svg width="80" height="2rem"><rect width="80" height="24" fill="red"/></svg></div>
+<svg width="80" height="8"><rect width="80" height="8" fill="#dd8800"/></svg>
+</div>
+</body></html>

@@ -30,7 +30,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgViewportValidator do
              HtmlValidator.normalize_geometry_number(Map.get(style, :font_size, 12.0)),
            {:ok, root_font_size} <-
              HtmlValidator.normalize_geometry_number(Map.get(style, :_root_font_size, 12.0)),
-           true <- font_size > 0 and root_font_size > 0,
+           true <- font_size >= 0 and root_font_size >= 0,
            overflow = Map.get(style, :overflow, :hidden),
            true <- overflow in [:hidden, :visible, :scroll, :auto] do
         {:ok,
@@ -48,7 +48,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgViewportValidator do
          }}
       else
         {:error, {_, _}} = error -> error
-        _ -> invalid("SVG viewport requires positive font sizes and supported overflow")
+        _ -> invalid("SVG viewport requires nonnegative font sizes and supported overflow")
       end
     else
       invalid("SVG viewport requires attributes, computed style and nonnegative host dimensions")
