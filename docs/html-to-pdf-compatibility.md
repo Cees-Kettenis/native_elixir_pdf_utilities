@@ -165,6 +165,7 @@ See [PDF forms](pdf-forms.md) for naming, values, filling, flattening and limita
 | Select elements | Tag, class, ID, universal, attribute presence, equality, token/dash/prefix/suffix/substring operators and case flags, descendant and child selectors; comma groups; `:lang()` with range lists, escapes and wildcard subtags; simple `:not()`; `:root`; first/last child and type selectors; integer An+B for `:nth-child`, `:nth-last-child`, `:nth-of-type`, `:nth-last-of-type`; `:only-child` and `:only-of-type` |
 | Reuse styles | The cascade, `!important`, inherited text styles, custom properties, `var()`, `currentColor` |
 | Arrange content | Block, inline, inline-block, flex, and grid layouts; relative and absolute positioning; `z-index` |
+| Transform artwork | Static 2D `transform` function lists and `transform-origin`; see [positioning and transforms](#positioning-and-transforms). |
 | Set sizes and spacing | Width/height, min/max sizes, `min()`, aspect ratio, box sizing, margins, padding, gaps |
 | Style text | Font family/size/weight/style, line height, alignment, text transform, letter spacing, line and word breaking, `white-space: normal`, `pre-line`, `nowrap`, `pre`, `pre-wrap`, or `break-spaces` |
 | Decorate text | `text-decoration`, `text-decoration-line`, `text-decoration-color`, `text-decoration-thickness: auto/from-font/length/percentage`, and solid `text-decoration-style` |
@@ -191,6 +192,25 @@ word hyphens, and allows a break after each preserved space, tab or other
 Unicode space separator except no-break space. Spaces keep their measured
 width at line ends. These opportunities and styled inline boundaries share
 the same Unicode line breaking validator.
+
+### Positioning and transforms
+
+Ordinary HTML supports static, relative and absolute positioning. Fixed
+positioning is limited to MathML owners and static popover artwork; it is not
+available for arbitrary HTML elements.
+
+Supported transformable boxes accept `transform: none` or lists of `matrix()`,
+`translate()`, `translateX()`, `translateY()`, `scale()`, `scaleX()`, `scaleY()`,
+`rotate()`, `skew()`, `skewX()` and `skewY()` functions. For example,
+`transform: translate(6pt, 3pt) rotate(5deg)` moves and rotates the artwork.
+
+`transform-origin` defaults to `50% 50%` of the laid-out border box. Percentage
+translations use that box's width and height. Transforms affect painting without
+reflowing surrounding content; link regions and supported form appearances follow
+the transformed artwork. Source flow paginates before transform painting.
+
+3D transforms, perspective, the separate `translate`, `rotate` and `scale` CSS
+properties, and animations remain unsupported.
 
 ## Render options
 
@@ -465,7 +485,7 @@ For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#c
 | --- | --- |
 | JavaScript, canvas drawing APIs, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded framesets |
 | XFA, JavaScript form actions | Use supported AcroForm fields or static artwork |
-| Floats, general fixed positioning, transforms, animations | Block, flex, grid, relative, or absolute layout; MathML owners also admit fixed positioning |
+| Floats, general fixed positioning, 3D transforms, perspective and animations | Block, flex, grid, relative or absolute layout, and supported static 2D transforms; fixed positioning is limited to MathML owners and static popover artwork |
 | Named pages and CSS page-margin boxes | Page options and header/footer templates |
 | CSS `counter(page)` or `counter(pages)` | `{{page}}` and `{{pages}}` in header/footer templates |
 | Animated PNG playback | The PNG default image is rendered; animation frames are not played. |

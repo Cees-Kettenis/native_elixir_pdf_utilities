@@ -1864,8 +1864,11 @@ An initial popover remains closed when scripts are disabled:
 <p>Printed after the popover</p>
 ```
 
-Author CSS that changes the popover to a visible display receives a diagnostic
-until native fixed positioning and intrinsic geometry are implemented.
+Author CSS can reveal static popover artwork with supported sizing and positioning,
+including the popover's fixed-position defaults. This does not activate the
+popover or simulate browser top-layer behavior. General fixed positioning remains
+unsupported for arbitrary HTML elements. See
+[positioning and transforms](html-to-pdf-compatibility.md#positioning-and-transforms).
 
 Named CSS colors and horizontal rules work without substituting numeric colors
 or drawing a separate PDF line:
