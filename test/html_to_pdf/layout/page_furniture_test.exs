@@ -3,6 +3,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter, ResourceContext}
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @page_size {200.0, 100.0}
   @margin 20.0
@@ -339,6 +341,110 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
         end
       end)
     end
+  end
+
+  test "fractions radicals and clipped glyphs paint together inside each furniture margin" do
+    fraction = "<math><mfrac><mn>1</mn><mn>2</mn></mfrac></math>"
+
+    for template <- [
+          fraction,
+          "<math><msqrt><mn>2</mn></msqrt></math>",
+          "<div style='height:20pt;overflow:hidden'>#{fraction}</div>"
+        ],
+        position <- [:header, :footer] do
+      assert {:ok, decorated} =
+               PageFurniture.decorate(pages(2), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      {bottom, top} = if position == :header, do: {80.0, 100.0}, else: {0.0, 20.0}
+
+      for page <- decorated do
+        groups = Enum.filter(page.boxes, &(&1.type == :glyph_group))
+        assert groups != []
+        glyphs = Enum.flat_map(groups, & &1.boxes)
+
+        for glyph <- glyphs do
+          {ink_top, ink_bottom} = glyph_vertical_ink_bounds(glyph)
+          assert ink_bottom >= bottom - 0.0001
+          assert ink_top <= top + 0.0001
+        end
+
+        for group <- groups, Map.has_key?(group, :clip) do
+          assert group.clip.y >= bottom - 0.0001
+          assert group.clip.y + group.clip.height <= top + 0.0001
+          assert Enum.all?(group.boxes, &(&1.clip == group.clip))
+        end
+
+        [bar] = Enum.filter(page.boxes, &(&1[:role] == :math_bar))
+        assert bar.y >= bottom and bar.y + bar.height <= top
+
+        if String.contains?(template, "mfrac") do
+          numerator = Enum.find(glyphs, &(&1.text == "1"))
+          denominator = Enum.find(glyphs, &(&1.text == "2"))
+          {_top, numerator_bottom} = glyph_vertical_ink_bounds(numerator)
+          {denominator_top, _bottom} = glyph_vertical_ink_bounds(denominator)
+          assert numerator_bottom > bar.y + bar.height
+          assert denominator_top < bar.y
+        end
+      end
+
+      assert {:ok, _pdf} = PdfWriter.render(decorated)
+    end
+  end
+
+  test "embedded viewport transforms and clips move into headers and footers on every page" do
+    template = """
+    <iframe style="display:block;width:99pt;height:18pt;border:0"
+      srcdoc='<body style="margin:0;font-size:8pt;line-height:10pt">hello</body>'></iframe>
+    """
+
+    for position <- [:header, :footer] do
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
+        assert {:ok, decorated} =
+                 PageFurniture.decorate(pages(2), layout_tree(),
+                   page_furniture: [{position, template}]
+                 )
+
+        {bottom, top} = if position == :header, do: {80.0, 100.0}, else: {0.0, 20.0}
+
+        for page <- decorated do
+          [group] = Enum.filter(page.boxes, &(&1.type == :drawing_group))
+          assert group.role == :overflow_clip
+          assert group.clip.y >= bottom
+          assert group.clip.y + group.clip.height <= top
+          [host] = group.boxes
+          assert host.role == :embedded_viewport_host
+          {1, 0, 0, 1, tx, ty} = host.transform
+          assert_in_delta tx, host.x, 0.0001
+          assert_in_delta ty, group.y, 0.0001
+          assert_in_delta host.y, group.y, 0.0001
+          assert host.clip.y == 0.0
+          assert host.clip.height == 18.0
+          [text] = Enum.filter(host.boxes, &(&1[:text] == "hello"))
+          {text_top, text_bottom} = PageGeometry.box_vertical_bounds(text)
+          assert text_bottom + ty >= bottom
+          assert text_top + ty <= top
+        end
+
+        assert {:ok, _pdf} = PdfWriter.render(decorated)
+      end)
+
+      assert {:ok, _pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [{position, template}]
+               )
+    end
+  end
+
+  defp glyph_vertical_ink_bounds(glyph) do
+    [id] = glyph.glyph_ids
+    {:ok, bounds} = Font.glyph_bounds(glyph.font_face)
+    {_left, bottom, _right, top} = elem(bounds, id)
+    scale = glyph.font_size / glyph.font_face.units_per_em
+    {glyph.y + top * scale, glyph.y + bottom * scale}
   end
 
   defp pages(count) do

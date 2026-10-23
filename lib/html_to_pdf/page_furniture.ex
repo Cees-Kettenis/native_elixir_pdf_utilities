@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
@@ -302,7 +303,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
         case HtmlValidator.validate_furniture_fit(position, height, available_margin) do
           :ok ->
             target_top = if position == :header, do: page_height, else: margins.bottom
-            {:ok, shift_boxes(drawable_boxes, target_top - top)}
+            {:ok, DrawingGeometry.translate_boxes(drawable_boxes, 0, target_top - top)}
 
           {:error, {reason, diagnostic}} ->
             {:error,
@@ -313,17 +314,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
               )}}
         end
     end
-  end
-
-  defp shift_boxes(boxes, delta_y) do
-    Enum.map(boxes, fn %{y: y} = box ->
-      box = Map.put(box, :y, y + delta_y)
-
-      case Map.get(box, :clip) do
-        %{y: clip_y} = clip -> Map.put(box, :clip, %{clip | y: clip_y + delta_y})
-        _ -> box
-      end
-    end)
   end
 
   defp wrap_fragment(html) do
