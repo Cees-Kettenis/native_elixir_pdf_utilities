@@ -390,11 +390,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       assert extracted =~ "∫𝑥" and extracted =~ "Sibling"
       assert {:ok, context} = Reader.read_validated(pdf)
       assert length(context.pages) == 2
-      assert {:ok, %{pages: [%{spans: spans}, _]}} = Text.extract_spans(pdf)
+      assert {:ok, %{pages: [%{spans: spans}, _]}} = Text.extract_spans(pdf, actual_text: true)
       span = Enum.find(spans, &(&1.text == "∫𝑥"))
       assert span.x == 20.0, inspect(span)
       assert span.y == 268.0
       assert span.ctm == [1.0, 0.0, 0.0, 6.0, 20.0, 32.0]
+      assert {:ok, %{pages: [%{spans: physical}, _]}} = Text.extract_spans(pdf)
+      assert Enum.any?(physical, &(&1.text == "Ω" and &1.ctm == span.ctm))
       assert pdf =~ "/Rect [24 38 35 62]"
       assert pdf =~ "/Rect [100 100 120 110]"
       refute pdf =~ "https://example.com/clipped"
@@ -827,12 +829,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     for opts <- [[compress_streams: false], [subset_fonts: false], []] do
       assert {:ok, pdf} = PdfWriter.render([page, page], opts)
       assert {:ok, "∫𝑥\n∫𝑥"} = Text.extract(pdf, layout: false)
-      assert {:ok, %{pages: [%{spans: [first]}, %{spans: [second]}]}} = Text.extract_spans(pdf)
+
+      assert {:ok, %{pages: [%{spans: [first]}, %{spans: [second]}]}} =
+               Text.extract_spans(pdf, actual_text: true)
+
       assert first.text == "∫𝑥"
       assert first.x == 10.0
       assert first.end_x > 40.0
       assert first.source_index == 0
       assert first == second
+      assert {:ok, %{pages: [%{spans: physical}, %{spans: repeated}]}} = Text.extract_spans(pdf)
+      assert physical == repeated
+      assert Enum.map(physical, & &1.text) == ["x", "y", "z"]
+      assert Enum.map(physical, & &1.source_index) == [0, 1, 2]
     end
   end
 
@@ -859,7 +868,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
              PdfWriter.render([%{size: {100, 100}, boxes: groups}], compress_streams: false)
 
     assert {:ok, ^text} = Text.extract(pdf, layout: false)
-    assert {:ok, %{pages: [%{spans: [%{text: ^text}]}]}} = Text.extract_spans(pdf)
+
+    assert {:ok, %{pages: [%{spans: [%{text: ^text}]}]}} =
+             Text.extract_spans(pdf, actual_text: true)
+
+    assert {:ok, %{pages: [%{spans: physical}]}} = Text.extract_spans(pdf)
+    assert Enum.map(physical, & &1.text) == ["pieces", "pieces"]
     assert pdf =~ "/ActualText"
     assert pdf =~ "BDC"
     assert pdf =~ "EMC"

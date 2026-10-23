@@ -63,7 +63,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
     refute Map.has_key?(appearance, :paint_frame)
     assert {:ok, pdf} = FormWriter.create(context, fields)
     assert {:ok, initial} = Forms.fields(pdf)
-    assert {:ok, filled} = Forms.fill(pdf, %{"editor" => "Changed ffi"})
+    assert {:ok, filled} = Forms.fill(pdf, %{"editor" => "Changed ffi"}, appearance: :source)
     assert {:ok, current} = Forms.fields(filled)
     assert Enum.map(initial, & &1.widgets) == Enum.map(current, & &1.widgets)
     assert {:ok, flat} = Forms.flatten(filled)

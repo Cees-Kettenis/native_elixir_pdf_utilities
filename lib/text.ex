@@ -7,8 +7,10 @@ defmodule NativeElixirPdfUtilities.Text do
   every shown text string has a reliable Unicode mapping; it never guesses from
   an embedded font program or merges CMaps from unrelated fonts.
 
-  Marked-content `ActualText` replaces enclosed decoded text operands or painted
-  image graphics once. Image replacements use their actual image transform and
+  In string extraction, marked-content `ActualText` replaces enclosed decoded
+  text operands or painted image graphics once. Positioned extraction preserves
+  physical text operands by default; set `actual_text: true` for replacement
+  spans. Image replacements use their actual image transform and
   region geometry; they do not recover per-glyph coordinates or a font resource.
   Nested replacements use the outermost string, and empty replacements suppress
   their pieces. Physical operands still undergo font and geometry validation.
@@ -45,7 +47,7 @@ defmodule NativeElixirPdfUtilities.Text do
   @typedoc "Options for reconstructed string extraction."
   @type extract_option :: {:layout, boolean()}
   @typedoc "Options for positioned span extraction."
-  @type span_option :: {:order, :source | :visual}
+  @type span_option :: {:order, :source | :visual} | {:actual_text, boolean()}
   @typedoc "A PDF text rendering mode from 0 through 7."
   @type render_mode :: 0..7
   @typedoc "A six-value PDF affine matrix in `[a, b, c, d, e, f]` order."
@@ -55,7 +57,8 @@ defmodule NativeElixirPdfUtilities.Text do
   A decoded text-showing operand and its positioned extraction context.
 
   `source_index` is zero-based within a page and follows emitted-span execution
-  order. An `ActualText` group emits one span in place of its text operands. Page content streams are traversed in `/Contents` order, and Form
+  order. With `actual_text: true`, an `ActualText` group emits one span in place
+  of its text operands. Page content streams are traversed in `/Contents` order, and Form
   XObjects are traversed where their `Do` operator occurs. Reusing a Form
   therefore produces new spans with new indexes.
 
@@ -150,7 +153,7 @@ defmodule NativeElixirPdfUtilities.Text do
     with {:ok, request} <- TextValidator.validate_request(pdf_binary, opts, :extract),
          {:ok, pdf_context} <- Reader.read_validated(request.pdf),
          {:ok, text_context} <- TextValidator.prepare(pdf_context),
-         {:ok, pages} <- extract_pages(text_context) do
+         {:ok, pages} <- extract_pages(text_context, true) do
       visible_pages =
         pages
         |> Enum.map(fn page -> {page.number, Enum.filter(page.spans, & &1.paints_text?)} end)
@@ -191,8 +194,9 @@ defmodule NativeElixirPdfUtilities.Text do
   Extracts positioned, reliably decoded text spans from a PDF binary.
 
   The result preserves every resolved page and every non-empty decoded text
-  operand, except operands covered by `ActualText`, which emit one replacement
-  span. An empty replacement suppresses the operands. This includes rendering
+  operand, including operands enclosed by `ActualText`. Set `actual_text: true`
+  to emit one replacement span per group instead; an empty replacement then
+  suppresses its operands. This includes rendering
   modes 3 (neither painted nor added
   to the clipping path) and 7 (added to the clipping path without painting).
   This preservation guarantee applies to decoded text operations, not to OCR,
@@ -213,7 +217,7 @@ defmodule NativeElixirPdfUtilities.Text do
     with {:ok, request} <- TextValidator.validate_request(pdf_binary, opts, :extract_spans),
          {:ok, pdf_context} <- Reader.read_validated(request.pdf),
          {:ok, text_context} <- TextValidator.prepare(pdf_context),
-         {:ok, pages} <- extract_pages(text_context) do
+         {:ok, pages} <- extract_pages(text_context, request.options.actual_text) do
       pages =
         if request.options.order == :visual do
           Enum.map(pages, fn page -> %{page | spans: visual_spans(page.spans)} end)
@@ -280,10 +284,10 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp extract_pages(text_context) do
+  defp extract_pages(text_context, actual_text) do
     text_context.pages
     |> Enum.reduce_while({:ok, []}, fn page, {:ok, pages} ->
-      case extract_page(page) do
+      case extract_page(page, actual_text) do
         {:ok, page} -> {:cont, {:ok, [page | pages]}}
         {:error, _} = extraction_error -> {:halt, extraction_error}
       end
@@ -294,8 +298,8 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp extract_page(page) do
-    initial_state = text_state(page)
+  defp extract_page(page, actual_text) do
+    initial_state = text_state(page, actual_text)
 
     Enum.reduce_while(page.contents, {:ok, initial_state, []}, fn operations,
                                                                   {:ok, state, spans} ->
@@ -342,7 +346,7 @@ defmodule NativeElixirPdfUtilities.Text do
     case {operator, operands} do
       {operator, _operands} when operator in ["BMC", "BDC"] ->
         text = Map.get(operation, :actual_text)
-        owns_replacement? = is_binary(text) and is_nil(state.replacement)
+        owns_replacement? = state.actual_text? and is_binary(text) and is_nil(state.replacement)
 
         replacement =
           if owns_replacement?,
@@ -788,7 +792,7 @@ defmodule NativeElixirPdfUtilities.Text do
     %{parts: Enum.reverse(parts), whitespace_bytes: whitespace_bytes}
   end
 
-  defp text_state(page) do
+  defp text_state(page, actual_text) do
     %{
       ctm: identity(),
       text_matrix: identity(),
@@ -807,6 +811,7 @@ defmodule NativeElixirPdfUtilities.Text do
       next_source_index: 0,
       shown_span_count: 0,
       marked_content: [],
+      actual_text?: actual_text,
       replacement: nil,
       previous_replacement?: false,
       rotation: page.rotation,

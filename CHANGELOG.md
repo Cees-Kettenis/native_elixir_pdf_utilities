@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Preserve the v1.0.0 form-filling defaults, using bundled DejaVu Sans and
+  shrink-to-fit text. Original HTML field styling is available with
+  `appearance: :source`.
+- Preserve physical text operands in positioned extraction by default. Use
+  `actual_text: true` for semantic replacement spans; reconstructed strings
+  continue to honor PDF `ActualText`.
+- Accept older three-map font encodings without ligature metadata while
+  respecting explicit shaping settings in current encodings.
+
 - Render initial `<details>` disclosures and summary legends, including fallback legends, nesting, named-group validation, markers and author styling. Closed bodies omit assets and fields while retaining input validation.
 
 - Support boolean required attributes and initial `:required` / `:optional` styling on supported controls. Preserve empty initial values and map editable requirements to PDF field flags, including owner-scoped radio groups.

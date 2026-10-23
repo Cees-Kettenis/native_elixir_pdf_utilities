@@ -59,6 +59,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   @bundled_font_family "DejaVu Sans"
   @measurement_cache_key {__MODULE__, :measurement_cache}
+  @latin_ligatures [
+    {"ffi", 0xFB03, "ﬃ"},
+    {"ffl", 0xFB04, "ﬄ"},
+    {"ff", 0xFB00, "ﬀ"},
+    {"fi", 0xFB01, "ﬁ"},
+    {"fl", 0xFB02, "ﬂ"}
+  ]
 
   @doc """
   Reads the selected font's OpenType MATH constants, glyph corrections,
@@ -623,13 +630,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @spec shape_ligatures(String.t(), map(), number()) :: String.t()
   def shape_ligatures(text, font, letter_spacing \\ 0) do
     if letter_spacing == 0 and :binary.match(text, "f") != :nomatch do
-      [
-        {"ffi", 0xFB03, "ﬃ"},
-        {"ffl", 0xFB04, "ﬄ"},
-        {"ff", 0xFB00, "ﬀ"},
-        {"fi", 0xFB01, "ﬁ"},
-        {"fl", 0xFB02, "ﬂ"}
-      ]
+      @latin_ligatures
       |> Enum.reduce(text, fn {letters, codepoint, ligature}, shaped ->
         if Map.get(Map.get(font, :latin_ligatures, %{}), letters) == codepoint and
              Map.get(font.cmap, codepoint, 0) > 0,
@@ -696,6 +697,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @doc """
   Encodes original text for an embedded Type0 font content stream.
   Applies the encoding's available ligatures unless letter spacing is nonzero.
+  Older three-map encodings without `:latin_ligatures` retain their original
+  shaping based on available Unicode ligature mappings. Explicit metadata,
+  including an empty map, takes precedence.
   """
   @spec encode_embedded_text(String.t(), pdf_encoding() | embedded_font(), number()) :: String.t()
   def encode_embedded_text(text, encoding_or_font, letter_spacing \\ 0) do
@@ -713,7 +717,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         text,
         %{
           cmap: encoding.codepoint_to_cid,
-          latin_ligatures: Map.get(encoding, :latin_ligatures, %{})
+          latin_ligatures:
+            Map.get_lazy(encoding, :latin_ligatures, fn ->
+              Map.new(@latin_ligatures, fn {letters, codepoint, _ligature} ->
+                {letters, codepoint}
+              end)
+            end)
         },
         letter_spacing
       )

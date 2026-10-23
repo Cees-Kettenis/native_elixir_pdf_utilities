@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterTest do
                )
            end)
 
-    assert {:ok, filled} = Forms.fill(pdf, %{"editor" => "ffiChanged"})
+    assert {:ok, filled} = Forms.fill(pdf, %{"editor" => "ffiChanged"}, appearance: :source)
     artifact = "tmp/test_artifacts/form_appearance_converter/current-ordinary-physical"
     File.mkdir_p!(artifact)
     File.write!(Path.join(artifact, "initial.pdf"), pdf)
@@ -136,7 +136,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterTest do
       "<input name='password' type='password' value='old'><select name='pick'><option value='a'>Alpha</option><option value='b'>Beta</option></select>"
 
     assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
-    assert {:ok, filled} = Forms.fill(pdf, %{"password" => "secret", "pick" => "b"})
+
+    assert {:ok, filled} =
+             Forms.fill(pdf, %{"password" => "secret", "pick" => "b"}, appearance: :source)
+
     assert {:ok, values} = Forms.fields(filled)
     assert Map.new(values, &{&1.name, &1.value}) == %{"password" => "secret", "pick" => "b"}
     assert {:ok, flat} = Forms.flatten(filled)

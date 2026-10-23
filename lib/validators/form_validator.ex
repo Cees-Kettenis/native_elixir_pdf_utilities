@@ -92,7 +92,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   @doc false
   @spec options(term(), :fill | :flatten) :: {:ok, map()} | {:error, {atom(), map()}}
   def options(opts, operation) do
-    allowed = if operation == :fill, do: [:flatten], else: [:fields]
+    allowed = if operation == :fill, do: [:flatten, :appearance], else: [:fields]
 
     cond do
       not Keyword.keyword?(opts) ->
@@ -104,6 +104,9 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
       operation == :fill and not is_boolean(Keyword.get(opts, :flatten, false)) ->
         error(:invalid_options, "flatten must be a boolean")
+
+      operation == :fill and Keyword.get(opts, :appearance, :fit) not in [:fit, :source] ->
+        error(:invalid_options, "appearance must be :fit or :source")
 
       operation == :flatten and
           not (Keyword.get(opts, :fields, :all) == :all or
@@ -187,7 +190,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                        ),
                      {:ok, count, bytes} <-
                        reserve_appearances(field, value, operation, count, bytes),
-                     {:ok, appearances} <- prepare_appearances(field, value, operation),
+                     {:ok, appearances} <-
+                       prepare_appearances(
+                         field,
+                         value,
+                         operation,
+                         Map.get(opts, :appearance, :fit)
+                       ),
                      :ok <- button_appearances(context.document, field) do
                   {:cont,
                    {:ok,
@@ -843,14 +852,15 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
          )
   end
 
-  defp prepare_appearances(field, value, operation) do
+  defp prepare_appearances(field, value, operation, appearance) do
     if operation == :flatten or field.type in [:checkbox, :radio] do
       {:ok, []}
     else
-      if Enum.all?(
-           field.widgets,
-           &(not is_nil(&1.source_editor))
-         ) do
+      if appearance == :source and
+           Enum.all?(
+             field.widgets,
+             &(not is_nil(&1.source_editor))
+           ) do
         Enum.reduce_while(field.widgets, {:ok, []}, fn widget, {:ok, frames} ->
           case NativeElixirPdfUtilities.Validators.FormAppearanceValidator.appearance(
                  field,

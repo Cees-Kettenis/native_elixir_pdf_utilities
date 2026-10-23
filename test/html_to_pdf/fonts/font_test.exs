@@ -3357,6 +3357,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.encode_embedded_text("AB", encoding) == "00010002"
   end
 
+  test "actual three-map encodings retain legacy ligatures without overriding explicit metadata" do
+    encoding = %{
+      codepoint_to_cid: %{99 => 3, 101 => 4, 111 => 1, 64259 => 2},
+      cid_to_gid: %{1 => 82, 2 => 5044, 3 => 70, 4 => 72},
+      cid_to_unicode: %{1 => 111, 2 => 64259, 3 => 99, 4 => 101}
+    }
+
+    assert Font.encode_embedded_text("office", encoding) == "0001000200030004"
+    assert Font.encode_embedded_text("oﬃce", encoding) == "0001000200030004"
+
+    mixed = %{
+      encoding
+      | codepoint_to_cid: Map.merge(encoding.codepoint_to_cid, %{?f => 5, ?i => 6})
+    }
+
+    unshaped = "000100050005000600030004"
+    assert Font.encode_embedded_text("office", mixed, 4) == unshaped
+    assert Font.encode_embedded_text("office", Map.put(mixed, :latin_ligatures, %{})) == unshaped
+
+    assert Font.encode_embedded_text(
+             "office",
+             Map.put(mixed, :latin_ligatures, %{"ffi" => 0xFB03})
+           ) ==
+             "0001000200030004"
+  end
+
   test "nonzero letter spacing preserves individual glyphs in measurement and encoding" do
     assert {:ok, registry} = Font.load_registry([])
     assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)

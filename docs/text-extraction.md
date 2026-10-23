@@ -25,8 +25,16 @@ decoded reliably; it does not return a partial result.
 ## Replacement text
 
 A marked-content `ActualText` string replaces the enclosed decoded text operands
-once. This preserves a ligature or an assembled mathematical symbol as its
-original Unicode. Literal strings, Unicode strings, named `/Properties` lists,
+in reconstructed string extraction. Positioned extraction keeps the physical
+operands by default. Set `actual_text: true` to request replacement spans:
+
+```elixir
+{:ok, document} = Text.extract_spans(pdf, actual_text: true)
+```
+
+In that view, replacement text is emitted once. This preserves a ligature or an
+assembled mathematical symbol as its original Unicode. Literal strings, Unicode
+strings, named `/Properties` lists,
 and indirect property values use the shared PDF text-string codec.
 
 Nested replacements use the outermost string. Empty replacements suppress their
@@ -60,6 +68,8 @@ end)
 For a binary, use `Text.extract_spans(pdf)`. The result contains `:page_count`
 and `:pages`. Every page is retained, even if its `:spans` list is empty.
 Each page has `:number`, `:media_box`, `:rotation`, and `:spans`.
+Each non-empty decoded text operand retains its own span, source index and
+coordinates, even inside an `ActualText` group with an empty replacement.
 
 ### Span fields
 

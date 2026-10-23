@@ -71,7 +71,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @typedoc "A validated public text-extraction request."
   @type request :: %{
           required(:pdf) => binary(),
-          required(:options) => %{optional(:layout) => boolean(), optional(:order) => atom()}
+          required(:options) => %{
+            optional(:layout) => boolean(),
+            optional(:order) => atom(),
+            optional(:actual_text) => boolean()
+          }
         }
 
   @doc """
@@ -114,8 +118,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       {pdf, opts, :extract_spans} when is_binary(pdf) and is_list(opts) ->
         case Keyword.keyword?(opts) do
           true ->
-            unknown = opts |> Keyword.keys() |> Enum.reject(&(&1 == :order)) |> Enum.uniq()
+            unknown =
+              opts
+              |> Keyword.keys()
+              |> Enum.reject(&(&1 in [:order, :actual_text]))
+              |> Enum.uniq()
+
             order = Keyword.get(opts, :order, :source)
+            actual_text = Keyword.get(opts, :actual_text, false)
 
             cond do
               unknown != [] ->
@@ -131,8 +141,13 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
                   operation: operation
                 )
 
+              not is_boolean(actual_text) ->
+                error(:options, :invalid_options, "actual_text option must be a boolean",
+                  operation: operation
+                )
+
               true ->
-                {:ok, %{pdf: pdf, options: %{order: order}}}
+                {:ok, %{pdf: pdf, options: %{order: order, actual_text: actual_text}}}
             end
 
           false ->

@@ -173,19 +173,30 @@ choices and export values. Unknown names,
 read-only fields, invalid selections and field `MaxLen` violations return
 [diagnostics](diagnostics.md).
 
-Library-generated HTML fields retain a validated appearance template containing
-approved embedded font bytes, text style, editor geometry and clip. Filling
-these fields uses the original font and layout rules. The existing
-`NEPUSourceEditor` PDF format remains readable for these ordinary templates;
-it contains no SVG source, executable effect graph or external resource lookup.
-A new value that the embedded fonts cannot draw returns a diagnostic.
-
-Other PDFs use bundled DejaVu Sans and black text. Text shrinks to fit, up to
-12 points, with a two-point inset. Explicit line breaks are retained; automatic
+By default, filling uses bundled DejaVu Sans and black text. Text shrinks to fit,
+up to 12 points, with a two-point inset. Explicit line breaks are retained; automatic
 word wrapping is not performed. PDF left, center and right alignment are
 respected. Missing glyphs and widgets too small for the inset return diagnostics.
 External font/style instructions without a supported template use this
 appearance style.
+
+Use `appearance: :source` to fill library-generated HTML fields with their
+original embedded fonts, text style, geometry and clipping rules:
+
+```elixir
+{:ok, completed} = Forms.fill(original, %{"applicant.full_name" => "Cees Kettenis"},
+  appearance: :source)
+```
+
+This policy preserves the original size rather than shrinking to fit, so long
+values may be clipped. A value that the captured fonts cannot draw returns a
+diagnostic. Fields without a supported source template still use the default
+fitted appearance. `appearance: :fit` selects that default explicitly.
+
+Library-generated HTML fields retain a validated appearance template containing
+approved embedded font bytes, text style, editor geometry and clip. The existing
+`NEPUSourceEditor` PDF format remains readable for these ordinary templates;
+it contains no SVG source, executable effect graph or external resource lookup.
 
 PDFs depending on the removed custom SVG appearance programs remain inspectable,
 but modifying their fields returns an `unsupported_form` diagnostic. The

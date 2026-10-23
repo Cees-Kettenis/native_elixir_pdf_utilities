@@ -31,14 +31,64 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert diagnostic.message =~ "MediaBox"
   end
 
-  test "public extraction retains decoded replacement text and stream order" do
+  test "positioned extraction preserves physical operands while string extraction uses replacements" do
     source =
       page_pdf("BT /F1 12 Tf (A) Tj /Span << /ActualText (reading) >> BDC (ink) Tj EMC (B) Tj ET")
 
     assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source)
+    assert Enum.map(spans, & &1.text) == ["A", "ink", "B"]
+    assert Enum.map(spans, & &1.source_index) == [0, 1, 2]
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source, actual_text: true)
     assert Enum.map(spans, & &1.text) == ["A", "reading", "B"]
     assert Enum.map(spans, & &1.source_index) == [0, 1, 2]
     assert {:ok, "AreadingB"} = Text.extract(source, layout: false)
+  end
+
+  test "multiple and empty replacements retain operand geometry and source indexes by default" do
+    physical = page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (one) Tj (two) Tj (after) Tj ET")
+    assert {:ok, %{pages: [%{spans: expected}]}} = Text.extract_spans(physical)
+
+    for replacement <- ["Semantic replacement", ""] do
+      source =
+        page_pdf(
+          "BT /F1 12 Tf 1 0 0 1 10 20 Tm /Span << /ActualText (#{replacement}) >> BDC (one) Tj (two) Tj EMC (after) Tj ET"
+        )
+
+      assert {:ok, %{pages: [%{spans: ^expected}]}} = Text.extract_spans(source)
+
+      assert {:ok, %{pages: [%{spans: ^expected}]}} =
+               Text.extract_spans(source, actual_text: false)
+
+      assert {:ok, %{pages: [%{spans: ^expected}]}} = Text.extract_spans(source, order: :visual)
+      assert Enum.map(expected, & &1.text) == ["one", "two", "after"]
+      assert Enum.map(expected, & &1.source_index) == [0, 1, 2]
+      assert Enum.map(expected, & &1.joins_previous?) == [false, true, true]
+
+      assert {:ok, %{pages: [%{spans: semantic}]}} = Text.extract_spans(source, actual_text: true)
+
+      assert Enum.map(semantic, & &1.text) ==
+               if(replacement == "", do: ["after"], else: [replacement, "after"])
+
+      path =
+        Path.join(System.tmp_dir!(), "operand-spans-#{System.unique_integer([:positive])}.pdf")
+
+      File.write!(path, source)
+      on_exit(fn -> File.rm!(path) end)
+      assert {:ok, %{pages: [%{spans: ^expected}]}} = Text.extract_file_spans(path)
+    end
+  end
+
+  test "positioned extraction rejects invalid replacement options with public diagnostics" do
+    for actual_text <- [:semantic, nil, "true", 1] do
+      assert {:error, {:invalid_options, diagnostic}} =
+               Text.extract_spans("", actual_text: actual_text)
+
+      assert diagnostic.stage == :options
+      assert diagnostic.reason == :invalid_options
+      assert diagnostic.module == Text
+      assert diagnostic.operation == :extract_spans
+      assert diagnostic.message == "actual_text option must be a boolean"
+    end
   end
 
   test "alias content references reuse decoded bytes and preserve each physical execution" do
@@ -131,7 +181,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
     on_exit(fn -> Limits.install(previous) end)
     Limits.install(Map.put(previous, :max_text_spans, 1))
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract_spans(source)
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Text.extract_spans(source, actual_text: true)
+
     assert diagnostic.stage == :limits
     assert diagnostic.operation == :extract_spans
     assert diagnostic.module == Text
@@ -183,7 +235,8 @@ defmodule NativeElixirPdfUtilities.TextTest do
       )
 
     assert {:ok, "café"} = Text.extract(source, layout: false)
-    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(source)
+    assert {:ok, %{pages: [%{spans: []}]}} = Text.extract_spans(source)
+    assert {:ok, %{pages: [%{spans: [span]}]}} = Text.extract_spans(source, actual_text: true)
     assert span.image_resource == "Ink"
     assert span.font_resource == nil
     assert span.x == 10.0 and span.y == 170.0
@@ -212,7 +265,10 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     assert {:ok, "A∫B"} = Text.extract(source, layout: false)
     assert {:ok, "A∫B"} = Text.extract(source)
-    assert {:ok, %{pages: [%{spans: [a, integral, b]}]}} = Text.extract_spans(source)
+
+    assert {:ok, %{pages: [%{spans: [a, integral, b]}]}} =
+             Text.extract_spans(source, actual_text: true)
+
     assert Enum.map([a, integral, b], & &1.source_index) == [0, 1, 2]
     assert integral.text == "∫"
     assert integral.x == a.end_x
@@ -229,7 +285,10 @@ defmodule NativeElixirPdfUtilities.TextTest do
       )
 
     assert {:ok, "𝑥yz"} = Text.extract(source, layout: false)
-    assert {:ok, %{pages: [%{spans: [first, second]}]}} = Text.extract_spans(source)
+
+    assert {:ok, %{pages: [%{spans: [first, second]}]}} =
+             Text.extract_spans(source, actual_text: true)
+
     assert first.text == "𝑥"
     refute first.joins_previous?
     assert second.joins_previous?
@@ -241,7 +300,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
         "BT /F1 12 Tf /Span << /ActualText (outer) >> BDC (a) Tj q /Other BMC /Span << /ActualText (inner) >> BDC 7 Tr (b) Tj EMC EMC Q 3 Tr (c) Tj EMC (d) Tj ET"
       )
 
-    assert {:ok, %{pages: [%{spans: [outer, d]}]}} = Text.extract_spans(source)
+    assert {:ok, %{pages: [%{spans: [outer, d]}]}} = Text.extract_spans(source, actual_text: true)
     assert outer.text == "outer"
     assert outer.paints_text?
     assert outer.adds_to_clip_path?
@@ -275,7 +334,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
           extra_objects: [{9, "<< /ActualText 10 0 R >>"}, {10, text}]
         )
 
-      assert {:ok, %{pages: [%{spans: [%{text: actual}]}]}} = Text.extract_spans(source)
+      assert {:ok, %{pages: [%{spans: [%{text: actual}]}]}} =
+               Text.extract_spans(source, actual_text: true)
+
       assert actual == %{"<FEFFD835DC65>" => "𝑥", "<EFBBBF78>" => "x", "(\\200)" => "•"}[text]
     end
   end
@@ -288,11 +349,18 @@ defmodule NativeElixirPdfUtilities.TextTest do
         "2 0 0 2 10 20"
       )
 
-    assert {:ok, %{pages: [%{spans: [operator, after_span]}]}} = Text.extract_spans(source)
+    assert {:ok, %{pages: [%{spans: [operator, after_span]}]}} =
+             Text.extract_spans(source, actual_text: true)
+
     assert operator.text == "operator"
     assert operator.ctm == [2.0, 0.0, 0.0, 2.0, 10.0, 20.0]
     assert operator.source_index == 0
     assert after_span.source_index == 1
+    assert {:ok, %{pages: [%{spans: [physical, physical_after]}]}} = Text.extract_spans(source)
+    assert physical.text == "pieces"
+    assert physical.ctm == operator.ctm
+    assert physical.source_index == 0
+    assert physical_after.source_index == 1
     assert {:ok, "operator after"} = Text.extract(source, layout: false)
 
     assert {:ok, "inner after"} =

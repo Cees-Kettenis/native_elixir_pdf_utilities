@@ -3,8 +3,9 @@ defmodule NativeElixirPdfUtilities.Forms do
   Inspects, fills and flattens supported AcroForm fields in existing PDFs.
 
   Values use fully qualified field names. Filling generates self-contained
-  appearances using validated embedded HTML editor fonts and style when available.
-  Other PDFs use bundled DejaVu Sans, black text, and automatic sizing.
+  appearances using bundled DejaVu Sans, black text, and automatic sizing.
+  Set `appearance: :source` to use validated embedded HTML editor fonts and style
+  when available.
   Flattening removes active interactivity, not historical data or revisions.
   XFA and changes to signed documents are unsupported.
   """
@@ -35,7 +36,15 @@ defmodule NativeElixirPdfUtilities.Forms do
     own_error(result, :fields)
   end
 
-  @doc "Fills named fields; `flatten: true` removes interactivity for the supplied fields after filling."
+  @doc """
+  Fills named fields, shrinking text to fit with bundled DejaVu Sans by default.
+
+  Set `appearance: :source` to retain supported HTML fields' original fonts,
+  style and clipping rules instead. Fields without a supported source template
+  still use the default fitted appearance. `appearance: :fit` selects the
+  default explicitly. `flatten: true` removes interactivity for the supplied
+  fields after filling.
+  """
   @spec fill(binary(), map(), keyword()) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def fill(pdf, values, opts \\ []) do
