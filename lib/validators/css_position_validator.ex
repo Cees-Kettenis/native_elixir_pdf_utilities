@@ -5,35 +5,34 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
   alias NativeElixirPdfUtilities.Validators.{CssMathValidator, HtmlValidator, SourceSizeValidator}
 
   @doc "Checks the numeric type of a position calculation without loading fonts or images."
-  @spec prepare_math(String.t()) :: {:ok, {:css_position_math, String.t()}} | :error
+  @spec prepare_math(String.t()) ::
+          {:ok, {:css_position_math, String.t()}} | :error | {:error, {atom(), map()}}
   def prepare_math(value) do
-    environment = %{
-      width: 1.0,
-      height: 1.0,
-      type_check: true,
-      percentage_basis: 1.0,
-      _depth_limit: :max_css_calculation_depth
-    }
+    HtmlValidator.with_render_budget(fn ->
+      environment = %{
+        width: 1.0,
+        height: 1.0,
+        type_check: true,
+        percentage_basis: 1.0,
+        _depth_limit: :max_css_calculation_depth
+      }
 
-    result =
-      try do
+      result =
         if is_binary(value) and String.valid?(value),
           do: CssMathValidator.evaluate(value, environment),
           else: :error
-      rescue
-        ArithmeticError -> :error
+
+      case result do
+        {:ok, _, %{length: 1} = type} when map_size(type) == 1 ->
+          {:ok, {:css_position_math, value}}
+
+        {:ok, zero, type} when zero == 0 and map_size(type) == 0 ->
+          {:ok, {:css_position_math, value}}
+
+        _ ->
+          :error
       end
-
-    case result do
-      {:ok, _, %{length: 1} = type} when map_size(type) == 1 ->
-        {:ok, {:css_position_math, value}}
-
-      {:ok, zero, type} when zero == 0 and map_size(type) == 0 ->
-        {:ok, {:css_position_math, value}}
-
-      _ ->
-        :error
-    end
+    end)
   end
 
   @doc "Prepares the selected-font CSS math environment using a real point percentage basis."
@@ -140,14 +139,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
               source = if String.valid?(source), do: source, else: "invalid"
 
               with {:ok, environment} <- math_environment(style, remaining) do
-                evaluated =
-                  try do
-                    CssMathValidator.evaluate(source, environment)
-                  rescue
-                    ArithmeticError -> :error
-                  end
-
-                case evaluated do
+                case CssMathValidator.evaluate(source, environment) do
                   {:ok, :nan, type} when type == %{length: 1} ->
                     {:ok, 0.0}
 

@@ -324,25 +324,10 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       end
 
     parsed =
-      try do
-        if length(
-             NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(value, true)
-           ) == 1,
-           do: NativeElixirPdfUtilities.Validators.CssMathValidator.evaluate(value, context),
-           else: :error
-      rescue
-        ArithmeticError ->
-          throw(
-            {:render_resource_limit,
-             Diagnostics.error(
-               :style,
-               :resource_limit_exceeded,
-               "source-size arithmetic is outside the finite numeric range",
-               module: __MODULE__,
-               source: value
-             )}
-          )
-      end
+      if length(NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(value, true)) ==
+           1,
+         do: NativeElixirPdfUtilities.Validators.CssMathValidator.evaluate(value, context),
+         else: :error
 
     parsed =
       case parsed do

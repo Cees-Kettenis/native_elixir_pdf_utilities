@@ -55,12 +55,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageSizingAndMapValidationTest do
              CssPositionValidator.resolve({:css_position_math, "calc(1)"}, 20, style)
 
     overflow = "calc(pow(1e9,32) * pow(1e9,32) * 1px)"
-    assert :error = CssPositionValidator.prepare_math(overflow)
+    assert {:error, {:resource_limit_exceeded, d}} = CssPositionValidator.prepare_math(overflow)
+    assert d.stage == :style and d.operation == :evaluate_css_math and d.source == overflow
 
-    assert {:error, {:invalid_layout, d}} =
+    assert {:error, {:resource_limit_exceeded, d}} =
              CssPositionValidator.resolve({:css_position_math, overflow}, 20, style)
 
-    assert d.source == inspect({:css_position_math, overflow})
+    assert d.stage == :style and d.operation == :evaluate_css_math and d.source == overflow
     assert CssPositionValidator.valid_prepared?(12)
     assert {:error, {:invalid_layout, d}} = CssPositionValidator.resolve(:invalid, 20, style)
     assert d.source == ":invalid"

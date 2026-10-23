@@ -124,6 +124,14 @@ each custom-property computation, and output sizes are checked before building
 expanded binaries. Cycles and missing variables retain their existing invalid-value
 behavior. A limit failure returns `:resource_limit_exceeded` at the `:limits` stage.
 
+CSS calculations also reject finite arithmetic that overflows the runtime's
+floating-point range, including intermediate results during dimension checking.
+This returns `:resource_limit_exceeded` at the `:style` stage with the expression
+and guidance for reducing it. The runtime numeric range is a fixed invariant,
+not a configurable resource limit. Small nonzero values remain accepted when
+their calculations fit the supported range. Explicit CSS infinity and NaN keep
+their existing calculation semantics.
+
 PNG decoded-image budgets count bytes per sample, including alpha when present.
 A 16-bit RGBA image reserves eight bytes per pixel before decoding. The working
 allowance also covers inflated scanlines and reconstruction buffers. It can reject

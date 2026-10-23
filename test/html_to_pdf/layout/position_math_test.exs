@@ -121,7 +121,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PositionMathTest do
       assert diagnostic.message != ""
     end
 
-    assert :error = CssPositionValidator.prepare_math("calc(1px / 1e-320)")
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssPositionValidator.prepare_math("calc(1px / 1e-320)")
+
+    assert diagnostic.stage == :style
+    assert diagnostic.operation == :evaluate_css_math
+    assert diagnostic.source == "calc(1px / 1e-320)"
     assert :error = CssPositionValidator.prepare_math(nil)
 
     assert {:error, {:invalid_layout, _}} =

@@ -7,7 +7,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   @type numeric :: number() | :infinity | :negative_infinity | :nan
   @type dimension :: %{optional(atom()) => integer()}
 
-  @doc "Evaluates a CSS scalar or math function in an already prepared length environment."
+  @doc """
+  Evaluates a CSS scalar or math function in an already prepared length environment.
+
+  Finite arithmetic overflow aborts through the shared render-budget diagnostic
+  path. Explicit CSS infinity and NaN retain their calculation semantics.
+  """
   @spec evaluate(String.t(), map()) :: {:ok, numeric(), dimension()} | :error
   def evaluate(value, environment) do
     value = Regex.replace(~r/\/\*.*?\*\//s, value, " ")
@@ -16,6 +21,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     if length(component_terms(value, true)) == 1 and not String.starts_with?(value, "("),
       do: expression(value, environment, 0),
       else: :error
+  rescue
+    ArithmeticError ->
+      throw(
+        {:render_resource_limit,
+         Diagnostics.error(
+           :style,
+           :resource_limit_exceeded,
+           "CSS calculation arithmetic exceeds the finite numeric range; reduce intermediate magnitudes or increase tiny nonzero divisors and step intervals",
+           operation: :evaluate_css_math,
+           module: __MODULE__,
+           source: value
+         )}
+      )
   end
 
   @doc "Evaluates an absolute color component using the pinned scalar calculation grammar without font or viewport authority."
