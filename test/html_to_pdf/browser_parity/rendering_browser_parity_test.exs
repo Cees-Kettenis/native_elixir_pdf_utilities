@@ -1194,6 +1194,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
      [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_authored_select_controls.html",
      [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
+    {"html_select_important_styles.html",
+     [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_css_affine_clipped_descendants.html",
      [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_css_affine_rotated_widget_slices.html",
@@ -4876,6 +4878,7 @@ for group <- 0..7 do
       if fixture_name == "html_skipped_special_controls.html", do: @tag(:skipped_special_inputs)
       if fixture_name == "html_modern_color_initial_values.html", do: @tag(:modern_color_inputs)
       if fixture_name == "html_selected_content_clones.html", do: @tag(:selected_content)
+      if fixture_name == "html_select_important_styles.html", do: @tag(:select_important)
       if fixture_name == "html_selected_content_shadow_clones.html", do: @tag(:clone_shadows)
       if fixture_name == "html_selected_content_slot_order.html", do: @tag(:clone_slot_order)
       if fixture_name == "html_declarative_shadow_slots.html", do: @tag(:shadow_slots)

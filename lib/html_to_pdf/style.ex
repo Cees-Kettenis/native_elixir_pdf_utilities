@@ -4993,7 +4993,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      |> Map.put(:form_kind, :base_select)
                      |> then(fn style ->
                        if node._initial_form_state.disabled and
-                            not Enum.any?(declarations, fn {property, _} ->
+                            not Enum.any?(declarations, fn declaration ->
+                              {property, _} = CssValueValidator.declaration_pair(declaration)
                               property == "color"
                             end), do: Map.put(style, :color, {0, 0, 0}), else: style
                      end),
@@ -5068,7 +5069,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     |> Map.put(
                       :_native_menu,
                       Map.get(style, :appearance, :auto) != :none and
-                        not Enum.any?(declarations, fn {property, _value} ->
+                        not Enum.any?(declarations, fn declaration ->
+                          {property, _value} = CssValueValidator.declaration_pair(declaration)
+
                           property in ["background", "background-color", "background-image"] or
                             (String.starts_with?(property, "border") and
                                property != "border-radius")

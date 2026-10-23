@@ -18,6 +18,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     :ok
   end
 
+  test "declaration pairs share value validation's ordinary and important representations" do
+    for declaration <- [
+          {"width", "100px"},
+          {"width", "100px", :important},
+          %{declaration: {"width", "100px"}, source: %{text: "width:100px"}},
+          %{declaration: {"width", "100px", :important}, source: %{text: "width:100px!important"}}
+        ] do
+      assert CssValueValidator.declaration_pair(declaration) == {"width", "100px"}
+    end
+
+    for declaration <- [nil, {"width"}, {"width", 100}, {"width", "100px", :invalid}] do
+      assert CssValueValidator.declaration_pair(declaration) == nil
+    end
+  end
+
   test "vertical alignment retains keyword and font-relative length authority" do
     context = %{font_size: 12.0, color: {0, 0, 0}, _custom_properties: %{}}
 

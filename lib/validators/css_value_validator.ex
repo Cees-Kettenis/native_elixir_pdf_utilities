@@ -68,25 +68,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec validate_declaration(map(), term(), :atomics.atomics_ref()) ::
           {:ok, map()} | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
   def validate_declaration(style, declaration, budget) do
-    declaration =
-      case declaration do
-        %{declaration: declaration} -> declaration
-        declaration -> declaration
-      end
-
-    normalized =
-      case declaration do
-        {property, value} when is_binary(property) and is_binary(value) ->
-          {property, value}
-
-        {property, value, :important} when is_binary(property) and is_binary(value) ->
-          {property, value}
-
-        _ ->
-          nil
-      end
-
-    case normalized do
+    case declaration_pair(declaration) do
       {"--" <> _ = property, value} ->
         with {:ok, _references} <- HtmlValidator.parse_css_variable_references(value),
              do: validate_resolved(style, property, value)
@@ -435,6 +417,27 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           )
       end
     end)
+  end
+
+  @doc "Returns the property and value of an ordinary, important or source-wrapped declaration, or nil for a malformed declaration."
+  @spec declaration_pair(term()) :: {String.t(), String.t()} | nil
+  def declaration_pair(declaration) do
+    declaration =
+      case declaration do
+        %{declaration: declaration} -> declaration
+        declaration -> declaration
+      end
+
+    case declaration do
+      {property, value} when is_binary(property) and is_binary(value) ->
+        {property, value}
+
+      {property, value, :important} when is_binary(property) and is_binary(value) ->
+        {property, value}
+
+      _ ->
+        nil
+    end
   end
 
   @doc false

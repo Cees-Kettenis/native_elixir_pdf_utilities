@@ -195,6 +195,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialSelectTest do
     end
   end
 
+  test "important inline and stylesheet declarations preserve menu appearance and width priority" do
+    for {css, attributes, width, native?, background, border_width} <- [
+          {"", "style='width:100px!important'", 75.0, true, nil, 0.75},
+          {".dropdown{width:200px!important}", "class=dropdown style='width:100px!important'",
+           75.0, true, nil, 0.75},
+          {".dropdown{width:100px!important}", "class=dropdown style='width:200px'", 75.0, true,
+           nil, 0.75},
+          {".dropdown{width:100px;background:#00ff00!important}", "class=dropdown", 75.0, false,
+           {0.0, 1.0, 0.0}, 0.75},
+          {"", "style='width:100px;border:2pt solid red!important'", 75.0, false, nil, 1.5}
+        ] do
+      html = "<style>#{css}</style><select #{attributes}><option>Choice</option></select>"
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      select = Enum.find(styled.children, &(&1[:tag] == "select"))
+      assert select.style.width == width
+      assert select.style._native_menu == native?
+      assert select.style.border_widths.top == border_width
+
+      if background, do: assert(select.style.background_color == background)
+
+      for mode <- [:static, :interactive] do
+        assert {:ok, _pdf} = HtmlToPdf.render(html, forms: mode)
+      end
+    end
+  end
+
+  test "disabled base-select color checks accept important declarations and retain cascade priority" do
+    for {css, attributes, color} <- [
+          {"", "style='appearance:base-select;width:100px!important'", {0, 0, 0}},
+          {"", "style='appearance:base-select;color:red!important'", {1.0, 0.0, 0.0}},
+          {".dropdown{appearance:base-select;color:red!important}",
+           "class=dropdown style='color:blue'", {1.0, 0.0, 0.0}},
+          {".dropdown{appearance:base-select;color:blue!important}",
+           "class=dropdown style='color:red!important'", {1.0, 0.0, 0.0}}
+        ] do
+      html =
+        "<style>#{css}</style><select disabled #{attributes}><option>Choice</option></select>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      select = Enum.find(styled.children, &(&1[:tag] == "select"))
+      assert select.style.form_kind == :base_select
+      assert select.style.color == color
+
+      for mode <- [:static, :interactive] do
+        assert {:ok, _pdf} = HtmlToPdf.render(html, forms: mode)
+      end
+    end
+  end
+
   test "select resource and ambiguous interactive export failures are actionable" do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<select size=1000000001><option>A</option></select>")
