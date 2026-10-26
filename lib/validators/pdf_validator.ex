@@ -101,6 +101,115 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   @doc false
+  @spec charge_stream_work(non_neg_integer(), ref()) :: :ok
+  def charge_stream_work(amount, ref) do
+    charge_reader_budget(:max_pdf_reader_work, amount)
+  catch
+    {:pdf_reader_budget, {:error, {reason, diagnostic}}} ->
+      abort_reader_budget(
+        {:error,
+         {reason,
+          Diagnostics.with_context(diagnostic,
+            source: "object #{elem(ref, 0)} #{elem(ref, 1)}"
+          )}}
+      )
+  end
+
+  @doc false
+  @spec prepare_predictor(binary(), map(), ref()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_predictor(data, parameters, ref) do
+    predictor = parameters["Predictor"]
+    colors = parameters["Colors"]
+    bits = parameters["BitsPerComponent"]
+    columns = parameters["Columns"]
+    pixel_bits = colors * bits
+    sample_count = colors * columns
+    row_bytes = div(sample_count * bits + 7, 8)
+    pixel_bytes = div(pixel_bits + 7, 8)
+    encoded_row_bytes = row_bytes + if(predictor == 2, do: 0, else: 1)
+    rows = div(byte_size(data), encoded_row_bytes)
+    output_bytes = rows * row_bytes
+
+    # Admission covers packed input/output, row construction and predecessor
+    # buffers. It is a buffer allowance, not an exact BEAM heap measurement.
+    working_bytes =
+      if rows == 0,
+        do: 0,
+        else: byte_size(data) + 2 * output_bytes + 2 * row_bytes + 2 * pixel_bytes
+
+    opts = [operation: :read, module: Reader, source: "object #{elem(ref, 0)} #{elem(ref, 1)}"]
+
+    cond do
+      row_bytes > Limits.get(:max_pdf_decoded_stream_bytes) ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "predictor row exceeds the decoded-stream safety limit",
+          opts,
+          object: ref
+        )
+
+      rem(byte_size(data), encoded_row_bytes) != 0 ->
+        kind = if predictor == 2, do: "TIFF", else: "PNG"
+
+        error(:filter, :invalid_pdf_input, "#{kind} predictor rows are truncated", opts,
+          object: ref
+        )
+
+      working_bytes > Limits.get(:max_pdf_predictor_working_bytes) ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "predictor buffers exceed max_pdf_predictor_working_bytes",
+          opts,
+          object: ref
+        )
+
+      true ->
+        work =
+          if predictor == 2,
+            do: rows * (sample_count + columns),
+            else: rows * (row_bytes + 1 + div(row_bytes + pixel_bytes - 1, pixel_bytes))
+
+        charge_stream_work(work, ref)
+
+        with :ok <-
+               if(predictor == 2,
+                 do: :ok,
+                 else: validate_predictor_filters(data, row_bytes, opts, ref)
+               ) do
+          {:ok,
+           %{
+             predictor: predictor,
+             bits: bits,
+             columns: columns,
+             pixel_bits: pixel_bits,
+             pixel_bytes: pixel_bytes,
+             row_bytes: row_bytes,
+             rows: rows
+           }}
+        end
+    end
+  end
+
+  defp validate_predictor_filters(data, row_bytes, opts, ref) do
+    case data do
+      <<>> ->
+        :ok
+
+      <<filter, _row::binary-size(^row_bytes), remaining::binary>> ->
+        if filter in 0..4 do
+          validate_predictor_filters(remaining, row_bytes, opts, ref)
+        else
+          error(:filter, :invalid_pdf_input, "PNG predictor row has an invalid filter", opts,
+            object: ref
+          )
+        end
+    end
+  end
+
+  @doc false
   @spec validate_reader_size(non_neg_integer(), Limits.key()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_reader_size(size, key) do
@@ -1221,7 +1330,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp with_reference_resolution(opts, operation) do
+  @doc false
+  @spec with_reference_resolution(keyword(), (keyword() -> result)) :: result when result: var
+  def with_reference_resolution(opts, operation) do
     case Keyword.fetch(opts, @reference_resolution_option) do
       {:ok, _resolution} ->
         operation.(opts)
@@ -1240,9 +1351,24 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   defp reserve_reference_work(ref, opts) do
-    %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
+    total =
+      case Process.get(@reader_budget_key) do
+        nil ->
+          %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
+          :atomics.add_get(work, 1, 1)
 
-    case :atomics.add_get(work, 1, 1) <= Limits.get(:max_pdf_reference_resolution_work) do
+        budget ->
+          total = Map.get(budget, :max_pdf_reference_resolution_work, 0) + 1
+
+          Process.put(
+            @reader_budget_key,
+            Map.put(budget, :max_pdf_reference_resolution_work, total)
+          )
+
+          total
+      end
+
+    case total <= Limits.get(:max_pdf_reference_resolution_work) do
       true ->
         :ok
 
@@ -1257,11 +1383,12 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp cached_reference(ref, opts) do
+  defp cached_reference(document, ref, opts) do
     %{cache: cache} = Keyword.fetch!(opts, @reference_resolution_option)
 
     case :ets.lookup(cache, ref) do
-      [{^ref, value, terminal_ref, chain_depth}] ->
+      [{^ref, terminal_ref, chain_depth}] ->
+        {:ok, %{value: value}} = fetch_object_record(document, terminal_ref)
         {:ok, value, terminal_ref, chain_depth}
 
       [] ->
@@ -1269,9 +1396,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp cache_reference(ref, value, terminal_ref, chain_depth, opts) do
+  defp cache_reference(ref, terminal_ref, chain_depth, opts) do
     %{cache: cache} = Keyword.fetch!(opts, @reference_resolution_option)
-    true = :ets.insert(cache, {ref, value, terminal_ref, chain_depth})
+    true = :ets.insert(cache, {ref, terminal_ref, chain_depth})
     :ok
   end
 
@@ -1296,7 +1423,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
 
       true ->
         with :ok <- reserve_reference_work(ref, opts) do
-          case cached_reference(ref, opts) do
+          case cached_reference(document, ref, opts) do
             {:ok, value, terminal_ref, chain_depth} ->
               case depth + chain_depth < Limits.get(:max_pdf_reference_chain_depth) do
                 true ->
@@ -1324,7 +1451,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                        ) do
                     {:ok, value, terminal_ref, chain_depth} ->
                       chain_depth = chain_depth + 1
-                      cache_reference(ref, value, terminal_ref, chain_depth, opts)
+                      cache_reference(ref, terminal_ref, chain_depth, opts)
                       {:ok, value, terminal_ref, chain_depth}
 
                     {:error, _} = resolution_error ->
@@ -1332,7 +1459,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                   end
 
                 {:ok, %{value: value}} ->
-                  cache_reference(ref, value, ref, 0, opts)
+                  cache_reference(ref, ref, 0, opts)
                   {:ok, value, ref, 0}
 
                 {:ok, _object} ->

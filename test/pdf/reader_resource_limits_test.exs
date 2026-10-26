@@ -279,6 +279,29 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     assert_limit(Reader.decode_prepared_stream(stream))
   end
 
+  test "LZW control codes consume work even when they produce no output" do
+    limits = Limits.effective()
+    bits = Enum.reduce(1..32, <<>>, fn _, acc -> <<acc::bitstring, 256::9>> end)
+    bits = <<bits::bitstring, 257::9>>
+    encoded = <<bits::bitstring, 0::size(rem(8 - rem(bit_size(bits), 8), 8))>>
+
+    stream = %{
+      ref: {1, 0},
+      stream: encoded,
+      filters: [%{name: "LZWDecode", parameters: %{"Predictor" => 1, "EarlyChange" => 1}}]
+    }
+
+    assert {:ok, <<>>} = Reader.decode_prepared_stream(stream)
+    Limits.install(%{limits | max_pdf_reader_work: byte_size(encoded) + 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Reader.decode_prepared_stream(stream)
+
+    assert diagnostic.stage == :limits and diagnostic.operation == :read
+    assert diagnostic.source == "object 1 0"
+    assert diagnostic.message =~ "max_pdf_reader_work"
+  end
+
   defp assert_limit(result) do
     assert {:error, {:resource_limit_exceeded, diagnostic}} = result
     assert diagnostic.stage == :limits
@@ -288,12 +311,27 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     assert is_binary(diagnostic.message)
   end
 
-  defp classic_pdf(value) do
-    objects = [
-      {1, "<< /Type /Catalog /Pages 2 0 R >>"},
-      {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
-      {3, value}
-    ]
+  test "indirect stream lengths share their reference allowance and retain limit diagnostics" do
+    limits = Limits.effective()
+    stream = "<< /Length 4 0 R >>\nstream\nx\nendstream"
+    pdf = classic_pdf(stream, [{4, "5 0 R"}, {5, "1"}, {6, stream}, {7, stream}])
+    assert {:ok, _} = Reader.read(pdf)
+    Limits.install(%{limits | max_pdf_reference_resolution_work: 3})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(pdf)
+    assert diagnostic.stage == :limits and diagnostic.operation == :read
+    assert diagnostic.module == Reader
+    assert diagnostic.message =~ "indirect reference resolution work"
+    Limits.install(limits)
+    assert {:ok, _} = Reader.read(pdf)
+  end
+
+  defp classic_pdf(value, extra_objects \\ []) do
+    objects =
+      [
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [] /Count 0 >>"},
+        {3, value}
+      ] ++ extra_objects
 
     {body, offsets} =
       Enum.reduce(objects, {"%PDF-1.7\n", []}, fn {id, value}, {body, offsets} ->
@@ -305,10 +343,12 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
         String.pad_leading(to_string(offset), 10, "0") <> " 00000 n \n"
       end)
 
+    size = length(objects) + 1
+
     body <>
-      "xref\n0 4\n0000000000 65535 f \n" <>
+      "xref\n0 #{size}\n0000000000 65535 f \n" <>
       entries <>
-      "trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n#{byte_size(body)}\n%%EOF\n"
+      "trailer\n<< /Size #{size} /Root 1 0 R >>\nstartxref\n#{byte_size(body)}\n%%EOF\n"
   end
 
   defp object_stream_pdf(count) do

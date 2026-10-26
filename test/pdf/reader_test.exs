@@ -878,6 +878,16 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     )
   end
 
+  test "LZW resets discard prior entries and EarlyChange zero preserves width boundaries" do
+    bits = for code <- [256, 65, 66, 258, 256, 67, 68, 258, 257], into: <<>>, do: <<code::9>>
+    assert {:ok, "ABABCDCD"} = decoded_stream(pad_bits(bits), {:name, "LZWDecode"})
+
+    bits = for code <- [256, 65 | Enum.to_list(258..511)], into: <<>>, do: <<code::9>>
+    encoded = pad_bits(<<bits::bitstring, 257::10>>) <> :binary.copy(<<0>>, 100)
+    expected = for length <- 1..255, into: <<>>, do: :binary.copy("A", length)
+    assert {:ok, ^expected} = decoded_stream(encoded, {:name, "LZWDecode"}, %{"EarlyChange" => 0})
+  end
+
   defp stream_object(dictionary, stream, include_length?) do
     length = if include_length?, do: " /Length #{byte_size(stream)}", else: ""
     "<< #{dictionary}#{length} >>\nstream\n" <> stream <> "\nendstream"

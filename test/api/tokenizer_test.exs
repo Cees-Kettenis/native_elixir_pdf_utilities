@@ -92,6 +92,31 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
     assert [{:name, "A B/C"}, {:name, "A#zzB"}] = toks(input)
   end
 
+  test "invalid name escapes preserve overlapping escapes with linear processing work" do
+    assert [name: "#A", name: "#GA", name: "#4", name: "#"] =
+             toks("/##41 /#G#41 /#4 /#")
+
+    toks("/warm#zz")
+
+    measure = fn repetitions ->
+      Task.async(fn ->
+        expected = String.duplicate("#zz", repetitions)
+        input = "/" <> expected
+        :erlang.garbage_collect()
+        {:reductions, before} = Process.info(self(), :reductions)
+        result = toks(input)
+        {:reductions, after_work} = Process.info(self(), :reductions)
+        assert result == [name: expected]
+        after_work - before
+      end)
+      |> Task.await()
+    end
+
+    small = measure.(1_024)
+    large = measure.(4_096)
+    assert large < small * 5
+  end
+
   test "literal strings with escapes and nesting" do
     input = "(a(b)c\\r\\t\\b\\f\\\\\\\n\\\r\n\\101\\4\\z)"
     [{:string, s}] = toks(input)

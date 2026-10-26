@@ -13,6 +13,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   import Bitwise
 
+  # The 256-byte alphabet is fixed by LZW, not a configurable resource ceiling.
+  @lzw_initial_dictionary Map.new(0..255, fn value -> {value, <<value>>} end)
+
   @type ref :: {non_neg_integer(), non_neg_integer()}
   @type value ::
           nil
@@ -989,33 +992,39 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp materialize_indirect_streams(pdf, objects, selected?) do
-    Enum.reduce_while(objects, {:ok, %{}}, fn {ref, parsed}, {:ok, resolved} ->
-      case Map.pop(parsed, :pending_stream) do
-        {nil, parsed} ->
-          {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+    PdfValidator.with_reference_resolution([operation: :read, module: __MODULE__], fn opts ->
+      Enum.reduce_while(objects, {:ok, %{}}, fn {ref, parsed}, {:ok, resolved} ->
+        case Map.pop(parsed, :pending_stream) do
+          {nil, parsed} ->
+            {:cont, {:ok, Map.put(resolved, ref, parsed)}}
 
-        {source, parsed} ->
-          case selected?.(parsed) do
-            true ->
-              case materialize_indirect_stream(pdf, objects, ref, parsed, source) do
-                {:ok, parsed} -> {:cont, {:ok, Map.put(resolved, ref, parsed)}}
-                {:error, _} = stream_error -> {:halt, stream_error}
-              end
+          {source, parsed} ->
+            case selected?.(parsed) do
+              true ->
+                case materialize_indirect_stream(pdf, objects, ref, parsed, source, opts) do
+                  {:ok, parsed} -> {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+                  {:error, _} = stream_error -> {:halt, stream_error}
+                end
 
-            false ->
-              parsed = Map.put(parsed, :pending_stream, source)
-              {:cont, {:ok, Map.put(resolved, ref, parsed)}}
-          end
-      end
+              false ->
+                parsed = Map.put(parsed, :pending_stream, source)
+                {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+            end
+        end
+      end)
     end)
   end
 
-  defp materialize_indirect_stream(pdf, objects, ref, parsed, source) do
+  defp materialize_indirect_stream(
+         pdf,
+         objects,
+         ref,
+         parsed,
+         source,
+         opts \\ [operation: :read, module: __MODULE__]
+       ) do
     result =
-      PdfValidator.resolve(%{objects: objects}, {:ref, source.length_ref},
-        operation: :read,
-        module: __MODULE__
-      )
+      PdfValidator.resolve(%{objects: objects}, {:ref, source.length_ref}, opts)
 
     case result do
       {:ok, length} when is_integer(length) and length >= 0 ->
@@ -1044,6 +1053,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
               object: ref
             )
         end
+
+      {:error, {:resource_limit_exceeded, _}} = error ->
+        error
 
       _ ->
         error(
@@ -1478,7 +1490,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp decode_lzw(data, early_change, ref) do
-    dictionary = Enum.into(0..255, %{}, fn value -> {value, <<value>>} end)
+    dictionary = @lzw_initial_dictionary
 
     limit =
       min(
@@ -1511,13 +1523,15 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       <<_::bitstring-size(^bit_offset), code::unsigned-big-integer-size(^width), _::bitstring>> =
         data
 
+      PdfValidator.charge_stream_work(1, ref)
+
       case code do
         256 ->
           decode_lzw_bits(
             data,
             bit_offset + width,
             9,
-            Enum.into(0..255, %{}, fn value -> {value, <<value>>} end),
+            @lzw_initial_dictionary,
             258,
             nil,
             early_change,
@@ -1592,168 +1606,124 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       1 ->
         {:ok, data}
 
-      2 ->
-        tiff_predictor(data, parameters, ref)
-
-      _predictor ->
-        png_predictor(data, parameters, ref)
-    end
-  end
-
-  defp tiff_predictor(data, parameters, ref) do
-    with {:ok, row_bytes, _bytes_per_pixel} <- predictor_dimensions(parameters, ref),
-         true <- rem(byte_size(data), row_bytes) == 0 do
-      colors = Map.get(parameters, "Colors", 1)
-      bits = Map.get(parameters, "BitsPerComponent", 8)
-      columns = Map.get(parameters, "Columns", 1)
-
-      rows =
-        for <<row::binary-size(^row_bytes) <- data>>,
-          do: tiff_row(row, colors, bits, columns)
-
-      {:ok, IO.iodata_to_binary(rows)}
-    else
-      false ->
-        error(:filter, :invalid_pdf_input, "TIFF predictor rows are truncated", object: ref)
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp tiff_row(row, colors, bits, columns) do
-    sample_count = colors * columns
-    sample_bits = sample_count * bits
-    padding_bits = bit_size(row) - sample_bits
-    <<samples::bitstring-size(^sample_bits), padding::bitstring-size(^padding_bits)>> = row
-
-    {decoded, _values} =
-      samples
-      |> then(fn samples -> for <<sample::unsigned-big-size(^bits) <- samples>>, do: sample end)
-      |> Enum.with_index()
-      |> Enum.reduce({[], %{}}, fn {sample, index}, {decoded, values} ->
-        value = rem(sample + Map.get(values, index - colors, 0), 1 <<< bits)
-        {[value | decoded], Map.put(values, index, value)}
-      end)
-
-    decoded
-    |> Enum.reverse()
-    |> Enum.reduce(<<>>, fn sample, row ->
-      <<row::bitstring, sample::unsigned-big-size(bits)>>
-    end)
-    |> then(fn decoded -> <<decoded::bitstring, padding::bitstring>> end)
-  end
-
-  defp png_predictor(data, parameters, ref) do
-    with {:ok, row_bytes, bytes_per_pixel} <- predictor_dimensions(parameters, ref) do
-      cond do
-        data == <<>> ->
-          {:ok, <<>>}
-
-        byte_size(data) <= row_bytes ->
-          error(:filter, :invalid_pdf_input, "PNG predictor rows are truncated", object: ref)
-
-        true ->
-          decode_png_rows(
-            data,
-            row_bytes,
-            bytes_per_pixel,
-            :binary.copy(<<0>>, row_bytes),
-            [],
-            ref
-          )
-      end
-    end
-  end
-
-  defp decode_png_rows(data, row_bytes, bytes_per_pixel, previous, acc, ref) do
-    case data do
-      <<>> ->
-        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
-
       _ ->
-        if byte_size(data) >= row_bytes + 1 do
-          <<filter, encoded::binary-size(^row_bytes), rest::binary>> = data
+        with {:ok, plan} <- PdfValidator.prepare_predictor(data, parameters, ref) do
+          case plan do
+            %{rows: 0} ->
+              {:ok, <<>>}
 
-          case png_row(filter, encoded, previous, bytes_per_pixel) do
-            {:ok, row} ->
-              decode_png_rows(rest, row_bytes, bytes_per_pixel, row, [row | acc], ref)
+            %{predictor: 2} ->
+              row_bytes = plan.row_bytes
 
-            :error ->
-              error(:filter, :invalid_pdf_input, "PNG predictor row has an invalid filter",
-                object: ref
-              )
+              decoded =
+                for <<row::binary-size(^row_bytes) <- data>>, into: <<>> do
+                  tiff_row(row, <<0::size(plan.pixel_bits)>>, plan, plan.columns, <<>>)
+                end
+
+              {:ok, decoded}
+
+            _ ->
+              {:ok, decode_png_rows(data, plan, :binary.copy(<<0>>, plan.row_bytes), <<>>)}
           end
-        else
-          error(:filter, :invalid_pdf_input, "PNG predictor rows are truncated", object: ref)
         end
     end
   end
 
-  defp png_row(filter, encoded, previous, bytes_per_pixel) do
-    case filter do
-      filter when filter in 0..4 ->
-        encoded
-        |> :binary.bin_to_list()
-        |> Enum.with_index()
-        |> Enum.reduce({[], %{}}, fn {byte, index}, {decoded, values} ->
-          left = Map.get(values, index - bytes_per_pixel, 0)
-          up = :binary.at(previous, index)
-
-          up_left =
-            if index < bytes_per_pixel,
-              do: 0,
-              else: :binary.at(previous, index - bytes_per_pixel)
-
-          value =
-            case filter do
-              0 -> byte
-              1 -> rem(byte + left, 256)
-              2 -> rem(byte + up, 256)
-              3 -> rem(byte + div(left + up, 2), 256)
-              4 -> rem(byte + paeth(left, up, up_left), 256)
-            end
-
-          {[value | decoded], Map.put(values, index, value)}
-        end)
-        |> then(fn {decoded, _values} ->
-          {:ok, decoded |> Enum.reverse() |> :erlang.list_to_binary()}
-        end)
+  defp tiff_row(data, previous, plan, columns, acc) do
+    case columns do
+      0 ->
+        <<acc::bitstring, data::bitstring>>
 
       _ ->
-        :error
+        pixel_bits = plan.pixel_bits
+        <<pixel::bitstring-size(^pixel_bits), remaining::bitstring>> = data
+        decoded = tiff_pixel(pixel, previous, plan.bits, <<>>)
+        tiff_row(remaining, decoded, plan, columns - 1, <<acc::bitstring, decoded::bitstring>>)
+    end
+  end
+
+  defp tiff_pixel(data, previous, bits, acc) do
+    case data do
+      <<>> ->
+        acc
+
+      <<sample::unsigned-big-size(^bits), remaining::bitstring>> ->
+        <<left::unsigned-big-size(^bits), previous::bitstring>> = previous
+        value = rem(sample + left, 1 <<< bits)
+        tiff_pixel(remaining, previous, bits, <<acc::bitstring, value::unsigned-big-size(bits)>>)
+    end
+  end
+
+  defp decode_png_rows(data, plan, previous, acc) do
+    row_bytes = plan.row_bytes
+
+    case data do
+      <<>> ->
+        acc
+
+      <<filter, encoded::binary-size(^row_bytes), remaining::binary>> ->
+        zeros = :binary.copy(<<0>>, plan.pixel_bytes)
+        row = png_row(encoded, previous, zeros, zeros, filter, plan.pixel_bytes, <<>>)
+        decode_png_rows(remaining, plan, row, <<acc::binary, row::binary>>)
+    end
+  end
+
+  defp png_row(data, previous, left, up_left, filter, pixel_bytes, acc) do
+    case data do
+      <<>> ->
+        acc
+
+      _ ->
+        size = min(pixel_bytes, byte_size(data))
+        <<pixel::binary-size(^size), remaining::binary>> = data
+        <<up::binary-size(^size), previous::binary>> = previous
+        decoded = png_pixel(pixel, up, left, up_left, filter, <<>>)
+
+        png_row(
+          remaining,
+          previous,
+          decoded,
+          up,
+          filter,
+          pixel_bytes,
+          <<acc::binary, decoded::binary>>
+        )
+    end
+  end
+
+  defp png_pixel(data, up, left, up_left, filter, acc) do
+    case data do
+      <<>> ->
+        acc
+
+      <<byte, remaining::binary>> ->
+        <<above, up::binary>> = up
+        <<before, left::binary>> = left
+        <<diagonal, up_left::binary>> = up_left
+
+        value =
+          case filter do
+            0 -> byte
+            1 -> rem(byte + before, 256)
+            2 -> rem(byte + above, 256)
+            3 -> rem(byte + div(before + above, 2), 256)
+            4 -> rem(byte + paeth(before, above, diagonal), 256)
+          end
+
+        png_pixel(remaining, up, left, up_left, filter, <<acc::binary, value>>)
     end
   end
 
   defp paeth(left, up, up_left) do
     prediction = left + up - up_left
+    left_distance = abs(prediction - left)
+    up_distance = abs(prediction - up)
+    diagonal_distance = abs(prediction - up_left)
 
-    distances = [
-      {abs(prediction - left), left},
-      {abs(prediction - up), up},
-      {abs(prediction - up_left), up_left}
-    ]
-
-    distances |> Enum.min_by(fn {distance, _} -> distance end) |> elem(1)
-  end
-
-  defp predictor_dimensions(parameters, ref) do
-    colors = parameters["Colors"]
-    bits = parameters["BitsPerComponent"]
-    columns = parameters["Columns"]
-    row_bytes = div(colors * columns * bits + 7, 8)
-
-    case row_bytes <= Limits.get(:max_pdf_decoded_stream_bytes) do
-      true ->
-        {:ok, row_bytes, max(1, div(colors * bits + 7, 8))}
-
-      false ->
-        error(
-          :limits,
-          :resource_limit_exceeded,
-          "predictor row exceeds the decoded-stream safety limit",
-          object: ref
-        )
+    cond do
+      left_distance <= up_distance and left_distance <= diagonal_distance -> left
+      up_distance <= diagonal_distance -> up
+      true -> up_left
     end
   end
 

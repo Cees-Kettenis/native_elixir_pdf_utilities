@@ -58,7 +58,8 @@ These limits apply when reading existing PDFs.
 | `max_pdf_reader_decoded_bytes` | 50,000,000 | Decoded bytes across object streams, xref streams, revisions, candidate attempts, and each intermediate filter stage in one reader call |
 | `max_pdf_reader_tokens` | 1,000,000 | Tokens produced across all parsing passes in one reader call |
 | `max_pdf_reader_values` | 500,000 | Parsed values and expanded xref entries across one reader call |
-| `max_pdf_reader_work` | 250,000,000 | Bytes scanned by tokenizers, xref searches, stream decoding and predictor processing, including repeated passes |
+| `max_pdf_reader_work` | 250,000,000 | Bytes scanned by tokenizers, xref searches and stream decoding, plus predictor sample/group processing and every LZW code, including resets and end codes |
+| `max_pdf_predictor_working_bytes` | 160,000,000 | Conservative packed-buffer allowance for one TIFF/PNG predictor reconstruction, checked before buffers are allocated |
 | `max_pdf_container_entries` | 100,000 | Entries in one array or dictionary, including repeated dictionary keys |
 | `max_pdf_numeric_token_bytes` | 1,024 | Decimal numeric-token bytes before integer/float conversion, and bytes in one binary xref integer |
 | `max_pdf_objects` | 100,000 | Parsed and generated PDF object counts and allocation IDs |
@@ -66,7 +67,7 @@ These limits apply when reading existing PDFs.
 | `max_pdf_pages` | 10,000 | Pages in one PDF |
 | `max_pdf_page_tree_depth` | 1,000 | PDF page-tree nesting |
 | `max_pdf_reference_chain_depth` | 1,000 | Indirect-reference nesting |
-| `max_pdf_reference_resolution_work` | 25,000 | Aggregate reference resolutions |
+| `max_pdf_reference_resolution_work` | 25,000 | Reference visits across one reader call, including indirect stream lengths and recovery candidates; cached lookups still count |
 | `max_pdf_value_depth` | 100 | Nested PDF arrays and dictionaries |
 | `max_pdf_decoded_stream_bytes` | 25,000,000 | One decoded PDF stream |
 | `max_pdf_decompression_ratio` | 100 | Decoded-to-encoded stream ratio |
@@ -80,6 +81,20 @@ decoding requested separately through `Reader.decoded_stream/2` gets a fresh
 budget; callers repeatedly decoding content still need their operation's own
 aggregate limit, as text extraction already has. Flate output is drained in
 bounded chunks, and expanding filters stop at the remaining decoded allowance.
+Reference caches retain terminal identities and chain depths, while resolved
+values remain in the document object table. Separate object tables and recovery
+candidates have separate caches but share an active reader's reference allowance.
+Standalone validator calls retain their own bounded resolution scopes.
+
+Predictors process packed rows and predecessor pixels without per-sample maps.
+Their buffer allowance counts the input bytes, twice the output bytes, two row
+buffers and two pixel buffers. Empty predictor input requires no reconstruction
+buffers. This is conservative buffer accounting, not an exact BEAM heap or
+native-memory measurement. TIFF sample/pixel visits and PNG byte/group/filter
+visits are charged before reconstruction; invalid row dimensions, incomplete
+rows and unsupported filter bytes return diagnostics. LZW clear codes reuse the
+fixed initial dictionary and consume work even when they produce no output.
+
 These counters bound parsing work and retained structures. Document API calls
 also have the operation deadline and worker-memory allowance above. Neither
 provides an application-wide memory ceiling.

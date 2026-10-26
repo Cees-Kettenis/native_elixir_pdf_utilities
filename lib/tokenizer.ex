@@ -370,13 +370,17 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
       <<>> ->
         Enum.reverse(acc)
 
-      <<?#, a, b, rest::binary>> ->
-        if hex_char?(a) and hex_char?(b) do
-          <<val>> = <<hexval(a) * 16 + hexval(b)>>
-          decode_name(rest, [val | acc])
-        else
-          # not a valid #xx escape; keep '#' literal and continue
-          decode_name(<<a, b, rest::binary>>, [?# | acc])
+      <<?#, rest::binary>> ->
+        case rest do
+          <<a, b, remaining::binary>> ->
+            if hex_char?(a) and hex_char?(b) do
+              decode_name(remaining, [hexval(a) * 16 + hexval(b) | acc])
+            else
+              decode_name(rest, [?# | acc])
+            end
+
+          _ ->
+            decode_name(rest, [?# | acc])
         end
 
       <<c, rest::binary>> ->
