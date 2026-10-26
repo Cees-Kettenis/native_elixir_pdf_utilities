@@ -4,6 +4,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPngReferenceBrowserParityTest do
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
 
+  test "a region allowance preserves other regions and its average-color bound" do
+    root = Path.expand("tmp/browser_parity/region_threshold_contract")
+    File.mkdir_p!(root)
+    fixture = Path.join(root, "source.html")
+
+    File.write!(fixture, """
+    <!doctype html><html><head><style>
+    @page { size:180pt 120pt; margin:0 }
+    html,body { margin:0 }
+    div { position:absolute;left:10pt;top:10pt;width:8pt;height:8pt;background:#174a86 }
+    </style></head><body><div></div></body></html>
+    """)
+
+    opts = [
+      render_opts: [fonts: []],
+      regions: [{"allowed", {10, 10, 8, 8}}],
+      region_thresholds: %{
+        "allowed" => %{max_changed_ratio: 1.0, max_average_delta: 1.0}
+      },
+      max_changed_ratio: 0.01,
+      max_average_delta: 0.01,
+      native_renderer: fn source, render_opts ->
+        HtmlToPdf.render(String.replace(source, "#174a86", "#ff0000"), render_opts)
+      end
+    ]
+
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        fixture,
+        Keyword.put(opts, :artifact_dir, Path.join(root, "allowed"))
+      )
+
+    assert hd(hd(stats.pages).regions).changed_ratio == 1.0
+
+    assert_raise ExUnit.AssertionError, ~r/strict: changed-pixel ratio/, fn ->
+      PdfVisualCompare.assert_browser_match!(
+        fixture,
+        Keyword.merge(opts,
+          artifact_dir: Path.join(root, "strict-region"),
+          regions: [{"allowed", {10, 10, 8, 8}}, {"strict", {10, 10, 8, 8}}]
+        )
+      )
+    end
+
+    assert_raise ExUnit.AssertionError, ~r/allowed: average delta/, fn ->
+      PdfVisualCompare.assert_browser_match!(
+        fixture,
+        Keyword.merge(opts,
+          artifact_dir: Path.join(root, "average-bound"),
+          region_thresholds: %{
+            "allowed" => %{max_changed_ratio: 1.0, max_average_delta: 0.01}
+          }
+        )
+      )
+    end
+  end
+
   test "Chrome PNG reference detects lost artwork and changed color, size and position" do
     root = Path.expand("tmp/browser_parity/svg_png_reference_contract")
     File.mkdir_p!(root)

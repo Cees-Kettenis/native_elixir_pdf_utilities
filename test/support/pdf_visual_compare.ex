@@ -216,12 +216,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         passed =
           length(vector_pages) == length(original_native_pages) and
             Enum.all?(original_pages, fn page ->
-              not Map.has_key?(page, :error) and page.changed_ratio < changed_limit and
+              not Map.has_key?(page, :error) and
+                changed_ratio_within_limit?(page.changed_ratio, changed_limit) and
                 page.average_delta <= average_limit and
                 Enum.all?(
                   page.regions,
-                  &(&1.changed_ratio < changed_limit and
-                      &1.average_delta <= average_limit and
+                  &(changed_ratio_within_limit?(&1.changed_ratio, &1.max_changed_ratio) and
+                      &1.average_delta <= &1.max_average_delta and
                       &1.native_ink_pixels >= &1.minimum_ink_pixels)
                 )
             end)
@@ -287,10 +288,10 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       for page <- page_stats,
           region <- page.regions,
           {failed?, message} <- [
-            {region.changed_ratio >= max_changed_ratio,
-             "changed-pixel ratio #{region.changed_ratio}, allowed less than #{max_changed_ratio}"},
-            {region.average_delta > max_average_delta,
-             "average delta #{region.average_delta}, allowed #{max_average_delta}"},
+            {not changed_ratio_within_limit?(region.changed_ratio, region.max_changed_ratio),
+             "changed-pixel ratio #{region.changed_ratio}, allowed #{region.max_changed_ratio}"},
+            {region.average_delta > region.max_average_delta,
+             "average delta #{region.average_delta}, allowed #{region.max_average_delta}"},
             {region.native_ink_pixels < region.minimum_ink_pixels,
              "visible ink #{region.native_ink_pixels}, required #{region.minimum_ink_pixels}"}
           ],
@@ -301,7 +302,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
            "Browser parity samples failed for #{fixture_path}:\n" <>
              Enum.join(region_failures, "\n") <> "\nartifacts: #{stats.artifact_dir}"
 
-    assert stats.max_changed_ratio < max_changed_ratio,
+    assert changed_ratio_within_limit?(stats.max_changed_ratio, max_changed_ratio),
            """
            Browser parity changed-pixel threshold exceeded for #{fixture_path}
            changed ratio: #{Float.round(stats.max_changed_ratio, 5)}
@@ -974,12 +975,17 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
         reference = crop_pixels(chromium, width, height, x, y)
         actual = crop_pixels(native, width, height, x, y)
+        thresholds = opts |> Keyword.get(:region_thresholds, %{}) |> Map.get(name, %{})
 
         # Each sample retains its own denominator. Blank neighbors cannot dilute
         # a regression, and sparse artwork must still paint visible pixels.
         Map.merge(diff_stats(reference, actual), %{
           name: name,
           bounds: {x, y, width, height},
+          max_changed_ratio:
+            Map.get(thresholds, :max_changed_ratio, Keyword.get(opts, :max_changed_ratio, 0.12)),
+          max_average_delta:
+            Map.get(thresholds, :max_average_delta, Keyword.get(opts, :max_average_delta, 0.03)),
           minimum_ink_pixels: ceil(20 * scale * scale),
           native_ink_pixels:
             for <<r, g, b <- actual>>, reduce: 0 do
@@ -1113,6 +1119,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       average_delta: stats.total_delta / (stats.total_pixels * 3 * 255),
       max_channel_delta: stats.max_channel_delta
     }
+  end
+
+  defp changed_ratio_within_limit?(ratio, limit) do
+    # Smaller ceilings stay strict. An explicit 100% allowance can include 100%,
+    # while the independent average-color and visible-ink checks still apply.
+    ratio < limit or (limit == 1.0 and ratio == 1.0)
   end
 
   defp max_stat(stats, key) do

@@ -49,9 +49,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:elixir_font_discovery, "~> 0.2.0"},
       {:ex_doc, "~> 0.37", only: :dev, runtime: false},
-      {:resvg,
-       git: "https://github.com/Cees-Kettenis/resvg_nif.git",
-       ref: "7664016fa855bac495ccf595e346a0d2c8631a60"}
+      {:resvg, "~> 0.6.0"}
     ]
   end
 

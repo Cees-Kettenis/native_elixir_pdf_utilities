@@ -127,8 +127,12 @@ uses HTML attribute admission rules. Images and backgrounds retain authored
 `viewBox` and `preserveAspectRatio` behavior at their CSS viewport dimensions.
 `foreignObject`, non-scaling strokes and SVG2 inline `textPath` path data return
 `unsupported_html`. Use a same-document path reference for supported `textPath`
-content. Fractional pattern repeat spacing, `linearRGB` gradients and luminance
-masks, automatic marker directions and thin strokes on small rasters are supported.
+content. The published `resvg` Elixir package supplies the Rust renderer. Its
+current renderer has known differences in fractional pattern spacing, `linearRGB`
+gradients and luminance masks, automatic marker directions, text-path positioning,
+marker clipping and thin strokes on small rasters. Transformed SVG image viewports
+and some filter-image paint servers can also differ from browser output. These
+limitations remain until upstream fixes reach the published converter package.
 Filter inputs outside the filter region are clipped as required by the published
 [Filter Effects specification](https://www.w3.org/TR/filter-effects-1/#FilterPrimitiveSubRegion),
 which differs from Chromium in some offset chains. Other SVG features may differ

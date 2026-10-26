@@ -25,7 +25,7 @@ PDF viewers decode the embedded image.
 
 ## SVG images
 
-SVGs appear as PNG artwork in the PDF through the existing Resvg dependency.
+SVGs appear as PNG artwork in the PDF through the published `resvg` Hex dependency.
 Elixir prepares source, dimensions, permitted font bytes and selected nested image
 resources. The converter cannot read arbitrary caller paths or fetch network
 resources. DTD/entity declarations and escaped CSS resource syntax are rejected.
@@ -41,5 +41,9 @@ profile and [diagnostics](diagnostics.md) for handling conversion failures.
 
 Known converter differences include linear-RGB gradient and mask interpolation,
 filter inputs moved from outside their filter region, some automatic marker
-orientations, percentage geometry in marker children and strokes on very small
-canvases. These can affect visible output even when conversion succeeds.
+orientations and clipping, fractional pattern spacing, text-path positioning,
+transformed image viewports, filter-image paint servers and strokes on very small
+canvases. These can affect visible output even when conversion succeeds. Some
+fixes are already merged into Rust resvg and still await a published Elixir
+wrapper release. Converter-dependent browser tests retain explicit, bounded
+allowances while those updates are pending.
