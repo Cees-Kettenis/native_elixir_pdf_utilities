@@ -10,6 +10,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.NativeTextProvenanceTest do
     NativeGlyphSourceValidator
   }
 
+  test "newline splitting advances UTF-8 scalar provenance without rescanning prior lines" do
+    owner = %{type: :text, node_id: make_ref(), text: "Ω\n\néZ"}
+    characters = NativeGlyphSourceValidator.source_characters(owner, owner.text)
+    run = %{text: owner.text, source_glyph_characters: characters}
+    {first, rest} = NativeGlyphSourceValidator.split_line(run, byte_size("Ω"))
+    {empty, last} = NativeGlyphSourceValidator.split_line(rest, 0)
+    assert first.text == "Ω" and empty.text == "" and last.text == "éZ"
+    assert empty.source_glyph_characters == []
+    assert first.source_glyph_characters == Enum.take(characters, 1)
+    assert last.source_glyph_characters == Enum.drop(characters, 3)
+    assert Enum.map(last.source_glyph_characters, &hd(&1.fragments).offset) == [3, 4]
+
+    assert {%{text: "A"}, %{text: "B"}} =
+             NativeGlyphSourceValidator.split_line(%{text: "A\nB"}, 1)
+  end
+
   test "parsed DOM scalars survive whitespace, slicing, tabs and selected font ligatures" do
     assert {:ok, document} = HtmlParser.parse_document_detailed("<p> A\tffi\r\nΩ </p>")
     tree = HtmlTree.from_document(document)

@@ -414,7 +414,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
 
     # Occupancy and row sizing use columns + 3 work units. The zero-edge
     # clone pass adds one row map and four maps for its single spanning cell.
-    for {columns, work} <- [{20, 28}, {30, 38}] do
+    # Width preparation also reserves the indexed columns and spanning slice.
+    for {columns, work} <- [{20, 68}, {30, 98}] do
       expanded = String.replace(table, "colspan='30'", "colspan='#{columns}'")
       Limits.install(%{Limits.effective() | max_table_grid_work: work - 1})
 
@@ -428,7 +429,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
       assert {:ok, _pdf} = HtmlToPdf.render(expanded)
     end
 
-    for maximum <- [50, 110, 1_000] do
+    for maximum <- [98, 110, 1_000] do
       Limits.install(%{Limits.effective() | max_table_grid_work: maximum})
       assert {:ok, _pdf} = HtmlToPdf.render(table)
     end

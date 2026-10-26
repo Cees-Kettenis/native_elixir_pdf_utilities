@@ -114,9 +114,13 @@ provides an application-wide memory ceiling.
 | `max_layout_boxes` | 100,000 | Drawing-box construction attempts, including measurements and furniture |
 | `max_rendered_text_bytes` | 10,000,000 | Text production bytes, including generated-content parts before joining and transformations |
 | `max_layout_text_work` | 20,000,000 | Text bytes measured and glyph-width entries visited, including repeated measurements |
+| `max_layout_line_work` | 1,000,000 | Parts of newline-containing text runs constructed during layout, including empty parts and repeated measurements |
+| `max_grid_occupied_cells` | 1,000,000 | Cumulative row-span times column-span occupancy insertions, including overlapping placements and repeated layouts |
+| `max_grid_tracks` | 100,000 | Explicit and implicit row/column tracks constructed across grid containers and repeated layouts |
+| `max_grid_placement_work` | 2,000,000 | Grid search candidates, candidate-cell reservations, intrinsic track scans, flexible sizing passes and track-prefix visits |
 | `max_layout_measurement_cache_bytes` | 2,000,000 | Text bytes retained in one render's width cache; extra unique text is measured without caching |
 | `max_layout_measurement_cache_entries` | 10,000 | Distinct width measurements retained in one render |
-| `max_table_grid_work` | 1,000,000 | Table row scans, column expansion and probes, and collapsed-border edge visits, reserved before expanding spans |
+| `max_table_grid_work` | 1,000,000 | Table row scans, column expansion and probes, preferred-width span updates, and collapsed-border edge visits, reserved before expansion |
 | `max_rendered_pages` | 1,000 | Generated PDF pages, also bounded by `max_pdf_pages` |
 | `max_rendered_pdf_bytes` | 50,000,000 | Serialized PDF output before flattening its iodata |
 

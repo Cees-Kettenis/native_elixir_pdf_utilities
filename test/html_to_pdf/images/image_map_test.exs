@@ -20,6 +20,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
 
   @image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
 
+  test "polygon containment visits participate in exact cumulative geometry admission" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    area = %{identity: make_ref(), shape: :default, destination: {:uri, "https://example.com/"}}
+    model = %{identity: make_ref(), areas: [area]}
+    viewport = %{x: 0.0, y: 0.0, width: 30.0, height: 30.0}
+
+    # Four edges need six pair checks, eight level-edge visits and one
+    # four-edge containment scan. The previous accounting omitted that scan.
+    Limits.install(%{original | max_image_map_geometry_work: 18})
+
+    assert [_] =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    Limits.install(%{original | max_image_map_geometry_work: 17})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_image_map_geometry_work"
+
+    Limits.install(%{original | max_image_map_geometry_work: 35})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+  end
+
+  test "a bounded concave contour exhausts containment work beyond its edge-pair allowance" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    points =
+      for index <- 0..63 do
+        angle = index * 2 * :math.pi() / 64
+        radius = if rem(index, 2) == 0, do: 45, else: 18
+        {50 + radius * :math.cos(angle), 50 + radius * :math.sin(angle)}
+      end
+
+    area = %{
+      identity: make_ref(),
+      shape: {:poly, points},
+      destination: {:uri, "https://example.com/concave"}
+    }
+
+    model = %{identity: make_ref(), areas: [area]}
+    viewport = %{x: 0.0, y: 0.0, width: 75.0, height: 75.0}
+    Limits.install(%{original | max_image_map_geometry_work: 5_000})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_image_map_geometry_work"
+
+    Limits.install(%{original | max_image_map_geometry_work: 50_000})
+
+    assert [region] =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    assert length(region.link_quads) > 64
+  end
+
   test "circle approximation keeps subnormal radii and the fixed sagitta precision bounded" do
     for radius <- [5.0e-324, 1.0e-320, 1.0e-200, 0.015625, 0.015626] do
       assert ImageMapValidator.circle_segments(radius) == 4

@@ -138,6 +138,25 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
     end
   end
 
+  @doc "Splits a run at a known newline byte offset, consuming source scalars once."
+  @spec split_line(map(), non_neg_integer()) :: {map(), map()}
+  def split_line(run, offset) do
+    <<part::binary-size(^offset), "\n", rest::binary>> = run.text
+    first = Map.put(run, :text, part)
+    last = Map.put(run, :text, rest)
+
+    case Map.get(run, :source_glyph_characters) do
+      characters when is_list(characters) ->
+        {before, after_newline} = Enum.split(characters, length(String.codepoints(part)))
+
+        {Map.put(first, :source_glyph_characters, before),
+         Map.put(last, :source_glyph_characters, Enum.drop(after_newline, 1))}
+
+      _ ->
+        {first, last}
+    end
+  end
+
   @doc "Retains source scalar offsets when layout trims an actual run."
   @spec trim_run(map(), String.t()) :: map()
   def trim_run(run, text) do

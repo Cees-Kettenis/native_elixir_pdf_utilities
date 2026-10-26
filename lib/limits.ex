@@ -61,6 +61,10 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_drawing_group_depth: 128,
     max_rendered_text_bytes: 10_000_000,
     max_layout_text_work: 20_000_000,
+    max_layout_line_work: 1_000_000,
+    max_grid_occupied_cells: 1_000_000,
+    max_grid_tracks: 100_000,
+    max_grid_placement_work: 2_000_000,
     max_layout_measurement_cache_bytes: 2_000_000,
     max_layout_measurement_cache_entries: 10_000,
     max_table_grid_work: 1_000_000,
@@ -226,6 +230,10 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_layout_measurement_cache_bytes
           | :max_layout_measurement_cache_entries
           | :max_table_grid_work
+          | :max_layout_line_work
+          | :max_grid_occupied_cells
+          | :max_grid_tracks
+          | :max_grid_placement_work
           | :max_table_model_work
           | :max_table_header_work
           | :max_rendered_pages

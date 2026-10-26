@@ -29,10 +29,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
               {viewport.x + x * 0.75, viewport.y + viewport.height - y * 0.75}
             end)
 
-          {area, clip_polygon(polygon, clip)}
+          {area, polygon |> clip_polygon(clip) |> edges()}
         end)
 
-      edges = Enum.flat_map(polygons, fn {_area, points} -> edges(points) end)
+      edges = Enum.flat_map(polygons, fn {_area, polygon_edges} -> polygon_edges end)
       count = length(edges)
 
       HtmlValidator.reserve_render_resource(
@@ -76,7 +76,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
             if edge_x(right_edge, middle) <= edge_x(left_edge, middle) do
               result
             else
-              owner = Enum.find(polygons, fn {_area, points} -> inside?(points, x, middle) end)
+              owner = Enum.find(polygons, fn {_area, edges} -> inside?(edges, x, middle) end)
 
               case owner do
                 {area, _} when area.destination != nil ->
@@ -161,9 +161,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
 
   defp edge_x({{ax, ay}, {bx, by}}, y), do: ax + (bx - ax) * (y - ay) / (by - ay)
 
-  defp inside?(points, x, y) do
+  defp inside?(edges, x, y) do
+    HtmlValidator.reserve_render_resource(:max_image_map_geometry_work, length(edges), :layout)
+
     rem(
-      Enum.count(edges(points), fn {{ax, ay}, {bx, by}} ->
+      Enum.count(edges, fn {{ax, ay}, {bx, by}} ->
         ay > y != by > y and x < (bx - ax) * (y - ay) / (by - ay) + ax
       end),
       2
