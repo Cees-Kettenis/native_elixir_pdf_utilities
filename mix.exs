@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
     [
       name: "native_elixir_pdf_utilities",
       files:
-        ~w(lib assets priv/fonts priv/licenses docs mix.exs README.md CONTRIBUTING.md CHANGELOG.md LICENSE),
+        ~w(lib assets priv/fonts priv/licenses priv/html_to_pdf/temporal docs mix.exs README.md CONTRIBUTING.md CHANGELOG.md LICENSE),
       licenses: ["MIT", "Bitstream-Vera", "BSD-3-Clause", "OFL-1.1"],
       links: %{"GitHub" => "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"}
     ]
