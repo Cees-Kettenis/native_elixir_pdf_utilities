@@ -430,51 +430,65 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   defp reduce_instruction_tokens(tokens, instruction_state, page_number) do
-    Enum.reduce_while(tokens, instruction_state, fn token, {:ok, operations, operands} ->
-      case token do
-        token when token in [:dict_start, :lbracket] ->
-          depth = Enum.count(operands, &(&1 in [:dictionary_start, :array_start])) + 1
-          marker = if token == :dict_start, do: :dictionary_start, else: :array_start
+    case tokens do
+      [] ->
+        instruction_state
 
-          case PdfValidator.validate_value_depth(depth, operation: :extract, module: __MODULE__) do
-            :ok -> {:cont, {:ok, operations, [marker | operands]}}
-            {:error, _} = error -> {:halt, error}
+      [token | remaining] ->
+        {:ok, operations, operands} = instruction_state
+
+        next_state =
+          case token do
+            token when token in [:dict_start, :lbracket] ->
+              depth = Enum.count(operands, &(&1 in [:dictionary_start, :array_start])) + 1
+              marker = if token == :dict_start, do: :dictionary_start, else: :array_start
+
+              case PdfValidator.validate_value_depth(depth,
+                     operation: :extract,
+                     module: __MODULE__
+                   ) do
+                :ok -> {:ok, operations, [marker | operands]}
+                {:error, _} = error -> error
+              end
+
+            :dict_end ->
+              case close_dictionary(operands, page_number) do
+                {:ok, operands} -> {:ok, operations, operands}
+                :error -> content_error("content dictionary is malformed", page_number)
+                {:error, _} = error -> error
+              end
+
+            :rbracket ->
+              case close_array(operands) do
+                {:ok, operands} -> {:ok, operations, operands}
+                :error -> content_error("content array is unbalanced", page_number)
+              end
+
+            {:op, operator} ->
+              if :dictionary_start in operands do
+                content_error(
+                  "content dictionary contains an operator or is unbalanced",
+                  page_number
+                )
+              else
+                case prepare_instruction(operator, Enum.reverse(operands), page_number) do
+                  {:ok, operation} -> {:ok, [operation | operations], []}
+                  {:error, _} = instruction_error -> instruction_error
+                end
+              end
+
+            token ->
+              {:ok, operations, [token | operands]}
           end
 
-        :dict_end ->
-          case close_dictionary(operands, page_number) do
-            {:ok, operands} -> {:cont, {:ok, operations, operands}}
-            :error -> {:halt, content_error("content dictionary is malformed", page_number)}
-            {:error, _} = error -> {:halt, error}
-          end
+        case next_state do
+          {:ok, _operations, _operands} ->
+            reduce_instruction_tokens(remaining, next_state, page_number)
 
-        :rbracket ->
-          case close_array(operands) do
-            {:ok, operands} -> {:cont, {:ok, operations, operands}}
-            :error -> {:halt, content_error("content array is unbalanced", page_number)}
-          end
-
-        {:op, operator} ->
-          if :dictionary_start in operands do
-            {:halt,
-             content_error(
-               "content dictionary contains an operator or is unbalanced",
-               page_number
-             )}
-          else
-            case prepare_instruction(operator, Enum.reverse(operands), page_number) do
-              {:ok, operation} ->
-                {:cont, {:ok, [operation | operations], []}}
-
-              {:error, _} = instruction_error ->
-                {:halt, instruction_error}
-            end
-          end
-
-        token ->
-          {:cont, {:ok, operations, [token | operands]}}
-      end
-    end)
+          {:error, _} = error ->
+            error
+        end
+    end
   end
 
   @doc """

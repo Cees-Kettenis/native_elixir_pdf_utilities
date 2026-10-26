@@ -5,8 +5,6 @@ alias NativeElixirPdfUtilities.Text
 Code.require_file("../test/support/png_fixture.ex", __DIR__)
 alias NativeElixirPdfUtilities.TestSupport.PngFixture
 
-maximum_reduction_regression_percent = 10
-maximum_time_regression_percent = 10
 runtime_version = System.version() |> String.split(".") |> Enum.take(2) |> Enum.join(".")
 report_path = System.get_env("PERFORMANCE_REPORT")
 baseline_path = System.get_env("PERFORMANCE_BASELINE_REPORT")
@@ -117,8 +115,7 @@ measure = fn name, operation, limits ->
     |> Keyword.fetch!(:baseline_reductions)
     |> Map.fetch!(runtime_version)
 
-  maximum_reductions =
-    div(baseline_reductions * (100 + maximum_reduction_regression_percent), 100)
+  maximum_reductions = baseline_reductions
 
   latest_value = samples |> List.last() |> Map.fetch!(:value)
   result_bytes = if is_binary(latest_value), do: byte_size(latest_value), else: nil
@@ -140,7 +137,7 @@ measure = fn name, operation, limits ->
     #{name} exceeded the reductions limit
     measured: #{median_reductions}
     baseline: #{baseline_reductions}
-    allowed: #{maximum_reductions} (+#{maximum_reduction_regression_percent}%)
+    allowed: #{maximum_reductions} (no regression allowance)
     optimize the regression before treating the pull request as complete
     """)
   end
@@ -220,7 +217,7 @@ Enum.each(fixtures, fn {file, opts, baseline_reductions, baseline_bytes} ->
     "fixture #{file}",
     fn -> HtmlToPdf.render(html, opts) end,
     baseline_reductions: baseline_reductions,
-    maximum_microseconds: 3_000_000,
+    maximum_microseconds: 1_000_000,
     maximum_result_bytes: div(baseline_bytes * 105, 100)
   )
 end)
@@ -255,7 +252,7 @@ synthetic_pdf =
     "100-row HTML render",
     fn -> HtmlToPdf.render(synthetic_html) end,
     baseline_reductions: %{"1.19" => 13_270_000, "1.20" => 11_840_000},
-    maximum_microseconds: 2_000_000,
+    maximum_microseconds: 1_000_000,
     maximum_result_bytes: div(166_852 * 105, 100)
   )
 
@@ -263,7 +260,7 @@ measure.(
   "100-row uncompressed full-font render",
   fn -> HtmlToPdf.render(synthetic_html, subset_fonts: false, compress_streams: false) end,
   baseline_reductions: %{"1.19" => 12_710_000, "1.20" => 11_270_000},
-  maximum_microseconds: 3_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(1_632_177 * 105, 100)
 )
 
@@ -271,14 +268,14 @@ measure.(
   "100-row PDF text extraction",
   fn -> Text.extract(synthetic_pdf, layout: false) end,
   baseline_reductions: %{"1.19" => 5_090_000, "1.20" => 4_600_000},
-  maximum_microseconds: 2_000_000
+  maximum_microseconds: 1_000_000
 )
 
 measure.(
   "100-row PDF visual text extraction",
   fn -> Text.extract(synthetic_pdf, layout: true) end,
   baseline_reductions: %{"1.19" => 5_420_000, "1.20" => 4_920_000},
-  maximum_microseconds: 2_000_000
+  maximum_microseconds: 1_000_000
 )
 
 repeated_text =
@@ -290,7 +287,7 @@ measure.(
   "repeated text layout",
   fn -> HtmlToPdf.render("<html><body>#{repeated_text}</body></html>") end,
   baseline_reductions: %{"1.19" => 3_290_000, "1.20" => 3_250_000},
-  maximum_microseconds: 2_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(82_140 * 105, 100)
 )
 
@@ -304,7 +301,7 @@ measure.(
   "long paragraph layout",
   fn -> HtmlToPdf.render("<html><body><p>#{long_paragraph}</p></body></html>") end,
   baseline_reductions: %{"1.19" => 6_350_000, "1.20" => 6_250_000},
-  maximum_microseconds: 2_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(85_076 * 105, 100)
 )
 
@@ -321,7 +318,7 @@ measure.(
     HtmlToPdf.render("<html><body>#{images}</body></html>", assets: %{"sample" => {:bytes, png}})
   end,
   baseline_reductions: %{"1.19" => 1_860_000, "1.20" => 1_860_000},
-  maximum_microseconds: 3_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(37_811 * 105, 100)
 )
 
@@ -348,7 +345,7 @@ measure.(
     )
   end,
   baseline_reductions: %{"1.19" => 26_180_000, "1.20" => 26_150_000},
-  maximum_microseconds: 3_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(634_859 * 105, 100)
 )
 
@@ -361,7 +358,7 @@ measure.(
   "800-word inline paragraph",
   fn -> HtmlToPdf.render(adversarial_paragraph) end,
   baseline_reductions: %{"1.19" => 4_140_000, "1.20" => 4_090_000},
-  maximum_microseconds: 2_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(84_761 * 105, 100)
 )
 
@@ -374,7 +371,7 @@ measure.(
   "160 table headings",
   fn -> HtmlToPdf.render(many_table_headers) end,
   baseline_reductions: %{"1.19" => 5_890_000, "1.20" => 5_700_000},
-  maximum_microseconds: 2_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(155_020 * 105, 100)
 )
 
@@ -395,7 +392,7 @@ measure.(
   "4,000 boxes on one page",
   fn -> PdfWriter.render([%{size: {500, 500}, boxes: many_boxes}]) end,
   baseline_reductions: %{"1.19" => 1_970_000, "1.20" => 1_370_000},
-  maximum_microseconds: 2_000_000,
+  maximum_microseconds: 1_000_000,
   maximum_result_bytes: div(21_226 * 105, 100)
 )
 
@@ -421,6 +418,7 @@ if report_path do
   file_hashes = fn files ->
     Map.new(files, fn path ->
       relative = Path.relative_to(path, Path.expand("..", __DIR__))
+
       {Map.get(logical_input_names, relative, relative),
        :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)}
     end)
@@ -492,7 +490,7 @@ if report_path do
     for workload <- report.workloads do
       baseline_workload = Map.fetch!(baseline_workloads, workload.name)
       baseline_ms = Map.fetch!(baseline_workload, "median_ms")
-      maximum_ms = baseline_ms * (100 + maximum_time_regression_percent) / 100
+      maximum_ms = baseline_ms
       change_percent = (workload.median_ms / baseline_ms - 1) * 100
 
       IO.inspect(
@@ -508,12 +506,11 @@ if report_path do
 
       if workload.median_ms > maximum_ms do
         record_failure.(
-          "#{workload.name} exceeded the cumulative wall-clock allowance: " <>
-            "#{workload.median_ms} ms versus fixed #{baseline_ms} ms, allowed +10%"
+          "#{workload.name} exceeded the fixed wall-clock baseline: " <>
+            "#{workload.median_ms} ms versus fixed #{baseline_ms} ms, no regression allowance"
         )
       end
     end
-
   end
 end
 
@@ -522,7 +519,7 @@ case Enum.reverse(Process.get(:performance_failures)) do
     IO.puts("PERFORMANCE_REGRESSION status=PASS")
 
     if baseline_path do
-      IO.puts("PERFORMANCE_MILESTONE status=PASS allowance_percent=10 baseline=#{baseline_path}")
+      IO.puts("PERFORMANCE_MILESTONE status=PASS allowance_percent=0 baseline=#{baseline_path}")
     end
 
   failures ->

@@ -228,7 +228,9 @@ regenerating a sheet.
 
 ## Performance measurements
 
-The harness guards existing workloads against reduction and PDF-size growth.
+The harness requires existing workloads to stay at or below their recorded
+v1.0.0 reductions baselines, with no regression allowance. Each workload also
+has a one-second elapsed-time ceiling and an output-size guard.
 Change a baseline only for an intentional workload change or a justified tradeoff
 with measurements and a reason. Adding a feature does not reset an existing
 workload's baseline.
@@ -250,8 +252,8 @@ PERFORMANCE_REPORT=.quality/performance/candidate.json mise exec -- mix test.per
 The baseline can be a single report or a bundle. A bundle selects
 `elixir-<major.minor>.json` by default; `PERFORMANCE_BASELINE_KEY` selects another
 capture. Runtime, scheduler count, workload names, fixture/font hashes and the
-dependency lock must match. The cumulative timing allowance is 10% per existing
-workload against the fixed baseline, covering the whole work rather than each
+dependency lock must match. Each existing workload must stay at or below its
+fixed elapsed-time baseline, covering the whole work rather than each
 individual change. Preserve that original baseline when recapturing under
 controlled conditions.
 
@@ -263,6 +265,6 @@ can miss short peaks; use an OS profiler when native memory matters.
 Other builds can distort elapsed time. Retain all attempts when retrying under
 load, compare complete workload sets and keep baseline inputs and limits fixed.
 Do not assemble a passing result from selected workloads across different runs.
-Investigate reproducible slowdowns above the allowance or obtain an explicit
+Investigate reproducible slowdowns above the baseline or obtain an explicit
 exception. Store reports and logs in ignored `.quality/`, and investigations in
 ignored `tmp/`. Publish the reusable measurement procedure here.
