@@ -20,6 +20,11 @@ Beyond rendering, it merges, transforms, splits, and stamps PDFs, fills forms,
 embeds attachments, extracts embedded text, and reads and updates metadata and
 bookmarks.
 
+Document operations have configurable limits for untrusted inputs, including a
+five-minute deadline and a 1 GiB observed BEAM worker-memory allowance by default.
+See [resource limits](docs/resource-limits.md) for configuration and the boundaries
+of memory accounting and native cancellation. Applications control concurrency.
+
 ## Package and docs
 
 - Package: https://hex.pm/packages/native_elixir_pdf_utilities

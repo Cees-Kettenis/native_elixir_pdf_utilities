@@ -23,7 +23,9 @@ defmodule NativeElixirPdfUtilities.Info do
   """
   @type page_size :: InfoValidator.page_size()
 
-  @type error_reason :: Reader.error_reason()
+  @type error_reason ::
+          :operation_worker_failed
+          | Reader.error_reason()
 
   @doc """
   Returns common fields from the active PDF information dictionary.
@@ -35,10 +37,12 @@ defmodule NativeElixirPdfUtilities.Info do
   @spec get(binary()) ::
           {:ok, info()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def get(pdf) do
-    with {:ok, context} <- read_context(pdf, :get_info),
-         {:ok, info} <- InfoValidator.prepare_info(context) |> own_error(:get_info) do
-      {:ok, info}
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :get_info, fn ->
+      with {:ok, context} <- read_context(pdf, :get_info),
+           {:ok, info} <- InfoValidator.prepare_info(context) |> own_error(:get_info) do
+        {:ok, info}
+      end
+    end)
   end
 
   @doc """
@@ -52,14 +56,16 @@ defmodule NativeElixirPdfUtilities.Info do
   @spec put(binary(), map() | keyword()) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def put(pdf, fields) do
-    with {:ok, patch} <- InfoValidator.prepare_patch(fields) |> own_error(:put_info),
-         {:ok, context} <- read_context(pdf, :put_info),
-         {:ok, prepared} <- InfoValidator.prepare_write(context, patch) |> own_error(:put_info) do
-      case map_size(patch) do
-        0 -> {:ok, pdf}
-        _ -> InfoWriter.write(context, prepared.dictionary) |> own_error(:put_info)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :put_info, fn ->
+      with {:ok, patch} <- InfoValidator.prepare_patch(fields) |> own_error(:put_info),
+           {:ok, context} <- read_context(pdf, :put_info),
+           {:ok, prepared} <- InfoValidator.prepare_write(context, patch) |> own_error(:put_info) do
+        case map_size(patch) do
+          0 -> {:ok, pdf}
+          _ -> InfoWriter.write(context, prepared.dictionary) |> own_error(:put_info)
+        end
       end
-    end
+    end)
   end
 
   @doc """
@@ -68,9 +74,11 @@ defmodule NativeElixirPdfUtilities.Info do
   @spec page_count(binary()) ::
           {:ok, non_neg_integer()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def page_count(pdf) do
-    with {:ok, context} <- read_context(pdf, :page_count) do
-      {:ok, length(context.pages)}
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :page_count, fn ->
+      with {:ok, context} <- read_context(pdf, :page_count) do
+        {:ok, length(context.pages)}
+      end
+    end)
   end
 
   @doc """
@@ -83,10 +91,12 @@ defmodule NativeElixirPdfUtilities.Info do
   @spec page_sizes(binary()) ::
           {:ok, [page_size()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def page_sizes(pdf) do
-    with {:ok, context} <- read_context(pdf, :page_sizes),
-         {:ok, sizes} <- InfoValidator.prepare_page_sizes(context) |> own_error(:page_sizes) do
-      {:ok, sizes}
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :page_sizes, fn ->
+      with {:ok, context} <- read_context(pdf, :page_sizes),
+           {:ok, sizes} <- InfoValidator.prepare_page_sizes(context) |> own_error(:page_sizes) do
+        {:ok, sizes}
+      end
+    end)
   end
 
   @doc """
@@ -98,10 +108,12 @@ defmodule NativeElixirPdfUtilities.Info do
   @spec encrypted?(binary()) ::
           {:ok, boolean()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def encrypted?(pdf) do
-    case Reader.probe(pdf) |> own_error(:encryption_status) do
-      {:ok, probe} -> {:ok, probe.encrypted?}
-      {:error, _} = probe_error -> probe_error
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :encryption_status, fn ->
+      case Reader.probe(pdf) |> own_error(:encryption_status) do
+        {:ok, probe} -> {:ok, probe.encrypted?}
+        {:error, _} = probe_error -> probe_error
+      end
+    end)
   end
 
   defp read_context(pdf, operation) do

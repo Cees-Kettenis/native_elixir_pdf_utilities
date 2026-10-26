@@ -94,12 +94,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsTest do
   end
 
   test "skipped image removes replaced pixels while retaining authored dimension hints and authority" do
+    callback_owner = self()
+
     bytes =
       File.read!(Path.expand("test/fixtures/html_to_pdf/browser_parity/assets/iframe-bars.png"))
 
     opts = [
       asset_resolver: fn request ->
-        send(self(), {:asset, request.reference})
+        send(callback_owner, {:asset, request.reference})
         {:ok, bytes}
       end
     ]

@@ -59,6 +59,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
   end
 
   test "runtime source observations retain exact original owners and resist resource callback reentry" do
+    callback_owner = self()
+
     html =
       "<body><?start name='A'><math style='--size:2rem'><mspace style='width:var(--size);height:2px'></mspace></math><?end?><template for='A'><img src='proof.png'></template></body>"
 
@@ -114,7 +116,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
                  frame.declaration_contexts
 
         assert :atomics.get(frame.css_budget, 1) == used
-        send(self(), :verified_original_runtime_context)
+        send(callback_owner, :verified_original_runtime_context)
       end
 
       {:ok, png}
@@ -125,6 +127,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
   end
 
   test "resource callback cannot reopen the exact enclosing original source authority" do
+    callback_owner = self()
+
     html =
       "<body><?start name='A'><p style='font-size:20pt;width:50%'>Original</p><?end?><template for='A'><img src='proof.png'></template></body>"
 
@@ -164,7 +168,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
         assert Process.get({TemplateRendererContextValidator, :preparation}) == preparation
         assert Process.get({TemplateExecutionValidator, :execution}) == frame
         assert :atomics.get(frame.css_budget, 1) == prior_budget
-        send(self(), :denied_enclosing_original_source)
+        send(callback_owner, :denied_enclosing_original_source)
       end
 
       {:ok, png}

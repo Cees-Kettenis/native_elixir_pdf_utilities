@@ -122,6 +122,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveMathTest do
   end
 
   test "source selection and print predicates use the same math without reading alternatives" do
+    callback_owner = self()
+
     png =
       NativeElixirPdfUtilities.TestSupport.PngFixture.build(64, 32, 2, 8, 0, fn _, _ ->
         [0, 128, 64]
@@ -140,7 +142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveMathTest do
                HtmlToPdf.render(html,
                  asset_resolver: fn request ->
                    assert request.reference == "chosen"
-                   send(self(), {:read, request.reference})
+                   send(callback_owner, {:read, request.reference})
                    {:ok, png}
                  end
                )

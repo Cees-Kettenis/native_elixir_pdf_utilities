@@ -50,7 +50,8 @@ defmodule NativeElixirPdfUtilities.Stamp do
           | {:fit, :exact | :contain | :cover | :stretch}
           | {:opacity, number()}
   @type error_reason ::
-          :encrypted_pdf
+          :operation_worker_failed
+          | :encrypted_pdf
           | :invalid_options
           | :invalid_page_selection
           | :invalid_pdf_input
@@ -69,7 +70,9 @@ defmodule NativeElixirPdfUtilities.Stamp do
   @spec text(binary(), String.t(), [text_option()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def text(pdf, text, options \\ []) do
-    generated_text_stamp(pdf, text, options, :text, :stamp_text)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :stamp_text, fn ->
+      generated_text_stamp(pdf, text, options, :text, :stamp_text)
+    end)
   end
 
   @doc """
@@ -81,7 +84,9 @@ defmodule NativeElixirPdfUtilities.Stamp do
   @spec watermark(binary(), String.t(), [text_option()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def watermark(pdf, text, options \\ []) do
-    generated_text_stamp(pdf, text, options, :watermark, :watermark)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :watermark, fn ->
+      generated_text_stamp(pdf, text, options, :watermark, :watermark)
+    end)
   end
 
   @doc """
@@ -95,14 +100,16 @@ defmodule NativeElixirPdfUtilities.Stamp do
   @spec overlay(binary(), binary(), [overlay_option()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def overlay(pdf, overlay_pdf, options \\ []) do
-    with {:ok, target_context} <- Reader.read_validated(pdf),
-         {:ok, overlay_context} <- Reader.read_validated(overlay_pdf),
-         {:ok, plan} <- StampValidator.prepare_overlay(target_context, overlay_context, options),
-         {:ok, stamped} <- StampWriter.write(plan) do
-      {:ok, stamped}
-    else
-      {:error, error} -> owned_error(error, :overlay_pdf)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :overlay_pdf, fn ->
+      with {:ok, target_context} <- Reader.read_validated(pdf),
+           {:ok, overlay_context} <- Reader.read_validated(overlay_pdf),
+           {:ok, plan} <- StampValidator.prepare_overlay(target_context, overlay_context, options),
+           {:ok, stamped} <- StampWriter.write(plan) do
+        {:ok, stamped}
+      else
+        {:error, error} -> owned_error(error, :overlay_pdf)
+      end
+    end)
   end
 
   @doc """
@@ -118,13 +125,15 @@ defmodule NativeElixirPdfUtilities.Stamp do
         ]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def page_numbers(pdf, options \\ []) do
-    with {:ok, target_context} <- Reader.read_validated(pdf),
-         {:ok, text_plan} <- StampValidator.prepare_page_numbers(target_context, options),
-         {:ok, stamped} <- render_generated_stamp(target_context, text_plan) do
-      {:ok, stamped}
-    else
-      {:error, error} -> owned_error(error, :page_numbers)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :page_numbers, fn ->
+      with {:ok, target_context} <- Reader.read_validated(pdf),
+           {:ok, text_plan} <- StampValidator.prepare_page_numbers(target_context, options),
+           {:ok, stamped} <- render_generated_stamp(target_context, text_plan) do
+        {:ok, stamped}
+      else
+        {:error, error} -> owned_error(error, :page_numbers)
+      end
+    end)
   end
 
   defp generated_text_stamp(pdf, text, options, kind, operation) do

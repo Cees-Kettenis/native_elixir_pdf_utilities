@@ -14,7 +14,10 @@ defmodule NativeElixirPdfUtilities.Merge do
   alias NativeElixirPdfUtilities.Validators.MergeValidator
 
   @type pdf_bin :: binary()
-  @type error_reason :: :empty_pdf_list | Reader.error_reason()
+  @type error_reason ::
+          :operation_worker_failed
+          | :empty_pdf_list
+          | Reader.error_reason()
 
   @doc """
   Merges a non-empty list of PDF binaries into one rebuilt PDF.
@@ -26,19 +29,21 @@ defmodule NativeElixirPdfUtilities.Merge do
   @spec merge([pdf_bin()]) ::
           {:ok, pdf_bin()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def merge(inputs) do
-    with {:ok, inputs} <- MergeValidator.validate_inputs(inputs),
-         {:ok, prepared} <- prepare_inputs(inputs),
-         {:ok, remapped} <- MergeValidator.prepare_remapping(prepared, 3),
-         {:ok, output} <- AssemblyWriter.write(remapped) do
-      {:ok, output}
-    else
-      {:error, {reason, diagnostic}} ->
-        {:error,
-         {reason,
-          diagnostic
-          |> Map.put(:operation, :merge)
-          |> Map.put(:module, __MODULE__)}}
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :merge, fn ->
+      with {:ok, inputs} <- MergeValidator.validate_inputs(inputs),
+           {:ok, prepared} <- prepare_inputs(inputs),
+           {:ok, remapped} <- MergeValidator.prepare_remapping(prepared, 3),
+           {:ok, output} <- AssemblyWriter.write(remapped) do
+        {:ok, output}
+      else
+        {:error, {reason, diagnostic}} ->
+          {:error,
+           {reason,
+            diagnostic
+            |> Map.put(:operation, :merge)
+            |> Map.put(:module, __MODULE__)}}
+      end
+    end)
   end
 
   defp prepare_inputs(inputs) do

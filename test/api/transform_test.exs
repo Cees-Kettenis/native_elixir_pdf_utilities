@@ -79,9 +79,15 @@ defmodule NativeElixirPdfUtilities.TransformTest do
             ]
 
         source = pdf(objects)
-        {:reductions, before_work} = Process.info(self(), :reductions)
-        assert {:ok, outputs} = Split.by_page(source)
-        {:reductions, after_work} = Process.info(self(), :reductions)
+
+        {outputs, work} =
+          NativeElixirPdfUtilities.Operation.run(__MODULE__, :measure_split, fn ->
+            {:reductions, before_work} = Process.info(self(), :reductions)
+            assert {:ok, outputs} = Split.by_page(source)
+            {:reductions, after_work} = Process.info(self(), :reductions)
+            {outputs, after_work - before_work}
+          end)
+
         assert length(outputs) == count
 
         for output <- [hd(outputs), List.last(outputs)] do
@@ -89,7 +95,7 @@ defmodule NativeElixirPdfUtilities.TransformTest do
           assert {:ok, %{pages: [_]}} = Reader.read(output)
         end
 
-        after_work - before_work
+        work
       end
 
     [small, large] = measurements

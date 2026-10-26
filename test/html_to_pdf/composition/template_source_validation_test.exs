@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.TemplateSourceValidationTest do
   }
 
   test "candidate resource callbacks reject a caller copy with mismatched stored identities" do
+    callback_owner = self()
     alias NativeElixirPdfUtilities.Validators.TemplateExecutionValidator
 
     png =
@@ -42,7 +43,7 @@ defmodule NativeElixirPdfUtilities.TemplateSourceValidationTest do
         assert diagnostic.operation == :template_candidate_projection
         assert diagnostic.source == "source_prefix"
         assert diagnostic.message =~ "canonical stored node identities"
-        send(self(), :actual_candidate_identity_checked)
+        send(callback_owner, :actual_candidate_identity_checked)
       end
 
       {:ok, png}

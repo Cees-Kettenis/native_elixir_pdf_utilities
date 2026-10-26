@@ -201,13 +201,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
   end
 
   test "image resolution remains caller authorized and interactive submit actions fail explicitly" do
+    callback_owner = self()
     bytes = File.read!(@image)
 
     assert {:ok, _} =
              HtmlToPdf.render("<input type=image src=tile>",
                forms: :static,
                asset_resolver: fn request ->
-                 send(self(), {:asset, request})
+                 send(callback_owner, {:asset, request})
                  {:ok, bytes}
                end
              )

@@ -9,12 +9,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceResourceContextTest d
   @opts [system_font_discovery: false, compress_streams: false, forms: :static]
 
   test "discarded image-input reference under a hidden ancestor cannot evade original resource validation" do
+    callback_owner = self()
+
     html =
       "<body><?start name='A'><div hidden><input type='image' src='missing-original.png'></div><?end?><template for='A'><p>Good</p></template></body>"
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn request ->
-        send(self(), {:original_asset, request.reference})
+        send(callback_owner, {:original_asset, request.reference})
         :not_found
       end)
 

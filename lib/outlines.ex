@@ -31,7 +31,8 @@ defmodule NativeElixirPdfUtilities.Outlines do
           | {String.t(), pos_integer() | nil, [item_input()]}
 
   @type error_reason ::
-          :encrypted_pdf
+          :operation_worker_failed
+          | :encrypted_pdf
           | :invalid_outlines
           | :invalid_pdf_input
           | :no_outline_source
@@ -49,12 +50,14 @@ defmodule NativeElixirPdfUtilities.Outlines do
   @spec get(binary()) ::
           {:ok, [item()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def get(pdf) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, items} <- OutlineValidator.extract(context) do
-      {:ok, items}
-    else
-      {:error, error} -> owned_error(error, :get_outlines)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :get_outlines, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, items} <- OutlineValidator.extract(context) do
+        {:ok, items}
+      else
+        {:error, error} -> owned_error(error, :get_outlines)
+      end
+    end)
   end
 
   @doc """
@@ -69,14 +72,16 @@ defmodule NativeElixirPdfUtilities.Outlines do
   @spec put(binary(), [item_input()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def put(pdf, items) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, items} <- OutlineValidator.normalize(items, length(context.pages)),
-         :ok <- OutlineValidator.validate_incremental_capacity(context, items),
-         {:ok, updated} <- OutlineWriter.write(context, items) do
-      {:ok, updated}
-    else
-      {:error, error} -> owned_error(error, :put_outlines)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :put_outlines, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, items} <- OutlineValidator.normalize(items, length(context.pages)),
+           :ok <- OutlineValidator.validate_incremental_capacity(context, items),
+           {:ok, updated} <- OutlineWriter.write(context, items) do
+        {:ok, updated}
+      else
+        {:error, error} -> owned_error(error, :put_outlines)
+      end
+    end)
   end
 
   @doc """
@@ -89,19 +94,21 @@ defmodule NativeElixirPdfUtilities.Outlines do
   @spec detect(binary()) ::
           {:ok, [item()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def detect(pdf) do
-    case get(pdf) do
-      {:ok, []} ->
-        case OutlineDetector.detect(pdf) do
-          {:ok, items} -> {:ok, items}
-          {:error, error} -> owned_error(error, :detect_outlines)
-        end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :detect_outlines, fn ->
+      case get(pdf) do
+        {:ok, []} ->
+          case OutlineDetector.detect(pdf) do
+            {:ok, items} -> {:ok, items}
+            {:error, error} -> owned_error(error, :detect_outlines)
+          end
 
-      {:ok, items} ->
-        {:ok, items}
+        {:ok, items} ->
+          {:ok, items}
 
-      {:error, error} ->
-        owned_error(error, :detect_outlines)
-    end
+        {:error, error} ->
+          owned_error(error, :detect_outlines)
+      end
+    end)
   end
 
   @doc """
@@ -112,12 +119,14 @@ defmodule NativeElixirPdfUtilities.Outlines do
   @spec automatic(binary()) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def automatic(pdf) do
-    with {:ok, items} <- detect(pdf),
-         {:ok, updated} <- put(pdf, items) do
-      {:ok, updated}
-    else
-      {:error, error} -> owned_error(error, :automatic_outlines)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :automatic_outlines, fn ->
+      with {:ok, items} <- detect(pdf),
+           {:ok, updated} <- put(pdf, items) do
+        {:ok, updated}
+      else
+        {:error, error} -> owned_error(error, :automatic_outlines)
+      end
+    end)
   end
 
   defp owned_error({reason, diagnostic}, operation) do

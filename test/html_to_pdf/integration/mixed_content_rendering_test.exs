@@ -51,6 +51,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MixedContentRenderingTest do
   end
 
   test "source contexts keep links and SVG policy while MathML font work remains explicit" do
+    callback_owner = self()
+
     html = """
     <a id=target href='#target'>Link</a><img src='missing-source-image.png'>
     <iframe src='missing-source-frame.html'></iframe>
@@ -67,7 +69,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MixedContentRenderingTest do
                [],
                NativeElixirPdfUtilities.Validators.HtmlValidator.new_css_budget(),
                fn node, pseudo, context ->
-                 send(self(), {token, Map.get(node, :tag), pseudo, context})
+                 send(callback_owner, {token, Map.get(node, :tag), pseudo, context})
                  :ok
                end
              )

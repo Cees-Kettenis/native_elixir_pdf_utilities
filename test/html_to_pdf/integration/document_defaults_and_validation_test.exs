@@ -52,6 +52,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
   end
 
   test "empty font faces and unrepresentable body margin hints retain canonical defaults" do
+    callback_owner = self()
+
     for html <- [
           "<body><font>Actual</font></body>",
           "<body marginwidth=10000000000><font face=''>Actual</font></body>"
@@ -59,7 +61,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
       assert {:ok, dom} = HtmlParser.parse_detailed(html)
       assert {:ok, tree} = Style.compute_detailed(dom)
       [body] = tree.children
-      send(self(), {:default_margin, body.style.margin})
+      send(callback_owner, {:default_margin, body.style.margin})
       assert {:ok, pdf} = HtmlToPdf.render(html)
       assert {:ok, text} = Text.extract(pdf)
       assert text =~ "Actual"

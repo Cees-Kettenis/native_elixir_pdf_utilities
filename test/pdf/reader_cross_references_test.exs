@@ -832,12 +832,14 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
   end
 
   defp measured_reductions(fun) do
-    :erlang.garbage_collect()
-    {:reductions, reductions_before} = Process.info(self(), :reductions)
-    result = fun.()
-    {:reductions, reductions_after} = Process.info(self(), :reductions)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :measure_reader, fn ->
+      :erlang.garbage_collect()
+      {:reductions, reductions_before} = Process.info(self(), :reductions)
+      result = fun.()
+      {:reductions, reductions_after} = Process.info(self(), :reductions)
 
-    {result, reductions_after - reductions_before}
+      {result, reductions_after - reductions_before}
+    end)
   end
 
   defp assert_error({:error, {reason, diagnostic}}, reason, stage) do

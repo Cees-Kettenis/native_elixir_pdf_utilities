@@ -13,14 +13,16 @@ defmodule NativeElixirPdfUtilities.Attachments do
   @doc "Lists embedded filenames, descriptions, MIME types and declared byte sizes without extracting files."
   @spec list(binary()) :: {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def list(pdf) do
-    result =
-      with {:ok, context} <- Reader.read_validated(pdf),
-           {:ok, existing} <- AttachmentValidator.inspect_document(context) do
-        {:ok,
-         Enum.map(existing.files, &Map.take(&1, [:filename, :description, :mime_type, :size]))}
-      end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :list, fn ->
+      result =
+        with {:ok, context} <- Reader.read_validated(pdf),
+             {:ok, existing} <- AttachmentValidator.inspect_document(context) do
+          {:ok,
+           Enum.map(existing.files, &Map.take(&1, [:filename, :description, :mime_type, :size]))}
+        end
 
-    own_error(result, :list)
+      own_error(result, :list)
+    end)
   end
 
   @doc """
@@ -34,18 +36,20 @@ defmodule NativeElixirPdfUtilities.Attachments do
   @spec embed(binary(), [map()], keyword()) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def embed(pdf, attachments, opts \\ []) do
-    result =
-      with {:ok, attachments} <- AttachmentValidator.prepare(attachments, opts),
-           {:ok, context} <- Reader.read_validated(pdf),
-           {:ok, existing} <- AttachmentValidator.inspect_document(context),
-           :ok <- AttachmentValidator.prepare_write(context, existing, attachments) do
-        case attachments do
-          [] -> {:ok, pdf}
-          _ -> AttachmentWriter.write(context, existing, attachments)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :embed, fn ->
+      result =
+        with {:ok, attachments} <- AttachmentValidator.prepare(attachments, opts),
+             {:ok, context} <- Reader.read_validated(pdf),
+             {:ok, existing} <- AttachmentValidator.inspect_document(context),
+             :ok <- AttachmentValidator.prepare_write(context, existing, attachments) do
+          case attachments do
+            [] -> {:ok, pdf}
+            _ -> AttachmentWriter.write(context, existing, attachments)
+          end
         end
-      end
 
-    own_error(result, :embed)
+      own_error(result, :embed)
+    end)
   end
 
   defp own_error(result, operation) do

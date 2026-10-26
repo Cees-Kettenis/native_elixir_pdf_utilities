@@ -197,6 +197,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
   end
 
   test "selected original style and resource failures cannot be replaced by symbolic policy" do
+    callback_owner = self()
+
     for declaration <- [
           "font-style:oblique",
           "border:var(--missing)",
@@ -215,7 +217,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
       "<style>.selected{list-style:url(required.png)}</style><body><?start name='A'><ul class='selected'><li>Old</li></ul><?end?><template for='A'><p>Good</p></template></body>"
 
     resolver = fn reference ->
-      send(self(), {:required_original_asset, reference})
+      send(callback_owner, {:required_original_asset, reference})
       {:error, :missing}
     end
 

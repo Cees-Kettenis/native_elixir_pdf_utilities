@@ -18,6 +18,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
   end
 
   test "unmatched and inactive source types permit replacement without fetching dormant assets" do
+    callback_owner = self()
+
     css =
       ".absent{width:2em;height:25%;padding:calc(1rem + 2pt);gap:2rem 25%;border-width:medium 2em;border-spacing:1em;flex-basis:2em;--x:var(--outer,2rem);width:var(--x);font-family:Missing;background-image:url(missing.png)}@media screen{p{font-size:125%;background-image:url(screen.png)}}"
 
@@ -25,7 +27,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
       "<style>#{css}</style><body><?marker name='A'><template for='A'><style>.absent{width:var(--scope,2rem);background-image:url(inert.png)}</style><p>Good</p></template></body>"
 
     resolver = fn reference ->
-      send(self(), {:unexpected_dormant_asset, reference})
+      send(callback_owner, {:unexpected_dormant_asset, reference})
       {:error, :missing}
     end
 
@@ -61,6 +63,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
   end
 
   test "composed clone cascade replaces provisional unapplied source selection" do
+    callback_owner = self()
+
     html =
       "<style>button span{width:2em}</style><body><select style='appearance:base-select'><button><selectedcontent></selectedcontent></button><option selected><span></span></option></select><?marker name='A'><template for='A'><img src='proof.png'></template></body>"
 
@@ -79,7 +83,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
                )
 
         refute Map.has_key?(record, :selection)
-        send(self(), :verified_composed_source_selection)
+        send(callback_owner, :verified_composed_source_selection)
       end
 
       {:ok, png}

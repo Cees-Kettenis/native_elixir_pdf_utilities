@@ -115,7 +115,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:compress_streams, boolean()}
           | {:subset_fonts, boolean()}
   @type error_reason ::
-          :invalid_document
+          :operation_worker_failed
+          | :invalid_document
           | :invalid_css
           | :invalid_encoding
           | :invalid_form
@@ -141,6 +142,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
   @doc """
   Renders an HTML document to a PDF binary.
+
+  Rendering and asset resolver callbacks execute in a disposable BEAM worker
+  under the application's operation time and memory limits. Capture a caller
+  PID explicitly when callbacks need to send it messages. See the resource
+  limits guide for native-rendering and memory-enforcement boundaries.
 
   Returns `{:ok, pdf_binary}` when rendering succeeds or
   `{:error, {reason, diagnostic}}` when
@@ -228,18 +234,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @spec render(String.t(), [render_option()]) ::
           {:ok, binary()} | {:error, detailed_error_reason()}
   def render(html, opts \\ []) do
-    case HtmlValidator.with_render_budget(fn ->
-           RenderCache.with_stylesheets(fn ->
-             FontValidator.with_budget(fn -> do_render(html, opts) end)
-           end)
-         end) do
-      {:ok, pdf_binary} ->
-        {:ok, pdf_binary}
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :render, fn ->
+      case HtmlValidator.with_render_budget(fn ->
+             RenderCache.with_stylesheets(fn ->
+               FontValidator.with_budget(fn -> do_render(html, opts) end)
+             end)
+           end) do
+        {:ok, pdf_binary} ->
+          {:ok, pdf_binary}
 
-      {:error, {reason, detail}} ->
-        {:error,
-         {reason, Diagnostics.with_context(detail, operation: :render, module: __MODULE__)}}
-    end
+        {:error, {reason, detail}} ->
+          {:error,
+           {reason, Diagnostics.with_context(detail, operation: :render, module: __MODULE__)}}
+      end
+    end)
   end
 
   @doc """
@@ -251,51 +259,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @spec render_file(String.t(), String.t(), [render_option()]) ::
           :ok | {:error, detailed_error_reason()}
   def render_file(input_path, output_path, opts \\ []) do
-    case HtmlValidator.validate_paths(input_path, output_path) do
-      {:ok, %{input_path: input_path, output_path: output_path}} ->
-        case NativeElixirPdfUtilities.FileReader.read(
-               input_path,
-               NativeElixirPdfUtilities.Limits.get(:max_html_source_bytes)
-             ) do
-          {:ok, html} ->
-            case render(html, opts) do
-              {:ok, pdf_binary} ->
-                case File.write(output_path, pdf_binary) do
-                  :ok ->
-                    :ok
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :render_file, fn ->
+      case HtmlValidator.validate_paths(input_path, output_path) do
+        {:ok, %{input_path: input_path, output_path: output_path}} ->
+          case NativeElixirPdfUtilities.FileReader.read(
+                 input_path,
+                 NativeElixirPdfUtilities.Limits.get(:max_html_source_bytes)
+               ) do
+            {:ok, html} ->
+              case render(html, opts) do
+                {:ok, pdf_binary} ->
+                  case File.write(output_path, pdf_binary) do
+                    :ok ->
+                      :ok
 
-                  {:error, reason} ->
-                    file_error(reason, :write, output_path)
-                end
+                    {:error, reason} ->
+                      file_error(reason, :write, output_path)
+                  end
 
-              {:error, {reason, detail}} ->
-                {:error,
-                 {reason,
-                  Diagnostics.with_context(detail,
-                    operation: :render_file,
-                    module: __MODULE__,
-                    source: input_path
-                  )}}
-            end
+                {:error, {reason, detail}} ->
+                  {:error,
+                   {reason,
+                    Diagnostics.with_context(detail,
+                      operation: :render_file,
+                      module: __MODULE__,
+                      source: input_path
+                    )}}
+              end
 
-          {:error, {reason, diagnostic}} ->
-            {:error,
-             {reason,
-              Diagnostics.with_context(diagnostic,
-                operation: :render_file,
-                module: __MODULE__,
-                source: input_path
-              )}}
+            {:error, {reason, diagnostic}} ->
+              {:error,
+               {reason,
+                Diagnostics.with_context(diagnostic,
+                  operation: :render_file,
+                  module: __MODULE__,
+                  source: input_path
+                )}}
 
-          {:error, reason} ->
-            file_error(reason, :read, input_path)
-        end
+            {:error, reason} ->
+              file_error(reason, :read, input_path)
+          end
 
-      {:error, {reason, diagnostic}} ->
-        {:error,
-         {reason,
-          Diagnostics.with_context(diagnostic, operation: :render_file, module: __MODULE__)}}
-    end
+        {:error, {reason, diagnostic}} ->
+          {:error,
+           {reason,
+            Diagnostics.with_context(diagnostic, operation: :render_file, module: __MODULE__)}}
+      end
+    end)
   end
 
   defp do_render(html, opts) do

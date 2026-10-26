@@ -133,6 +133,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "processing instructions never alter first-base image resolution or metadata references" do
+    callback_owner = self()
+
     png =
       NativeElixirPdfUtilities.TestSupport.PngFixture.build(8, 4, 2, 8, 0, fn _, _ ->
         [255, 0, 0]
@@ -152,7 +154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                  forms: mode,
                  compress_streams: false,
                  asset_resolver: fn request ->
-                   send(self(), {:combined_image_request, request})
+                   send(callback_owner, {:combined_image_request, request})
                    {:ok, png}
                  end
                )
@@ -1992,6 +1994,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "initial inert content preserves complete static artwork and ordinary resource failures" do
+    callback_owner = self()
+
     content =
       "<div><input name=held value=Printed><textarea name=area>Area</textarea><select name=choice><option selected>Selected</option></select><a href='https://example.com'>Link</a></div>"
 
@@ -2025,7 +2029,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:error, {:invalid_document, %{stage: :asset, source: "asset:denied"}}} =
              HtmlToPdf.render("<div inert><img src='asset:denied'></div>",
                asset_resolver: fn request ->
-                 send(self(), {:inert_asset, request})
+                 send(callback_owner, {:inert_asset, request})
                  {:error, :denied}
                end
              )
@@ -2034,6 +2038,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "initial hidden containers preserve complete visible PDFs fields and dormant resource policy" do
+    callback_owner = self()
+
     html =
       "<div><p hidden=false>Unused</p><input hidden name=actual value=Unused><x-box hidden><img src=denied.png><input name=actual value=Unused></x-box><p hidden style='display:block'>Shown</p><input name=actual value=Initial><p>After</p></div>"
 
@@ -2061,7 +2067,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:error, {:invalid_document, %{stage: :asset, source: "asset:denied"}}} =
              HtmlToPdf.render("<img hidden style='display:block' src='asset:denied'>",
                asset_resolver: fn request ->
-                 send(self(), {:visible_hidden_asset, request})
+                 send(callback_owner, {:visible_hidden_asset, request})
                  {:error, :denied}
                end
              )
@@ -2072,7 +2078,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert {:error, {:invalid_document, %{stage: :asset, source: "asset:denied"}}} =
              HtmlToPdf.render("<img hidden src='asset:denied'>",
                asset_resolver: fn request ->
-                 send(self(), {:strict_hidden_image, request})
+                 send(callback_owner, {:strict_hidden_image, request})
                  {:error, :denied}
                end
              )
@@ -2268,6 +2274,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "noscript active text and controls preserve full PDF values and resource policy" do
+    callback_owner = self()
+
     html =
       "<body><p>Before <noscript>Fallback <b>Bold</b></noscript> after</p><noscript style='display:block'><p>Block</p><input name=fallback value=Initial></noscript><template><noscript><input name=fallback value=Unused><img src=denied.png></noscript></template></body>"
 
@@ -2275,7 +2283,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       "<body><p>Before <span>Fallback <b>Bold</b></span> after</p><div style='display:block'><p>Block</p><input name=fallback value=Initial></div><template></template></body>"
 
     resolver = fn request ->
-      send(self(), {:unexpected_noscript_resource, request})
+      send(callback_owner, {:unexpected_noscript_resource, request})
       {:error, :denied}
     end
 
@@ -2330,6 +2338,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "specialized script-supporting content retains complete PDFs and select editing" do
+    callback_owner = self()
+
     inert =
       "<script type='application/json' src='https://invalid.test/data'>{}</script><template><style>li{color:red}</style><img src=denied.png><input name=choice value=Unused></template>"
 
@@ -2340,7 +2350,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       "<body><ol reversed><li>One</li><li>Two</li></ol><dl><dt>Term</dt><dd>Description</dd></dl><table><col><tr><td>Cell</td></tr><tr><td>Last</td></tr></table><button>Label</button><select name=choice><option value=A>First</option><option value=B selected>Second</option></select></body>"
 
     resolver = fn request ->
-      send(self(), {:unexpected_specialized_resource, request})
+      send(callback_owner, {:unexpected_specialized_resource, request})
       {:error, :denied}
     end
 
@@ -2429,11 +2439,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "unused templates preserve complete static output and active form ownership" do
+    callback_owner = self()
+
     html =
       "<template><style>p{color:red}</style><img src=denied.png><input name=same value=Hidden><svg><path d='M0 0'/></svg></template><input name=same value=Visible><p>After</p>"
 
     resolver = fn request ->
-      send(self(), {:unexpected_inert_resource, request})
+      send(callback_owner, {:unexpected_inert_resource, request})
       {:error, :denied}
     end
 
@@ -2482,11 +2494,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "data blocks do not load resources or styles and shown raw data matches literal references" do
+    callback_owner = self()
+
     html =
       "<script type='application/json' src='https://invalid.test/data'><img src='denied.png'><style>p{color:red}</style>&amp;</script><p>Visible</p>"
 
     resolver = fn request ->
-      send(self(), {:unexpected_script_resource, request})
+      send(callback_owner, {:unexpected_script_resource, request})
       {:error, :denied}
     end
 
@@ -2680,8 +2694,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "resources inside comments do not invoke the asset resolver" do
+    callback_owner = self()
+
     resolver = fn request ->
-      send(self(), {:comment_asset_request, request})
+      send(callback_owner, {:comment_asset_request, request})
       :not_found
     end
 

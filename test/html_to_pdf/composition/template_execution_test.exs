@@ -48,6 +48,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
   end
 
   test "one source CSS budget spans original detached fragments instead of resetting per view" do
+    callback_owner = self()
     png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
     fragment = "<template for='A'><p style='--x:3pt;width:var(--x)'>Original</p></template>"
     html = "<body><img src='pixel.png'><?marker name='A'>#{fragment}#{fragment}</body>"
@@ -57,7 +58,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
         frame = Process.get({TemplateExecutionValidator, :execution})
         assert frame.source_view == nil
         assert :atomics.get(frame.css_budget, 1) == if(frame.mode == :original, do: 18, else: 36)
-        send(self(), {:completed_source_budget, frame.css_budget})
+        send(callback_owner, {:completed_source_budget, frame.css_budget})
         {:ok, png}
       end)
 
@@ -78,12 +79,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
   end
 
   test "validated inert CSS cannot hide an unresolved resource or borrow active fetch evidence" do
+    callback_owner = self()
+
     html =
       "<body><?marker name='A'><template for='A'><div style='display:none;background-image:url(hidden.png)'><p>Hidden</p></div><p>Actual</p></template></body>"
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn request ->
-        send(self(), {:original_hidden, request.reference})
+        send(callback_owner, {:original_hidden, request.reference})
         :not_found
       end)
 
@@ -285,12 +288,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
   end
 
   test "hidden discarded resource cannot borrow completion from active preparation" do
+    callback_owner = self()
+
     html =
       "<body><?start name='A'><div hidden><img src='hidden.png'></div><?end?><template for='A'><p>Good</p></template></body>"
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn request ->
-        send(self(), {:original_hidden, request.reference})
+        send(callback_owner, {:original_hidden, request.reference})
         :not_found
       end)
 
@@ -328,6 +333,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
   end
 
   test "live source projection rejects malformed, changed and out-of-prefix facts without issuing authority" do
+    callback_owner = self()
     png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
 
     html =
@@ -368,7 +374,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
           assert changed.source == "<img src='pixel.png'>" and
                    changed.message =~ "lexical ownership"
 
-          send(self(), :checked_prospective_source_projection)
+          send(callback_owner, :checked_prospective_source_projection)
         end
 
         {:ok, png}

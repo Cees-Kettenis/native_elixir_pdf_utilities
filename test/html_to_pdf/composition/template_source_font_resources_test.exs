@@ -67,11 +67,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
   end
 
   test "superseded original src keeps its own ordered loading obligation", %{bytes: bytes} do
+    callback_owner = self()
+
     html =
       "<body><?start name='A'><style>@media screen{@font-face{font-family:OriginalInactive;src:url('invalid-original.ttf');src:url('valid-original.ttf')}}</style><p>Old</p><?end?><template for='A'><p>Good</p></template></body>"
 
     resolver = fn request ->
-      send(self(), {:source, request.reference})
+      send(callback_owner, {:source, request.reference})
 
       {:ok,
        if(request.reference == "invalid-original.ttf", do: "invalid font bytes", else: bytes)}
@@ -87,11 +89,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
   end
 
   test "one discarded src uses normal supported fallback candidates", %{bytes: bytes} do
+    callback_owner = self()
+
     html =
       "<body><?start name='A'><style>@media screen{@font-face{font-family:OriginalInactive;src:url('invalid-original.ttf'),url('valid-original.ttf')}}</style><p>Old</p><?end?><template for='A'><p>Good</p></template></body>"
 
     resolver = fn request ->
-      send(self(), {:candidate, request.reference})
+      send(callback_owner, {:candidate, request.reference})
 
       {:ok,
        if(request.reference == "invalid-original.ttf", do: "invalid font bytes", else: bytes)}
@@ -104,11 +108,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
   end
 
   test "inactive stylesheet media also preserves original font resources", %{bytes: bytes} do
+    callback_owner = self()
+
     html =
       "<body><?start name='A'><style media='screen'>@font-face{font-family:OriginalInactive;src:url('media-original.ttf')}</style><p>Old</p><?end?><template for='A'><p>Good</p></template></body>"
 
     resolver = fn request ->
-      send(self(), {:media_font, request.reference})
+      send(callback_owner, {:media_font, request.reference})
       {:ok, bytes}
     end
 
@@ -118,11 +124,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
   end
 
   test "original font assets use the original document URL context", %{bytes: bytes} do
+    callback_owner = self()
+
     html =
       "<head><base href='https://fonts.example/original/'></head><body><?start name='A'><style>@media screen{@font-face{font-family:OriginalInactive;src:url('provided-original.ttf')}}</style><p>Old</p><?end?><template for='A'><p>Good</p></template></body>"
 
     resolver = fn request ->
-      send(self(), {:resolved_original, request.reference})
+      send(callback_owner, {:resolved_original, request.reference})
       {:ok, bytes}
     end
 

@@ -47,7 +47,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           | {:compressed, pos_integer(), non_neg_integer()}
   @type probe_context :: PdfValidator.probe_context()
   @type error_reason ::
-          :encrypted_pdf
+          :operation_worker_failed
+          | :encrypted_pdf
           | :invalid_pdf_input
           | :unsupported_pdf_feature
           | :resource_limit_exceeded
@@ -57,9 +58,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   """
   @spec read(binary()) :: {:ok, document()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def read(pdf) do
-    with {:ok, context} <- read_validated(pdf) do
-      {:ok, context.document}
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      with {:ok, context} <- read_validated(pdf) do
+        {:ok, context.document}
+      end
+    end)
   end
 
   @doc false
@@ -126,33 +129,35 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           {:ok, PdfValidator.context()}
           | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def read_validated(pdf) do
-    PdfValidator.with_reader_budget(fn ->
-      with {:ok, probe} <- probe(pdf),
-           :ok <-
-             PdfValidator.validate_unencrypted(probe.trailer,
-               operation: :read,
-               module: __MODULE__
-             ),
-           xref = probe.xref,
-           trailer = probe.trailer,
-           {:ok, objects} <- load_objects(pdf, xref),
-           {:ok, context} <-
-             PdfValidator.validate(
-               %{
-                 binary: pdf,
-                 objects: objects,
-                 trailer: trailer,
-                 xref: xref,
-                 xref_offset: probe.xref_offset,
-                 xref_revisions: probe.xref_revisions
-               },
-               operation: :read,
-               module: __MODULE__
-             ) do
-        {:ok, context}
-      else
-        {:error, {_reason, _diagnostic}} = reader_error -> reader_error
-      end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      PdfValidator.with_reader_budget(fn ->
+        with {:ok, probe} <- probe(pdf),
+             :ok <-
+               PdfValidator.validate_unencrypted(probe.trailer,
+                 operation: :read,
+                 module: __MODULE__
+               ),
+             xref = probe.xref,
+             trailer = probe.trailer,
+             {:ok, objects} <- load_objects(pdf, xref),
+             {:ok, context} <-
+               PdfValidator.validate(
+                 %{
+                   binary: pdf,
+                   objects: objects,
+                   trailer: trailer,
+                   xref: xref,
+                   xref_offset: probe.xref_offset,
+                   xref_revisions: probe.xref_revisions
+                 },
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          {:ok, context}
+        else
+          {:error, {_reason, _diagnostic}} = reader_error -> reader_error
+        end
+      end)
     end)
   end
 
@@ -160,27 +165,29 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @spec probe(term()) ::
           {:ok, probe_context()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def probe(pdf) do
-    PdfValidator.with_reader_budget(fn ->
-      with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
-           {:ok, xref_offset} <- final_xref_offset(pdf),
-           {:ok, xref, trailer, revisions} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
-           :ok <-
-             PdfValidator.validate_xref_structure(xref, trailer, pdf,
-               operation: :read,
-               module: __MODULE__
-             ) do
-        {:ok,
-         %{
-           binary: pdf,
-           xref_offset: xref_offset,
-           xref_revisions: revisions,
-           xref: xref,
-           trailer: trailer,
-           encrypted?: not is_nil(Map.get(trailer, "Encrypt"))
-         }}
-      else
-        {:error, {_reason, _diagnostic}} = reader_error -> reader_error
-      end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      PdfValidator.with_reader_budget(fn ->
+        with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
+             {:ok, xref_offset} <- final_xref_offset(pdf),
+             {:ok, xref, trailer, revisions} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
+             :ok <-
+               PdfValidator.validate_xref_structure(xref, trailer, pdf,
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          {:ok,
+           %{
+             binary: pdf,
+             xref_offset: xref_offset,
+             xref_revisions: revisions,
+             xref: xref,
+             trailer: trailer,
+             encrypted?: not is_nil(Map.get(trailer, "Encrypt"))
+           }}
+        else
+          {:error, {_reason, _diagnostic}} = reader_error -> reader_error
+        end
+      end)
     end)
   end
 

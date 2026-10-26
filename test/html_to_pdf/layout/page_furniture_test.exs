@@ -394,6 +394,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
   end
 
   test "lazy automatic images resolve their final candidates in both running margins" do
+    callback_owner = self()
+
     image =
       NativeElixirPdfUtilities.TestSupport.PngFixture.build(120, 40, 2, 8, 0, fn _x, _y ->
         [0, 128, 64]
@@ -411,7 +413,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
                    page_furniture: [{position, template}],
                    asset_resolver: fn request ->
                      assert request.reference == "selected.png"
-                     send(self(), :selected_furniture_image)
+                     send(callback_owner, :selected_furniture_image)
                      {:ok, image}
                    end
                  )

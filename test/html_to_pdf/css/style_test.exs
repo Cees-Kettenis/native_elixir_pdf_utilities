@@ -1919,13 +1919,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   end
 
   test "inert template fragments never collect styles, fonts, assets or fields" do
+    callback_owner = self()
     alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
     source =
       "<template id=unused><style>p{color:red} @font-face{font-family:Unused;src:url(denied.ttf)}</style><img src=denied.png><input name=same value=Hidden><svg><image href='https://invalid.test/image'/></svg></template><input name=same value=Visible><p>After</p>"
 
     resolver = fn request ->
-      send(self(), {:unexpected_template_asset, request})
+      send(callback_owner, {:unexpected_template_asset, request})
       {:error, :denied}
     end
 
@@ -2018,13 +2019,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   end
 
   test "data scripts default hidden and author styles expose literal text only" do
+    callback_owner = self()
     alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
     html =
       "<script type='text/plain' src='denied.json'>p{color:red}<img src='denied.png'>&amp;</script><p>Visible</p>"
 
     resolver = fn request ->
-      send(self(), {:unexpected_script_asset, request})
+      send(callback_owner, {:unexpected_script_asset, request})
       {:error, :denied}
     end
 
@@ -2991,6 +2993,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   end
 
   test "hidden inputs suppress author display, generated content, and image resolution" do
+    callback_owner = self()
+
     for type <- ["hidden", "HIDDEN", "HiDdEn"] do
       html = """
       <style>
@@ -3005,7 +3009,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       assert {:ok, dom} = HtmlParser.parse(html)
 
       resolver = fn source ->
-        send(self(), {:hidden_image_resolved, source})
+        send(callback_owner, {:hidden_image_resolved, source})
         {:error, :missing_asset}
       end
 

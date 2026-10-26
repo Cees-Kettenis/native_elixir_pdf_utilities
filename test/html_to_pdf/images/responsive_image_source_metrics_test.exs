@@ -104,6 +104,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveImageSourceMetricsTest do
   end
 
   test "font-relative selection reads only the selected authorized image" do
+    callback_owner = self()
+
     image =
       NativeElixirPdfUtilities.TestSupport.PngFixture.build(128, 64, 2, 8, 0, fn _x, _y ->
         [0, 128, 64]
@@ -114,7 +116,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveImageSourceMetricsTest do
                "<img src='unused-fallback' srcset='unused-small 20w, selected 128w' sizes='10ch' style='width:48pt;height:24pt;font-size:40pt'>",
                asset_resolver: fn request ->
                  assert request.reference == "selected"
-                 send(self(), {:selected_image, request.reference})
+                 send(callback_owner, {:selected_image, request.reference})
                  {:ok, image}
                end
              )

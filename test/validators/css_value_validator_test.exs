@@ -339,6 +339,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
   end
 
   test "cascade consumer sees validated declarations in existing Style execution order" do
+    callback_owner = self()
     base = %{color: {0, 0, 0}, font_size: 12.0, _root_font_size: 12.0, _custom_properties: %{}}
 
     declarations = [
@@ -350,7 +351,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     ]
 
     consumer = fn declaration, validated ->
-      send(self(), {:consumed, elem(declaration, 0), validated})
+      send(callback_owner, {:consumed, elem(declaration, 0), validated})
       {:ok, Map.put(validated, :consumer_state, :retained)}
     end
 

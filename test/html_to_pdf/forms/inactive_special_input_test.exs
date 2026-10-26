@@ -36,12 +36,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InactiveSpecialInputTest do
   end
 
   test "inert empty file chooser never resolves authored value paths or creates PDF fields" do
+    callback_owner = self()
+
     html =
       "<div inert><input type=file name=secret value='/private/unreadable.txt' multiple></div>"
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn request ->
-        send(self(), {:unexpected_asset, request})
+        send(callback_owner, {:unexpected_asset, request})
         {:error, :denied}
       end)
 
@@ -62,12 +64,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InactiveSpecialInputTest do
   end
 
   test "inert image remains caller-authorized and paints without submit coordinates" do
+    callback_owner = self()
     html = "<div inert><input type=image src=tile name=send width=80 height=40></div>"
     bytes = File.read!(@image)
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn request ->
-        send(self(), {:asset, request})
+        send(callback_owner, {:asset, request})
         {:ok, bytes}
       end)
 

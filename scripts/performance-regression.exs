@@ -75,9 +75,17 @@ measure = fn name, operation, limits ->
   samples =
     Enum.map(1..5, fn _iteration ->
       :erlang.garbage_collect()
-      {:reductions, reductions_before} = Process.info(self(), :reductions)
-      {microseconds, result} = :timer.tc(operation)
-      {:reductions, reductions_after} = Process.info(self(), :reductions)
+      # Measure work in the operation worker, and elapsed time around the full
+      # boundary so worker startup and result delivery remain part of latency.
+      {microseconds, {result, reductions}} =
+        :timer.tc(fn ->
+          NativeElixirPdfUtilities.Operation.run(__MODULE__, :performance_sample, fn ->
+            {:reductions, before_work} = Process.info(self(), :reductions)
+            result = operation.()
+            {:reductions, after_work} = Process.info(self(), :reductions)
+            {result, after_work - before_work}
+          end)
+        end)
 
       value =
         case result do
@@ -87,7 +95,7 @@ measure = fn name, operation, limits ->
 
       %{
         microseconds: microseconds,
-        reductions: reductions_after - reductions_before,
+        reductions: reductions,
         value: value
       }
     end)

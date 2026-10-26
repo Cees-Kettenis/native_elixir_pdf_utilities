@@ -129,7 +129,8 @@ defmodule NativeElixirPdfUtilities.Text do
           pages: [text_page()]
         }
   @type error_reason ::
-          :encrypted_pdf
+          :operation_worker_failed
+          | :encrypted_pdf
           | :invalid_options
           | :invalid_path
           | :invalid_pdf_input
@@ -150,44 +151,46 @@ defmodule NativeElixirPdfUtilities.Text do
   @spec extract(binary(), [extract_option()]) ::
           {:ok, String.t()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract(pdf_binary, opts \\ []) do
-    with {:ok, request} <- TextValidator.validate_request(pdf_binary, opts, :extract),
-         {:ok, pdf_context} <- Reader.read_validated(request.pdf),
-         {:ok, text_context} <- TextValidator.prepare(pdf_context),
-         {:ok, pages} <- extract_pages(text_context, true) do
-      visible_pages =
-        pages
-        |> Enum.map(fn page -> {page.number, Enum.filter(page.spans, & &1.paints_text?)} end)
-        |> Enum.reject(fn {_page_number, spans} -> spans == [] end)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :extract, fn ->
+      with {:ok, request} <- TextValidator.validate_request(pdf_binary, opts, :extract),
+           {:ok, pdf_context} <- Reader.read_validated(request.pdf),
+           {:ok, text_context} <- TextValidator.prepare(pdf_context),
+           {:ok, pages} <- extract_pages(text_context, true) do
+        visible_pages =
+          pages
+          |> Enum.map(fn page -> {page.number, Enum.filter(page.spans, & &1.paints_text?)} end)
+          |> Enum.reject(fn {_page_number, spans} -> spans == [] end)
 
-      case visible_pages do
-        [] ->
-          error(:text_extraction, :no_extractable_text, "PDF contains no extractable text")
+        case visible_pages do
+          [] ->
+            error(:text_extraction, :no_extractable_text, "PDF contains no extractable text")
 
-        pages ->
-          case request.options.layout do
-            true ->
-              projections = Enum.map(pages, &layout_page_projection/1)
+          pages ->
+            case request.options.layout do
+              true ->
+                projections = Enum.map(pages, &layout_page_projection/1)
 
-              case TextValidator.validate_layout_whitespace(
-                     Enum.map(projections, &{&1.page_number, &1.whitespace_bytes})
-                   ) do
-                :ok ->
-                  {:ok, projections |> Enum.map(&render_layout_page/1) |> Enum.join("\f")}
+                case TextValidator.validate_layout_whitespace(
+                       Enum.map(projections, &{&1.page_number, &1.whitespace_bytes})
+                     ) do
+                  :ok ->
+                    {:ok, projections |> Enum.map(&render_layout_page/1) |> Enum.join("\f")}
 
-                {:error, _} = projection_error ->
-                  text_error(projection_error, :extract)
-              end
+                  {:error, _} = projection_error ->
+                    text_error(projection_error, :extract)
+                end
 
-            false ->
-              {:ok,
-               pages
-               |> Enum.map(fn {_page_number, spans} -> plain_page(spans) end)
-               |> Enum.join("\n")}
-          end
+              false ->
+                {:ok,
+                 pages
+                 |> Enum.map(fn {_page_number, spans} -> plain_page(spans) end)
+                 |> Enum.join("\n")}
+            end
+        end
+      else
+        {:error, _} = extraction_error -> text_error(extraction_error, :extract)
       end
-    else
-      {:error, _} = extraction_error -> text_error(extraction_error, :extract)
-    end
+    end)
   end
 
   @doc """
@@ -214,21 +217,23 @@ defmodule NativeElixirPdfUtilities.Text do
   @spec extract_spans(binary(), [span_option()]) ::
           {:ok, text_document()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract_spans(pdf_binary, opts \\ []) do
-    with {:ok, request} <- TextValidator.validate_request(pdf_binary, opts, :extract_spans),
-         {:ok, pdf_context} <- Reader.read_validated(request.pdf),
-         {:ok, text_context} <- TextValidator.prepare(pdf_context),
-         {:ok, pages} <- extract_pages(text_context, request.options.actual_text) do
-      pages =
-        if request.options.order == :visual do
-          Enum.map(pages, fn page -> %{page | spans: visual_spans(page.spans)} end)
-        else
-          pages
-        end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :extract_spans, fn ->
+      with {:ok, request} <- TextValidator.validate_request(pdf_binary, opts, :extract_spans),
+           {:ok, pdf_context} <- Reader.read_validated(request.pdf),
+           {:ok, text_context} <- TextValidator.prepare(pdf_context),
+           {:ok, pages} <- extract_pages(text_context, request.options.actual_text) do
+        pages =
+          if request.options.order == :visual do
+            Enum.map(pages, fn page -> %{page | spans: visual_spans(page.spans)} end)
+          else
+            pages
+          end
 
-      {:ok, %{page_count: length(pages), pages: pages}}
-    else
-      {:error, _} = extraction_error -> text_error(extraction_error, :extract_spans)
-    end
+        {:ok, %{page_count: length(pages), pages: pages}}
+      else
+        {:error, _} = extraction_error -> text_error(extraction_error, :extract_spans)
+      end
+    end)
   end
 
   @doc """
@@ -237,7 +242,9 @@ defmodule NativeElixirPdfUtilities.Text do
   @spec extract_file(String.t(), [extract_option()]) ::
           {:ok, String.t()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract_file(path, opts \\ []) do
-    extract_file_with(path, opts, :extract_file, &extract/2)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :extract_file, fn ->
+      extract_file_with(path, opts, :extract_file, &extract/2)
+    end)
   end
 
   @doc """
@@ -249,7 +256,9 @@ defmodule NativeElixirPdfUtilities.Text do
   @spec extract_file_spans(String.t(), [span_option()]) ::
           {:ok, text_document()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def extract_file_spans(path, opts \\ []) do
-    extract_file_with(path, opts, :extract_file_spans, &extract_spans/2)
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :extract_file_spans, fn ->
+      extract_file_with(path, opts, :extract_file_spans, &extract_spans/2)
+    end)
   end
 
   defp extract_file_with(path, opts, operation, extractor) do

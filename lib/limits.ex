@@ -19,10 +19,16 @@ defmodule NativeElixirPdfUtilities.Limits do
         ]
 
   Configuration is validated when the library application starts. Values are
-  process-wide, and changing them requires restarting the application.
+  application-wide, and changing them requires restarting the application.
+  Document operations default to a five-minute deadline and a 1 GiB observed
+  BEAM worker-memory allowance. Native allocations are outside that allowance;
+  see the resource limits guide for enforcement boundaries.
   """
 
   @defaults %{
+    max_operation_timeout_ms: 300_000,
+    max_operation_memory_bytes: 1_073_741_824,
+    operation_memory_check_interval_ms: 25,
     max_aggregate_html_source_bytes: 10_000_000,
     max_aggregate_css_source_bytes: 20_000_000,
     max_html_source_bytes: 2_000_000,
@@ -183,7 +189,10 @@ defmodule NativeElixirPdfUtilities.Limits do
 
   @typedoc "A configurable resource-limit name."
   @type key ::
-          :max_pdf_attachments
+          :max_operation_timeout_ms
+          | :max_operation_memory_bytes
+          | :operation_memory_check_interval_ms
+          | :max_pdf_attachments
           | :max_aggregate_html_source_bytes
           | :max_aggregate_css_source_bytes
           | :max_html_source_bytes

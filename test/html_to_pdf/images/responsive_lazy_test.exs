@@ -29,6 +29,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveLazyTest do
   end
 
   test "lazy auto selects only the final shrunk flex and grid candidates" do
+    callback_owner = self()
+
     image =
       NativeElixirPdfUtilities.TestSupport.PngFixture.build(64, 32, 2, 8, 0, fn _, _ ->
         [0, 128, 64]
@@ -50,7 +52,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveLazyTest do
                HtmlToPdf.render(html,
                  asset_resolver: fn request ->
                    assert request.reference == "selected"
-                   send(self(), {:loaded, request.reference})
+                   send(callback_owner, {:loaded, request.reference})
                    {:ok, image}
                  end
                )

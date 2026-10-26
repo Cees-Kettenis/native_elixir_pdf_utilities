@@ -13,6 +13,8 @@ Set only the values you want to change in `config/config.exs` or
 config :native_elixir_pdf_utilities,
   limits: [
     max_pdf_input_bytes: 75_000_000,
+    max_operation_timeout_ms: 300_000,
+    max_operation_memory_bytes: 1_073_741_824,
     max_merge_inputs: 20
   ]
 ```
@@ -22,10 +24,28 @@ change. Limits apply across the application and cannot be overridden for one
 call. Invalid settings prevent startup and identify the problem.
 
 Values must be positive integers. Aggregate image and metadata limits must
-allow at least one maximum-size item. The settings below do not impose an
-application-wide memory cap or timeout. Render budgets cover one synchronous
-operation, including repeated header/footer templates. Concurrent requests each
-have their own budget; applications should also limit concurrency.
+allow at least one maximum-size item.
+
+## Operation time and memory
+
+Document operations and PDF reads run in disposable workers. Nested calls share
+one allowance. Applications control concurrency.
+
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `max_operation_timeout_ms` | 300,000 | Five-minute operation deadline |
+| `max_operation_memory_bytes` | 1,073,741,824 | Observed worker memory and referenced binaries, with a GC heap cap |
+| `operation_memory_check_interval_ms` | 25 | Milliseconds between memory checks |
+
+Observed excess returns `:resource_limit_exceeded`. Unexpected worker exits,
+including GC heap kills, return `:operation_worker_failed`.
+
+Memory sampling can miss peaks and excludes native allocations, caches and
+helper processes. Native work may continue after a timeout. Use OS process or
+container isolation for hard memory and cancellation guarantees.
+
+Asset resolvers run in the worker. Capture the caller PID when callbacks need
+to send it messages; caller process dictionary entries are not inherited.
 
 ## PDF inputs
 
@@ -60,8 +80,9 @@ decoding requested separately through `Reader.decoded_stream/2` gets a fresh
 budget; callers repeatedly decoding content still need their operation's own
 aggregate limit, as text extraction already has. Flate output is drained in
 bounded chunks, and expanding filters stop at the remaining decoded allowance.
-These counters bound parsing work and retained structures, not total BEAM memory
-or elapsed time. Configure a caller-owned timeout and concurrency ceiling too.
+These counters bound parsing work and retained structures. Document API calls
+also have the operation deadline and worker-memory allowance above. Neither
+provides an application-wide memory ceiling.
 
 ## HTML processing and output
 

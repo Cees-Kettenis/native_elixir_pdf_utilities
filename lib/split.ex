@@ -13,7 +13,8 @@ defmodule NativeElixirPdfUtilities.Split do
   alias NativeElixirPdfUtilities.Validators.SplitValidator
 
   @type error_reason ::
-          :encrypted_pdf
+          :operation_worker_failed
+          | :encrypted_pdf
           | :invalid_page_range
           | :invalid_page_selection
           | :invalid_pdf_input
@@ -30,13 +31,15 @@ defmodule NativeElixirPdfUtilities.Split do
   @spec by_page(binary()) ::
           {:ok, [binary()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def by_page(pdf) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, inputs} <- SplitValidator.prepare_each_page(context),
-         {:ok, outputs} <- write_outputs(inputs) do
-      {:ok, outputs}
-    else
-      {:error, error} -> owned_error(error, :split_by_page)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :split_by_page, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, inputs} <- SplitValidator.prepare_each_page(context),
+           {:ok, outputs} <- write_outputs(inputs) do
+        {:ok, outputs}
+      else
+        {:error, error} -> owned_error(error, :split_by_page)
+      end
+    end)
   end
 
   @doc """
@@ -49,13 +52,15 @@ defmodule NativeElixirPdfUtilities.Split do
   @spec by_ranges(binary(), [Range.t()]) ::
           {:ok, [binary()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def by_ranges(pdf, ranges) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, inputs} <- SplitValidator.prepare_ranges(context, ranges),
-         {:ok, outputs} <- write_outputs(inputs) do
-      {:ok, outputs}
-    else
-      {:error, error} -> owned_error(error, :split_by_ranges)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :split_by_ranges, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, inputs} <- SplitValidator.prepare_ranges(context, ranges),
+           {:ok, outputs} <- write_outputs(inputs) do
+        {:ok, outputs}
+      else
+        {:error, error} -> owned_error(error, :split_by_ranges)
+      end
+    end)
   end
 
   @doc """
@@ -69,13 +74,15 @@ defmodule NativeElixirPdfUtilities.Split do
           {:ok, {binary(), binary()}}
           | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def after_page(pdf, page_number) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, inputs} <- SplitValidator.prepare_after_page(context, page_number),
-         {:ok, [before_pdf, after_pdf]} <- write_outputs(inputs) do
-      {:ok, {before_pdf, after_pdf}}
-    else
-      {:error, error} -> owned_error(error, :split_after_page)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :split_after_page, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, inputs} <- SplitValidator.prepare_after_page(context, page_number),
+           {:ok, [before_pdf, after_pdf]} <- write_outputs(inputs) do
+        {:ok, {before_pdf, after_pdf}}
+      else
+        {:error, error} -> owned_error(error, :split_after_page)
+      end
+    end)
   end
 
   defp write_outputs(inputs) do

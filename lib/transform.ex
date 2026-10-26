@@ -22,7 +22,8 @@ defmodule NativeElixirPdfUtilities.Transform do
 
   @type page_selector :: pos_integer() | Range.t()
   @type error_reason ::
-          :encrypted_pdf
+          :operation_worker_failed
+          | :encrypted_pdf
           | :invalid_options
           | :invalid_page_selection
           | :invalid_pdf_input
@@ -40,13 +41,15 @@ defmodule NativeElixirPdfUtilities.Transform do
   @spec pick_pages(binary(), [page_selector()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def pick_pages(pdf, selection) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, input} <- TransformValidator.prepare_pick(context, selection),
-         {:ok, output} <- AssemblyWriter.write([input]) do
-      {:ok, output}
-    else
-      {:error, error} -> owned_error(error, :pick_pages)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :pick_pages, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, input} <- TransformValidator.prepare_pick(context, selection),
+           {:ok, output} <- AssemblyWriter.write([input]) do
+        {:ok, output}
+      else
+        {:error, error} -> owned_error(error, :pick_pages)
+      end
+    end)
   end
 
   @doc """
@@ -60,13 +63,15 @@ defmodule NativeElixirPdfUtilities.Transform do
   @spec delete_pages(binary(), [page_selector()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def delete_pages(pdf, selection) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, input} <- TransformValidator.prepare_delete(context, selection),
-         {:ok, output} <- AssemblyWriter.write([input]) do
-      {:ok, output}
-    else
-      {:error, error} -> owned_error(error, :delete_pages)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :delete_pages, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, input} <- TransformValidator.prepare_delete(context, selection),
+           {:ok, output} <- AssemblyWriter.write([input]) do
+        {:ok, output}
+      else
+        {:error, error} -> owned_error(error, :delete_pages)
+      end
+    end)
   end
 
   @doc """
@@ -80,13 +85,15 @@ defmodule NativeElixirPdfUtilities.Transform do
   @spec rotate_pages(binary(), integer(), pages: :all | [page_selector()]) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def rotate_pages(pdf, degrees, options \\ []) do
-    with {:ok, context} <- Reader.read_validated(pdf),
-         {:ok, input} <- TransformValidator.prepare_rotation(context, degrees, options),
-         {:ok, output} <- AssemblyWriter.write([input]) do
-      {:ok, output}
-    else
-      {:error, error} -> owned_error(error, :rotate_pages)
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :rotate_pages, fn ->
+      with {:ok, context} <- Reader.read_validated(pdf),
+           {:ok, input} <- TransformValidator.prepare_rotation(context, degrees, options),
+           {:ok, output} <- AssemblyWriter.write([input]) do
+        {:ok, output}
+      else
+        {:error, error} -> owned_error(error, :rotate_pages)
+      end
+    end)
   end
 
   defp owned_error({reason, diagnostic}, operation) do
