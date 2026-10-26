@@ -167,6 +167,9 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_cmap_expanded_bytes: 10_000_000,
     max_text_decoded_content_bytes: 50_000_000,
     max_text_parsed_instructions: 100_000,
+    max_text_parsed_tokens: 1_000_000,
+    max_text_parsed_values: 500_000,
+    max_text_font_work: 1_000_000,
     max_text_stream_uses: 100_000,
     max_text_instruction_uses: 1_000_000,
     max_text_form_expansions: 10_000,
@@ -283,6 +286,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_reader_tokens
           | :max_pdf_reader_values
           | :max_pdf_reader_work
+          | :max_pdf_predictor_working_bytes
           | :max_pdf_container_entries
           | :max_pdf_numeric_token_bytes
           | :max_pdf_input_bytes
@@ -320,6 +324,9 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_cmap_expanded_bytes
           | :max_text_decoded_content_bytes
           | :max_text_parsed_instructions
+          | :max_text_parsed_tokens
+          | :max_text_parsed_values
+          | :max_text_font_work
           | :max_text_stream_uses
           | :max_text_instruction_uses
           | :max_text_form_expansions

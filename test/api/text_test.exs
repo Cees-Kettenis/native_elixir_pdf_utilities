@@ -2956,6 +2956,279 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert_error(Text.extract(pdf(malformed_indirect_matrix)), :invalid_pdf_input, :validation)
   end
 
+  test "Type 3 advances use FontMatrix horizontal widths and zero outside Widths" do
+    for {matrix, advance} <- [
+          {"0.01 0 0 0.02 5 8", 5.0},
+          {"0 0.01 -0.01 0 0 0", 0.0},
+          {"-0.01 0 0 0.01 0 0", -5.0}
+        ] do
+      font =
+        "<< /Type /Font /Subtype /Type3 /FontMatrix [#{matrix}] /FontBBox [0 0 100 100] /CharProcs << >> /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 65 /Widths [50] >>"
+
+      source = page_pdf("BT /F1 10 Tf 1 0 0 1 10 20 Tm (A) Tj (A) Tj (B) Tj ET", font: font)
+      assert {:ok, %{pages: [%{spans: [first, second, outside]}]}} = Text.extract_spans(source)
+      assert_in_delta first.end_x, 10.0 + advance, 1.0e-9
+      assert_in_delta second.x, first.end_x, 1.0e-9
+      assert_in_delta second.end_x, 10.0 + 2 * advance, 1.0e-9
+      assert outside.x == outside.end_x
+      assert first.y == first.end_y
+    end
+  end
+
+  test "odd CMap hexadecimal endpoints use zero padding in both Encoding and ToUnicode" do
+    simple_font =
+      "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding /ToUnicode 7 0 R >>"
+
+    cmap = "1 begincodespacerange <00> <F> endcodespacerange 1 beginbfchar <41> <0041> endbfchar"
+
+    assert {:ok, "A"} =
+             Text.extract(page_pdf("BT /F1 10 Tf (A) Tj ET", font: simple_font, cmap: cmap),
+               layout: false
+             )
+
+    encoding = "1 begincodespacerange <0> <F> endcodespacerange 1 begincidchar <41> 1 endcidchar"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    assert {:ok, "A"} =
+             Text.extract(
+               page_pdf("BT /F1 10 Tf (A) Tj ET",
+                 font: font,
+                 cmap: cmap,
+                 extra_objects: [{9, stream_object("", encoding)}]
+               ),
+               layout: false
+             )
+
+    for endpoints <- ["<FFFF> <F>", "<F> <00>", "<00> <G>"] do
+      malformed =
+        "1 begincodespacerange #{endpoints} endcodespacerange 1 beginbfchar <41> <0041> endbfchar"
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               Text.extract(
+                 page_pdf("BT /F1 10 Tf (A) Tj ET", font: simple_font, cmap: malformed)
+               )
+
+      assert diagnostic.stage == :cmap and diagnostic.operation == :extract
+      assert diagnostic.message =~ "page 1" and diagnostic.message =~ "font F1"
+
+      malformed_encoding =
+        "1 begincodespacerange #{endpoints} endcodespacerange 1 begincidchar <41> 1 endcidchar"
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               Text.extract(
+                 page_pdf("BT /F1 10 Tf (A) Tj ET",
+                   font: font,
+                   cmap: cmap,
+                   extra_objects: [{9, stream_object("", malformed_encoding)}]
+                 )
+               )
+
+      assert diagnostic.stage == :cmap and diagnostic.operation == :extract
+      assert diagnostic.message =~ "page 1" and diagnostic.message =~ "font F1"
+    end
+  end
+
+  test "normalized Differences are charged once across operands, aliases and pages" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_text_font_work: 5})
+
+    font =
+      "<< /Type /Font /Subtype /TrueType /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /Ignored 65 /B] >> >>"
+
+    assert {:ok, context} = Reader.read_validated(page_pdf("", font: font))
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
+
+    assert {:ok, instructions} =
+             TextValidator.instructions(
+               "BT /F1 10 Tf (A) Tj [(A) (A)] TJ /Alias 10 Tf (A) Tj ET",
+               1
+             )
+
+    assert {:ok, [prepared], preparation} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert Enum.at(prepared, 2).decoded.text == "B"
+    assert preparation.font_work == 5
+    assert map_size(preparation.font_encodings) == 1
+
+    assert {:ok, _, preparation} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               2,
+               preparation
+             )
+
+    assert preparation.font_work == 5
+
+    Limits.install(%{original | max_text_font_work: 4})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Text.extract(page_pdf("BT /F1 10 Tf (A) Tj ET", font: font))
+
+    assert diagnostic.operation == :extract and diagnostic.stage == :font
+    assert diagnostic.message =~ "max_text_font_work"
+    assert diagnostic.message =~ "font F1"
+    assert diagnostic.message =~ "page 1"
+    # Encoding validation remains lazy for fonts selected without showing text.
+    assert {:ok, %{pages: [%{spans: []}]}} =
+             Text.extract_spans(page_pdf("BT /F1 10 Tf ET", font: font))
+  end
+
+  test "shared descendant widths reuse expansion while distinct descendants share a work budget" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_text_font_work: 6})
+    font = "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>"
+
+    source =
+      page_pdf("",
+        font: font,
+        descendant: "<< /DW 700 /W [0 3 500] >>",
+        extra_objects: [{9, font}]
+      )
+
+    assert {:ok, context} = Reader.read_validated(source)
+    resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "F2" => {:ref, {9, 0}}}}
+    assert {:ok, instructions} = TextValidator.instructions("BT /F1 10 Tf /F2 10 Tf ET", 1)
+
+    assert {:ok, _, preparation} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert preparation.font_work == 6
+    assert map_size(preparation.cid_metrics) == 1
+    {first, _} = preparation.prepared_fonts[{5, 0}]
+    {second, _} = preparation.prepared_fonts[{9, 0}]
+    assert :erts_debug.same(first.widths, second.widths)
+
+    distinct =
+      put_in(resources, ["Font", "F2"], %{
+        "Subtype" => {:name, "Type0"},
+        "Encoding" => {:name, "Identity-H"},
+        "DescendantFonts" => [%{"W" => [0, 3, 500]}]
+      })
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TextResourceValidator.prepare_contents(context.document, distinct, [instructions], 1)
+
+    assert diagnostic.stage == :font and diagnostic.operation == :extract
+    assert diagnostic.message =~ "max_text_font_work"
+
+    Limits.install(%{original | max_text_font_work: 10})
+
+    assert {:ok, _, preparation} =
+             TextResourceValidator.prepare_contents(
+               context.document,
+               distinct,
+               [instructions],
+               1,
+               TextValidator.new_preparation_context()
+             )
+
+    assert preparation.font_work == 10
+    assert map_size(preparation.cid_metrics) == 1
+
+    missing_descendants =
+      "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts 9 0 R >>"
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             Text.extract(page_pdf("BT /F1 10 Tf ET", font: missing_descendants))
+
+    assert diagnostic.operation == :extract and diagnostic.message =~ "page 1"
+
+    for widths <- ["[0 3 500]", "[0 [500 500 500 500]]"] do
+      Limits.install(%{original | max_text_font_work: 4})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               Text.extract(
+                 page_pdf("BT /F1 10 Tf ET", font: font, descendant: "<< /W #{widths} >>")
+               )
+
+      assert diagnostic.message =~ "max_text_font_work"
+    end
+  end
+
+  test "simple width expansion and Type 3 FontMatrix validation precede execution" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_text_font_work: 2})
+    font = "<< /Type /Font /Subtype /TrueType /FirstChar 65 /Widths [500 500] >>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Text.extract(page_pdf("BT /F1 10 Tf ET", font: font))
+
+    assert diagnostic.stage == :font and diagnostic.message =~ "max_text_font_work"
+
+    Limits.install(original)
+
+    for matrix <- [
+          "",
+          "/FontMatrix [1 0 0 1 0]",
+          "/FontMatrix [1 0 0 1 0 /Bad]",
+          "/FontMatrix 9 0 R"
+        ] do
+      font = "<< /Type /Font /Subtype /Type3 #{matrix} /Widths [50] /Encoding /WinAnsiEncoding >>"
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               Text.extract_spans(
+                 page_pdf("BT /F1 10 Tf (A) Tj ET",
+                   font: font,
+                   extra_objects: [{9, "[1 0 0 1 0]"}]
+                 )
+               )
+
+      assert diagnostic.operation == :extract_spans
+      assert diagnostic.source == "Type3 FontMatrix"
+      assert diagnostic.message =~ "page 1"
+    end
+
+    # An indirect matrix uses the same shared number-array validator.
+    font =
+      "<< /Type /Font /Subtype /Type3 /FontMatrix 9 0 R /FirstChar 65 /Widths [50] /Encoding /WinAnsiEncoding >>"
+
+    assert {:ok, %{pages: [%{spans: [span]}]}} =
+             Text.extract_spans(
+               page_pdf("BT /F1 10 Tf (A) Tj ET",
+                 font: font,
+                 extra_objects: [{9, "[0.01 0 0 0.01 0 0]"}]
+               )
+             )
+
+    assert_in_delta span.end_x - span.x, 5.0, 1.0e-9
+  end
+
+  test "odd range endpoints reserve their zero-padded expansion" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    font = "<< /Type /Font /ToUnicode 7 0 R >>"
+
+    cmap =
+      "1 begincodespacerange <0> <F> endcodespacerange 1 beginbfrange <0> <F> <0041> endbfrange"
+
+    source = page_pdf("BT /F1 10 Tf <00> Tj ET", font: font, cmap: cmap)
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 241 + 2})
+    assert {:ok, "A"} = Text.extract(source, layout: false)
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 240})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+    assert diagnostic.message =~ "CMap processing work"
+  end
+
   defp form_transform_pdf(page_content, form_content, matrix) do
     pdf([
       {1, "<< /Type /Catalog /Pages 2 0 R >>"},

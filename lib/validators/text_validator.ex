@@ -41,6 +41,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
             optional(instruction_cache_key()) => [instruction()]
           },
           required(:prepared_fonts) => map(),
+          required(:font_encodings) => map(),
+          required(:cid_metrics) => map(),
+          required(:font_work) => non_neg_integer(),
+          required(:parsed_tokens) => non_neg_integer(),
+          required(:parsed_values) => non_neg_integer(),
           required(:extracted_bytes) => non_neg_integer(),
           required(:cmap_work) => non_neg_integer(),
           required(:cmap_bytes) => non_neg_integer(),
@@ -279,6 +284,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       decoded_streams: %{},
       instructions: %{},
       prepared_fonts: %{},
+      font_encodings: %{},
+      cid_metrics: %{},
+      font_work: 0,
+      parsed_tokens: 0,
+      parsed_values: 0,
       extracted_bytes: 0,
       cmap_bytes: 0,
       cmap_work: 0,
@@ -366,128 +376,155 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @spec instructions(binary() | [binary()], pos_integer()) ::
           {:ok, [instruction()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def instructions(content, page_number) do
-    valid_content? =
-      is_binary(content) or (is_list(content) and Enum.all?(content, &is_binary/1))
-
-    case valid_content? and is_integer(page_number) and page_number > 0 do
-      true ->
-        contents = if is_binary(content), do: [content], else: content
-
-        contents
-        |> Enum.reduce_while({:ok, [], []}, fn content, instruction_state ->
-          with {:ok, tokens} <- content_tokens(Tokenizer.new(content), [], page_number),
-               {:ok, _operations, _operands} = next_state <-
-                 reduce_instruction_tokens(tokens, instruction_state, page_number) do
-            {:cont, next_state}
-          else
-            {:error, _} = instruction_error -> {:halt, instruction_error}
-          end
-        end)
-        |> case do
-          {:ok, operations, []} ->
-            {:ok, Enum.reverse(operations)}
-
-          {:ok, _operations, _operands} ->
-            content_error("content stream has dangling operands", page_number)
-
-          {:error, _} = content_error ->
-            content_error
-        end
-
-      false ->
-        error(:content, :invalid_pdf_input, "content stream input is malformed")
+    case instructions(content, page_number, new_preparation_context()) do
+      {:ok, operations, _preparation} -> {:ok, operations}
+      error -> error
     end
   end
 
-  defp content_tokens(tokenizer, tokens, page_number) do
-    case Tokenizer.next(tokenizer) do
-      {{:eof, nil}, _tokenizer} ->
-        {:ok, Enum.reverse(tokens)}
+  @doc false
+  @spec instructions(binary() | [binary()], pos_integer(), preparation_context()) ::
+          {:ok, [instruction()], preparation_context()}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def instructions(content, page_number, preparation) do
+    valid_content? = is_binary(content) or (is_list(content) and Enum.all?(content, &is_binary/1))
 
-      {{:op, "BI"}, _tokenizer} ->
+    if valid_content? and is_integer(page_number) and page_number > 0 do
+      contents = if is_binary(content), do: [content], else: content
+      limits = Limits.effective()
+
+      initial =
+        {:ok, [], [], 0, 0, preparation.parsed_tokens, preparation.parsed_values,
+         preparation.parsed_instructions}
+
+      Enum.reduce_while(contents, initial, fn content, state ->
+        case content_instructions(Tokenizer.new(content), state, limits, page_number) do
+          {:ok, _, _, _, _, _, _, _} = next -> {:cont, next}
+          error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, operations, [], 0, 0, tokens, values, count} ->
+          {:ok, Enum.reverse(operations),
+           %{
+             preparation
+             | parsed_tokens: tokens,
+               parsed_values: values,
+               parsed_instructions: count
+           }}
+
+        {:ok, _operations, _operands, _depth, _dictionaries, _, _, _} ->
+          content_error("content stream has dangling operands", page_number)
+
+        error ->
+          error
+      end
+    else
+      error(:content, :invalid_pdf_input, "content stream input is malformed")
+    end
+  end
+
+  defp content_instructions(tokenizer, state, limits, page) do
+    {:ok, operations, operands, depth, dictionaries, tokens, values, count} = state
+
+    case Tokenizer.next(tokenizer) do
+      {{:eof, nil}, _} ->
+        state
+
+      {{:op, "BI"}, _} ->
         error(
           :content,
           :unsupported_pdf_feature,
           "inline images are not supported by text extraction; use an image XObject instead",
-          page: page_number
+          page: page
         )
 
-      {:error, {_reason, diagnostic}} ->
+      {:error, {reason, diagnostic}} ->
+        reason = if reason == :resource_limit_exceeded, do: reason, else: :invalid_pdf_input
+
         {:error,
-         {:invalid_pdf_input,
+         {reason,
           %{
             diagnostic
-            | reason: :invalid_pdf_input,
+            | reason: reason,
               stage: :content,
-              message: diagnostic.message <> "; page #{page_number}",
+              message: diagnostic.message <> "; page #{page}",
               operation: :extract,
               module: __MODULE__
           }}}
 
       {token, tokenizer} ->
-        content_tokens(tokenizer, [token | tokens], page_number)
+        tokens = tokens + 1
+        count = count + if(match?({:op, _}, token), do: 1, else: 0)
+
+        values =
+          values + if(match?({:op, _}, token) or token in [:dict_end, :rbracket], do: 0, else: 1)
+
+        admission =
+          cond do
+            tokens > limits.max_text_parsed_tokens ->
+              resource_limit_error("parsed content token count exceeds the limit", page)
+
+            values > limits.max_text_parsed_values ->
+              resource_limit_error("parsed content value count exceeds the limit", page)
+
+            count > limits.max_text_parsed_instructions ->
+              resource_limit_error("parsed content instruction count exceeds the limit", page)
+
+            true ->
+              :ok
+          end
+
+        with :ok <- admission,
+             {:ok, operations, operands, depth, dictionaries} <-
+               instruction_token(token, operations, operands, depth, dictionaries, page) do
+          content_instructions(
+            tokenizer,
+            {:ok, operations, operands, depth, dictionaries, tokens, values, count},
+            limits,
+            page
+          )
+        end
     end
   end
 
-  defp reduce_instruction_tokens(tokens, instruction_state, page_number) do
-    case tokens do
-      [] ->
-        instruction_state
-
-      [token | remaining] ->
-        {:ok, operations, operands} = instruction_state
-
-        next_state =
-          case token do
-            token when token in [:dict_start, :lbracket] ->
-              depth = Enum.count(operands, &(&1 in [:dictionary_start, :array_start])) + 1
-              marker = if token == :dict_start, do: :dictionary_start, else: :array_start
-
-              case PdfValidator.validate_value_depth(depth,
-                     operation: :extract,
-                     module: __MODULE__
-                   ) do
-                :ok -> {:ok, operations, [marker | operands]}
-                {:error, _} = error -> error
-              end
-
-            :dict_end ->
-              case close_dictionary(operands, page_number) do
-                {:ok, operands} -> {:ok, operations, operands}
-                :error -> content_error("content dictionary is malformed", page_number)
-                {:error, _} = error -> error
-              end
-
-            :rbracket ->
-              case close_array(operands) do
-                {:ok, operands} -> {:ok, operations, operands}
-                :error -> content_error("content array is unbalanced", page_number)
-              end
-
-            {:op, operator} ->
-              if :dictionary_start in operands do
-                content_error(
-                  "content dictionary contains an operator or is unbalanced",
-                  page_number
-                )
-              else
-                case prepare_instruction(operator, Enum.reverse(operands), page_number) do
-                  {:ok, operation} -> {:ok, [operation | operations], []}
-                  {:error, _} = instruction_error -> instruction_error
-                end
-              end
-
-            token ->
-              {:ok, operations, [token | operands]}
-          end
-
-        case next_state do
-          {:ok, _operations, _operands} ->
-            reduce_instruction_tokens(remaining, next_state, page_number)
-
-          {:error, _} = error ->
-            error
+  defp instruction_token(token, operations, operands, depth, dictionaries, page) do
+    case token do
+      token when token in [:dict_start, :lbracket] ->
+        with :ok <-
+               PdfValidator.validate_value_depth(depth + 1,
+                 operation: :extract,
+                 module: __MODULE__
+               ) do
+          marker = if token == :dict_start, do: :dictionary_start, else: :array_start
+          dictionaries = dictionaries + if(token == :dict_start, do: 1, else: 0)
+          {:ok, operations, [marker | operands], depth + 1, dictionaries}
         end
+
+      :dict_end ->
+        case close_dictionary(operands, page) do
+          {:ok, operands} -> {:ok, operations, operands, depth - 1, dictionaries - 1}
+          :error -> content_error("content dictionary is malformed", page)
+          error -> error
+        end
+
+      :rbracket ->
+        case close_array(operands) do
+          {:ok, operands} -> {:ok, operations, operands, depth - 1, dictionaries}
+          :error -> content_error("content array is unbalanced", page)
+        end
+
+      {:op, operator} ->
+        if dictionaries > 0 do
+          content_error("content dictionary contains an operator or is unbalanced", page)
+        else
+          with {:ok, operation} <- prepare_instruction(operator, Enum.reverse(operands), page) do
+            {:ok, [operation | operations], [], depth, dictionaries}
+          end
+        end
+
+      token ->
+        {:ok, operations, [token | operands], depth, dictionaries}
     end
   end
 
@@ -968,30 +1005,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         end
 
       :error ->
-        with {:ok, operations} <- instructions(content, page_number),
-             {:ok, preparation_context} <-
-               cache_instructions(preparation_context, cache_key, operations, page_number),
+        with {:ok, operations, preparation_context} <-
+               instructions(content, page_number, preparation_context),
              {:ok, preparation_context} <-
                charge_instruction_uses(preparation_context, length(operations), page_number) do
+          preparation_context = %{
+            preparation_context
+            | instructions: Map.put(preparation_context.instructions, cache_key, operations)
+          }
+
           {:ok, operations, preparation_context}
         end
-    end
-  end
-
-  defp cache_instructions(preparation_context, cache_key, operations, page_number) do
-    parsed_instructions = preparation_context.parsed_instructions + length(operations)
-
-    case parsed_instructions <= Limits.get(:max_text_parsed_instructions) do
-      true ->
-        {:ok,
-         %{
-           preparation_context
-           | instructions: Map.put(preparation_context.instructions, cache_key, operations),
-             parsed_instructions: parsed_instructions
-         }}
-
-      false ->
-        resource_limit_error("parsed content instruction count exceeds the limit", page_number)
     end
   end
 

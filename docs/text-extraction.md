@@ -91,6 +91,10 @@ Coordinates start at the top-left of the rotated MediaBox. X increases right;
 Y increases down. They use PDF default user-space units, normally 1/72 inch.
 CropBox offsets and UserUnit scaling are not applied. Baselines are not glyph
 bounding boxes, and endpoints can be approximate when font widths are absent.
+Type 3 widths use the horizontal component of `FontMatrix`; codes outside the
+declared width array advance by zero. Rotation in the glyph matrix does not
+rotate the text baseline. This follows the Type 3 width rules in
+[PDF 32000-1, Table 112](https://opensource.adobe.com/dc-acrobat-sdk-docs/standards/pdfstandards/pdf/PDF32000_2008.pdf).
 
 These coordinates differ from [stamp coordinates](pdf-stamping.md#coordinates-and-page-geometry).
 Use [Info.page_sizes/1](pdf-information.md#page-count-and-geometry) for physical
@@ -120,6 +124,9 @@ text may still be hidden by clipping, transparency, or other content.
 Unsupported font encodings, vertical Type0 CMaps, inherited `usecmap` mappings,
 and inline images can prevent extraction. Encrypted PDFs are not supported.
 Failures use the [diagnostic tuple](diagnostics.md).
+Hexadecimal strings in ToUnicode and Type0 Encoding CMaps accept an odd final
+digit by padding it with zero. Invalid or mismatched codespace endpoints return
+`:invalid_pdf_input` with page and font context.
 
 [Extraction limits](resource-limits.md#text-extraction) cap content, work, spans,
 and reconstructed spacing. Oversized numeric operands or font metrics return

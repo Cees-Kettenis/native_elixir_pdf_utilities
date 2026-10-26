@@ -258,6 +258,9 @@ limits apply across all returned PDFs. See [Merging](pdf-merging.md) and
 | `max_cmap_expanded_bytes` | 10,000,000 | Aggregate expanded ToUnicode mapping keys and UTF-8 destinations, including overwritten entries |
 | `max_text_decoded_content_bytes` | 50,000,000 | Decoded content used by extraction |
 | `max_text_parsed_instructions` | 100,000 | Unique parsed content instructions |
+| `max_text_parsed_tokens` | 1,000,000 | Tokens consumed while parsing unique content sequences, including operators and container delimiters |
+| `max_text_parsed_values` | 500,000 | Operand values and opened containers parsed across unique content sequences |
+| `max_text_font_work` | 1,000,000 | Aggregate uncached fonts, expanded width entries and simple-font Differences entries prepared during extraction |
 | `max_text_stream_uses` | 100,000 | Content stream references traversed |
 | `max_text_instruction_uses` | 1,000,000 | Aggregate content instruction work |
 | `max_text_form_expansions` | 10,000 | Form XObject executions |
@@ -267,12 +270,18 @@ limits apply across all returned PDFs. See [Merging](pdf-merging.md) and
 | `max_cmap_work` | 1,000,000 | Aggregate CMap source bytes, expanded declarations, and conservative codespace lookup work across extraction |
 | `max_cmap_bytes` | 1,000,000 | One CMap stream |
 | `max_cmap_entries` | 100,000 | Mappings in one CMap |
-| `max_cid_width_entries` | 65,536 | CID width entries |
+| `max_cid_width_entries` | 65,536 | Width declarations expanded for one CID font, including overwritten entries |
 | `max_form_xobject_depth` | 20 | Form XObject nesting |
 
 Reconstructed whitespace counts added padding, not original text or page
 separators. It applies only to `layout: true`. The PDF CID range is fixed at
 0 through 65,535, so `max_cid_width_entries` cannot exceed 65,536.
+Token, value and instruction admission happens while parsing, before retaining
+the next item. These counters span pages and Forms; cached content reuses its
+parsed values and still counts toward instruction-use limits. Container nesting
+uses `max_pdf_value_depth`. Font work is admitted before expanding widths or
+Differences. Indirect fonts reuse their prepared encodings, and Type0 fonts
+sharing the same indirect descendant reuse its width map.
 See [Text extraction](text-extraction.md).
 
 ## Check active settings
