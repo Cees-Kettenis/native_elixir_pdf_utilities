@@ -65,79 +65,94 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
   end
 
   test "canonical fragments preserve original source through nested table modes" do
-    source = "<table><col><tr><td>e\u0301&amp;é\r\n<?marker name='A'?></table>"
-    assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed(source, "div")
-    assert :ok = HtmlTreeValidator.validate_transport(fragment)
-    [table] = fragment.children
-    [columns, rows] = table.children
-    [row] = rows.children
-    [cell] = row.children
-    [text, marker] = cell.children
-    assert Enum.map(table.children, & &1.tag) == ["colgroup", "tbody"]
-    assert columns.source.text == "" and rows.source.text == ""
-    assert table.source == %{text: "<table>", line: 1, column: 1}
-    assert text.source == %{text: "e\u0301&amp;é\r\n", line: 1, column: 21}
-    assert text.text == "e\u0301&é\n"
-    assert marker.source == %{text: "<?marker name='A'?>", line: 2, column: 1}
-    assert marker.parent_id == cell.node_id
-    assert marker.tree_scope_id == fragment.node_id
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        source = "<table><col><tr><td>e\u0301&amp;é\r\n<?marker name='A'?></table>"
+        assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed(source, "div")
+        assert :ok = HtmlTreeValidator.validate_transport(fragment)
+        [table] = fragment.children
+        [columns, rows] = table.children
+        [row] = rows.children
+        [cell] = row.children
+        [text, marker] = cell.children
+        assert Enum.map(table.children, & &1.tag) == ["colgroup", "tbody"]
+        assert columns.source.text == "" and rows.source.text == ""
+        assert table.source == %{text: "<table>", line: 1, column: 1}
+        assert text.source == %{text: "e\u0301&amp;é\r\n", line: 1, column: 21}
+        assert text.text == "e\u0301&é\n"
+        assert marker.source == %{text: "<?marker name='A'?>", line: 2, column: 1}
+        assert marker.parent_id == cell.node_id
+        assert marker.tree_scope_id == fragment.node_id
 
-    assert {:ok, legacy} = HtmlParser.parse_fragment_detailed(source, "div")
-    assert legacy.type == :document
-    assert Enum.map(hd(legacy.children).children, & &1.tag) == ["col", "tr"]
-    assert {:ok, legacy} = HtmlParser.parse_fragment("<tr><td>A", "table")
-    assert legacy.type == :document and hd(legacy.children).tag == "tr"
+        assert {:ok, legacy} = HtmlParser.parse_fragment_detailed(source, "div")
+        assert legacy.type == :document
+        assert Enum.map(hd(legacy.children).children, & &1.tag) == ["col", "tr"]
+        assert {:ok, legacy} = HtmlParser.parse_fragment("<tr><td>A", "table")
+        assert legacy.type == :document and hd(legacy.children).tag == "tr"
+      end
+    )
   end
 
   test "omitted table select and ruby fragment tags preserve explicit trees and logical parents" do
-    for {context, omitted, explicit} <- [
-          {"table", "<col><col><tr><td>A<td>B<tr><td>C<td>D",
-           "<colgroup><col><col></colgroup><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody>"},
-          {"select", "<optgroup label=First><option>A<option>B<optgroup label=Next><option>C",
-           "<optgroup label=First><option>A</option><option>B</option></optgroup><optgroup label=Next><option>C</option></optgroup>"},
-          {"ruby", "<rb>A<rtc><rt>a<rt>b<rtc>other",
-           "<rb>A</rb><rtc><rt>a</rt><rt>b</rt></rtc><rtc>other</rtc>"}
-        ] do
-      assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed(omitted, context)
-      assert {:ok, expected} = HtmlParser.parse_fragment_tree_detailed(explicit, context)
-      assert tree_content(fragment) == tree_content(expected)
-      assert :ok = HtmlTreeValidator.validate_transport(fragment)
-      assert :ok = HtmlTreeValidator.validate_transport(expected)
-    end
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for {context, omitted, explicit} <- [
+              {"table", "<col><col><tr><td>A<td>B<tr><td>C<td>D",
+               "<colgroup><col><col></colgroup><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody>"},
+              {"select", "<optgroup label=First><option>A<option>B<optgroup label=Next><option>C",
+               "<optgroup label=First><option>A</option><option>B</option></optgroup><optgroup label=Next><option>C</option></optgroup>"},
+              {"ruby", "<rb>A<rtc><rt>a<rt>b<rtc>other",
+               "<rb>A</rb><rtc><rt>a</rt><rt>b</rt></rtc><rtc>other</rtc>"}
+            ] do
+          assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed(omitted, context)
+          assert {:ok, expected} = HtmlParser.parse_fragment_tree_detailed(explicit, context)
+          assert tree_content(fragment) == tree_content(expected)
+          assert :ok = HtmlTreeValidator.validate_transport(fragment)
+          assert :ok = HtmlTreeValidator.validate_transport(expected)
+        end
+      end
+    )
   end
 
   test "canonical fragment roots preserve tokenizer and foreign integration contexts" do
-    for {context, source, expected} <- [
-          {"tr", "<td>A<td>B", ["td", "td"]},
-          {"select", "<option>A<option>B", ["option", "option"]},
-          {"template", "<tr><td>A</td></tr>", ["tr"]},
-          {"svg", "<path/>", ["path"]},
-          {"math", "<mi>x</mi>", ["mi"]},
-          {%{namespace: :svg, tag: "foreignObject"}, "<p>HTML</p>", ["p"]}
-        ] do
-      assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed(source, context)
-      assert :ok = HtmlTreeValidator.validate_transport(fragment)
-      assert Enum.map(fragment.children, & &1.tag) == expected
-      assert Enum.all?(fragment.children, &(&1.parent_id == fragment.node_id))
-    end
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for {context, source, expected} <- [
+              {"tr", "<td>A<td>B", ["td", "td"]},
+              {"select", "<option>A<option>B", ["option", "option"]},
+              {"template", "<tr><td>A</td></tr>", ["tr"]},
+              {"svg", "<path/>", ["path"]},
+              {"math", "<mi>x</mi>", ["mi"]},
+              {%{namespace: :svg, tag: "foreignObject"}, "<p>HTML</p>", ["p"]}
+            ] do
+          assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed(source, context)
+          assert :ok = HtmlTreeValidator.validate_transport(fragment)
+          assert Enum.map(fragment.children, & &1.tag) == expected
+          assert Enum.all?(fragment.children, &(&1.parent_id == fragment.node_id))
+        end
 
-    for {context, expected} <- [
-          {"textarea", "A&B\n"},
-          {"style", "A&amp;B\n"},
-          {"plaintext", "A&amp;B\n"}
-        ] do
-      assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed("A&amp;B\r\n", context)
-      assert [%{text: ^expected, parent_id: parent}] = fragment.children
-      assert parent == fragment.node_id
-      assert fragment.type == :document_fragment
-      assert :ok = HtmlTreeValidator.validate_transport(fragment)
+        for {context, expected} <- [
+              {"textarea", "A&B\n"},
+              {"style", "A&amp;B\n"},
+              {"plaintext", "A&amp;B\n"}
+            ] do
+          assert {:ok, fragment} = HtmlParser.parse_fragment_tree_detailed("A&amp;B\r\n", context)
+          assert [%{text: ^expected, parent_id: parent}] = fragment.children
+          assert parent == fragment.node_id
+          assert fragment.type == :document_fragment
+          assert :ok = HtmlTreeValidator.validate_transport(fragment)
 
-      assert {:ok, %{type: :document_fragment, children: []}} =
-               HtmlParser.parse_fragment_tree_detailed("", context)
-    end
+          assert {:ok, %{type: :document_fragment, children: []}} =
+                   HtmlParser.parse_fragment_tree_detailed("", context)
+        end
 
-    assert {:ok, %{type: :document_fragment, children: []}} =
-             HtmlParser.parse_fragment_tree_detailed("", "table")
+        assert {:ok, %{type: :document_fragment, children: []}} =
+                 HtmlParser.parse_fragment_tree_detailed("", "table")
+      end
+    )
   end
 
   test "canonical fragment failures keep strict validators and original diagnostics" do
@@ -202,28 +217,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
   end
 
   test "canonical implied fragment parents consume shared node depth and work budgets" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_html_nodes: 5})
-    assert {:ok, _fragment} = HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
-    Limits.install(%{limits | max_html_nodes: 3})
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        limits = Limits.effective()
+        on_exit(fn -> Limits.install(limits) end)
+        Limits.install(%{limits | max_html_nodes: 5})
+        assert {:ok, _fragment} = HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
+        Limits.install(%{limits | max_html_nodes: 3})
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_nodes"
-    Limits.install(%{limits | max_html_depth: 2})
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_html_nodes"
+        Limits.install(%{limits | max_html_depth: 2})
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_depth"
-    Limits.install(%{limits | max_html_tree_work: 1})
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_html_depth"
+        Limits.install(%{limits | max_html_tree_work: 1})
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_fragment_tree_detailed("<?marker>", "div")
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_fragment_tree_detailed("<?marker>", "div")
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+      end
+    )
   end
 
   test "implied insertion parents already own earlier nodes at the next authored token" do
@@ -286,66 +306,76 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
   end
 
   test "authored tokens retain original sources inside token-time implied parents" do
-    source = "\uFEFF\r\n<title>T</title>\r<p>e\u0301&amp;é<table><col><tr><td>A</table>"
-    assert {:ok, document} = HtmlParser.parse_document_detailed(source)
-    assert :ok = HtmlTreeValidator.validate_transport(document)
-    assert document.source.text == source
-    [html] = document.children
-    [head, body] = html.children
-    [title] = head.children
-    [paragraph, table] = body.children
-    [columns, rows] = table.children
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        source = "\uFEFF\r\n<title>T</title>\r<p>e\u0301&amp;é<table><col><tr><td>A</table>"
+        assert {:ok, document} = HtmlParser.parse_document_detailed(source)
+        assert :ok = HtmlTreeValidator.validate_transport(document)
+        assert document.source.text == source
+        [html] = document.children
+        [head, body] = html.children
+        [title] = head.children
+        [paragraph, table] = body.children
+        [columns, rows] = table.children
 
-    for node <- [html, head, body, columns, rows] do
-      assert node.source == %{text: "", line: 1, column: 1}
-      assert node.document_id == document.document_id
-      assert node.tree_scope_id == document.tree_scope_id
-    end
+        for node <- [html, head, body, columns, rows] do
+          assert node.source == %{text: "", line: 1, column: 1}
+          assert node.document_id == document.document_id
+          assert node.tree_scope_id == document.tree_scope_id
+        end
 
-    assert title.source == %{text: "<title>", line: 2, column: 1}
-    assert paragraph.source == %{text: "<p>", line: 3, column: 1}
-    assert hd(paragraph.children).source == %{text: "e\u0301&amp;é", line: 3, column: 4}
-    assert table.source == %{text: "<table>", line: 3, column: 11}
-    assert hd(columns.children).parent_id == columns.node_id
-    assert hd(rows.children).parent_id == rows.node_id
+        assert title.source == %{text: "<title>", line: 2, column: 1}
+        assert paragraph.source == %{text: "<p>", line: 3, column: 1}
+        assert hd(paragraph.children).source == %{text: "e\u0301&amp;é", line: 3, column: 4}
+        assert table.source == %{text: "<table>", line: 3, column: 11}
+        assert hd(columns.children).parent_id == columns.node_id
+        assert hd(rows.children).parent_id == rows.node_id
 
-    assert {:ok, legacy} = HtmlParser.parse_detailed(source)
-    assert Enum.map(legacy.children, & &1.tag) == ["title", "p", "table"]
-    assert Enum.map(List.last(legacy.children).children, & &1.tag) == ["col", "tr"]
-    assert {:ok, fragment} = HtmlParser.parse_fragment("<tr><td>A", "table")
-    assert hd(fragment.children).tag == "tr"
+        assert {:ok, legacy} = HtmlParser.parse_detailed(source)
+        assert Enum.map(legacy.children, & &1.tag) == ["title", "p", "table"]
+        assert Enum.map(List.last(legacy.children).children, & &1.tag) == ["col", "tr"]
+        assert {:ok, fragment} = HtmlParser.parse_fragment("<tr><td>A", "table")
+        assert hd(fragment.children).tag == "tr"
+      end
+    )
   end
 
   test "implied parents reserve node and depth budgets before their authored children" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        limits = Limits.effective()
+        on_exit(fn -> Limits.install(limits) end)
 
-    Limits.install(%{limits | max_html_nodes: 3})
-    assert {:ok, _empty_document} = HtmlParser.parse_document_detailed("")
+        Limits.install(%{limits | max_html_nodes: 3})
+        assert {:ok, _empty_document} = HtmlParser.parse_document_detailed("")
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_document_detailed("<p>A</p>")
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_document_detailed("<p>A</p>")
 
-    assert diagnostic.stage == :html
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_html_nodes"
+        assert diagnostic.stage == :html
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.message =~ "max_html_nodes"
 
-    Limits.install(%{limits | max_html_depth: 2})
-    assert {:ok, _document} = HtmlParser.parse_document_detailed("")
+        Limits.install(%{limits | max_html_depth: 2})
+        assert {:ok, _document} = HtmlParser.parse_document_detailed("")
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_document_detailed("<p>A</p>")
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_document_detailed("<p>A</p>")
 
-    assert diagnostic.message =~ "max_html_depth"
+        assert diagnostic.message =~ "max_html_depth"
 
-    Limits.install(%{limits | max_html_nodes: 9})
-    assert {:ok, _document} = HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
-    Limits.install(%{limits | max_html_nodes: 8})
+        Limits.install(%{limits | max_html_nodes: 9})
+        assert {:ok, _document} = HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
+        Limits.install(%{limits | max_html_nodes: 8})
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
 
-    assert diagnostic.message =~ "max_html_nodes"
+        assert diagnostic.message =~ "max_html_nodes"
+      end
+    )
   end
 
   test "legacy document construction and live reordering preserve authored template addresses" do

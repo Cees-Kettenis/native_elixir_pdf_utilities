@@ -234,69 +234,83 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "token-time omitted document and table parents preserve the public PDF result" do
-    implied =
-      "<title>Metadata</title><?head></head><p>Opening<table><col><col></colgroup>" <>
-        "<tr><td>First<td>Second<?cell></tbody><tr><td>Third<td>Fourth</table>" <>
-        "<template><img src=unused.png><p>Inert</p></template>"
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        implied =
+          "<title>Metadata</title><?head></head><p>Opening<table><col><col></colgroup>" <>
+            "<tr><td>First<td>Second<?cell></tbody><tr><td>Third<td>Fourth</table>" <>
+            "<template><img src=unused.png><p>Inert</p></template>"
 
-    explicit =
-      "<html><head><title>Metadata</title><?head></head><body><p>Opening</p>" <>
-        "<table><colgroup><col><col></colgroup><tbody><tr><td>First</td>" <>
-        "<td>Second<?cell></td></tr></tbody><tbody><tr><td>Third</td>" <>
-        "<td>Fourth</td></tr></tbody></table>" <>
-        "<template><img src=unused.png><p>Inert</p></template></body></html>"
+        explicit =
+          "<html><head><title>Metadata</title><?head></head><body><p>Opening</p>" <>
+            "<table><colgroup><col><col></colgroup><tbody><tr><td>First</td>" <>
+            "<td>Second<?cell></td></tr></tbody><tbody><tr><td>Third</td>" <>
+            "<td>Fourth</td></tr></tbody></table>" <>
+            "<template><img src=unused.png><p>Inert</p></template></body></html>"
 
-    for mode <- [:static, :interactive] do
-      options = [
-        forms: mode,
-        system_font_discovery: false,
-        compress_streams: false,
-        asset_resolver: fn request -> flunk("inert resource fetched #{inspect(request)}") end
-      ]
+        for mode <- [:static, :interactive] do
+          options = [
+            forms: mode,
+            system_font_discovery: false,
+            compress_streams: false,
+            asset_resolver: fn request -> flunk("inert resource fetched #{inspect(request)}") end
+          ]
 
-      assert {:ok, actual} = HtmlToPdf.render(implied, options)
-      assert {:ok, expected} = HtmlToPdf.render(explicit, options)
-      assert actual == expected
-      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(actual)
-      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(actual)
-      assert_pdf_text(actual, ["Opening", "First", "Second", "Third", "Fourth"])
-      assert {:ok, text} = Text.extract(actual)
-      refute text =~ "Inert"
-    end
+          assert {:ok, actual} =
+                   HtmlToPdf.render(implied, Keyword.put(options, :html_recovery, true))
+
+          assert {:ok, expected} =
+                   HtmlToPdf.render(explicit, Keyword.put(options, :html_recovery, true))
+
+          assert actual == expected
+          assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(actual)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(actual)
+          assert_pdf_text(actual, ["Opening", "First", "Second", "Third", "Fourth"])
+          assert {:ok, text} = Text.extract(actual)
+          refute text =~ "Inert"
+        end
+      end
+    )
   end
 
   test "token-time implied parents preserve strict public diagnostics and original locations" do
-    for {source, token, line, column, operation} <- [
-          {"<title>T</title>\r\n<head></head>", "<head>", 2, 1, :render},
-          {"<body></body>\r<head></head>", "<head>", 2, 1, :render},
-          {"<p>e\u0301</p>\r\n  <template for=missing><p>Inert</p></template>",
-           "<template for=missing>", 2, 3, :parse},
-          {"<table><tr><td>A</table>\r\n  <script>run()</script>", "<script>", 2, 3, :render}
-        ] do
-      result =
-        if operation == :parse do
-          assert {:ok, actual} = HtmlToPdf.render(source)
-          assert {:ok, expected} = HtmlToPdf.render("<p>e\u0301</p>")
-          assert actual == expected
-          NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(source)
-        else
-          HtmlToPdf.render(source)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for {source, token, line, column, operation} <- [
+              {"<title>T</title>\r\n<head></head>", "<head>", 2, 1, :render},
+              {"<body></body>\r<head></head>", "<head>", 2, 1, :render},
+              {"<p>e\u0301</p>\r\n  <template for=missing><p>Inert</p></template>",
+               "<template for=missing>", 2, 3, :parse},
+              {"<table><tr><td>A</table>\r\n  <script>run()</script>", "<script>", 2, 3, :render}
+            ] do
+          result =
+            if operation == :parse do
+              assert {:ok, actual} = HtmlToPdf.render(source, html_recovery: true)
+              assert {:ok, expected} = HtmlToPdf.render("<p>e\u0301</p>", html_recovery: true)
+              assert actual == expected
+              NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(source)
+            else
+              HtmlToPdf.render(source, html_recovery: true)
+            end
+
+          assert {:error, {:unsupported_html, diagnostic}} = result
+          assert diagnostic.reason == :unsupported_html
+          assert diagnostic.stage == :html and diagnostic.operation == operation
+
+          if operation == :parse do
+            assert diagnostic.module == NativeElixirPdfUtilities.Validators.TemplatePatchValidator
+            assert diagnostic.message =~ "inert fallback, no earlier matching marker"
+            assert diagnostic.message =~ "no original source has been discarded"
+          end
+
+          assert diagnostic.source == token
+          assert diagnostic.line == line and diagnostic.column == column
+          assert is_binary(diagnostic.message) and diagnostic.message != ""
         end
-
-      assert {:error, {:unsupported_html, diagnostic}} = result
-      assert diagnostic.reason == :unsupported_html
-      assert diagnostic.stage == :html and diagnostic.operation == operation
-
-      if operation == :parse do
-        assert diagnostic.module == NativeElixirPdfUtilities.Validators.TemplatePatchValidator
-        assert diagnostic.message =~ "inert fallback, no earlier matching marker"
-        assert diagnostic.message =~ "no original source has been discarded"
       end
-
-      assert diagnostic.source == token
-      assert diagnostic.line == line and diagnostic.column == column
-      assert is_binary(diagnostic.message) and diagnostic.message != ""
-    end
+    )
   end
 
   test "processing instruction data creates no resources, boxes or PDF fields" do
@@ -393,66 +407,74 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "legacy raw text renders literal content without reading resources or creating fields" do
-    html =
-      File.read!(Paths.fixture("html_to_pdf/browser_parity/html_legacy_raw_text.html"))
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        html =
+          File.read!(Paths.fixture("html_to_pdf/browser_parity/html_legacy_raw_text.html"))
 
-    for mode <- [:static, :interactive] do
-      assert {:ok, pdf} =
-               HtmlToPdf.render(html,
-                 forms: mode,
-                 system_font_discovery: false,
-                 asset_resolver: fn request ->
-                   flunk("raw content fetched #{inspect(request)}")
-                 end
-               )
+        for mode <- [:static, :interactive] do
+          assert {:ok, pdf} =
+                   HtmlToPdf.render(html,
+                     forms: mode,
+                     system_font_discovery: false,
+                     asset_resolver: fn request ->
+                       flunk("raw content fetched #{inspect(request)}")
+                     end,
+                     html_recovery: true
+                   )
 
-      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
-      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
 
-      assert_pdf_text(pdf, [
-        "Before raw text",
-        "Café &amp; &#13;",
-        "<img src=denied.png>",
-        "<script>literal()</script>",
-        "</xmp-suffix> boundary",
-        "After hidden fallback",
-        "Before plaintext",
-        "Plaintext é &amp;",
-        "<input name=literal value=Literal>",
-        "</plaintext>",
-        "<div>Still literal</div>"
-      ])
+          assert_pdf_text(pdf, [
+            "Before raw text",
+            "Café &amp; &#13;",
+            "<img src=denied.png>",
+            "<script>literal()</script>",
+            "</xmp-suffix> boundary",
+            "After hidden fallback",
+            "Before plaintext",
+            "Plaintext é &amp;",
+            "<input name=literal value=Literal>",
+            "</plaintext>",
+            "<div>Still literal</div>"
+          ])
 
-      assert {:ok, text} = Text.extract(pdf)
-      refute text =~ "Unused raw fallback"
-      refute text =~ "Shown &lt; <b>raw</b>"
-      refute text =~ "Inert raw text"
-    end
+          assert {:ok, text} = Text.extract(pdf)
+          refute text =~ "Unused raw fallback"
+          refute text =~ "Shown &lt; <b>raw</b>"
+          refute text =~ "Inert raw text"
+        end
 
-    assert {:ok, pdf} =
-             HtmlToPdf.render(
-               "<div><p>Before inert plaintext</p><template><plaintext>Unused <img src=denied.png></template></div>",
-               asset_resolver: fn request ->
-                 flunk("inert plaintext fetched #{inspect(request)}")
-               end
-             )
+        assert {:ok, pdf} =
+                 HtmlToPdf.render(
+                   "<div><p>Before inert plaintext</p><template><plaintext>Unused <img src=denied.png></template></div>",
+                   asset_resolver: fn request ->
+                     flunk("inert plaintext fetched #{inspect(request)}")
+                   end,
+                   html_recovery: true
+                 )
 
-    assert {:ok, text} = Text.extract(pdf)
-    assert text =~ "Before inert plaintext"
-    refute text =~ "Unused"
+        assert {:ok, text} = Text.extract(pdf)
+        assert text =~ "Before inert plaintext"
+        refute text =~ "Unused"
 
-    assert {:ok, pdf} =
-             HtmlToPdf.render(
-               "<p>Before override</p><noembed style='display:block;background-image:url(missing.png)'>Unused override</noembed><p>After override</p>",
-               system_font_discovery: false,
-               asset_resolver: fn request ->
-                 flunk("noembed override fetched #{inspect(request)}")
-               end
-             )
+        assert {:ok, pdf} =
+                 HtmlToPdf.render(
+                   "<p>Before override</p><noembed style='display:block;background-image:url(missing.png)'>Unused override</noembed><p>After override</p>",
+                   system_font_discovery: false,
+                   asset_resolver: fn request ->
+                     flunk("noembed override fetched #{inspect(request)}")
+                   end,
+                   html_recovery: true
+                 )
 
-    assert {:ok, text} = Text.extract(pdf)
-    assert text =~ "Before override" and text =~ "After override"
-    refute text =~ "Unused override"
+        assert {:ok, text} = Text.extract(pdf)
+        assert text =~ "Before override" and text =~ "After override"
+        refute text =~ "Unused override"
+      end
+    )
   end
 
   test "legacy raw text never weakens executable node policy or original-source diagnostics" do
@@ -568,45 +590,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "mixed anchor and button contents preserve visible text, pages and field state" do
-    html =
-      File.read!(Paths.fixture("html_to_pdf/browser_parity/html_mixed_link_button_content.html"))
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        html =
+          File.read!(
+            Paths.fixture("html_to_pdf/browser_parity/html_mixed_link_button_content.html")
+          )
 
-    opts = [
-      system_font_discovery: false,
-      compress_streams: false,
-      asset_resolver: fn request -> flunk("inert content fetched #{inspect(request)}") end
-    ]
+        opts = [
+          system_font_discovery: false,
+          compress_streams: false,
+          asset_resolver: fn request -> flunk("inert content fetched #{inspect(request)}") end
+        ]
 
-    for mode <- [:static, :interactive] do
-      assert {:ok, pdf} = HtmlToPdf.render(html, Keyword.put(opts, :forms, mode))
-      assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
-      assert {:ok, flattened} = NativeElixirPdfUtilities.Forms.flatten(pdf)
+        for mode <- [:static, :interactive] do
+          assert {:ok, pdf} =
+                   HtmlToPdf.render(
+                     html,
+                     Keyword.put(Keyword.put(opts, :forms, mode), :html_recovery, true)
+                   )
 
-      assert_pdf_text(flattened, [
-        "Anchor block",
-        "Nested prose",
-        "List first",
-        "List second",
-        "Code",
-        "Marked",
-        "Added",
-        "Removed",
-        "Placeholder",
-        "Line first",
-        "Line second",
-        "Attribute",
-        "Initial",
-        "After"
-      ])
+          assert {:ok, 1} = NativeElixirPdfUtilities.Info.page_count(pdf)
+          assert {:ok, flattened} = NativeElixirPdfUtilities.Forms.flatten(pdf)
 
-      assert {:ok, text} = Text.extract(flattened)
-      refute text =~ "Inert caption"
-      assert pdf =~ "https://example.com/mixed"
-      assert {:ok, fields} = NativeElixirPdfUtilities.Forms.fields(pdf)
+          assert_pdf_text(flattened, [
+            "Anchor block",
+            "Nested prose",
+            "List first",
+            "List second",
+            "Code",
+            "Marked",
+            "Added",
+            "Removed",
+            "Placeholder",
+            "Line first",
+            "Line second",
+            "Attribute",
+            "Initial",
+            "After"
+          ])
 
-      assert Enum.map(fields, &{&1.name, &1.value}) ==
-               if(mode == :interactive, do: [{"active", "Initial"}], else: [])
-    end
+          assert {:ok, text} = Text.extract(flattened)
+          refute text =~ "Inert caption"
+          assert pdf =~ "https://example.com/mixed"
+          assert {:ok, fields} = NativeElixirPdfUtilities.Forms.fields(pdf)
+
+          assert Enum.map(fields, &{&1.name, &1.value}) ==
+                   if(mode == :interactive, do: [{"active", "Initial"}], else: [])
+        end
+      end
+    )
   end
 
   test "transparent block anchors retain prose and its PDF link" do
@@ -2757,17 +2791,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "omitted table and list tags preserve visible content and links" do
-    html =
-      "<ul><li>First<li>Second</ul><table><caption>Totals<tbody><tr><td>A<td>B<tr><td>C<td><a href='https://example.com'>Link</a></table><p>Last"
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        html =
+          "<ul><li>First<li>Second</ul><table><caption>Totals<tbody><tr><td>A<td>B<tr><td>C<td><a href='https://example.com'>Link</a></table><p>Last"
 
-    assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert {:ok, text} = Text.extract(pdf)
+        assert {:ok, pdf} = HtmlToPdf.render(html, html_recovery: true)
+        assert {:ok, text} = Text.extract(pdf)
 
-    for content <- ["First", "Second", "Totals", "A", "B", "C", "Link", "Last"] do
-      assert text =~ content
-    end
+        for content <- ["First", "Second", "Totals", "A", "B", "C", "Link", "Last"] do
+          assert text =~ content
+        end
 
-    assert pdf =~ "https://example.com"
+        assert pdf =~ "https://example.com"
+      end
+    )
   end
 
   test "valid empty table structures render without losing following content" do

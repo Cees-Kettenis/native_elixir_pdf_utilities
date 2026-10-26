@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator
 
   @svg_names ~w(altGlyph altGlyphDef altGlyphItem animateColor animateMotion animateTransform clipPath feBlend feColorMatrix feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap feDistantLight feDropShadow feFlood feFuncA feFuncB feFuncG feFuncR feGaussianBlur feImage feMerge feMergeNode feMorphology feOffset fePointLight feSpecularLighting feSpotLight feTile feTurbulence foreignObject glyphRef linearGradient radialGradient textPath)
   @svg_tags Map.new(@svg_names, &{String.downcase(&1), &1})
@@ -60,7 +61,8 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
     with true <- namespace != :html or HtmlValidator.supported_html_tag?(tag),
          {:ok, metadata} <- HtmlValidator.prepare_html_attributes(source, tag, namespace),
          attributes = metadata.attributes,
-         self_closing? = metadata.self_closing?,
+         {:ok, self_closing?} <-
+           HtmlRecoveryValidator.prepare_self_closing(namespace, tag, metadata.self_closing?),
          :ok <- validate_element(namespace, tag, attributes) do
       {tag, attributes} =
         case namespace do
@@ -104,9 +106,7 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
            Enum.map(metadata.attribute_order, &adjust_attribute_name(namespace, &1)),
          namespace: namespace,
          attribute_namespaces: namespaced,
-         self_closing?:
-           (self_closing? and not (namespace == :html and HtmlValidator.custom_html_tag?(tag))) or
-             (namespace == :html and HtmlValidator.html_void_tag?(tag))
+         self_closing?: self_closing?
        }}
     else
       false -> {:error, :unsupported_html}

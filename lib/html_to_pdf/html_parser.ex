@@ -7,8 +7,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   containers, div containers for flex/grid layouts, lists, links, tables,
   images, static form controls, and CSS-targeting attributes, including
   `data-*` and `aria-*` metadata used by attribute selectors and generated
-  content. Unsupported or malformed markup returns an error instead of
-  guessing at browser behavior.
+  content. Unsupported or malformed markup returns an error by default.
+  `html_recovery: true` enables the documented end-tag and trailing-slash repairs.
 
   Parsed elements retain accepted names in `:attribute_order`, normalized for
   their namespace. Validators use this additive source fact for initial hints
@@ -21,7 +21,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   alias NativeElixirPdfUtilities.Validators.ForeignContentValidator
   alias NativeElixirPdfUtilities.Validators.TemplatePatchValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator
+
   alias NativeElixirPdfUtilities.Validators.TemplateCandidateValidator
+
+  @type parse_option :: {:html_recovery, boolean()}
 
   # This fixed byte alphabet follows UTF-8 encoding, not a configurable ceiling.
   @non_ascii_bytes for byte <- 128..255, do: <<byte>>
@@ -90,6 +94,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @doc """
   Parses an HTML binary into a renderer DOM tree.
 
+  Set `html_recovery: true` to accept optional end tags, close unclosed HTML
+  elements at end of input, and ignore nonvoid HTML trailing slashes. Recovery
+  defaults to false and leaves SVG/MathML and static input restrictions intact.
+
   Processing instructions retain case-sensitive targets and literal data. They
   occupy authored tree positions without painting or acting as element siblings.
   Every node has a unique logical `node_id`, an authored `document_id`, a
@@ -105,12 +113,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   elements have empty source text at line 1, column 1. Text tokens retain their
   boundaries across comments; CDATA spans include the original delimiters.
   """
-  @spec parse(term()) ::
+  @spec parse(term(), [parse_option()]) ::
           {:ok, dom_tree()}
           | {:error,
-             :invalid_encoding | :invalid_html | :unsupported_html | :resource_limit_exceeded}
-  def parse(html) do
-    case parse_detailed(html) do
+             :invalid_encoding
+             | :invalid_html
+             | :invalid_options
+             | :unsupported_html
+             | :resource_limit_exceeded}
+  def parse(html, opts \\ []) do
+    case parse_detailed(html, opts) do
       {:ok, dom} -> {:ok, dom}
       {:error, {reason, _detail}} -> {:error, reason}
     end
@@ -119,12 +131,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @doc """
   Parses an HTML binary and returns source-location details when parsing fails.
   """
-  @spec parse_detailed(term()) ::
+  @spec parse_detailed(term(), [parse_option()]) ::
           {:ok, dom_tree()}
           | {:error,
-             {:invalid_encoding | :invalid_html | :unsupported_html | :resource_limit_exceeded,
-              map()}}
-  def parse_detailed(html), do: parse_input(html, :document)
+             {:invalid_encoding
+              | :invalid_html
+              | :invalid_options
+              | :unsupported_html
+              | :resource_limit_exceeded, map()}}
+  def parse_detailed(html, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn -> parse_input(html, :document) end)
+  end
 
   @doc """
   Parses a fragment in a supported HTML, SVG, or MathML context without adding a wrapper.
@@ -137,20 +154,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   Foreign elements retain `:namespace` and qualified `:attribute_namespaces`.
   Unsupported contexts return an error.
   """
-  @spec parse_fragment(term(), term()) ::
+  @spec parse_fragment(term(), term(), [parse_option()]) ::
           {:ok, dom_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def parse_fragment(html, context), do: parse_fragment_detailed(html, context)
+  def parse_fragment(html, context, opts \\ []),
+    do: parse_fragment_detailed(html, context, opts)
 
   @doc """
   Parses a fragment with the same source diagnostics and resource limits as `parse_detailed/1`.
   """
-  @spec parse_fragment_detailed(term(), term()) ::
+  @spec parse_fragment_detailed(term(), term(), [parse_option()]) ::
           {:ok, dom_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def parse_fragment_detailed(html, context) do
-    HtmlValidator.with_render_budget(fn ->
-      with {:ok, context} <- HtmlValidator.validate_html_fragment_context(context) do
-        parse_input(html, context)
-      end
+  def parse_fragment_detailed(html, context, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, context} <- HtmlValidator.validate_html_fragment_context(context) do
+          parse_input(html, context)
+        end
+      end)
     end)
   end
 
@@ -165,13 +185,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   operation grants no resource permissions and does not enable template patches.
   The existing fragment API retains its wrapper-free document projection.
   """
-  @spec parse_fragment_tree_detailed(term(), term()) ::
+  @spec parse_fragment_tree_detailed(term(), term(), [parse_option()]) ::
           {:ok, fragment_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def parse_fragment_tree_detailed(html, context) do
-    HtmlValidator.with_render_budget(fn ->
-      with {:ok, context} <- HtmlValidator.validate_html_fragment_context(context) do
-        parse_input(html, {:fragment_tree, context})
-      end
+  def parse_fragment_tree_detailed(html, context, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, context} <- HtmlValidator.validate_html_fragment_context(context) do
+          parse_input(html, {:fragment_tree, context})
+        end
+      end)
     end)
   end
 
@@ -183,14 +205,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   insertion locations include these implied parents. `parse_detailed/1`
   retains its existing wrapper-free tree representation.
   """
-  @spec parse_document_detailed(term()) ::
+  @spec parse_document_detailed(term(), [parse_option()]) ::
           {:ok, dom_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def parse_document_detailed(html) do
-    HtmlValidator.with_render_budget(fn ->
-      with {:ok, dom} <- parse_input(html, :render_document),
-           :ok <- HtmlValidator.validate_constructed_html_document(dom) do
-        {:ok, dom}
-      end
+  def parse_document_detailed(html, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, dom} <- parse_input(html, :render_document),
+             :ok <- HtmlValidator.validate_constructed_html_document(dom) do
+          {:ok, dom}
+        end
+      end)
     end)
   end
 
@@ -282,25 +306,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
       {:error, {_reason, _diagnostic}} = error ->
         error
-
-      _ ->
-        source =
-          Map.get(source_context, :candidate_source, %{
-            text: source_context.original,
-            line: 1,
-            column: 1
-          })
-
-        Diagnostics.error(
-          :html,
-          :unsupported_html,
-          "candidate source cannot be parsed completely in this tokenizer context; original input remains retained",
-          module: __MODULE__,
-          operation: :parse,
-          source: source.text,
-          line: source.line,
-          column: source.column
-        )
     end
   end
 
@@ -372,7 +377,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     TemplatePatchValidator.with_candidate_input(handle, tree, fn capture ->
       {input, source_context} = source_stream(capture.source)
       plan = capture.plan
-      source_context = Map.put(source_context, :candidate_source, plan.source)
 
       normalized_start =
         capture.source
@@ -747,10 +751,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                context,
                closing_tag,
                HtmlTree.children(tree, parent),
-               ancestors
+               ancestors,
+               tree.nodes[parent].source.text == ""
              ) do
-          true -> {:ok, tree, {:source, ""}}
-          false -> {:error, :unsupported_html}
+          true ->
+            {:ok, tree, {:source, ""}}
+
+          false ->
+            NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.missing_end_tag(
+              closing_tag,
+              HtmlTree.fetch(tree, parent).source,
+              context
+            )
         end
 
       {_, {:ok, token, remaining}} ->
@@ -900,7 +912,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
               tag == closing_tag ->
                 {:ok, tree, remaining}
 
-              HtmlValidator.omitted_html_end_tag?(closing_tag, {:end, tag}, ancestors) ->
+              HtmlValidator.omitted_html_end_tag?(
+                closing_tag,
+                {:end, tag},
+                ancestors,
+                tree.nodes[parent].source.text == ""
+              ) ->
                 {:ok, tree, {:pending, token, remaining}}
 
               true ->
@@ -981,7 +998,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                   nil
                 end),
              :ok <- HtmlValidator.validate_html_element_attributes(tag, attributes, planning),
-             false <- HtmlValidator.omitted_html_end_tag?(closing_tag, {:start, tag}, ancestors),
+             false <-
+               HtmlValidator.omitted_html_end_tag?(
+                 closing_tag,
+                 {:start, tag},
+                 ancestors,
+                 tree.nodes[parent].source.text == ""
+               ),
              true <- ForeignContentValidator.valid_child?(context, prepared, ancestors) do
           case NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.take_action(
                  tree,
@@ -1096,9 +1119,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
               else
                 false ->
                   {:error, {:html_source, token, byte_size(stream_source(remaining))}}
-
-                {:error, :unsupported_html} ->
-                  {:error, {:html_source, token <> stream_source(remaining), 0}}
 
                 error ->
                   error

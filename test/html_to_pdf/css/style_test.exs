@@ -12,30 +12,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   import NativeElixirPdfUtilities.HtmlTreeHelpers
 
   test "processing instructions neither paint nor affect element sibling selectors and counters" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
-    html =
-      "<style>p{counter-increment:item}p::before{content:counter(item)}p:first-child{color:red}p:nth-child(2){color:blue}p:last-child{font-weight:bold}</style><div><?marker><p>First</p><?start><p>Second</p><?end></div>"
+        html =
+          "<style>p{counter-increment:item}p::before{content:counter(item)}p:first-child{color:red}p:nth-child(2){color:blue}p:last-child{font-weight:bold}</style><div><?marker><p>First</p><?start><p>Second</p><?end></div>"
 
-    assert {:ok, dom} = HtmlParser.parse_detailed(html)
-    assert {:ok, %{children: [%{children: [first, second]}]}} = Style.compute_detailed(dom)
-    assert first.style.color == {1.0, 0.0, 0.0}
-    assert second.style.color == {0.0, 0.0, 1.0}
-    assert second.style.font_weight == 700
-    assert hd(hd(first.children).children).text == "1"
-    assert hd(hd(second.children).children).text == "2"
+        assert {:ok, dom} = HtmlParser.parse_detailed(html)
+        assert {:ok, %{children: [%{children: [first, second]}]}} = Style.compute_detailed(dom)
+        assert first.style.color == {1.0, 0.0, 0.0}
+        assert second.style.color == {0.0, 0.0, 1.0}
+        assert second.style.font_weight == 700
+        assert hd(hd(first.children).children).text == "1"
+        assert hd(hd(second.children).children).text == "2"
 
-    assert {:ok, dom} = HtmlParser.parse_detailed("<?marker name='unused.png'?>")
-    assert {:ok, %{children: []}} = Style.compute_detailed(dom)
+        assert {:ok, dom} = HtmlParser.parse_detailed("<?marker name='unused.png'?>")
+        assert {:ok, %{children: []}} = Style.compute_detailed(dom)
 
-    assert {:ok, dom} =
-             HtmlParser.parse_detailed(
-               "<ul><?marker><li>One</li><?end><li>Two</li></ul><select><?marker><option>A<?end><option selected>B</select>"
-             )
+        assert {:ok, dom} =
+                 HtmlParser.parse_detailed(
+                   "<ul><?marker><li>One</li><?end><li>Two</li></ul><select><?marker><option>A<?end><option selected>B</select>"
+                 )
 
-    assert {:ok, %{children: [list, select]}} = Style.compute_detailed(dom)
-    assert length(list.children) == 2
-    assert select.children == [%{type: :text, text: "B", style: hd(select.children).style}]
+        assert {:ok, %{children: [list, select]}} = Style.compute_detailed(dom)
+        assert length(list.children) == 2
+        assert select.children == [%{type: :text, text: "B", style: hd(select.children).style}]
+      end
+    )
   end
 
   test "direct processing instruction nodes validate before nonpainting selection" do
@@ -116,34 +121,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   end
 
   test "xmp and plaintext use preformatted defaults without dropping their first newline" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.Style
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
-    for tag <- ~w(xmp plaintext) do
-      suffix = if tag == "xmp", do: "</xmp></div>", else: ""
+        for tag <- ~w(xmp plaintext) do
+          suffix = if tag == "xmp", do: "</xmp></div>", else: ""
 
-      assert {:ok, dom} =
-               HtmlParser.parse_detailed(
-                 "<div style='font-size:15pt;font-weight:bold'><#{tag}>\r\n  é &amp;\rNext" <>
-                   suffix
-               )
+          assert {:ok, dom} =
+                   HtmlParser.parse_detailed(
+                     "<div style='font-size:15pt;font-weight:bold'><#{tag}>\r\n  é &amp;\rNext" <>
+                       suffix
+                   )
 
-      assert {:ok, %{children: [%{children: [node]}]}} = Style.compute_detailed(dom)
-      assert node.style.display == :block and node.style.white_space == :pre
-      assert node.style.font_face.family == "DejaVu Sans Mono"
-      assert node.style.font_size == 15.0 and node.style.font_weight == 700
-      assert node.style.margin.top == 15.0 and node.style.margin.bottom == 15.0
-      assert [%{text: "\n  é &amp;\nNext"}] = node.children
+          assert {:ok, %{children: [%{children: [node]}]}} = Style.compute_detailed(dom)
+          assert node.style.display == :block and node.style.white_space == :pre
+          assert node.style.font_face.family == "DejaVu Sans Mono"
+          assert node.style.font_size == 15.0 and node.style.font_weight == 700
+          assert node.style.margin.top == 15.0 and node.style.margin.bottom == 15.0
+          assert [%{text: "\n  é &amp;\nNext"}] = node.children
 
-      html =
-        "<#{tag} style='font-family:DejaVu Sans;white-space:normal;margin:0;font-size:9pt'>é &amp;" <>
-          if(tag == "xmp", do: "</xmp>", else: "")
+          html =
+            "<#{tag} style='font-family:DejaVu Sans;white-space:normal;margin:0;font-size:9pt'>é &amp;" <>
+              if(tag == "xmp", do: "</xmp>", else: "")
 
-      assert {:ok, dom} = HtmlParser.parse_detailed(html)
-      assert {:ok, %{children: [overridden]}} = Style.compute_detailed(dom)
-      assert overridden.style.white_space == :normal and overridden.style.font_size == 9.0
-      assert overridden.style.font_face.family == "DejaVu Sans"
-      assert overridden.style.margin == %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
-    end
+          assert {:ok, dom} = HtmlParser.parse_detailed(html)
+          assert {:ok, %{children: [overridden]}} = Style.compute_detailed(dom)
+          assert overridden.style.white_space == :normal and overridden.style.font_size == 9.0
+          assert overridden.style.font_face.family == "DejaVu Sans"
+          assert overridden.style.margin == %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+        end
+      end
+    )
   end
 
   test "noembed stays raw and produces no box even with authored display overrides" do
@@ -6914,12 +6924,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   end
 
   test "list defaults use outside markers and browser item spacing" do
-    assert {:ok, dom} = HtmlParser.parse("<ul><li>First<li>Second</ul>")
-    assert {:ok, %{children: [list]}} = Style.compute(dom, [])
-    assert list.style.padding.left == 30.0
-    assert list.style.margin.top == list.style.font_size
-    assert list.style.margin.bottom == list.style.font_size
-    assert Enum.all?(list.children, &(&1.style.margin.bottom == 0.0))
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, dom} = HtmlParser.parse("<ul><li>First<li>Second</ul>")
+        assert {:ok, %{children: [list]}} = Style.compute(dom, [])
+        assert list.style.padding.left == 30.0
+        assert list.style.margin.top == list.style.font_size
+        assert list.style.margin.bottom == list.style.font_size
+        assert Enum.all?(list.children, &(&1.style.margin.bottom == 0.0))
+      end
+    )
   end
 
   test "readonly selector values remain authored and disabled styling stays independent" do

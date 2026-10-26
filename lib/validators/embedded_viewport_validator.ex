@@ -69,6 +69,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
          :ok <- HtmlValidator.validate_render_request("", opts, {:ok, normalized}),
          opts <-
            Keyword.take(normalized, [
+             :html_recovery,
              :forms,
              :assets,
              :asset_resolver,

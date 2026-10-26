@@ -31,9 +31,12 @@ ordinary initial-state meaning. Boolean attributes depend on presence, so
 `disabled="false"` still disables a control and `open="false"` still opens details.
 
 HTML must be UTF-8. A leading BOM and supported HTML doctypes are accepted.
-`html`, `head` and `body` wrappers and standard optional paragraph, list, option
-and table end tags may be omitted. Duplicate attributes, invalid structure and
-unsupported executable content return [diagnostics](diagnostics.md).
+`html`, `head` and `body` wrappers may be omitted. Authored nonvoid HTML elements
+require closing tags by default. Set `html_recovery: true` to accept optional end tags, close
+unclosed HTML elements at end of input, and treat `<div/>` as an opening tag.
+Other invalid structure, duplicate attributes and executable content return
+[diagnostics](diagnostics.md). Script execution and linked stylesheet loading
+remain excluded in both modes.
 Comments paint nothing. Plain text and supported inline content may appear
 directly in the body. An empty document produces one blank page.
 
@@ -222,6 +225,7 @@ Pass options to `HtmlToPdf.render(html, options)` or `render_file/3`.
 
 | Option | Use it to | Default | Supported values |
 | --- | --- | --- | --- |
+| `:html_recovery` | Recover supported omitted or unclosed HTML end tags and ignore nonvoid trailing slashes | `false` | Boolean; other malformed structures and resource restrictions still return diagnostics |
 | `:page_size` | Set page dimensions | `:a4` | Named size, orientation tuple, size string, or numeric tuple. See [page sizes](#page-size-and-margins). |
 | `:margin` | Set page margins | `0` | Nonnegative point number, CSS string, or side map. See [margin formats](#page-size-and-margins). |
 | `:stylesheets` | Add CSS | `[]` | List of `{:css, css}` or `{:file, path}` entries |

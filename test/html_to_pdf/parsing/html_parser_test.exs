@@ -116,19 +116,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "processing instructions do not invalidate element content models or optional boundaries" do
-    for html <- [
-          "<ul><?marker><li>A<?end><li>B</ul>",
-          "<dl><?marker><dt>Term<?end><dd>Definition</dl>",
-          "<figure><?marker><figcaption>Caption</figcaption><p>Body</p><?end></figure>",
-          "<table><?marker><colgroup><?marker><col></colgroup><tbody><?start><tr><?marker><td>A</td></tr><?end></tbody></table>",
-          "<select><?marker><option>A<?end><option>B</select>",
-          "<button><?marker><b>Button</b><?end></button>",
-          "<a><?marker><p>Block</p><?end></a>",
-          "<head><noscript><?marker><style>p{color:red}</style><?end></noscript></head>",
-          "<title>Title</title><?marker></head><p>Body</p>"
-        ] do
-      assert {:ok, _} = HtmlParser.parse_document_detailed(html)
-    end
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for html <- [
+              "<ul><?marker><li>A<?end><li>B</ul>",
+              "<dl><?marker><dt>Term<?end><dd>Definition</dl>",
+              "<figure><?marker><figcaption>Caption</figcaption><p>Body</p><?end></figure>",
+              "<table><?marker><colgroup><?marker><col></colgroup><tbody><?start><tr><?marker><td>A</td></tr><?end></tbody></table>",
+              "<select><?marker><option>A<?end><option>B</select>",
+              "<button><?marker><b>Button</b><?end></button>",
+              "<a><?marker><p>Block</p><?end></a>",
+              "<head><noscript><?marker><style>p{color:red}</style><?end></noscript></head>",
+              "<title>Title</title><?marker></head><p>Body</p>"
+            ] do
+          assert {:ok, _} = HtmlParser.parse_document_detailed(html)
+        end
+      end
+    )
   end
 
   test "processing instructions stay in implied table groups in insertion order" do
@@ -266,94 +271,104 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "plaintext consumes all remaining input including its own and ancestor closing tags" do
-    for newline <- ["\r", "\r\n", "\n"] do
-      suffix = "#{newline}é &amp; &#13;<b>Literal</b></plaintext></div></body></html>"
-      expected = String.replace(suffix, ~r/\r\n?/, "\n")
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for newline <- ["\r", "\r\n", "\n"] do
+          suffix = "#{newline}é &amp; &#13;<b>Literal</b></plaintext></div></body></html>"
+          expected = String.replace(suffix, ~r/\r\n?/, "\n")
 
-      assert {:ok, %{children: [html]}} =
-               HtmlParser.parse_document_detailed(
-                 "<html><body><div><p>Before<plaintext>" <> suffix
-               )
+          assert {:ok, %{children: [html]}} =
+                   HtmlParser.parse_document_detailed(
+                     "<html><body><div><p>Before<plaintext>" <> suffix
+                   )
 
-      [_, body] = html.children
-      assert [%{tag: "div", children: [%{tag: "p"}, plaintext]}] = body.children
-      assert plaintext.tag == "plaintext"
-      assert tree_content(plaintext.children) == [%{type: :text, text: expected}]
+          [_, body] = html.children
+          assert [%{tag: "div", children: [%{tag: "p"}, plaintext]}] = body.children
+          assert plaintext.tag == "plaintext"
+          assert tree_content(plaintext.children) == [%{type: :text, text: expected}]
 
-      assert {:ok, %{children: [%{text: ^expected}]}} =
-               HtmlParser.parse_fragment(suffix, "PLAINTEXT")
-    end
+          assert {:ok, %{children: [%{text: ^expected}]}} =
+                   HtmlParser.parse_fragment(suffix, "PLAINTEXT")
+        end
 
-    assert {:ok, %{children: [%{tag: "plaintext", children: []}]}} =
-             HtmlParser.parse_detailed("<plaintext>")
+        assert {:ok, %{children: [%{tag: "plaintext", children: []}]}} =
+                 HtmlParser.parse_detailed("<plaintext>")
 
-    assert {:ok, %{children: [%{tag: "div", children: [%{tag: "plaintext", children: []}]}]}} =
-             HtmlParser.parse_detailed("<div><plaintext>")
+        assert {:ok, %{children: [%{tag: "div", children: [%{tag: "plaintext", children: []}]}]}} =
+                 HtmlParser.parse_detailed("<div><plaintext>")
 
-    assert {:ok, %{children: [%{tag: "div", children: [template]}]}} =
-             HtmlParser.parse_detailed(
-               "<div><template><plaintext>é &amp;</plaintext></template></div>"
-             )
+        assert {:ok, %{children: [%{tag: "div", children: [template]}]}} =
+                 HtmlParser.parse_detailed(
+                   "<div><template><plaintext>é &amp;</plaintext></template></div>"
+                 )
 
-    assert template.children == []
+        assert template.children == []
 
-    assert [%{tag: "plaintext", children: [%{text: "é &amp;</plaintext></template></div>"}]}] =
-             template.content.children
+        assert [%{tag: "plaintext", children: [%{text: "é &amp;</plaintext></template></div>"}]}] =
+                 template.content.children
+      end
+    )
   end
 
   test "raw text boundaries respect HTML nesting and foreign integration contexts" do
-    assert {:ok, %{children: [div]}} =
-             HtmlParser.parse_detailed(
-               "<div><p>Before<xmp><xmp>Nested-looking</xmp><p>After</p>" <>
-                 "<a><xmp>Anchor block</xmp></a><p><noembed><p>Literal</p></noembed></p>" <>
-                 "<template><xmp><input name=unused></xmp></template></div>"
-             )
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, %{children: [div]}} =
+                 HtmlParser.parse_detailed(
+                   "<div><p>Before<xmp><xmp>Nested-looking</xmp><p>After</p>" <>
+                     "<a><xmp>Anchor block</xmp></a><p><noembed><p>Literal</p></noembed></p>" <>
+                     "<template><xmp><input name=unused></xmp></template></div>"
+                 )
 
-    assert Enum.map(div.children, & &1.tag) == ~w(p xmp p a p template)
+        assert Enum.map(div.children, & &1.tag) == ~w(p xmp p a p template)
 
-    assert tree_content(Enum.at(div.children, 1).children) == [
-             %{type: :text, text: "<xmp>Nested-looking"}
-           ]
+        assert tree_content(Enum.at(div.children, 1).children) == [
+                 %{type: :text, text: "<xmp>Nested-looking"}
+               ]
 
-    assert tree_content(Enum.at(div.children, 4).children) == [
-             %{
-               type: :element,
-               tag: "noembed",
-               attributes: %{},
-               children: [%{type: :text, text: "<p>Literal</p>"}]
-             }
-           ]
+        assert tree_content(Enum.at(div.children, 4).children) == [
+                 %{
+                   type: :element,
+                   tag: "noembed",
+                   attributes: %{},
+                   children: [%{type: :text, text: "<p>Literal</p>"}]
+                 }
+               ]
 
-    [inert] = List.last(div.children).content.children
-    assert tree_content(inert.children) == [%{type: :text, text: "<input name=unused>"}]
+        [inert] = List.last(div.children).content.children
+        assert tree_content(inert.children) == [%{type: :text, text: "<input name=unused>"}]
 
-    for tag <- ~w(xmp noembed plaintext) do
-      assert {:ok, %{children: [svg]}} =
-               HtmlParser.parse_detailed("<svg><#{tag}><path/></#{tag}></svg>")
+        for tag <- ~w(xmp noembed plaintext) do
+          assert {:ok, %{children: [svg]}} =
+                   HtmlParser.parse_detailed("<svg><#{tag}><path/></#{tag}></svg>")
 
-      assert [%{tag: ^tag, namespace: :svg, children: [%{tag: "path", namespace: :svg}]}] =
-               svg.children
+          assert [%{tag: ^tag, namespace: :svg, children: [%{tag: "path", namespace: :svg}]}] =
+                   svg.children
 
-      context = %{namespace: :svg, tag: tag}
+          context = %{namespace: :svg, tag: tag}
 
-      assert {:ok, %{children: [%{tag: "path", namespace: :svg}]}} =
-               HtmlParser.parse_fragment("<path/>", context)
+          assert {:ok, %{children: [%{tag: "path", namespace: :svg}]}} =
+                   HtmlParser.parse_fragment("<path/>", context)
 
-      assert {:error, {:unsupported_html, _}} = HtmlParser.parse_detailed("<svg><#{tag}>")
-    end
+          assert {:error, {:unsupported_html, _}} = HtmlParser.parse_detailed("<svg><#{tag}>")
+        end
 
-    for {prefix, suffix} <- [
-          {"<svg><foreignObject>", "</foreignObject></svg>"},
-          {"<math><mtext>", "</mtext></math>"},
-          {"<math><annotation-xml encoding=text/html>", "</annotation-xml></math>"}
-        ] do
-      assert {:ok, _} =
-               HtmlParser.parse_detailed(
-                 prefix <> "<xmp><script>Literal</script></xmp>" <> suffix
-               )
+        for {prefix, suffix} <- [
+              {"<svg><foreignObject>", "</foreignObject></svg>"},
+              {"<math><mtext>", "</mtext></math>"},
+              {"<math><annotation-xml encoding=text/html>", "</annotation-xml></math>"}
+            ] do
+          assert {:ok, _} =
+                   HtmlParser.parse_detailed(
+                     prefix <> "<xmp><script>Literal</script></xmp>" <> suffix
+                   )
 
-      assert {:ok, _} = HtmlParser.parse_detailed(prefix <> "<plaintext>Literal" <> suffix)
-    end
+          assert {:ok, _} = HtmlParser.parse_detailed(prefix <> "<plaintext>Literal" <> suffix)
+        end
+      end
+    )
   end
 
   test "raw text syntax failures preserve caller closing boundaries and source locations" do
@@ -571,52 +586,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "anchors inherit parent content models and buttons accept static phrasing content" do
-    assert {:ok, %{children: [div]}} =
-             HtmlParser.parse_detailed(
-               "<div><a href='https://example.com'><p>Prose</p><ul><li>List<li>Next</ul><div>Block</div></a></div>"
-             )
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, %{children: [div]}} =
+                 HtmlParser.parse_detailed(
+                   "<div><a href='https://example.com'><p>Prose</p><ul><li>List<li>Next</ul><div>Block</div></a></div>"
+                 )
 
-    [anchor] = div.children
-    assert Enum.map(anchor.children, & &1.tag) == ["p", "ul", "div"]
+        [anchor] = div.children
+        assert Enum.map(anchor.children, & &1.tag) == ["p", "ul", "div"]
 
-    assert tree_content(Enum.map(Enum.at(anchor.children, 1).children, & &1.children)) ==
-             [[%{type: :text, text: "List"}], [%{type: :text, text: "Next"}]]
+        assert tree_content(Enum.map(Enum.at(anchor.children, 1).children, & &1.children)) ==
+                 [[%{type: :text, text: "List"}], [%{type: :text, text: "Next"}]]
 
-    valid =
-      "<button><code>Code</code><mark>Mark</mark><ins><span>Added</span></ins>" <>
-        "<del>Removed</del><abbr title=Title>Abbr</abbr><br><img src=asset.png>" <>
-        "<a>Placeholder</a><input type=hidden><template><div><button>Inert</button></div></template></button>"
+        valid =
+          "<button><code>Code</code><mark>Mark</mark><ins><span>Added</span></ins>" <>
+            "<del>Removed</del><abbr title=Title>Abbr</abbr><br><img src=asset.png>" <>
+            "<a>Placeholder</a><input type=hidden><template><div><button>Inert</button></div></template></button>"
 
-    assert {:ok, %{children: [button]}} = HtmlParser.parse_detailed(valid)
+        assert {:ok, %{children: [button]}} = HtmlParser.parse_detailed(valid)
 
-    assert Enum.map(button.children, & &1.tag) ==
-             ~w(code mark ins del abbr br img a input template)
+        assert Enum.map(button.children, & &1.tag) ==
+                 ~w(code mark ins del abbr br img a input template)
 
-    assert {:ok, _} = HtmlParser.parse_fragment(valid, "div")
+        assert {:ok, _} = HtmlParser.parse_fragment(valid, "div")
 
-    assert {:ok, _} =
-             HtmlParser.parse_detailed("<a><template><div><a>Inert</a></div></template></a>")
+        assert {:ok, _} =
+                 HtmlParser.parse_detailed("<a><template><div><a>Inert</a></div></template></a>")
 
-    assert {:ok, _} = HtmlParser.parse_detailed("<div><a><svg><a>Foreign</a></svg></a></div>")
-    assert {:ok, _} = HtmlParser.parse_detailed("<button><math><mi>x</mi></math></button>")
+        assert {:ok, _} = HtmlParser.parse_detailed("<div><a><svg><a>Foreign</a></svg></a></div>")
+        assert {:ok, _} = HtmlParser.parse_detailed("<button><math><mi>x</mi></math></button>")
 
-    for html <- [
-          "<p><a><div>Invalid</div></a></p>",
-          "<p><a><ins><div>Invalid</div></ins></a></p>",
-          "<div><a><span><a>Nested</a></span></a></div>",
-          "<a><span><input></span></a>",
-          "<a><div><details><summary>Interactive</summary></details></div></a>",
-          "<a><label>Interactive</label></a>",
-          "<button><div>Block</div></button>",
-          "<button><span><button>Nested</button></span></button>",
-          "<button><a href='https://example.com'>Interactive</a></button>",
-          "<button><ins><input></ins></button>",
-          "<a><svg><foreignObject><input></foreignObject></svg></a>"
-        ] do
-      assert {:error, {:unsupported_html, detail}} = HtmlParser.parse_detailed(html)
-      assert detail.stage == :html and detail.line == 1
-      assert is_integer(detail.column) and is_binary(detail.source)
-    end
+        for html <- [
+              "<p><a><div>Invalid</div></a></p>",
+              "<p><a><ins><div>Invalid</div></ins></a></p>",
+              "<div><a><span><a>Nested</a></span></a></div>",
+              "<a><span><input></span></a>",
+              "<a><div><details><summary>Interactive</summary></details></div></a>",
+              "<a><label>Interactive</label></a>",
+              "<button><div>Block</div></button>",
+              "<button><span><button>Nested</button></span></button>",
+              "<button><a href='https://example.com'>Interactive</a></button>",
+              "<button><ins><input></ins></button>",
+              "<a><svg><foreignObject><input></foreignObject></svg></a>"
+            ] do
+          assert {:error, {:unsupported_html, detail}} = HtmlParser.parse_detailed(html)
+          assert detail.stage == :html and detail.line == 1
+          assert is_integer(detail.column) and is_binary(detail.source)
+        end
+      end
+    )
   end
 
   test "newline preprocessing accounts for caller bytes before normalization" do
@@ -1073,50 +1093,60 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "custom fragment contexts preserve namespace integration and nonvoid content" do
-    assert {:ok, %{children: [%{tag: "x-box", children: [%{text: "Kept"}]}]}} =
-             HtmlParser.parse_detailed("<x-box/>Kept</x-box>")
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, %{children: [%{tag: "x-box", children: [%{text: "Kept"}]}]}} =
+                 HtmlParser.parse_detailed("<x-box/>Kept</x-box>")
 
-    assert {:ok, %{children: [%{tag: "x-box", children: []}, %{tag: "p"}]}} =
-             HtmlParser.parse_detailed("<x-box></x-box><p>Sibling</p>")
+        assert {:ok, %{children: [%{tag: "x-box", children: []}, %{tag: "p"}]}} =
+                 HtmlParser.parse_detailed("<x-box></x-box><p>Sibling</p>")
 
-    assert {:ok, %{children: [%{tag: "div"}]}} =
-             HtmlParser.parse_fragment_detailed("<div>Fallback flow</div>", "X-É")
+        assert {:ok, %{children: [%{tag: "div"}]}} =
+                 HtmlParser.parse_fragment_detailed("<div>Fallback flow</div>", "X-É")
 
-    for context <- [
-          %{namespace: :svg, tag: "foreignObject"},
-          %{namespace: :mathml, tag: "annotation-xml", attributes: %{"encoding" => "text/html"}}
-        ] do
-      assert {:ok, %{children: [%{tag: "x-É", namespace: :html, children: [%{tag: "div"}]}]}} =
-               HtmlParser.parse_fragment_detailed("<x-É><div>HTML</div></x-É>", context)
-    end
+        for context <- [
+              %{namespace: :svg, tag: "foreignObject"},
+              %{
+                namespace: :mathml,
+                tag: "annotation-xml",
+                attributes: %{"encoding" => "text/html"}
+              }
+            ] do
+          assert {:ok, %{children: [%{tag: "x-É", namespace: :html, children: [%{tag: "div"}]}]}} =
+                   HtmlParser.parse_fragment_detailed("<x-É><div>HTML</div></x-É>", context)
+        end
 
-    assert {:ok, %{children: [%{tag: "x-box", namespace: :svg}]}} =
-             HtmlParser.parse_fragment_detailed("<x-box/>", "svg")
+        assert {:ok, %{children: [%{tag: "x-box", namespace: :svg}]}} =
+                 HtmlParser.parse_fragment_detailed("<x-box/>", "svg")
 
-    assert {:ok, %{children: [%{tag: "x-box", namespace: :mathml}]}} =
-             HtmlParser.parse_fragment_detailed("<x-box/>", "math")
+        assert {:ok, %{children: [%{tag: "x-box", namespace: :mathml}]}} =
+                 HtmlParser.parse_fragment_detailed("<x-box/>", "math")
 
-    for html <- [
-          "<template><x-box/><div>Kept</div></x-box></template>",
-          "<button><x-box><input name=invalid></x-box></button>"
-        ] do
-      case html do
-        "<template>" <> _ ->
-          assert {:ok,
-                  %{
-                    children: [
+        for html <- [
+              "<template><x-box/><div>Kept</div></x-box></template>",
+              "<button><x-box><input name=invalid></x-box></button>"
+            ] do
+          case html do
+            "<template>" <> _ ->
+              assert {:ok,
                       %{
-                        tag: "template",
-                        content: %{children: [%{tag: "x-box", children: [%{tag: "div"}]}]}
-                      }
-                    ]
-                  }} =
-                   HtmlParser.parse_detailed(html)
+                        children: [
+                          %{
+                            tag: "template",
+                            content: %{children: [%{tag: "x-box", children: [%{tag: "div"}]}]}
+                          }
+                        ]
+                      }} =
+                       HtmlParser.parse_detailed(html)
 
-        _ ->
-          assert {:error, {:unsupported_html, %{stage: :html}}} = HtmlParser.parse_detailed(html)
+            _ ->
+              assert {:error, {:unsupported_html, %{stage: :html}}} =
+                       HtmlParser.parse_detailed(html)
+          end
+        end
       end
-    end
+    )
   end
 
   test "scripting-disabled noscript parses active transparent markup and head styles" do
@@ -1563,33 +1593,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
 
     test "uses MathML text and annotation integration points with their exceptions" do
-      for token <- ~w(mi mo mn ms mtext) do
-        assert {:ok, %{children: [%{children: [point]}]}} =
-                 HtmlParser.parse_detailed(
-                   "<math><#{token}><span>HTML</span><mglyph/><malignmark/></#{token}></math>"
-                 )
+      NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+        [html_recovery: true],
+        fn ->
+          for token <- ~w(mi mo mn ms mtext) do
+            assert {:ok, %{children: [%{children: [point]}]}} =
+                     HtmlParser.parse_detailed(
+                       "<math><#{token}><span>HTML</span><mglyph/><malignmark/></#{token}></math>"
+                     )
 
-        assert [
-                 %{tag: "span", namespace: :html},
-                 %{tag: "mglyph", namespace: :mathml},
-                 %{tag: "malignmark", namespace: :mathml}
-               ] = point.children
-      end
+            assert [
+                     %{tag: "span", namespace: :html},
+                     %{tag: "mglyph", namespace: :mathml},
+                     %{tag: "malignmark", namespace: :mathml}
+                   ] = point.children
+          end
 
-      for encoding <- ["text/html", "APPLICATION/XHTML+XML"] do
-        assert {:ok, %{children: [%{children: [%{children: [%{tag: "p", namespace: :html}]}]}]}} =
-                 HtmlParser.parse_detailed(
-                   "<math><annotation-xml encoding='#{encoding}'><p>HTML</annotation-xml></math>"
-                 )
-      end
+          for encoding <- ["text/html", "APPLICATION/XHTML+XML"] do
+            assert {:ok,
+                    %{children: [%{children: [%{children: [%{tag: "p", namespace: :html}]}]}]}} =
+                     HtmlParser.parse_detailed(
+                       "<math><annotation-xml encoding='#{encoding}'><p>HTML</annotation-xml></math>"
+                     )
+          end
 
-      assert {:ok, %{children: [%{children: [annotation]}]}} =
-               HtmlParser.parse_detailed(
-                 "<math><annotation-xml encoding='application/custom'><svg><path/></svg><unknown-math/></annotation-xml></math>"
-               )
+          assert {:ok, %{children: [%{children: [annotation]}]}} =
+                   HtmlParser.parse_detailed(
+                     "<math><annotation-xml encoding='application/custom'><svg><path/></svg><unknown-math/></annotation-xml></math>"
+                   )
 
-      assert [%{tag: "svg", namespace: :svg}, %{tag: "unknown-math", namespace: :mathml}] =
-               annotation.children
+          assert [%{tag: "svg", namespace: :svg}, %{tag: "unknown-math", namespace: :mathml}] =
+                   annotation.children
+        end
+      )
     end
 
     test "CDATA stays literal only in foreign content and raw text remains context dependent" do
@@ -1712,17 +1748,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "description lists accept omitted item ends and reject structural text" do
-    explicit = "<dl><dt>Term</dt><dd>Meaning</dd><dt>Next</dt><dd><p>Detail</p></dd></dl>"
-    omitted = "<dl><dt>Term<dd>Meaning<dt>Next<dd><p>Detail</dl>"
-    assert tree_content(HtmlParser.parse(explicit)) == tree_content(HtmlParser.parse(omitted))
-    assert {:error, :unsupported_html} = HtmlParser.parse("<dl>outside<dt>Term</dt></dl>")
-    assert {:error, :unsupported_html} = HtmlParser.parse("<dl><dt>Term</dl>")
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        explicit = "<dl><dt>Term</dt><dd>Meaning</dd><dt>Next</dt><dd><p>Detail</p></dd></dl>"
+        omitted = "<dl><dt>Term<dd>Meaning<dt>Next<dd><p>Detail</dl>"
+        assert tree_content(HtmlParser.parse(explicit)) == tree_content(HtmlParser.parse(omitted))
+        assert {:error, :unsupported_html} = HtmlParser.parse("<dl>outside<dt>Term</dt></dl>")
+        assert {:error, :unsupported_html} = HtmlParser.parse("<dl><dt>Term</dl>")
 
-    assert {:ok, %{children: [%{children: [%{text: "  first\nnext"}]}]}} =
-             HtmlParser.parse("<pre>\r\n  first\nnext</pre>")
+        assert {:ok, %{children: [%{children: [%{text: "  first\nnext"}]}]}} =
+                 HtmlParser.parse("<pre>\r\n  first\nnext</pre>")
 
-    assert {:ok, %{children: [%{children: [%{text: "first"}]}]}} =
-             HtmlParser.parse("<listing>\rfirst</listing>")
+        assert {:ok, %{children: [%{children: [%{text: "first"}]}]}} =
+                 HtmlParser.parse("<listing>\rfirst</listing>")
+      end
+    )
   end
 
   test "parse accepts a strict paragraph document" do
@@ -1970,49 +2011,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "optgroups support omitted option and group endings and diagnose unsupported contents" do
-    assert {:ok, %{children: [select]}} =
-             HtmlParser.parse_detailed("""
-             <select><optgroup label='One'><option label='Alpha' value='a'><option>B
-             <optgroup label='Two' disabled><option>C</select>
-             """)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, %{children: [select]}} =
+                 HtmlParser.parse_detailed("""
+                 <select><optgroup label='One'><option label='Alpha' value='a'><option>B
+                 <optgroup label='Two' disabled><option>C</select>
+                 """)
 
-    assert Enum.map(select.children, & &1.tag) == ["optgroup", "optgroup"]
-    assert Enum.map(hd(select.children).children, & &1.tag) == ["option", "option"]
-    assert hd(hd(select.children).children).attributes["label"] == "Alpha"
+        assert Enum.map(select.children, & &1.tag) == ["optgroup", "optgroup"]
+        assert Enum.map(hd(select.children).children, & &1.tag) == ["option", "option"]
+        assert hd(hd(select.children).children).attributes["label"] == "Alpha"
 
-    assert {:ok, %{children: [separated]}} =
-             HtmlParser.parse_detailed(
-               "<select><optgroup label='Group'><option>A<hr><option selected>B</select>"
-             )
+        assert {:ok, %{children: [separated]}} =
+                 HtmlParser.parse_detailed(
+                   "<select><optgroup label='Group'><option>A<hr><option selected>B</select>"
+                 )
 
-    assert Enum.map(separated.children, & &1.tag) == ["optgroup", "hr", "option"]
-    [group, separator, selected] = separated.children
-    assert Enum.map(group.children, & &1.tag) == ["option"]
-    assert separator.children == []
-    assert selected.attributes["selected"] == ""
+        assert Enum.map(separated.children, & &1.tag) == ["optgroup", "hr", "option"]
+        [group, separator, selected] = separated.children
+        assert Enum.map(group.children, & &1.tag) == ["option"]
+        assert separator.children == []
+        assert selected.attributes["selected"] == ""
 
-    assert tree_content(
-             Enum.map(
-               NativeElixirPdfUtilities.Validators.HtmlValidator.select_options(
-                 separated.children
-               ),
-               & &1.children
-             )
-           ) == [
-             [%{type: :text, text: "A"}],
-             [%{type: :text, text: "B"}]
-           ]
+        assert tree_content(
+                 Enum.map(
+                   NativeElixirPdfUtilities.Validators.HtmlValidator.select_options(
+                     separated.children
+                   ),
+                   & &1.children
+                 )
+               ) == [
+                 [%{type: :text, text: "A"}],
+                 [%{type: :text, text: "B"}]
+               ]
 
-    for html <- [
-          "<select><optgroup><option>A</option></optgroup></select>",
-          "<select><optgroup label='Group'>Unexpected</optgroup></select>",
-          "<select><optgroup label='Group'><span>Unsupported</span></optgroup></select>"
-        ] do
-      assert {:error, {reason, diagnostic}} = HtmlParser.parse_detailed(html)
-      assert diagnostic.stage == :html and diagnostic.reason == reason
-      assert is_binary(diagnostic.message) and diagnostic.message != ""
-      assert is_integer(diagnostic.line) and is_integer(diagnostic.column)
-    end
+        for html <- [
+              "<select><optgroup><option>A</option></optgroup></select>",
+              "<select><optgroup label='Group'>Unexpected</optgroup></select>",
+              "<select><optgroup label='Group'><span>Unsupported</span></optgroup></select>"
+            ] do
+          assert {:error, {reason, diagnostic}} = HtmlParser.parse_detailed(html)
+          assert diagnostic.stage == :html and diagnostic.reason == reason
+          assert is_binary(diagnostic.message) and diagnostic.message != ""
+          assert is_integer(diagnostic.line) and is_integer(diagnostic.column)
+        end
+      end
+    )
   end
 
   test "parse rejects invalid static form structures and attributes" do
@@ -2396,7 +2442,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   test "parse rejects unsupported markup" do
     assert tree_content(HtmlParser.parse("")) == {:ok, %{type: :document, children: []}}
     assert tree_content(HtmlParser.parse("<>")) == {:error, :unsupported_html}
-    assert {:ok, _dom} = HtmlParser.parse("<p>Hello")
+    assert {:error, :unsupported_html} = HtmlParser.parse("<p>Hello")
+    assert {:ok, _dom} = HtmlParser.parse("<p>Hello", html_recovery: true)
     assert tree_content(HtmlParser.parse("<style>")) == {:error, :unsupported_html}
 
     assert tree_content(HtmlParser.parse("<style>missing closing tag")) ==
@@ -2458,8 +2505,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
                reason: :unsupported_html,
                line: 1,
                column: 1,
-               source: "<div>Hello",
-               message: ~s(line 1: HTML source "<div>Hello" is unsupported or malformed)
+               source: "<div>",
+               message:
+                 "missing closing </div>; add the closing tag or set html_recovery: true for supported end-tag recovery"
              }}} = HtmlParser.parse_detailed("<div>Hello")
 
     assert {:error,
@@ -2609,24 +2657,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "optional end tags preserve explicit paragraph, list, option, and table trees" do
-    for {omitted, explicit} <- [
-          {"<p>First<p>Second", "<p>First</p><p>Second</p>"},
-          {"<div><p>First<div>Second</div></div>", "<div><p>First</p><div>Second</div></div>"},
-          {"<ul><li>First<li>Second</ul>", "<ul><li>First</li><li>Second</li></ul>"},
-          {"<div><select><option>First<option>Second</select></div>",
-           "<div><select><option>First</option><option>Second</option></select></div>"},
-          {"<html><head><title>Title</title><body><p>Body",
-           "<html><head><title>Title</title></head><body><p>Body</p></body></html>"},
-          {"<html><body><p>Body</html>", "<html><body><p>Body</p></body></html>"},
-          {"<table><caption>Totals<colgroup><col><thead><tr><th>A<th>B<tbody><tr><td>C<td>D<tr><td>E<td>F<tfoot><tr><td>G<td>H</table>",
-           "<table><caption>Totals</caption><colgroup><col></colgroup><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>C</td><td>D</td></tr><tr><td>E</td><td>F</td></tr></tbody><tfoot><tr><td>G</td><td>H</td></tr></tfoot></table>"},
-          {"<table><tr><td>A<td>B</table>", "<table><tr><td>A</td><td>B</td></tr></table>"},
-          {"<table><colgroup><col></table>", "<table><colgroup><col></colgroup></table>"},
-          {"<p>First<!-- remains inside p --><p>Second", "<p>First</p><p>Second</p>"}
-        ] do
-      assert {:ok, dom} = HtmlParser.parse(omitted)
-      assert tree_content(HtmlParser.parse(explicit)) == tree_content({:ok, dom})
-    end
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for {omitted, explicit} <- [
+              {"<p>First<p>Second", "<p>First</p><p>Second</p>"},
+              {"<div><p>First<div>Second</div></div>",
+               "<div><p>First</p><div>Second</div></div>"},
+              {"<ul><li>First<li>Second</ul>", "<ul><li>First</li><li>Second</li></ul>"},
+              {"<div><select><option>First<option>Second</select></div>",
+               "<div><select><option>First</option><option>Second</option></select></div>"},
+              {"<html><head><title>Title</title><body><p>Body",
+               "<html><head><title>Title</title></head><body><p>Body</p></body></html>"},
+              {"<html><body><p>Body</html>", "<html><body><p>Body</p></body></html>"},
+              {"<table><caption>Totals<colgroup><col><thead><tr><th>A<th>B<tbody><tr><td>C<td>D<tr><td>E<td>F<tfoot><tr><td>G<td>H</table>",
+               "<table><caption>Totals</caption><colgroup><col></colgroup><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>C</td><td>D</td></tr><tr><td>E</td><td>F</td></tr></tbody><tfoot><tr><td>G</td><td>H</td></tr></tfoot></table>"},
+              {"<table><tr><td>A<td>B</table>", "<table><tr><td>A</td><td>B</td></tr></table>"},
+              {"<table><colgroup><col></table>", "<table><colgroup><col></colgroup></table>"},
+              {"<p>First<!-- remains inside p --><p>Second", "<p>First</p><p>Second</p>"}
+            ] do
+          assert {:ok, dom} = HtmlParser.parse(omitted)
+          assert tree_content(HtmlParser.parse(explicit)) == tree_content({:ok, dom})
+        end
+      end
+    )
   end
 
   test "omission never repairs required end tags or invalid table section transitions" do
@@ -2661,108 +2715,132 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "fragment contexts accept cells, options, inline content, and raw text" do
-    assert {:ok, %{children: [first, second]}} = HtmlParser.parse_fragment("<td>A<td>B", "TR")
-    assert [first.tag, second.tag] == ["td", "td"]
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, %{children: [first, second]}} = HtmlParser.parse_fragment("<td>A<td>B", "TR")
+        assert [first.tag, second.tag] == ["td", "td"]
 
-    assert {:ok, %{children: [%{tag: "option"}, %{tag: "option"}]}} =
-             HtmlParser.parse_fragment("<option>A<option>B", "select")
+        assert {:ok, %{children: [%{tag: "option"}, %{tag: "option"}]}} =
+                 HtmlParser.parse_fragment("<option>A<option>B", "select")
 
-    assert {:ok, %{children: [%{type: :text, text: "Text "}, %{tag: "strong"}]}} =
-             HtmlParser.parse_fragment("Text <strong>bold</strong>", "p")
+        assert {:ok, %{children: [%{type: :text, text: "Text "}, %{tag: "strong"}]}} =
+                 HtmlParser.parse_fragment("Text <strong>bold</strong>", "p")
 
-    assert {:ok, %{children: [%{type: :text, text: "<p>&amp;</p>"}]}} =
-             HtmlParser.parse_fragment("<p>&amp;</p>", "style")
+        assert {:ok, %{children: [%{type: :text, text: "<p>&amp;</p>"}]}} =
+                 HtmlParser.parse_fragment("<p>&amp;</p>", "style")
 
-    assert {:ok, %{children: [%{type: :text, text: "<p>&</p>"}]}} =
-             HtmlParser.parse_fragment("<p>&amp;</p>", "textarea")
+        assert {:ok, %{children: [%{type: :text, text: "<p>&</p>"}]}} =
+                 HtmlParser.parse_fragment("<p>&amp;</p>", "textarea")
 
-    assert {:ok, %{children: []}} = HtmlParser.parse_fragment("", "title")
-    assert {:ok, %{children: []}} = HtmlParser.parse_fragment("", "style")
-    assert {:ok, %{children: []}} = HtmlParser.parse_fragment("", "body")
+        assert {:ok, %{children: []}} = HtmlParser.parse_fragment("", "title")
+        assert {:ok, %{children: []}} = HtmlParser.parse_fragment("", "style")
+        assert {:ok, %{children: []}} = HtmlParser.parse_fragment("", "body")
 
-    assert {:error, {:unsupported_html, _diagnostic}} =
-             HtmlParser.parse_fragment("<td>A</td>", "div")
+        assert {:error, {:unsupported_html, _diagnostic}} =
+                 HtmlParser.parse_fragment("<td>A</td>", "div")
 
-    assert {:error, {:unsupported_html, %{stage: :html, line: 1, column: 1}}} =
-             HtmlParser.parse_fragment_detailed("<li>A</li>", "tr")
+        assert {:error, {:unsupported_html, %{stage: :html, line: 1, column: 1}}} =
+                 HtmlParser.parse_fragment_detailed("<li>A</li>", "tr")
 
-    for context <- ["html", "img", "unknown", nil, 42] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlParser.parse_fragment_detailed("", context)
+        for context <- ["html", "img", "unknown", nil, 42] do
+          assert {:error, {:unsupported_html, diagnostic}} =
+                   HtmlParser.parse_fragment_detailed("", context)
 
-      assert diagnostic.message =~ "fragment context"
-      assert diagnostic.source == inspect(context)
-      assert {:error, {:unsupported_html, _diagnostic}} = HtmlParser.parse_fragment("", context)
-    end
+          assert diagnostic.message =~ "fragment context"
+          assert diagnostic.source == inspect(context)
 
-    assert {:error, {:invalid_encoding, _diagnostic}} = HtmlParser.parse_fragment(<<255>>, "p")
+          assert {:error, {:unsupported_html, _diagnostic}} =
+                   HtmlParser.parse_fragment("", context)
+        end
+
+        assert {:error, {:invalid_encoding, _diagnostic}} =
+                 HtmlParser.parse_fragment(<<255>>, "p")
+      end
+    )
   end
 
   test "wrapper-free optional groups and document sections retain their strict legacy contexts" do
-    for html <- [
-          "<title>T</title></head><p>B</body></html>",
-          "<table><col><?column><col></colgroup><tr><td>A</tbody></table>",
-          "<table><tr><td>A</td></tr><script type=application/json>{}</script><template></template></tbody></table>"
-        ] do
-      assert {:ok, _document} = HtmlParser.parse_detailed(html)
-    end
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for html <- [
+              "<title>T</title></head><p>B</body></html>",
+              "<table><col><?column><col></colgroup><tr><td>A</tbody></table>",
+              "<table><tr><td>A</td></tr><script type=application/json>{}</script><template></template></tbody></table>"
+            ] do
+          assert {:ok, _document} = HtmlParser.parse_detailed(html)
+        end
 
-    assert {:ok, %{children: [%{tag: "html", children: [head, body]}]}} =
-             HtmlParser.parse_document_detailed("Body <p>Next</p>")
+        assert {:ok, %{children: [%{tag: "html", children: [head, body]}]}} =
+                 HtmlParser.parse_document_detailed("Body <p>Next</p>")
 
-    assert head.children == []
-    assert hd(body.children).text == "Body "
+        assert head.children == []
+        assert hd(body.children).text == "Body "
 
-    for html <- [
-          "<head>Visible</head>",
-          "<head></head><style>p{color:red}</style><p>Body</p>",
-          "<head></head><template><p>Inert</p></template><p>Body</p>"
-        ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlParser.parse_document_detailed(html)
-      assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
-    end
+        for html <- [
+              "<head>Visible</head>",
+              "<head></head><style>p{color:red}</style><p>Body</p>",
+              "<head></head><template><p>Inert</p></template><p>Body</p>"
+            ] do
+          assert {:error, {:unsupported_html, diagnostic}} =
+                   HtmlParser.parse_document_detailed(html)
 
-    assert {:ok, %{children: [%{tag: "html", children: [_, %{children: [%{tag: "noscript"}]}]}]}} =
-             HtmlParser.parse_document_detailed("<noscript><span>Visible</span></noscript>")
+          assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
+        end
+
+        assert {:ok,
+                %{children: [%{tag: "html", children: [_, %{children: [%{tag: "noscript"}]}]}]}} =
+                 HtmlParser.parse_document_detailed("<noscript><span>Visible</span></noscript>")
+      end
+    )
   end
 
   test "complete document parsing constructs document and table ancestry" do
-    implied = "<title>Title</title><p>Text<table><col span=2><tr><td>A<td>B</table>"
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        implied = "<title>Title</title><p>Text<table><col span=2><tr><td>A<td>B</table>"
 
-    explicit =
-      "<html><head><title>Title</title></head><body><p>Text</p><table><colgroup><col span=2></colgroup><tbody><tr><td>A</td><td>B</td></tr></tbody></table></body></html>"
+        explicit =
+          "<html><head><title>Title</title></head><body><p>Text</p><table><colgroup><col span=2></colgroup><tbody><tr><td>A</td><td>B</td></tr></tbody></table></body></html>"
 
-    assert {:ok, dom} = HtmlParser.parse_document_detailed(implied)
-    assert tree_content(HtmlParser.parse_document_detailed(explicit)) == tree_content({:ok, dom})
-    [html] = dom.children
-    [head, body] = html.children
-    assert head.tag == "head"
-    assert body.tag == "body"
-    [paragraph, table] = body.children
-    assert paragraph.tag == "p"
-    assert Enum.map(table.children, & &1.tag) == ["colgroup", "tbody"]
+        assert {:ok, dom} = HtmlParser.parse_document_detailed(implied)
 
-    assert {:ok,
-            %{
-              children: [
-                %{tag: "title"},
-                %{tag: "p"},
-                %{tag: "table", children: [%{tag: "col"}, %{tag: "tr"}]}
-              ]
-            }} = HtmlParser.parse(implied)
+        assert tree_content(HtmlParser.parse_document_detailed(explicit)) ==
+                 tree_content({:ok, dom})
 
-    for html <- ["", "<html></html>", "<head></head><body></body>", "<body></body>"] do
-      assert {:ok, %{children: [%{tag: "html", children: [%{tag: "head"}, %{tag: "body"}]}]}} =
-               HtmlParser.parse_document_detailed(html)
-    end
+        [html] = dom.children
+        [head, body] = html.children
+        assert head.tag == "head"
+        assert body.tag == "body"
+        [paragraph, table] = body.children
+        assert paragraph.tag == "p"
+        assert Enum.map(table.children, & &1.tag) == ["colgroup", "tbody"]
 
-    assert {:ok, %{children: [%{attributes: %{"lang" => "en"}, children: [head, body]}]}} =
-             HtmlParser.parse_document_detailed(
-               "<html lang=en><head id=metadata></head><body class=copy></body></html>"
-             )
+        assert {:ok,
+                %{
+                  children: [
+                    %{tag: "title"},
+                    %{tag: "p"},
+                    %{tag: "table", children: [%{tag: "col"}, %{tag: "tr"}]}
+                  ]
+                }} = HtmlParser.parse(implied)
 
-    assert head.attributes == %{"id" => "metadata"}
-    assert body.attributes == %{"class" => "copy"}
+        for html <- ["", "<html></html>", "<head></head><body></body>", "<body></body>"] do
+          assert {:ok, %{children: [%{tag: "html", children: [%{tag: "head"}, %{tag: "body"}]}]}} =
+                   HtmlParser.parse_document_detailed(html)
+        end
+
+        assert {:ok, %{children: [%{attributes: %{"lang" => "en"}, children: [head, body]}]}} =
+                 HtmlParser.parse_document_detailed(
+                   "<html lang=en><head id=metadata></head><body class=copy></body></html>"
+                 )
+
+        assert head.attributes == %{"id" => "metadata"}
+        assert body.attributes == %{"class" => "copy"}
+      end
+    )
   end
 
   test "complete documents retain authored groups and reject duplicate structural elements" do
@@ -2818,52 +2896,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
   end
 
   test "omitted start tags may have explicit closing tags" do
-    for {omitted, explicit} <- [
-          {"<title>Title</title></head><p>Text</body></html>",
-           "<html><head><title>Title</title></head><body><p>Text</p></body></html>"},
-          {"</head></body></html>", "<html><head></head><body></body></html>"},
-          {"<body><p>Text</body></html>", "<html><head></head><body><p>Text</p></body></html>"},
-          {"<table><col><col></colgroup><tr><td>First</tbody><tr><td>Second</tbody></table>",
-           "<html><head></head><body><table><colgroup><col><col></colgroup><tbody><tr><td>First</td></tr></tbody><tbody><tr><td>Second</td></tr></tbody></table></body></html>"}
-        ] do
-      assert {:ok, dom} = HtmlParser.parse_document_detailed(omitted)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for {omitted, explicit} <- [
+              {"<title>Title</title></head><p>Text</body></html>",
+               "<html><head><title>Title</title></head><body><p>Text</p></body></html>"},
+              {"</head></body></html>", "<html><head></head><body></body></html>"},
+              {"<body><p>Text</body></html>",
+               "<html><head></head><body><p>Text</p></body></html>"},
+              {"<table><col><col></colgroup><tr><td>First</tbody><tr><td>Second</tbody></table>",
+               "<html><head></head><body><table><colgroup><col><col></colgroup><tbody><tr><td>First</td></tr></tbody><tbody><tr><td>Second</td></tr></tbody></table></body></html>"}
+            ] do
+          assert {:ok, dom} = HtmlParser.parse_document_detailed(omitted)
 
-      assert tree_content(HtmlParser.parse_document_detailed(explicit)) ==
-               tree_content({:ok, dom})
-    end
+          assert tree_content(HtmlParser.parse_document_detailed(explicit)) ==
+                   tree_content({:ok, dom})
+        end
 
-    for html <- [
-          "</head></head>",
-          "</body>Text",
-          "</html><p>After</p>",
-          "<table><col></colgroup></colgroup></table>",
-          "<table><tr><td>A</tbody></tbody></table>",
-          "<p></ p>",
-          "<style>x</ style>",
-          "<p></p\u00A0>"
-        ] do
-      assert {:error, {:unsupported_html, %{stage: :html}}} =
-               HtmlParser.parse_document_detailed(html)
-    end
+        for html <- [
+              "</head></head>",
+              "</body>Text",
+              "</html><p>After</p>",
+              "<table><col></colgroup></colgroup></table>",
+              "<table><tr><td>A</tbody></tbody></table>",
+              "<p></ p>",
+              "<style>x</ style>",
+              "<p></p\u00A0>"
+            ] do
+          assert {:error, {:unsupported_html, %{stage: :html}}} =
+                   HtmlParser.parse_document_detailed(html, html_recovery: false)
+        end
+      end
+    )
   end
 
   test "doctype validation accepts the UTF-8 HTML contract and rejects quirks or misplaced declarations" do
-    assert {:ok, _dom} =
-             HtmlParser.parse_document_detailed(
-               ~s(<!doctype html SYSTEM "about:legacy-compat"><p>Text)
-             )
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, _dom} =
+                 HtmlParser.parse_document_detailed(
+                   ~s(<!doctype html SYSTEM "about:legacy-compat"><p>Text)
+                 )
 
-    for html <- [
-          "<!doctype html><!doctype html>",
-          "<p>Text</p><!doctype html>",
-          "<!doctype html PUBLIC 'legacy'>",
-          "<div><!doctype html></div>"
-        ] do
-      assert {:error, {:unsupported_html, diagnostic}} = HtmlParser.parse_document_detailed(html)
-      assert diagnostic.message =~ "doctype"
-      assert diagnostic.source =~ "<!doctype"
-      assert diagnostic.line == 1
-    end
+        for html <- [
+              "<!doctype html><!doctype html>",
+              "<p>Text</p><!doctype html>",
+              "<!doctype html PUBLIC 'legacy'>",
+              "<div><!doctype html></div>"
+            ] do
+          assert {:error, {:unsupported_html, diagnostic}} =
+                   HtmlParser.parse_document_detailed(html)
+
+          assert diagnostic.message =~ "doctype"
+          assert diagnostic.source =~ "<!doctype"
+          assert diagnostic.line == 1
+        end
+      end
+    )
   end
 
   test "parse retains readonly boolean values and input applicability" do

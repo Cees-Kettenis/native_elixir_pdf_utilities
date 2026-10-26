@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeTicksBrowserParityTest do
       PdfVisualCompare.assert_browser_match!(
         Paths.fixture("html_to_pdf/browser_parity/html_range_datalist_ticks.html"),
         artifact_dir: "tmp/browser_parity/html_range_datalist_ticks",
-        render_opts: [forms: :static],
+        render_opts: [forms: :static, html_recovery: true],
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
@@ -32,7 +32,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeTicksBrowserParityTest do
       stats =
         PdfVisualCompare.assert_browser_match!(fixture,
           artifact_dir: "tmp/browser_parity/html_disabled_range_datalist_ticks-" <> suffix,
-          render_opts: [forms: mode],
+          render_opts: [forms: mode, html_recovery: true],
           native_renderer: renderer,
           max_changed_ratio: 0.01,
           max_average_delta: 0.01

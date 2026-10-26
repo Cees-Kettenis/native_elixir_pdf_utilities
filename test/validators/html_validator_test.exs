@@ -131,54 +131,59 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
   end
 
   test "direct legacy trees validate literal contents, context, attributes and executable policy" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.Style
-    text = %{type: :text, text: "<img src=denied.png><script>Literal</script>"}
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        alias NativeElixirPdfUtilities.HtmlToPdf.Style
+        text = %{type: :text, text: "<img src=denied.png><script>Literal</script>"}
 
-    element = fn tag, attributes, children ->
-      %{type: :element, tag: tag, attributes: attributes, children: children}
-    end
+        element = fn tag, attributes, children ->
+          %{type: :element, tag: tag, attributes: attributes, children: children}
+        end
 
-    for tag <- ~w(xmp plaintext noembed) do
-      node = element.(tag, %{}, [text])
-      dom = %{type: :document, children: [node]}
-      assert {:ok, _} = Style.compute_detailed(dom)
+        for tag <- ~w(xmp plaintext noembed) do
+          node = element.(tag, %{}, [text])
+          dom = %{type: :document, children: [node]}
+          assert {:ok, _} = Style.compute_detailed(dom)
 
-      for child <- [element.("span", %{}, [text]), element.("script", %{}, [])] do
-        assert {:error, {:invalid_document, diagnostic}} =
-                 Style.compute_detailed(%{dom | children: [%{node | children: [child]}]})
+          for child <- [element.("span", %{}, [text]), element.("script", %{}, [])] do
+            assert {:error, {:invalid_document, diagnostic}} =
+                     Style.compute_detailed(%{dom | children: [%{node | children: [child]}]})
 
-        assert diagnostic.stage == :style and diagnostic.operation == :compute
-        assert diagnostic.module == HtmlValidator and diagnostic.source == tag
-        assert diagnostic.message =~ "literal text-only"
+            assert diagnostic.stage == :style and diagnostic.operation == :compute
+            assert diagnostic.module == HtmlValidator and diagnostic.source == tag
+            assert diagnostic.message =~ "literal text-only"
+          end
+
+          assert {:error, {:unsupported_html, diagnostic}} =
+                   Style.compute_detailed(%{
+                     dom
+                     | children: [%{node | attributes: %{"onclick" => "bad"}}]
+                   })
+
+          assert diagnostic.stage == :html and diagnostic.operation == :compute
+          assert diagnostic.source == tag
+
+          assert {:error, {:invalid_document, diagnostic}} =
+                   Style.compute_detailed(%{dom | children: [element.("head", %{}, [node])]})
+
+          assert diagnostic.stage == :style and diagnostic.source == tag
+        end
+
+        for tag <- ~w(xmp plaintext) do
+          refute HtmlValidator.valid_html_child?("button", tag)
+          assert HtmlValidator.omitted_html_end_tag?("p", {:start, tag}, ["div"])
+          assert HtmlValidator.valid_html_child?("a", tag, ["div"])
+          dom = %{type: :document, children: [element.("p", %{}, [element.(tag, %{}, [text])])]}
+
+          assert {:error, {:invalid_document, %{stage: :style, source: ^tag}}} =
+                   Style.compute_detailed(dom)
+        end
+
+        assert HtmlValidator.valid_html_child?("p", "noembed")
+        assert HtmlValidator.valid_html_child?("button", "noembed")
       end
-
-      assert {:error, {:unsupported_html, diagnostic}} =
-               Style.compute_detailed(%{
-                 dom
-                 | children: [%{node | attributes: %{"onclick" => "bad"}}]
-               })
-
-      assert diagnostic.stage == :html and diagnostic.operation == :compute
-      assert diagnostic.source == tag
-
-      assert {:error, {:invalid_document, diagnostic}} =
-               Style.compute_detailed(%{dom | children: [element.("head", %{}, [node])]})
-
-      assert diagnostic.stage == :style and diagnostic.source == tag
-    end
-
-    for tag <- ~w(xmp plaintext) do
-      refute HtmlValidator.valid_html_child?("button", tag)
-      assert HtmlValidator.omitted_html_end_tag?("p", {:start, tag}, ["div"])
-      assert HtmlValidator.valid_html_child?("a", tag, ["div"])
-      dom = %{type: :document, children: [element.("p", %{}, [element.(tag, %{}, [text])])]}
-
-      assert {:error, {:invalid_document, %{stage: :style, source: ^tag}}} =
-               Style.compute_detailed(dom)
-    end
-
-    assert HtmlValidator.valid_html_child?("p", "noembed")
-    assert HtmlValidator.valid_html_child?("button", "noembed")
+    )
   end
 
   test "prepared gauge contracts reject forged types points classification and position" do

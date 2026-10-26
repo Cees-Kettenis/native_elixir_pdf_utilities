@@ -263,7 +263,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
           |> Keyword.put(:page_size, page_size)
           |> Keyword.put(:margin, margins)
 
-        with {:ok, dom} <- HtmlParser.parse_detailed(html),
+        with {:ok, dom} <-
+               HtmlParser.parse_detailed(html, Keyword.take(furniture_opts, [:html_recovery])),
              {:ok, styled_tree} <- Style.compute_detailed(dom, furniture_opts, image_budget),
              {:ok, styled_tree} <-
                FontFallback.resolve(

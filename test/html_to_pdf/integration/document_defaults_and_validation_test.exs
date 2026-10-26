@@ -342,22 +342,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
   end
 
   test "Ruby optional-end-tag scope ends at SVG integration boundaries" do
-    assert {:ok, dom} =
-             HtmlParser.parse_detailed(
-               "<svg><foreignObject><rb>Base<rt>Annotation</foreignObject></svg>"
-             )
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        assert {:ok, dom} =
+                 HtmlParser.parse_detailed(
+                   "<svg><foreignObject><rb>Base<rt>Annotation</foreignObject></svg>"
+                 )
 
-    [svg] = dom.children
-    [foreign] = svg.children
-    [base] = foreign.children
-    assert base.tag == "rb" and base.namespace == :html
-    assert Enum.any?(base.children, &(Map.get(&1, :tag) == "rt"))
-    assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(dom.source.text)
-    assert diagnostic.stage == :layout
-    assert diagnostic.operation == :convert
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-    assert diagnostic.source == "foreignObject"
-    assert diagnostic.message =~ "HTML content cannot be omitted"
+        [svg] = dom.children
+        [foreign] = svg.children
+        [base] = foreign.children
+        assert base.tag == "rb" and base.namespace == :html
+        assert Enum.any?(base.children, &(Map.get(&1, :tag) == "rt"))
+
+        assert {:error, {:unsupported_html, diagnostic}} =
+                 HtmlToPdf.render(dom.source.text, html_recovery: true)
+
+        assert diagnostic.stage == :layout
+        assert diagnostic.operation == :convert
+        assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
+        assert diagnostic.source == "foreignObject"
+        assert diagnostic.message =~ "HTML content cannot be omitted"
+      end
+    )
   end
 
   test "percentage color sizing succeeds and corrupted initial color transport fails actionably" do
@@ -460,7 +468,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
                        HtmlParser.capture_template_candidate(handle, tree)
 
               assert diagnostic.source == token and diagnostic.column == byte_size(prefix) + 1
-              assert diagnostic.message =~ "original input remains retained"
+              assert diagnostic.message =~ "missing closing </template>"
+              assert diagnostic.message =~ "html_recovery: true"
+              assert tree.nodes[tree.root].source.text == original
             end)
           end
         )

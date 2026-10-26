@@ -146,7 +146,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
             end),
          :ok <-
            if(kind == :object, do: ObjectValidator.validate_content(html, descriptor), else: :ok),
-         {:ok, dom} <- HtmlParser.parse_document_detailed(html) do
+         {:ok, dom} <-
+           HtmlParser.parse_document_detailed(html, Keyword.take(opts, [:html_recovery])) do
       {:ok, %{context: child, source: descriptor, html: html, dom: dom}}
     else
       {:error, {reason, diagnostic}} ->

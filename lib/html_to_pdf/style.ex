@@ -267,298 +267,305 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          mode \\ :render,
          frame_margins \\ nil
        ) do
-    RenderCache.with_stylesheets(fn ->
-      HtmlValidator.with_render_budget(fn ->
-        FontValidator.with_budget(fn ->
-          font_options = Font.normalize_options(opts)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_render_options(opts, fn ->
+      RenderCache.with_stylesheets(fn ->
+        HtmlValidator.with_render_budget(fn ->
+          FontValidator.with_budget(fn ->
+            font_options = Font.normalize_options(opts)
 
-          case HtmlValidator.prepare_style_input(dom, opts, font_options, mode) do
-            {:ok, initial_controls?} ->
-              {:ok, opts} = font_options
+            case HtmlValidator.prepare_style_input(dom, opts, font_options, mode) do
+              {:ok, initial_controls?} ->
+                {:ok, opts} = font_options
 
-              opts =
-                if is_nil(frame_margins),
-                  do: opts,
-                  else: Keyword.put(opts, :__frame_body_margins__, frame_margins)
+                opts =
+                  if is_nil(frame_margins),
+                    do: opts,
+                    else: Keyword.put(opts, :__frame_body_margins__, frame_margins)
 
-              %{type: :document} = dom
+                %{type: :document} = dom
 
-              url_context =
-                case document_url do
-                  {:document_viewport, url, _viewport, _media} ->
-                    HtmlUrlValidator.document_context_from_url(dom, url)
+                url_context =
+                  case document_url do
+                    {:document_viewport, url, _viewport, _media} ->
+                      HtmlUrlValidator.document_context_from_url(dom, url)
 
-                  {:document_url, url} ->
-                    HtmlUrlValidator.document_context_from_url(dom, url)
+                    {:document_url, url} ->
+                      HtmlUrlValidator.document_context_from_url(dom, url)
 
-                  :caller ->
-                    HtmlUrlValidator.document_context(dom, opts)
-                end
+                    :caller ->
+                      HtmlUrlValidator.document_context(dom, opts)
+                  end
 
-              with {:ok, url_context} <- url_context,
-                   opts <- Keyword.put(opts, :__document_url_context__, url_context),
-                   opts <-
-                     (case document_url do
-                        {:document_viewport, _url, {width, height}, _media} ->
-                          Keyword.put(opts, :__client_css_viewport__, %{
-                            width: width / 0.75,
-                            height: height / 0.75
-                          })
+                with {:ok, url_context} <- url_context,
+                     opts <- Keyword.put(opts, :__document_url_context__, url_context),
+                     opts <-
+                       (case document_url do
+                          {:document_viewport, _url, {width, height}, _media} ->
+                            Keyword.put(opts, :__client_css_viewport__, %{
+                              width: width / 0.75,
+                              height: height / 0.75
+                            })
 
-                        _ ->
-                          opts
-                      end),
-                   {:ok, composition, children} <-
-                     NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.prepare_composition(
-                       dom,
-                       initial_controls?
-                     ),
-                   {:ok, link_context} <-
-                     HtmlLinkValidator.prepare_composition(
-                       children,
-                       url_context,
-                       composition,
-                       ResourceContext.current()
-                     ),
-                   {:ok, image_maps} <-
-                     NativeElixirPdfUtilities.Validators.ImageMapValidator.prepare(
-                       children,
-                       link_context
-                     ),
-                   {:ok, media_context} <-
-                     (case document_url do
-                        {:document_viewport, _url, _viewport, media} ->
-                          PrintMediaValidator.client_context(opts, media)
+                          _ ->
+                            opts
+                        end),
+                     {:ok, composition, children} <-
+                       NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.prepare_composition(
+                         dom,
+                         initial_controls?
+                       ),
+                     {:ok, link_context} <-
+                       HtmlLinkValidator.prepare_composition(
+                         children,
+                         url_context,
+                         composition,
+                         ResourceContext.current()
+                       ),
+                     {:ok, image_maps} <-
+                       NativeElixirPdfUtilities.Validators.ImageMapValidator.prepare(
+                         children,
+                         link_context
+                       ),
+                     {:ok, media_context} <-
+                       (case document_url do
+                          {:document_viewport, _url, _viewport, media} ->
+                            PrintMediaValidator.client_context(opts, media)
 
-                        {:document_url, _url} ->
-                          {:ok, :unpositioned}
+                          {:document_url, _url} ->
+                            {:ok, :unpositioned}
 
-                        :caller ->
-                          PrintMediaValidator.renderer_context(opts)
-                      end),
-                   {:ok, entries} <- stylesheet_entries(dom.children, opts, media_context),
-                   shadow_entries <-
-                     composition.roots
-                     |> Enum.sort_by(fn {_scope, root} -> root.order end)
-                     |> Enum.flat_map(fn {scope, root} ->
-                       root.children
-                       |> HtmlMetadataValidator.selected_shadow_style_nodes(media_context)
-                       |> Enum.map(fn style ->
-                         %{
-                           css: Enum.map_join(style.children, "", & &1.text),
-                           base_url: Keyword.get(opts, :base_url),
-                           trusted_local_resources: false,
-                           shadow_scope_id: scope,
-                           shadow_parent_scope_id: root.host_tree_scope_id,
-                           shadow_host_id: root.host_id,
-                           shadow_depth: root.depth
-                         }
-                       end)
-                     end),
-                   entries <- entries ++ shadow_entries,
-                   {:ok, stylesheet_entries} <- prepare_stylesheet_entries(entries, media_context),
-                   {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
-                   {:ok, font_registry} <-
-                     font_registry(
-                       opts,
-                       css_fonts,
-                       Map.new(composition.roots, fn {scope, root} ->
-                         {scope, root.host_tree_scope_id}
-                       end)
-                     ),
-                   {:ok, font_families, font_face} <-
-                     resolve_font(
-                       Keyword.get(opts, :default_font, "DejaVu Sans"),
-                       400,
-                       :normal,
-                       font_registry
-                     ),
-                   {:ok, rules} <- stylesheet_rules(stylesheet_entries),
-                   {:ok, children} <-
-                     NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_document(
-                       children
-                     ) do
-                link_metadata =
-                  if Enum.any?(link_context.links, fn {_href, destination} ->
-                       match?({:target, _}, destination) or match?({:top, _}, destination)
-                     end),
-                     do: %{link_scope: {link_context.document_id, link_context.tree_scope_id}},
-                     else: %{}
+                          :caller ->
+                            PrintMediaValidator.renderer_context(opts)
+                        end),
+                     {:ok, entries} <- stylesheet_entries(dom.children, opts, media_context),
+                     shadow_entries <-
+                       composition.roots
+                       |> Enum.sort_by(fn {_scope, root} -> root.order end)
+                       |> Enum.flat_map(fn {scope, root} ->
+                         root.children
+                         |> HtmlMetadataValidator.selected_shadow_style_nodes(media_context)
+                         |> Enum.map(fn style ->
+                           %{
+                             css: Enum.map_join(style.children, "", & &1.text),
+                             base_url: Keyword.get(opts, :base_url),
+                             trusted_local_resources: false,
+                             shadow_scope_id: scope,
+                             shadow_parent_scope_id: root.host_tree_scope_id,
+                             shadow_host_id: root.host_id,
+                             shadow_depth: root.depth
+                           }
+                         end)
+                       end),
+                     entries <- entries ++ shadow_entries,
+                     {:ok, stylesheet_entries} <-
+                       prepare_stylesheet_entries(entries, media_context),
+                     {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
+                     {:ok, font_registry} <-
+                       font_registry(
+                         opts,
+                         css_fonts,
+                         Map.new(composition.roots, fn {scope, root} ->
+                           {scope, root.host_tree_scope_id}
+                         end)
+                       ),
+                     {:ok, font_families, font_face} <-
+                       resolve_font(
+                         Keyword.get(opts, :default_font, "DejaVu Sans"),
+                         400,
+                         :normal,
+                         font_registry
+                       ),
+                     {:ok, rules} <- stylesheet_rules(stylesheet_entries),
+                     {:ok, children} <-
+                       NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_document(
+                         children
+                       ) do
+                  link_metadata =
+                    if Enum.any?(link_context.links, fn {_href, destination} ->
+                         match?({:target, _}, destination) or match?({:top, _}, destination)
+                       end),
+                       do: %{link_scope: {link_context.document_id, link_context.tree_scope_id}},
+                       else: %{}
 
-                link_metadata =
-                  if link_context.document_targets == [],
-                    do: link_metadata,
-                    else:
-                      Map.put(
-                        link_metadata,
-                        :link_document_targets,
-                        link_context.document_targets
-                      )
+                  link_metadata =
+                    if link_context.document_targets == [],
+                      do: link_metadata,
+                      else:
+                        Map.put(
+                          link_metadata,
+                          :link_document_targets,
+                          link_context.document_targets
+                        )
 
-                style_opts =
-                  opts
-                  |> Keyword.put(:__image_budget__, image_budget)
-                  |> Keyword.put(:__link_context__, link_context)
+                  style_opts =
+                    opts
+                    |> Keyword.put(:__image_budget__, image_budget)
+                    |> Keyword.put(:__link_context__, link_context)
 
-                base_style = base_style(font_registry, font_families, font_face)
+                  base_style = base_style(font_registry, font_families, font_face)
 
-                base_style =
-                  if mode == :prepare_svg or svg_nodes?(children),
-                    do:
-                      Map.merge(
-                        base_style,
-                        SvgStyleValidator.defaults(%{})
-                        |> Map.put(:_svg_prepare, true)
-                        |> Map.put(:_svg_measurement_only, mode == :prepare_svg)
-                      ),
-                    else: base_style
+                  base_style =
+                    if mode == :prepare_svg or svg_nodes?(children),
+                      do:
+                        Map.merge(
+                          base_style,
+                          SvgStyleValidator.defaults(%{})
+                          |> Map.put(:_svg_prepare, true)
+                          |> Map.put(:_svg_measurement_only, mode == :prepare_svg)
+                        ),
+                      else: base_style
 
-                compiled_rules = compile_selector_rules(rules)
+                  compiled_rules = compile_selector_rules(rules)
 
-                compute_styles = fn cache ->
-                  root_id =
-                    case ResourceContext.current() do
-                      nil -> cache
-                      document -> document.tree_scope_id
-                    end
-
-                  context = %{
-                    rules: compiled_rules,
-                    cache: cache,
-                    root_selector_id: root_id,
-                    root_canvas_key: make_ref(),
-                    image_maps: image_maps,
-                    position_viewport: media_context
-                  }
-
-                  context =
-                    if Map.get(compiled_rules.selectors, :positional_dependent, false) do
-                      context = Map.put(context, :root_children, children)
-
-                      if map_size(composition.roots) > 0,
-                        do:
-                          Map.merge(context, %{
-                            logical_nodes:
-                              Map.merge(
-                                NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.logical_index(
-                                  dom
-                                ),
-                                Map.get(composition, :clone_logical_nodes, %{})
-                              ),
-                            consumed_shadow_roots: composition.roots
-                          }),
-                        else: context
-                    else
-                      context
-                    end
-
-                  style_opts = Keyword.put(style_opts, :__render_cache__, cache)
-
-                  case fragment_root_style(children, base_style, context, style_opts) do
-                    {:ok, nil} ->
-                      {:ok, Map.merge(%{type: :document, children: []}, link_metadata)}
-
-                    {:ok, root_style} ->
-                      with {:ok, styled_children, _counters} <-
-                             style_children(
-                               children,
-                               root_style,
-                               context,
-                               [],
-                               style_opts,
-                               [],
-                               []
-                             ) do
-                        root_canvas_style =
-                          RenderCache.fetch(cache, {:root_canvas, context.root_canvas_key}, fn ->
-                            nil
-                          end)
-
-                        body_style =
-                          Enum.find_value(styled_children, fn node ->
-                            case node do
-                              %{tag: "body", style: style} -> style
-                              _ -> nil
-                            end
-                          end)
-
-                        canvas =
-                          HtmlValidator.prepare_document_canvas(root_canvas_style, body_style)
-
-                        {:ok,
-                         %{
-                           type: :document,
-                           children: styled_children,
-                           document_canvas: canvas,
-                           document_root_sizing:
-                             NativeElixirPdfUtilities.Validators.CssSizingValidator.prepare_root(
-                               root_canvas_style
-                             )
-                         }
-                         |> Map.merge(link_metadata)
-                         |> Map.merge(
-                           if MapSet.size(link_context.selected) == 0,
-                             do: %{},
-                             else: %{
-                               link_expected_targets:
-                                 HtmlLinkValidator.required_targets(styled_children)
-                             }
-                         )}
+                  compute_styles = fn cache ->
+                    root_id =
+                      case ResourceContext.current() do
+                        nil -> cache
+                        document -> document.tree_scope_id
                       end
 
-                    {:error, reason} ->
-                      {:error, reason}
-                  end
-                end
+                    context = %{
+                      rules: compiled_rules,
+                      cache: cache,
+                      root_selector_id: root_id,
+                      root_canvas_key: make_ref(),
+                      image_maps: image_maps,
+                      position_viewport: media_context
+                    }
 
-                scoped_compute = fn cache ->
-                  # Native temporal formats also depend on inherited language,
-                  # even when the author stylesheet has no :lang selector.
-                  LanguageValidator.with_composed_document(
-                    dom,
-                    composition.roots,
-                    Map.get(composition, :clone_logical_nodes, %{}),
-                    cache,
-                    fn ->
-                      compute_styles.(cache)
+                    context =
+                      if Map.get(compiled_rules.selectors, :positional_dependent, false) do
+                        context = Map.put(context, :root_children, children)
+
+                        if map_size(composition.roots) > 0,
+                          do:
+                            Map.merge(context, %{
+                              logical_nodes:
+                                Map.merge(
+                                  NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.logical_index(
+                                    dom
+                                  ),
+                                  Map.get(composition, :clone_logical_nodes, %{})
+                                ),
+                              consumed_shadow_roots: composition.roots
+                            }),
+                          else: context
+                      else
+                        context
+                      end
+
+                    style_opts = Keyword.put(style_opts, :__render_cache__, cache)
+
+                    case fragment_root_style(children, base_style, context, style_opts) do
+                      {:ok, nil} ->
+                        {:ok, Map.merge(%{type: :document, children: []}, link_metadata)}
+
+                      {:ok, root_style} ->
+                        with {:ok, styled_children, _counters} <-
+                               style_children(
+                                 children,
+                                 root_style,
+                                 context,
+                                 [],
+                                 style_opts,
+                                 [],
+                                 []
+                               ) do
+                          root_canvas_style =
+                            RenderCache.fetch(
+                              cache,
+                              {:root_canvas, context.root_canvas_key},
+                              fn ->
+                                nil
+                              end
+                            )
+
+                          body_style =
+                            Enum.find_value(styled_children, fn node ->
+                              case node do
+                                %{tag: "body", style: style} -> style
+                                _ -> nil
+                              end
+                            end)
+
+                          canvas =
+                            HtmlValidator.prepare_document_canvas(root_canvas_style, body_style)
+
+                          {:ok,
+                           %{
+                             type: :document,
+                             children: styled_children,
+                             document_canvas: canvas,
+                             document_root_sizing:
+                               NativeElixirPdfUtilities.Validators.CssSizingValidator.prepare_root(
+                                 root_canvas_style
+                               )
+                           }
+                           |> Map.merge(link_metadata)
+                           |> Map.merge(
+                             if MapSet.size(link_context.selected) == 0,
+                               do: %{},
+                               else: %{
+                                 link_expected_targets:
+                                   HtmlLinkValidator.required_targets(styled_children)
+                               }
+                           )}
+                        end
+
+                      {:error, reason} ->
+                        {:error, reason}
                     end
-                  )
-                end
-
-                result =
-                  case ResourceContext.current() do
-                    nil -> RenderCache.run(scoped_compute)
-                    context -> scoped_compute.(context.scope)
                   end
 
-                case result do
-                  {:ok, styled_tree} ->
-                    {:ok,
-                     if(mode == :prepare_svg,
-                       do: Map.put(styled_tree, :type, :svg_prepared_document),
-                       else: styled_tree
-                     )}
+                  scoped_compute = fn cache ->
+                    # Native temporal formats also depend on inherited language,
+                    # even when the author stylesheet has no :lang selector.
+                    LanguageValidator.with_composed_document(
+                      dom,
+                      composition.roots,
+                      Map.get(composition, :clone_logical_nodes, %{}),
+                      cache,
+                      fn ->
+                        compute_styles.(cache)
+                      end
+                    )
+                  end
 
-                  {:error, :invalid_document} ->
-                    {:error, style_error_detail(dom, opts)}
+                  result =
+                    case ResourceContext.current() do
+                      nil -> RenderCache.run(scoped_compute)
+                      context -> scoped_compute.(context.scope)
+                    end
+
+                  case result do
+                    {:ok, styled_tree} ->
+                      {:ok,
+                       if(mode == :prepare_svg,
+                         do: Map.put(styled_tree, :type, :svg_prepared_document),
+                         else: styled_tree
+                       )}
+
+                    {:error, :invalid_document} ->
+                      {:error, style_error_detail(dom, opts)}
+
+                    {:error, {_reason, _diagnostic}} = error ->
+                      error
+                  end
+                else
+                  {:error, {:font_load_failed, sources}} ->
+                    {:error, font_load_error(sources)}
 
                   {:error, {_reason, _diagnostic}} = error ->
                     error
+
+                  {:error, :invalid_document} ->
+                    {:error, style_error_detail(dom, opts)}
                 end
-              else
-                {:error, {:font_load_failed, sources}} ->
-                  {:error, font_load_error(sources)}
 
-                {:error, {_reason, _diagnostic}} = error ->
-                  error
-
-                {:error, :invalid_document} ->
-                  {:error, style_error_detail(dom, opts)}
-              end
-
-            {:error, {_reason, _diagnostic}} = error ->
-              error
-          end
+              {:error, {_reason, _diagnostic}} = error ->
+                error
+            end
+          end)
         end)
       end)
     end)
@@ -603,114 +610,123 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @spec with_source_style_contexts(term(), term(), term(), term(), keyword()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def with_source_style_contexts(dom, sources, budget, consumer, opts \\ []) do
-    HtmlValidator.with_render_budget(fn ->
-      with {:ok, controls?} <-
-             HtmlValidator.validate_source_style_input(dom, sources, budget, consumer, opts),
-           children =
-             if(controls?,
-               do:
-                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_initial_nodes(
-                   dom.children
-                 ),
-               else: HtmlValidator.assign_render_metadata(dom.children)
-             ),
-           {:ok, provenance} <- HtmlCssSourceValidator.prepare(%{dom | children: children}),
-           entries = Enum.map(sources, &%{css: &1}),
-           {:ok, media_context} <- PrintMediaValidator.renderer_context(opts),
-           selected =
-             children
-             |> HtmlMetadataValidator.selected_document_style_nodes(media_context)
-             |> MapSet.new(& &1._selector_id),
-           embedded =
-             Enum.map(provenance.embedded, fn entry ->
-               Map.put(
-                 entry,
-                 :applicable,
-                 MapSet.member?(selected, Map.get(entry.node, :_selector_id))
-               )
-             end),
-           {:ok, prepared} <- prepare_stylesheet_entries(entries ++ embedded, media_context, true) do
-        with {:ok, result, obligations} <-
-               CssSourceContextValidator.with_context_obligations(
-                 prepared,
-                 provenance,
-                 fn context_entries, inline, observe, select ->
-                   {:ok, rules} = stylesheet_rules(context_entries)
-                   compiled = compile_selector_rules(rules)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_render_options(opts, fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, controls?} <-
+               HtmlValidator.validate_source_style_input(dom, sources, budget, consumer, opts),
+             children =
+               if(controls?,
+                 do:
+                   NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_initial_nodes(
+                     dom.children
+                   ),
+                 else: HtmlValidator.assign_render_metadata(dom.children)
+               ),
+             {:ok, provenance} <- HtmlCssSourceValidator.prepare(%{dom | children: children}),
+             entries = Enum.map(sources, &%{css: &1}),
+             {:ok, media_context} <- PrintMediaValidator.renderer_context(opts),
+             selected =
+               children
+               |> HtmlMetadataValidator.selected_document_style_nodes(media_context)
+               |> MapSet.new(& &1._selector_id),
+             embedded =
+               Enum.map(provenance.embedded, fn entry ->
+                 Map.put(
+                   entry,
+                   :applicable,
+                   MapSet.member?(selected, Map.get(entry.node, :_selector_id))
+                 )
+               end),
+             {:ok, prepared} <-
+               prepare_stylesheet_entries(entries ++ embedded, media_context, true) do
+          with {:ok, result, obligations} <-
+                 CssSourceContextValidator.with_context_obligations(
+                   prepared,
+                   provenance,
+                   fn context_entries, inline, observe, select ->
+                     {:ok, rules} = stylesheet_rules(context_entries)
+                     compiled = compile_selector_rules(rules)
 
-                   RenderCache.run(fn cache ->
-                     context = %{
-                       rules: compiled,
-                       cache: cache,
-                       root_selector_id: cache,
-                       root_children: children,
-                       source_budget: budget,
-                       inline_records: inline,
-                       source_context_observer: observe,
-                       source_selection_observer: select
-                     }
+                     RenderCache.run(fn cache ->
+                       context = %{
+                         rules: compiled,
+                         cache: cache,
+                         root_selector_id: cache,
+                         root_children: children,
+                         source_budget: budget,
+                         inline_records: inline,
+                         source_context_observer: observe,
+                         source_selection_observer: select
+                       }
 
-                     traverse = fn ->
-                       source_selection_children(children, context, [])
+                       traverse = fn ->
+                         source_selection_children(children, context, [])
 
-                       with {:ok, inherited} <-
-                              fragment_root_style(
-                                children,
-                                source_base_style(children),
-                                context,
-                                opts
-                              ),
-                            :ok <-
-                              source_context_children(children, inherited, context, [], consumer) do
-                         {:ok,
-                          %{
-                            source_provenance: provenance,
-                            font_source_entries: context_entries,
-                            source_obligations: %{
-                              stylesheets: Enum.map(entries ++ embedded, & &1.css),
-                              inline: provenance.records,
-                              unmatched_rules: :unresolved,
-                              inactive_media: :unresolved,
-                              resource_references: :unresolved,
-                              template_insertion_contexts: :unresolved,
-                              math_font_contexts: :unresolved,
-                              authored:
-                                Enum.map(
-                                  prepared,
-                                  &Map.take(
-                                    &1.prepared,
-                                    [
-                                      :authored_rules,
-                                      :authored_fonts,
-                                      :authored_pages,
-                                      :authored_media,
-                                      :media_provider,
-                                      :media_policy,
-                                      :stylesheet_applicable
-                                    ]
+                         with {:ok, inherited} <-
+                                fragment_root_style(
+                                  children,
+                                  source_base_style(children),
+                                  context,
+                                  opts
+                                ),
+                              :ok <-
+                                source_context_children(
+                                  children,
+                                  inherited,
+                                  context,
+                                  [],
+                                  consumer
+                                ) do
+                           {:ok,
+                            %{
+                              source_provenance: provenance,
+                              font_source_entries: context_entries,
+                              source_obligations: %{
+                                stylesheets: Enum.map(entries ++ embedded, & &1.css),
+                                inline: provenance.records,
+                                unmatched_rules: :unresolved,
+                                inactive_media: :unresolved,
+                                resource_references: :unresolved,
+                                template_insertion_contexts: :unresolved,
+                                math_font_contexts: :unresolved,
+                                authored:
+                                  Enum.map(
+                                    prepared,
+                                    &Map.take(
+                                      &1.prepared,
+                                      [
+                                        :authored_rules,
+                                        :authored_fonts,
+                                        :authored_pages,
+                                        :authored_media,
+                                        :media_provider,
+                                        :media_policy,
+                                        :stylesheet_applicable
+                                      ]
+                                    )
                                   )
-                                )
-                            },
-                            runtime_obligations: [
-                              :font_selection,
-                              :font_metrics,
-                              :text_decorations,
-                              :resources
-                            ]
-                          }}
+                              },
+                              runtime_obligations: [
+                                :font_selection,
+                                :font_metrics,
+                                :text_decorations,
+                                :resources
+                              ]
+                            }}
+                         end
                        end
-                     end
 
-                     if Map.get(compiled.selectors, :language_dependent, false),
-                       do: LanguageValidator.with_document(children, cache, traverse),
-                       else: traverse.()
-                   end)
-                 end,
-                 budget
-               ) do
-          {:ok, put_in(result.source_obligations[:declaration_contexts], obligations)}
+                       if Map.get(compiled.selectors, :language_dependent, false),
+                         do: LanguageValidator.with_document(children, cache, traverse),
+                         else: traverse.()
+                     end)
+                   end,
+                   budget
+                 ) do
+            {:ok, put_in(result.source_obligations[:declaration_contexts], obligations)}
+          end
         end
-      end
+      end)
     end)
   end
 
@@ -895,23 +911,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, [stylesheet_entry()]}
           | {:error, :invalid_document | :invalid_stylesheet_options | {atom(), map()}}
   def load_stylesheets(dom, opts) do
-    font_options = Font.normalize_options(opts)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_render_options(opts, fn ->
+      font_options = Font.normalize_options(opts)
 
-    case HtmlValidator.validate_style_input(dom, opts, font_options) do
-      :ok ->
-        {:ok, opts} = font_options
-        children = dom.children
+      case HtmlValidator.validate_style_input(dom, opts, font_options) do
+        :ok ->
+          {:ok, opts} = font_options
+          children = dom.children
 
-        with {:ok, media_context} <-
-               PrintMediaValidator.renderer_context(opts),
-             do: stylesheet_entries(children, opts, media_context)
+          with {:ok, media_context} <-
+                 PrintMediaValidator.renderer_context(opts),
+               do: stylesheet_entries(children, opts, media_context)
 
-      {:error, {:invalid_options, _diagnostic}} ->
-        {:error, :invalid_stylesheet_options}
+        {:error, {:invalid_options, _diagnostic}} ->
+          {:error, :invalid_stylesheet_options}
 
-      {:error, {_reason, _diagnostic}} = error ->
-        error
-    end
+        {:error, {_reason, _diagnostic}} = error ->
+          error
+      end
+    end)
   end
 
   @doc false

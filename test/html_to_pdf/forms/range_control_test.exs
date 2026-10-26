@@ -401,61 +401,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
   end
 
   test "datalist range ticks use exact bounds and authored step base without selecting suggestions" do
-    html =
-      "<input type=range list=ticks min=-1 max=1 step=.5 value=.4><datalist id=ticks><option value=-1><option value=-.5 label=low><option value=-.25><option value=0><option value=.5 disabled><option value=1><option value=2><option value=bad><option value='.5suffix'><option value=' +.5'><option value=1e0></datalist>"
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        html =
+          "<input type=range list=ticks min=-1 max=1 step=.5 value=.4><datalist id=ticks><option value=-1><option value=-.5 label=low><option value=-.25><option value=0><option value=.5 disabled><option value=1><option value=2><option value=bad><option value='.5suffix'><option value=' +.5'><option value=1e0></datalist>"
 
-    assert {:ok, dom} = HtmlParser.parse_detailed(html)
-    assert {:ok, styled} = Style.compute_detailed(dom)
-    node = hd(styled.children)
-    state = node.style._form_control.initial_state
-    assert state.value == "0.5"
-    assert Enum.map(state.range.ticks, & &1.value) == [-1.0, -0.5, 0.0, 1.0, 1.0]
-    assert Enum.map(state.range.ticks, & &1.position) == [0.0, 0.25, 0.5, 1.0, 1.0]
-    assert "-.25" in state.range.options and ".5" not in state.range.options
-    assert HtmlFormValidator.valid_initial_range?(state, node.style._form_control.attributes)
+        assert {:ok, dom} = HtmlParser.parse_detailed(html)
+        assert {:ok, styled} = Style.compute_detailed(dom)
+        node = hd(styled.children)
+        state = node.style._form_control.initial_state
+        assert state.value == "0.5"
+        assert Enum.map(state.range.ticks, & &1.value) == [-1.0, -0.5, 0.0, 1.0, 1.0]
+        assert Enum.map(state.range.ticks, & &1.position) == [0.0, 0.25, 0.5, 1.0, 1.0]
+        assert "-.25" in state.range.options and ".5" not in state.range.options
+        assert HtmlFormValidator.valid_initial_range?(state, node.style._form_control.attributes)
 
-    for {attrs, options, expected} <- [
-          {%{"value" => ".5", "step" => "1"}, [".5", "1", "1.5"], [0.5, 1.5]},
-          {%{"min" => "0.1", "max" => "1", "step" => ".2"}, [".3", ".4", ".5"], [0.3, 0.5]},
-          {%{"min" => "0", "max" => "1", "step" => "any"}, [".123", "1", ""], [0.123, 1.0]},
-          {%{"min" => "9", "max" => "2"}, ["9", "20"], []},
-          {%{"min" => "0", "max" => "0"}, ["0"], []},
-          {%{"min" => "-1e308", "max" => "1e308", "step" => "any"}, ["-1e308", "0", "1e308"],
-           [-1.0e308, 0.0, 1.0e308]}
-        ] do
-      prepared = HtmlFormValidator.prepare_initial_range(attrs, options)
-      assert Enum.map(prepared.range.ticks, & &1.value) == expected
-      assert HtmlFormValidator.valid_initial_range?(prepared, attrs)
-    end
+        for {attrs, options, expected} <- [
+              {%{"value" => ".5", "step" => "1"}, [".5", "1", "1.5"], [0.5, 1.5]},
+              {%{"min" => "0.1", "max" => "1", "step" => ".2"}, [".3", ".4", ".5"], [0.3, 0.5]},
+              {%{"min" => "0", "max" => "1", "step" => "any"}, [".123", "1", ""], [0.123, 1.0]},
+              {%{"min" => "9", "max" => "2"}, ["9", "20"], []},
+              {%{"min" => "0", "max" => "0"}, ["0"], []},
+              {%{"min" => "-1e308", "max" => "1e308", "step" => "any"}, ["-1e308", "0", "1e308"],
+               [-1.0e308, 0.0, 1.0e308]}
+            ] do
+          prepared = HtmlFormValidator.prepare_initial_range(attrs, options)
+          assert Enum.map(prepared.range.ticks, & &1.value) == expected
+          assert HtmlFormValidator.valid_initial_range?(prepared, attrs)
+        end
+      end
+    )
   end
 
   test "associated empty and shadowed datalists retain source applicability and intrinsic height" do
-    for {html, associated, ticks} <- [
-          {"<input type=range list=t><datalist id=t></datalist>", true, []},
-          {"<input type=range list=t><datalist id=t><option value=bad></datalist>", true, []},
-          {"<input type=range list=t><span id=t></span><datalist id=t><option value=50></datalist>",
-           false, []},
-          {"<input type=range list=T><datalist id=t><option value=50></datalist>", false, []},
-          {"<input type=range list=t><datalist id=t><select><optgroup disabled label=Grouped><option value=20></optgroup><option value=80></select></datalist>",
-           true, [80.0]}
-        ] do
-      assert {:ok, dom} = HtmlParser.parse_detailed(html)
-      assert {:ok, styled} = Style.compute_detailed(dom)
-      node = hd(styled.children)
-      assert node.style._form_control.initial_state.datalist != nil == associated
-      assert node.style.height == if(associated, do: 16.5, else: 12.0)
-      assert Enum.map(node.style._range_state.ticks, & &1.value) == ticks
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for {html, associated, ticks} <- [
+              {"<input type=range list=t><datalist id=t></datalist>", true, []},
+              {"<input type=range list=t><datalist id=t><option value=bad></datalist>", true, []},
+              {"<input type=range list=t><span id=t></span><datalist id=t><option value=50></datalist>",
+               false, []},
+              {"<input type=range list=T><datalist id=t><option value=50></datalist>", false, []},
+              {"<input type=range list=t><datalist id=t><select><optgroup disabled label=Grouped><option value=20></optgroup><option value=80></select></datalist>",
+               true, [80.0]}
+            ] do
+          assert {:ok, dom} = HtmlParser.parse_detailed(html)
+          assert {:ok, styled} = Style.compute_detailed(dom)
+          node = hd(styled.children)
+          assert node.style._form_control.initial_state.datalist != nil == associated
+          assert node.style.height == if(associated, do: 16.5, else: 12.0)
+          assert Enum.map(node.style._range_state.ticks, & &1.value) == ticks
 
-      assert {:ok, pdf} =
-               HtmlToPdf.render(html,
-                 forms: :static,
-                 asset_resolver: fn request ->
-                   flunk("suggestions fetched #{inspect(request)}")
-                 end
-               )
+          assert {:ok, pdf} =
+                   HtmlToPdf.render(html,
+                     forms: :static,
+                     asset_resolver: fn request ->
+                       flunk("suggestions fetched #{inspect(request)}")
+                     end,
+                     html_recovery: true
+                   )
 
-      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
-    end
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+        end
+      end
+    )
   end
 
   test "qualified datalist value attributes remain source metadata for range ticks" do
@@ -480,128 +491,153 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
   end
 
   test "tick boxes paint text color and preserve canonical frames through PDF and readonly appearance" do
-    html =
-      "<input type=range disabled name=level list=t value=60 style='display:block;width:150pt;color:#884422'><datalist id=t><option value=0 label=Low><option value=50 label=Middle><option value=100 label=High></datalist>"
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        html =
+          "<input type=range disabled name=level list=t value=60 style='display:block;width:150pt;color:#884422'><datalist id=t><option value=0 label=Low><option value=50 label=Middle><option value=100 label=High></datalist>"
 
-    assert {:ok, dom} = HtmlParser.parse_detailed(html)
-    assert {:ok, styled} = Style.compute_detailed(dom)
-    assert {:ok, layout} = Layout.layout(styled)
-    ticks = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :range_tick))
-    assert length(ticks) == 3
+        assert {:ok, dom} = HtmlParser.parse_detailed(html)
+        assert {:ok, styled} = Style.compute_detailed(dom)
+        assert {:ok, layout} = Layout.layout(styled)
+        ticks = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :range_tick))
+        assert length(ticks) == 3
 
-    assert Enum.all?(
-             ticks,
-             &(&1.width == 0.75 and &1.height == 3.0 and &1.border_radius == 0.0 and
-                 &1.fill_color == {136 / 255, 68 / 255, 34 / 255})
-           )
+        assert Enum.all?(
+                 ticks,
+                 &(&1.width == 0.75 and &1.height == 3.0 and &1.border_radius == 0.0 and
+                     &1.fill_color == {136 / 255, 68 / 255, 34 / 255})
+               )
 
-    assert Enum.all?(
-             ticks,
-             &NativeElixirPdfUtilities.Validators.WriterValidator.valid_range_frame?/1
-           )
+        assert Enum.all?(
+                 ticks,
+                 &NativeElixirPdfUtilities.Validators.WriterValidator.valid_range_frame?/1
+               )
 
-    assert {:ok, pages} = Pagination.paginate(layout)
-    assert {:ok, _, [transport]} = HtmlFormValidator.prepare(pages, forms: :interactive)
-    assert Enum.count(transport.appearance.boxes, &(Map.get(&1, :role) == :range_tick)) == 3
-    assert {:ok, pdf} = HtmlToPdf.render(html, forms: :interactive)
-    assert {:ok, [field]} = NativeElixirPdfUtilities.Forms.fields(pdf)
-    assert field.name == "level" and field.value == "60" and field.read_only
-    assert {:ok, flattened} = NativeElixirPdfUtilities.Forms.flatten(pdf)
-    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(flattened)
+        assert {:ok, pages} = Pagination.paginate(layout)
+        assert {:ok, _, [transport]} = HtmlFormValidator.prepare(pages, forms: :interactive)
+        assert Enum.count(transport.appearance.boxes, &(Map.get(&1, :role) == :range_tick)) == 3
+        assert {:ok, pdf} = HtmlToPdf.render(html, forms: :interactive, html_recovery: true)
+        assert {:ok, [field]} = NativeElixirPdfUtilities.Forms.fields(pdf)
+        assert field.name == "level" and field.value == "60" and field.read_only
+        assert {:ok, flattened} = NativeElixirPdfUtilities.Forms.flatten(pdf)
+        assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(flattened)
 
-    assert {:error, {:no_extractable_text, diagnostic}} =
-             NativeElixirPdfUtilities.Text.extract(flattened)
+        assert {:error, {:no_extractable_text, diagnostic}} =
+                 NativeElixirPdfUtilities.Text.extract(flattened)
 
-    assert diagnostic.stage == :text_extraction and diagnostic.operation == :extract
-    assert {:ok, [page]} = Pagination.paginate(layout)
+        assert diagnostic.stage == :text_extraction and diagnostic.operation == :extract
+        assert {:ok, [page]} = Pagination.paginate(layout)
 
-    assert {:error, {:invalid_pdf_input, diagnostic}} =
-             PdfWriter.render([%{page | boxes: [Map.delete(hd(ticks), :range_frame)]}])
+        assert {:error, {:invalid_pdf_input, diagnostic}} =
+                 PdfWriter.render([%{page | boxes: [Map.delete(hd(ticks), :range_frame)]}])
 
-    assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+        assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
 
-    for frame <- [:invalid, {0.0, 150.0, 1.1}, {0.0, 1.0e20, 0.5}, {nil, 150.0, 0.5}] do
-      assert {:error, {:invalid_pdf_input, %{stage: :pdf, operation: :write_pdf}}} =
-               PdfWriter.render([%{page | boxes: [Map.put(hd(ticks), :range_tick_frame, frame)]}])
-    end
+        for frame <- [:invalid, {0.0, 150.0, 1.1}, {0.0, 1.0e20, 0.5}, {nil, 150.0, 0.5}] do
+          assert {:error, {:invalid_pdf_input, %{stage: :pdf, operation: :write_pdf}}} =
+                   PdfWriter.render([
+                     %{page | boxes: [Map.put(hd(ticks), :range_tick_frame, frame)]}
+                   ])
+        end
 
-    assert {:error, {:invalid_pdf_input, _}} =
-             PdfWriter.render([%{page | boxes: [Map.delete(hd(ticks), :range_tick_frame)]}])
+        assert {:error, {:invalid_pdf_input, _}} =
+                 PdfWriter.render([%{page | boxes: [Map.delete(hd(ticks), :range_tick_frame)]}])
 
-    node = hd(styled.children)
-    unassociated = put_in(node.style._form_control.initial_state.datalist, nil)
+        node = hd(styled.children)
+        unassociated = put_in(node.style._form_control.initial_state.datalist, nil)
 
-    assert {:error, {:invalid_layout, %{source: "range"}}} =
-             Layout.layout(%{styled | children: [unassociated | tl(styled.children)]})
+        assert {:error, {:invalid_layout, %{source: "range"}}} =
+                 Layout.layout(%{styled | children: [unassociated | tl(styled.children)]})
 
-    forged_pages =
-      Enum.map(pages, fn p ->
-        %{
-          p
-          | boxes:
-              Enum.map(p.boxes, fn box ->
-                if Map.get(box, :form_control),
-                  do: put_in(box.form_control.initial_state.datalist, nil),
-                  else: box
-              end)
-        }
-      end)
+        forged_pages =
+          Enum.map(pages, fn p ->
+            %{
+              p
+              | boxes:
+                  Enum.map(p.boxes, fn box ->
+                    if Map.get(box, :form_control),
+                      do: put_in(box.form_control.initial_state.datalist, nil),
+                      else: box
+                  end)
+            }
+          end)
 
-    assert {:error, {:invalid_form, %{source: "initial_state", stage: :forms}}} =
-             HtmlFormValidator.prepare(forged_pages, forms: :static)
+        assert {:error, {:invalid_form, %{source: "initial_state", stage: :forms}}} =
+                 HtmlFormValidator.prepare(forged_pages, forms: :static)
 
-    forged = put_in(node.style._range_state.ticks, [%{value: 25.0, position: 0.25}])
+        forged = put_in(node.style._range_state.ticks, [%{value: 25.0, position: 0.25}])
 
-    assert {:error, {:invalid_layout, %{source: "range"}}} =
-             Layout.layout(%{styled | children: [forged | tl(styled.children)]})
+        assert {:error, {:invalid_layout, %{source: "range"}}} =
+                 Layout.layout(%{styled | children: [forged | tl(styled.children)]})
+      end
+    )
   end
 
   test "hidden, inert, and appearance none preserve suggested initial state without invented tick labels" do
-    for style <- ["display:none", "appearance:none"] do
-      html =
-        "<input type=range inert list=t style='#{style}'><datalist id=t><option value=20 label=Twenty></datalist>"
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for style <- ["display:none", "appearance:none"] do
+          html =
+            "<input type=range inert list=t style='#{style}'><datalist id=t><option value=20 label=Twenty></datalist>"
 
-      assert {:ok, dom} = HtmlParser.parse_detailed("<body>" <> html <> "</body>")
-      assert {:ok, styled} = Style.compute_detailed(dom)
-      [prepared | _] = HtmlFormValidator.prepare_initial_nodes(hd(dom.children).children)
-      assert prepared._initial_form_state.value == "50"
+          assert {:ok, dom} = HtmlParser.parse_detailed("<body>" <> html <> "</body>")
+          assert {:ok, styled} = Style.compute_detailed(dom)
+          [prepared | _] = HtmlFormValidator.prepare_initial_nodes(hd(dom.children).children)
+          assert prepared._initial_form_state.value == "50"
 
-      assert prepared._initial_form_state.range.ticks == [
-               %{value: 20.0, position: 0.2}
-             ]
+          assert prepared._initial_form_state.range.ticks == [
+                   %{value: 20.0, position: 0.2}
+                 ]
 
-      assert {:ok, layout} = Layout.layout(styled)
-      refute Enum.any?(layout.boxes, &(Map.get(&1, :role) == :range_tick))
-      assert {:ok, pdf} = HtmlToPdf.render(html, forms: :interactive)
-      assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
-    end
+          assert {:ok, layout} = Layout.layout(styled)
+          refute Enum.any?(layout.boxes, &(Map.get(&1, :role) == :range_tick))
+          assert {:ok, pdf} = HtmlToPdf.render(html, forms: :interactive, html_recovery: true)
+          assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
+        end
+      end
+    )
   end
 
   test "static ticks may overflow an authored short height while PDF widget bounds remain truthful" do
-    html =
-      "<input type=range disabled name=short list=t style='height:12pt;width:60pt'><datalist id=t><option value=0><option value=100></datalist>"
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        html =
+          "<input type=range disabled name=short list=t style='height:12pt;width:60pt'><datalist id=t><option value=0><option value=100></datalist>"
 
-    assert {:ok, static} = HtmlToPdf.render(html, forms: :static)
-    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(static)
-    assert {:error, {:unsupported_form, diagnostic}} = HtmlToPdf.render(html, forms: :interactive)
+        assert {:ok, static} = HtmlToPdf.render(html, forms: :static, html_recovery: true)
+        assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(static)
 
-    assert diagnostic.stage == :forms and diagnostic.source == "range" and
-             diagnostic.operation == :write_pdf
+        assert {:error, {:unsupported_form, diagnostic}} =
+                 HtmlToPdf.render(html, forms: :interactive, html_recovery: true)
 
-    assert diagnostic.message =~ "artwork" and diagnostic.message =~ "forms: :static"
+        assert diagnostic.stage == :forms and diagnostic.source == "range" and
+                 diagnostic.operation == :write_pdf
+
+        assert diagnostic.message =~ "artwork" and diagnostic.message =~ "forms: :static"
+      end
+    )
   end
 
   test "tick numeric work observes the existing public shared budget" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_html_numeric_token_bytes, 4))
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        previous = Limits.effective()
+        on_exit(fn -> Limits.install(previous) end)
+        Limits.install(Map.put(previous, :max_html_numeric_token_bytes, 4))
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(
-               "<input type=range list=t><datalist id=t><option value=12345></datalist>",
-               forms: :static
-             )
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlToPdf.render(
+                   "<input type=range list=t><datalist id=t><option value=12345></datalist>",
+                   forms: :static,
+                   html_recovery: true
+                 )
 
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+        assert diagnostic.message =~ "max_html_numeric_token_bytes"
+      end
+    )
   end
 end

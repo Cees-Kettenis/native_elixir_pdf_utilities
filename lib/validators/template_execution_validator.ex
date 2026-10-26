@@ -30,132 +30,134 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
   @doc false
   @spec prepare_source(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare_source(source, opts, image_budget) do
-    with :ok <-
-           HtmlValidator.validate_render_request(
-             source,
-             opts,
-             NativeElixirPdfUtilities.HtmlToPdf.Font.normalize_options(opts)
-           ),
-         :ok <- ResourceValidator.validate_preparation_budget(image_budget) do
-      previous = Process.get(@key)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_render_options(opts, fn ->
+      with :ok <-
+             HtmlValidator.validate_render_request(
+               source,
+               opts,
+               NativeElixirPdfUtilities.HtmlToPdf.Font.normalize_options(opts)
+             ),
+           :ok <- ResourceValidator.validate_preparation_budget(image_budget) do
+        previous = Process.get(@key)
 
-      frame = %{
-        source: source,
-        opts: opts,
-        resource: ResourceContext.current(),
-        limits: Limits.effective(),
-        font_budget: Process.get({FontValidator, :budget}).budget_id,
-        mode: :original,
-        parser: nil,
-        original: nil,
-        indexed: %{},
-        actions: %{},
-        busy: false,
-        source_styles: %{},
-        source_provenance: nil,
-        source_view: nil,
-        capture: nil,
-        fragment_views: [],
-        fragment_provenances: %{},
-        declaration_contexts: [],
-        css_budget: HtmlValidator.new_css_budget()
-      }
+        frame = %{
+          source: source,
+          opts: opts,
+          resource: ResourceContext.current(),
+          limits: Limits.effective(),
+          font_budget: Process.get({FontValidator, :budget}).budget_id,
+          mode: :original,
+          parser: nil,
+          original: nil,
+          indexed: %{},
+          actions: %{},
+          busy: false,
+          source_styles: %{},
+          source_provenance: nil,
+          source_view: nil,
+          capture: nil,
+          fragment_views: [],
+          fragment_provenances: %{},
+          declaration_contexts: [],
+          css_budget: HtmlValidator.new_css_budget()
+        }
 
-      Process.put(@key, frame)
+        Process.put(@key, frame)
 
-      try do
-        with {:ok, original} <- HtmlParser.parse_document_detailed(source) do
-          # Parsed HTML tag names preserve their authored ASCII letters. If the
-          # source has no template spelling, no execution template can exist.
-          nodes =
-            if String.contains?(String.downcase(source, :ascii), "template"),
-              do: authored_nodes(original, true),
-              else: []
+        try do
+          with {:ok, original} <- HtmlParser.parse_document_detailed(source) do
+            # Parsed HTML tag names preserve their authored ASCII letters. If the
+            # source has no template spelling, no execution template can exist.
+            nodes =
+              if String.contains?(String.downcase(source, :ascii), "template"),
+                do: authored_nodes(original, true),
+                else: []
 
-          templates =
-            Enum.filter(nodes, fn node ->
-              Map.get(node, :tag) == "template" and
-                HtmlCompositionValidator.template_mode(node.attributes) == :replacement
-            end)
-
-          if templates == [] do
-            prepare_runtime_view(original, opts, image_budget)
-          else
-            indexed =
-              Enum.reduce(nodes, %{}, fn node, index ->
-                HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
-
-                key =
-                  {node.source.line, node.source.column, node.type, Map.get(node, :tag),
-                   node.parent_id}
-
-                Map.update(index, key, [node], &(&1 ++ [node]))
+            templates =
+              Enum.filter(nodes, fn node ->
+                Map.get(node, :tag) == "template" and
+                  HtmlCompositionValidator.template_mode(node.attributes) == :replacement
               end)
 
-            Process.put(@key, %{
-              Process.get(@key)
-              | original: HtmlTree.from_document(original),
-                indexed: indexed
-            })
+            if templates == [] do
+              prepare_runtime_view(original, opts, image_budget)
+            else
+              indexed =
+                Enum.reduce(nodes, %{}, fn node, index ->
+                  HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
 
-            with {:ok, entries} <- Style.prepare_stylesheets(original, opts),
-                 {:ok, source_contexts} <-
-                   Style.with_source_style_contexts(
-                     original,
-                     Enum.flat_map(entries, fn entry ->
-                       if entry.source_kind == :configured, do: [entry.css], else: []
-                     end),
-                     Process.get(@key).css_budget,
-                     fn node, _, context ->
-                       if context.status == :resolved do
-                         current = Process.get(@key)
-                         HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+                  key =
+                    {node.source.line, node.source.column, node.type, Map.get(node, :tag),
+                     node.parent_id}
 
-                         Process.put(@key, %{
-                           current
-                           | source_styles:
-                               Map.put(current.source_styles, node.node_id, context.style)
-                         })
-                       end
+                  Map.update(index, key, [node], &(&1 ++ [node]))
+                end)
 
-                       :ok
-                     end,
-                     opts
-                   ),
-                 _ =
-                   Process.put(@key, %{
-                     Process.get(@key)
-                     | source_provenance: source_contexts.source_provenance,
-                       declaration_contexts:
-                         source_contexts.source_obligations.declaration_contexts
-                   }),
-                 :ok <-
-                   prepare_original_font_sources(
-                     source_contexts.font_source_entries,
-                     entries,
-                     opts
-                   ),
-                 :ok <- prepare_original_fragment_contexts(nodes, opts),
-                 {:ok, prepared} <- prepare_runtime_view(original, opts, image_budget),
-                 :ok <- validate_glyph_coverage(original, prepared),
-                 :ok <- prepare_original_fragments(opts, image_budget),
-                 :ok <- complete_declaration_contexts(Process.get(@key).declaration_contexts),
-                 :ok <- validate_live() do
-              Process.put(@key, %{Process.get(@key) | mode: :execute, parser: nil})
+              Process.put(@key, %{
+                Process.get(@key)
+                | original: HtmlTree.from_document(original),
+                  indexed: indexed
+              })
 
-              with {:ok, dom} <- HtmlParser.parse_document_detailed(source),
-                   :ok <- validate_live(),
-                   {:ok, prepared} <- prepare_runtime_view(dom, opts, image_budget),
+              with {:ok, entries} <- Style.prepare_stylesheets(original, opts),
+                   {:ok, source_contexts} <-
+                     Style.with_source_style_contexts(
+                       original,
+                       Enum.flat_map(entries, fn entry ->
+                         if entry.source_kind == :configured, do: [entry.css], else: []
+                       end),
+                       Process.get(@key).css_budget,
+                       fn node, _, context ->
+                         if context.status == :resolved do
+                           current = Process.get(@key)
+                           HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+
+                           Process.put(@key, %{
+                             current
+                             | source_styles:
+                                 Map.put(current.source_styles, node.node_id, context.style)
+                           })
+                         end
+
+                         :ok
+                       end,
+                       opts
+                     ),
+                   _ =
+                     Process.put(@key, %{
+                       Process.get(@key)
+                       | source_provenance: source_contexts.source_provenance,
+                         declaration_contexts:
+                           source_contexts.source_obligations.declaration_contexts
+                     }),
+                   :ok <-
+                     prepare_original_font_sources(
+                       source_contexts.font_source_entries,
+                       entries,
+                       opts
+                     ),
+                   :ok <- prepare_original_fragment_contexts(nodes, opts),
+                   {:ok, prepared} <- prepare_runtime_view(original, opts, image_budget),
+                   :ok <- validate_glyph_coverage(original, prepared),
+                   :ok <- prepare_original_fragments(opts, image_budget),
+                   :ok <- complete_declaration_contexts(Process.get(@key).declaration_contexts),
                    :ok <- validate_live() do
-                {:ok, prepared}
+                Process.put(@key, %{Process.get(@key) | mode: :execute, parser: nil})
+
+                with {:ok, dom} <- HtmlParser.parse_document_detailed(source),
+                     :ok <- validate_live(),
+                     {:ok, prepared} <- prepare_runtime_view(dom, opts, image_budget),
+                     :ok <- validate_live() do
+                  {:ok, prepared}
+                end
               end
             end
           end
+        after
+          if previous, do: Process.put(@key, previous), else: Process.delete(@key)
         end
-      after
-        if previous, do: Process.put(@key, previous), else: Process.delete(@key)
       end
-    end
+    end)
   end
 
   @doc false

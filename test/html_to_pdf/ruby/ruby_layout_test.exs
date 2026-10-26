@@ -252,26 +252,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayoutTest do
   end
 
   test "Ruby optional tag parsing produces the same native base and reading boxes" do
-    for {omitted, explicit} <- [
-          {"<ruby><rb>A<rb>B<rt>a<rt>b</ruby>",
-           "<ruby><rb>A</rb><rb>B</rb><rt>a</rt><rt>b</rt></ruby>"},
-          {"<ruby>A<rp>(<rt>a<rp>)</ruby>", "<ruby>A<rp>(</rp><rt>a</rt><rp>)</rp></ruby>"},
-          {"<ruby><rb>A<rtc><rt>a<rt>b<rtc>other</ruby>",
-           "<ruby><rb>A</rb><rtc><rt>a</rt><rt>b</rt></rtc><rtc>other</rtc></ruby>"}
-        ] do
-      boxes =
-        for html <- [omitted, explicit] do
-          assert {:ok, dom} = HtmlParser.parse_detailed("<p>#{html}</p>")
-          assert {:ok, styled} = Style.compute_detailed(dom)
-          assert {:ok, layout} = Layout.layout(styled)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        for {omitted, explicit} <- [
+              {"<ruby><rb>A<rb>B<rt>a<rt>b</ruby>",
+               "<ruby><rb>A</rb><rb>B</rb><rt>a</rt><rt>b</rt></ruby>"},
+              {"<ruby>A<rp>(<rt>a<rp>)</ruby>", "<ruby>A<rp>(</rp><rt>a</rt><rp>)</rp></ruby>"},
+              {"<ruby><rb>A<rtc><rt>a<rt>b<rtc>other</ruby>",
+               "<ruby><rb>A</rb><rtc><rt>a</rt><rt>b</rt></rtc><rtc>other</rtc></ruby>"}
+            ] do
+          boxes =
+            for html <- [omitted, explicit] do
+              assert {:ok, dom} = HtmlParser.parse_detailed("<p>#{html}</p>")
+              assert {:ok, styled} = Style.compute_detailed(dom)
+              assert {:ok, layout} = Layout.layout(styled)
 
-          layout.boxes
-          |> Enum.filter(&(&1.type == :text))
-          |> Enum.map(&Map.take(&1, [:text, :x, :y, :annotation_width, :font_size]))
+              layout.boxes
+              |> Enum.filter(&(&1.type == :text))
+              |> Enum.map(&Map.take(&1, [:text, :x, :y, :annotation_width, :font_size]))
+            end
+
+          assert Enum.at(boxes, 0) == Enum.at(boxes, 1)
         end
-
-      assert Enum.at(boxes, 0) == Enum.at(boxes, 1)
-    end
+      end
+    )
   end
 
   test "anywhere wrapping partitions base and reading text without losing glyph content" do

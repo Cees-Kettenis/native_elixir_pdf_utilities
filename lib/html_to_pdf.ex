@@ -94,7 +94,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @type unsupported_glyphs :: :replace | :error
   @type outlines :: :headings | [NativeElixirPdfUtilities.Outlines.item_input()] | false | nil
   @type render_option ::
-          {:forms, :interactive | :static}
+          {:html_recovery, boolean()}
+          | {:forms, :interactive | :static}
           | {:print_viewport, {number(), number()}}
           | {:image_selection_density, number()}
           | {:page_size, page_size()}
@@ -142,6 +143,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
 
   @doc """
   Renders an HTML document to a PDF binary.
+
+  Authored nonvoid HTML elements require closing tags by default. Set `html_recovery: true`
+  for optional end tags, unclosed HTML elements at end of input, and browser
+  handling of trailing slashes on nonvoid HTML tags. Other input validation
+  and the static resource restrictions still apply.
 
   Rendering and asset resolver callbacks execute in a disposable BEAM worker
   under the application's operation time and memory limits. Capture a caller
@@ -309,70 +315,75 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   end
 
   defp do_render(html, opts) do
-    font_options = Font.normalize_options(opts)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_render_options(opts, fn ->
+      font_options = Font.normalize_options(opts)
 
-    case HtmlValidator.validate_render_request(html, opts, font_options) do
-      :ok ->
-        {:ok, opts} = font_options
-        image_budget = HtmlValidator.new_image_budget()
+      case HtmlValidator.validate_render_request(html, opts, font_options) do
+        :ok ->
+          {:ok, opts} = font_options
+          image_budget = HtmlValidator.new_image_budget()
 
-        ResourceContext.run(
-          ResourceValidator.renderer_context_options(opts),
-          image_budget,
-          fn _context ->
-            with {:ok, prepared} <-
-                   NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.prepare_source(
-                     html,
-                     opts,
-                     image_budget
-                   ),
-                 {:ok, pdf_binary} <- PdfWriter.render(prepared.pages, prepared.options) do
-              {:ok, pdf_binary}
+          ResourceContext.run(
+            ResourceValidator.renderer_context_options(opts),
+            image_budget,
+            fn _context ->
+              with {:ok, prepared} <-
+                     NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.prepare_source(
+                       html,
+                       opts,
+                       image_budget
+                     ),
+                   {:ok, pdf_binary} <- PdfWriter.render(prepared.pages, prepared.options) do
+                {:ok, pdf_binary}
+              end
             end
-          end
-        )
+          )
 
-      {:error, {_reason, _diagnostic}} = error ->
-        error
-    end
+        {:error, {_reason, _diagnostic}} = error ->
+          error
+      end
+    end)
   end
 
   @doc false
   @spec prepare_document(term(), term(), HtmlValidator.image_budget()) ::
           {:ok, map()} | {:error, detailed_error_reason()}
   def prepare_document(dom, opts, image_budget) do
-    font_options = Font.normalize_options(opts)
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_render_options(opts, fn ->
+      font_options = Font.normalize_options(opts)
 
-    with :ok <- HtmlValidator.validate_document_render_options(opts, font_options),
-         :ok <- ResourceValidator.validate_preparation_budget(image_budget),
-         {:ok, opts} <- font_options,
-         opts <-
-           NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.source_completion_options(
-             dom,
-             opts
-           ),
-         {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
-         {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
-         :ok <- HtmlValidator.release_style_input(dom),
-         {:ok, styled_tree} <-
-           FontFallback.resolve(
-             styled_tree,
-             Keyword.get(effective_opts, :unsupported_glyphs, :replace)
-           ),
-         {:ok, layout_tree} <-
-           Font.with_measurement_cache(fn -> layout_document(styled_tree, effective_opts) end),
-         {:ok, layout_tree} <- Layout.resolve_images(layout_tree),
-         {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
-         effective_opts <- prepared_outline_options(pages, effective_opts),
-         {:ok, pages} <- PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget) do
-      {:ok,
-       %{
-         styled_tree: styled_tree,
-         layout_tree: layout_tree,
-         pages: pages,
-         options: effective_opts
-       }}
-    end
+      with :ok <- HtmlValidator.validate_document_render_options(opts, font_options),
+           :ok <- ResourceValidator.validate_preparation_budget(image_budget),
+           {:ok, opts} <- font_options,
+           opts <-
+             NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.source_completion_options(
+               dom,
+               opts
+             ),
+           {:ok, effective_opts} <- effective_render_options_detailed(dom, opts),
+           {:ok, styled_tree} <- Style.compute_detailed(dom, effective_opts, image_budget),
+           :ok <- HtmlValidator.release_style_input(dom),
+           {:ok, styled_tree} <-
+             FontFallback.resolve(
+               styled_tree,
+               Keyword.get(effective_opts, :unsupported_glyphs, :replace)
+             ),
+           {:ok, layout_tree} <-
+             Font.with_measurement_cache(fn -> layout_document(styled_tree, effective_opts) end),
+           {:ok, layout_tree} <- Layout.resolve_images(layout_tree),
+           {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+           effective_opts <- prepared_outline_options(pages, effective_opts),
+           {:ok, pages} <-
+             PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget) do
+        {:ok,
+         %{
+           styled_tree: styled_tree,
+           layout_tree: layout_tree,
+           pages: pages,
+           options: effective_opts
+         }}
+      end
+    end)
   end
 
   defp prepared_outline_options(pages, opts) do

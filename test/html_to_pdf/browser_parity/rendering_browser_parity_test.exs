@@ -2163,6 +2163,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   # These fixtures have dedicated browser cases in this module or sibling test modules.
   # Keep the inventory explicit so an unassigned new fixture still fails this check.
   @dedicated_fixtures ~w(
+    html_recovery_unclosed_elements.html
+    html_recovery_trailing_slash.html
     inline_svg_zero_font.html
     page_furniture_finalization.html
     page_furniture_nested_paint.html
@@ -2388,6 +2390,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   @spec assert_fixture(String.t(), keyword()) :: term()
   def assert_fixture(fixture_name, thresholds) do
     fixture_path = Path.join(@fixtures_dir, fixture_name)
+
+    thresholds =
+      if fixture_name in ~w(html_optional_tags.html html_static_elements.html html_horizontal_rules.html html_mixed_link_button_content.html html_table_formation.html html_list_attributes.html ruby_optional_tags.html html_legacy_raw_text.html) do
+        Keyword.update(thresholds, :render_opts, [html_recovery: true], fn opts ->
+          Keyword.put(opts, :html_recovery, true)
+        end)
+      else
+        thresholds
+      end
 
     thresholds =
       if String.starts_with?(fixture_name, "inline_svg_") or

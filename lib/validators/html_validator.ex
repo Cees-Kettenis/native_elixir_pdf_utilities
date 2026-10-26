@@ -64,6 +64,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @table_starts Enum.map(~w(colgroup thead tbody tfoot tr), &{:start, &1})
 
   @render_option_keys [
+    :html_recovery,
     :forms,
     :print_viewport,
     :image_selection_density,
@@ -3124,12 +3125,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec html_eof_end_tag_allowed?(term(), term(), list(), list()) :: boolean()
-  def html_eof_end_tag_allowed?(context, tag, children, ancestors) do
-    # A plaintext start tag makes all following source literal, including every
-    # authored ancestor end tag. EOF must therefore finish those open ancestors.
-    plaintext? =
-      context == "plaintext" or
+  @spec html_eof_end_tag_allowed?(term(), term(), list(), list(), boolean()) :: boolean()
+  def html_eof_end_tag_allowed?(context, _tag, children, _ancestors, implied? \\ false) do
+    recovery? = NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.enabled?()
+
+    cond do
+      implied? or context == "plaintext" ->
+        true
+
+      recovery? and is_binary(context) ->
+        true
+
+      recovery? and is_tuple(context) ->
+        # HTML plaintext at a foreign integration point consumes every later
+        # closing token. Preserve that lexical boundary in recovery mode only.
         children
         |> List.last()
         |> Stream.iterate(fn
@@ -3143,14 +3152,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             nil
         end)
         |> Enum.take_while(&(not is_nil(&1)))
-        |> Enum.any?(
-          &match?(
-            %{type: :element, tag: "plaintext", namespace: :html},
-            Map.put_new(&1, :namespace, :html)
-          )
-        )
+        |> Enum.any?(fn node ->
+          reserve_render_resource(:max_html_tree_work, 1, :html)
 
-    plaintext? or omitted_html_end_tag?(tag, :eof, ancestors)
+          match?(
+            %{type: :element, tag: "plaintext", namespace: :html},
+            Map.put_new(node, :namespace, :html)
+          )
+        end)
+
+      true ->
+        false
+    end
   end
 
   @doc false
@@ -3158,9 +3171,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def html_void_tag?(tag), do: tag in @void_tags
 
   @doc false
-  @spec omitted_html_end_tag?(atom() | String.t(), term(), list()) :: boolean()
-  def omitted_html_end_tag?(tag, next, ancestors) do
-    case tag in @optional_end_tags do
+  @spec omitted_html_end_tag?(atom() | String.t(), term(), list(), boolean()) :: boolean()
+  def omitted_html_end_tag?(tag, next, ancestors, implied? \\ false) do
+    case (implied? or NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.enabled?()) and
+           tag in @optional_end_tags do
       false ->
         false
 
@@ -6706,7 +6720,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp validate_style_options(opts, font_options_result) do
     case Keyword.keyword?(opts) do
       true ->
-        with :ok <- NativeElixirPdfUtilities.Validators.PrintMediaValidator.validate_options(opts),
+        with {:ok, _recovery} <-
+               NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.prepare_options(
+                 Keyword.take(opts, [:html_recovery])
+               ),
+             :ok <- NativeElixirPdfUtilities.Validators.PrintMediaValidator.validate_options(opts),
              :ok <- validate_stylesheets(Keyword.get(opts, :stylesheets, [])),
              :ok <-
                validate_asset_options(
