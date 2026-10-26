@@ -4,6 +4,23 @@ The project code uses the MIT license. Bundled fonts and derived data have the
 notices below. Dependencies retain their own license terms. For custom font
 support, see [Fonts](html-to-pdf-compatibility.md#fonts-and-text).
 
+## SVG converter dependency
+
+SVG conversion uses the published [Resvg Hex package](https://hex.pm/packages/resvg).
+The Elixir binding retains its [MIT license](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/LICENSE.md).
+Its Rust `resvg` and `usvg` 0.47.0 crates declare `Apache-2.0 OR MIT`, and
+`tiny-skia` 0.12.0 declares `BSD-3-Clause`. Other transitive crates retain their
+own notices and license terms.
+
+The dependency's [native loader](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/lib/resvg/native.ex)
+selects a platform-specific archive from the upstream GitHub release.
+Its [checksum manifest](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/checksum-Elixir.Resvg.Native.exs)
+records the archive names, NIF ABI versions, platform targets and SHA-256 hashes.
+RustlerPrecompiled verifies the downloaded archive against that manifest.
+These hashes identify the expected downloads. Verifying the Rust dependencies
+compiled into a binary also requires the corresponding build inputs or build
+provenance.
+
 ## Project: MIT License
 
 Copyright (c) 2025 Cees Kettenis
