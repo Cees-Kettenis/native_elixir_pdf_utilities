@@ -189,10 +189,11 @@ defmodule NativeElixirPdfUtilities.StampTest do
     target = one_page_pdf("Original", {300, 200})
     assert {:ok, stamped} = Stamp.text(target, "Mark")
     assert {:ok, context} = Reader.read_validated(stamped)
-    maximum_objects = context.document.trailer["Size"] - 1
+    maximum_objects = map_size(context.document.xref)
     original = Limits.effective()
     Limits.install(%{original | max_pdf_objects: maximum_objects})
-    assert {:ok, _stamped} = Stamp.text(target, "Mark")
+    assert {:ok, bounded} = Stamp.text(target, "Mark")
+    assert {:ok, _} = Reader.read_validated(bounded)
     Limits.install(%{original | max_pdf_objects: maximum_objects - 1})
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Stamp.text(target, "Mark")
   end

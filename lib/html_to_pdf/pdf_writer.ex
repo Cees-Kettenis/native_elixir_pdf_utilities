@@ -283,6 +283,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     page_object_ids = Enum.map(page_entries, & &1.page_object_id)
     page_refs = List.to_tuple(page_object_ids)
 
+    outline_count =
+      if outlines == [],
+        do: 0,
+        else: NativeElixirPdfUtilities.Validators.OutlineValidator.count_items(outlines) + 1
+
+    info_count = if map_size(metadata) == 0, do: 0, else: 1
+    WriterValidator.reserve_object_capacity(next_object_id + outline_count + info_count)
+
     outline_objects =
       OutlineBuilder.build(
         outlines,
@@ -836,19 +844,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp annotation_object(annotation, page_refs) do
     {left, bottom, right, top} = annotation.rect
 
-    action =
+    dictionary = [
+      "<< /Type /Annot /Subtype /Link /Rect [",
+      format_number(left),
+      " ",
+      format_number(bottom),
+      " ",
+      format_number(right),
+      " ",
+      format_number(top),
+      "]",
+      quad_points(annotation),
+      " /Border [0 0 0] "
+    ]
+
+    {prefix, suffix, uri} =
       case annotation.destination do
         {:uri, url} ->
-          "/A << /S /URI /URI (#{escape_text(url)}) >>"
+          {[dictionary, "/A << /S /URI /URI ("], ") >> >>", url}
 
         {:xyz, page, x, y} ->
-          "/Dest [#{elem(page_refs, page - 1)} 0 R /XYZ #{format_number(x)} #{format_number(y)} null]"
+          {[
+             dictionary,
+             "/Dest [",
+             Integer.to_string(elem(page_refs, page - 1)),
+             " 0 R /XYZ ",
+             format_number(x),
+             " ",
+             format_number(y),
+             " null]"
+           ], " >>", nil}
       end
 
-    """
-    << /Type /Annot /Subtype /Link /Rect [#{format_number(left)} #{format_number(bottom)} #{format_number(right)} #{format_number(top)}]#{quad_points(annotation)} /Border [0 0 0] #{action} >>
-    """
-    |> String.trim()
+    WriterValidator.reserve_annotation_bytes([prefix, suffix], uri)
+    escaped = if uri == nil, do: "", else: escape_text(uri)
+    IO.iodata_to_binary([prefix, escaped, suffix])
   end
 
   defp quad_points(annotation) do
@@ -2694,27 +2724,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp font_resources(pages, first_object_id) do
-    pages
-    |> Enum.flat_map(& &1.boxes)
-    |> Enum.filter(&(&1.type == :text))
-    |> Enum.reduce(%{}, fn box, acc ->
-      key = font_key(box)
+    entries =
+      for page <- pages, %{type: :text} = box <- page.boxes, reduce: %{} do
+        acc ->
+          key = font_key(box)
 
-      case key do
-        {:built_in, _name} ->
-          # Builtin resources do not consume collected text from later boxes.
-          case Map.fetch(acc, key) do
-            {:ok, _entry} -> acc
-            :error -> Map.put(acc, key, font_entry(key, box))
+          case {key, Map.fetch(acc, key)} do
+            {{:built_in, _name}, {:ok, _entry}} ->
+              acc
+
+            {_key, {:ok, entry}} ->
+              entry = %{entry | texts: [font_text_entry(box) | entry.texts]}
+
+              entry =
+                if Map.has_key?(box, :glyph_ids),
+                  do: Map.put(entry, :glyph_text?, true),
+                  else: entry
+
+              Map.put(acc, key, entry)
+
+            {_key, :error} ->
+              Map.put(acc, key, font_entry(key, box))
           end
-
-        _ ->
-          Map.update(acc, key, font_entry(key, box), fn entry ->
-            entry = update_in(entry.texts, &[font_text_entry(box) | &1])
-            if Map.has_key?(box, :glyph_ids), do: Map.put(entry, :glyph_text?, true), else: entry
-          end)
       end
-    end)
+
+    entries
     |> Map.values()
     |> Enum.reduce({%{}, first_object_id, 1}, fn entry, {resources, object_id, index} ->
       resource = font_resource(entry, object_id, index)
@@ -3506,7 +3540,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp objects_to_pdf(objects, info_object_id) do
-    HtmlValidator.check_render_resource(:max_pdf_objects, length(objects), :writer)
     header = "%PDF-1.4\n%\xFF\xFF\xFF\xFF\n"
 
     {body, offsets, position} =
@@ -3543,12 +3576,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       "trailer\n<< /Size #{size} /Root 1 0 R#{info_reference} >>\nstartxref\n#{xref_position}\n%%EOF\n"
     ]
 
-    HtmlValidator.check_render_resource(
-      :max_rendered_pdf_bytes,
-      IO.iodata_length(output),
-      :writer
-    )
-
+    bytes = IO.iodata_length(output)
+    HtmlValidator.check_render_resource(:max_rendered_pdf_bytes, bytes, :writer)
+    HtmlValidator.check_render_resource(:max_pdf_input_bytes, bytes, :writer)
     IO.iodata_to_binary(output)
   end
 

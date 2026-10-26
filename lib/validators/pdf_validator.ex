@@ -14,6 +14,60 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Pdf.InfoCodec
+
+  @doc "Checks cross-reference capacity, including the free object-zero entry and the allocated ID range."
+  @spec validate_object_capacity(non_neg_integer(), pos_integer(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_object_capacity(entries, size, opts \\ []) do
+    cond do
+      not is_integer(size) or size <= 0 ->
+        error(:xref, :invalid_pdf_input, "xref Size is malformed", opts)
+
+      entries > Limits.get(:max_pdf_objects) ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "PDF object count including object zero exceeds max_pdf_objects",
+          opts
+        )
+
+      size - 1 > Limits.get(:max_pdf_objects) ->
+        error(:limits, :resource_limit_exceeded, "PDF object IDs exceed max_pdf_objects", opts)
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc "Checks a numeric output value against the shared magnitude and serialized-token limits."
+  @spec validate_serialized_number(number()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_serialized_number(value) do
+    if valid_number?(value) do
+      {:ok, encoded} = InfoCodec.serialize_value(value)
+
+      case validate_reader_size(IO.iodata_length(encoded), :max_pdf_numeric_token_bytes) do
+        :ok ->
+          :ok
+
+        {:error, {reason, _diagnostic}} ->
+          Diagnostics.error(
+            :limits,
+            reason,
+            "PDF output number exceeds max_pdf_numeric_token_bytes",
+            module: __MODULE__
+          )
+      end
+    else
+      Diagnostics.error(
+        :limits,
+        :resource_limit_exceeded,
+        "PDF output number exceeds max_pdf_numeric_magnitude",
+        module: __MODULE__
+      )
+    end
+  end
 
   # Reader work is synchronous. The scope is local to its process and shared by
   # nested probes and stream decoders. An exhausted budget aborts candidate
@@ -529,37 +583,33 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       {entries, trailer, pdf} when is_map(entries) and is_map(trailer) and is_binary(pdf) ->
         size = Map.get(trailer, "Size")
 
-        cond do
-          not is_integer(size) or size <= 0 or size > Limits.get(:max_pdf_objects) + 1 ->
-            error(:xref, :invalid_pdf_input, "xref Size is malformed", opts)
+        with :ok <- validate_object_capacity(map_size(entries), size, opts) do
+          cond do
+            not match?({:ref, _}, Map.get(trailer, "Root")) ->
+              error(
+                :trailer,
+                :invalid_pdf_input,
+                "trailer does not contain a catalog reference",
+                opts
+              )
 
-          map_size(entries) > Limits.get(:max_pdf_objects) ->
-            error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit", opts)
+            not valid_object_zero_entry?(Map.get(entries, 0), size) ->
+              error(
+                :xref,
+                :invalid_pdf_input,
+                "xref object 0 must be a free entry with generation 65535",
+                opts
+              )
 
-          not match?({:ref, _}, Map.get(trailer, "Root")) ->
-            error(
-              :trailer,
-              :invalid_pdf_input,
-              "trailer does not contain a catalog reference",
-              opts
-            )
+            Enum.any?(entries, fn {object, entry} ->
+              not is_integer(object) or object < 0 or object >= size or
+                  not valid_xref_entry?(entry, pdf, size)
+            end) ->
+              error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
 
-          not valid_object_zero_entry?(Map.get(entries, 0), size) ->
-            error(
-              :xref,
-              :invalid_pdf_input,
-              "xref object 0 must be a free entry with generation 65535",
-              opts
-            )
-
-          Enum.any?(entries, fn {object, entry} ->
-            not is_integer(object) or object < 0 or object >= size or
-                not valid_xref_entry?(entry, pdf, size)
-          end) ->
-            error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
-
-          true ->
-            :ok
+            true ->
+              :ok
+          end
         end
 
       _ ->

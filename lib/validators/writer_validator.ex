@@ -16,6 +16,54 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfFormValidator
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
+
+  @doc "Admits contiguous generated objects, including the free object-zero entry."
+  @spec reserve_object_capacity(pos_integer()) :: :ok
+  def reserve_object_capacity(size) do
+    case PdfValidator.validate_object_capacity(size, size) do
+      :ok ->
+        :ok
+
+      {:error, {reason, diagnostic}} ->
+        throw(
+          {:render_resource_limit,
+           Diagnostics.error(:writer, reason, diagnostic.message, module: __MODULE__)}
+        )
+    end
+  end
+
+  @doc "Reserves a link dictionary's encoded bytes before escaping and copying its URI."
+  @spec reserve_annotation_bytes(iodata(), binary() | nil) :: :ok
+  def reserve_annotation_bytes(parts, uri) do
+    uri_bytes = if is_binary(uri), do: escaped_uri_bytes(uri, 0), else: 0
+    bytes = IO.iodata_length(parts) + uri_bytes
+    HtmlValidator.reserve_render_resource(:max_rendered_pdf_bytes, bytes, :writer)
+
+    if Limits.get(:max_pdf_input_bytes) < Limits.get(:max_rendered_pdf_bytes) do
+      HtmlValidator.reserve_render_resource(:max_pdf_input_bytes, bytes, :writer)
+    end
+
+    :ok
+  end
+
+  defp escaped_uri_bytes(text, bytes) do
+    case :binary.match(text, ["\\", "(", ")", "\r", "\n"]) do
+      :nomatch ->
+        bytes + byte_size(text)
+
+      {offset, _} ->
+        remaining = binary_part(text, offset, byte_size(text) - offset)
+
+        rest =
+          case remaining do
+            <<"\r\n", rest::binary>> -> rest
+            <<_escaped, rest::binary>> -> rest
+          end
+
+        escaped_uri_bytes(rest, bytes + offset + 2)
+    end
+  end
 
   @border_styles [
     :none,

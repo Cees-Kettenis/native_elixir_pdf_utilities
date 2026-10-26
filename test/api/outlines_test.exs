@@ -592,7 +592,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
                %{title: "ignored", page: 1, view: :fit, open: true, children: []}
              ])
 
-    assert {:error, {:invalid_pdf_input, %{stage: :outlines}}} =
+    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
              OutlineValidator.validate_incremental_capacity(%{}, [])
   end
 
@@ -663,6 +663,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
       pages: [],
       document: %{
         binary: "%PDF-1.7",
+        xref_revisions: 1,
         trailer: %{"Size" => 2, "Root" => {:ref, {1, 0}}, "Info" => {:ref, {2, 0}}},
         xref_offset: 0
       }

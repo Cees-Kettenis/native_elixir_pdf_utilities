@@ -53,16 +53,16 @@ These limits apply when reading existing PDFs.
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
-| `max_pdf_numeric_magnitude` | 1,000,000,000 | Absolute numeric operands and font metrics used for text extraction, and shared PDF geometry arrays |
-| `max_pdf_input_bytes` | 50,000,000 | One PDF input |
+| `max_pdf_numeric_magnitude` | 1,000,000,000 | Absolute numeric operands and font metrics used for text extraction, shared PDF geometry arrays, and output bookmark coordinates |
+| `max_pdf_input_bytes` | 50,000,000 | One PDF input or generated output |
 | `max_pdf_reader_decoded_bytes` | 50,000,000 | Decoded bytes across object streams, xref streams, revisions, candidate attempts, and each intermediate filter stage in one reader call |
 | `max_pdf_reader_tokens` | 1,000,000 | Tokens produced across all parsing passes in one reader call |
 | `max_pdf_reader_values` | 500,000 | Parsed values and expanded xref entries across one reader call |
 | `max_pdf_reader_work` | 250,000,000 | Bytes scanned by tokenizers, xref searches and stream decoding, plus predictor sample/group processing and every LZW code, including resets and end codes |
 | `max_pdf_predictor_working_bytes` | 160,000,000 | Conservative packed-buffer allowance for one TIFF/PNG predictor reconstruction, checked before buffers are allocated |
 | `max_pdf_container_entries` | 100,000 | Entries in one array or dictionary, including repeated dictionary keys |
-| `max_pdf_numeric_token_bytes` | 1,024 | Decimal numeric-token bytes before integer/float conversion, and bytes in one binary xref integer |
-| `max_pdf_objects` | 100,000 | Parsed and generated PDF object counts and allocation IDs |
+| `max_pdf_numeric_token_bytes` | 1,024 | Decimal numeric-token bytes before integer/float conversion, output bookmark numbers, and bytes in one binary xref integer |
+| `max_pdf_objects` | 100,000 | Xref entries including free object zero, and the maximum allocated object ID |
 | `max_pdf_object_stream_entries` | 10,000 | Entries in one PDF object stream |
 | `max_pdf_pages` | 10,000 | Pages in one PDF |
 | `max_pdf_page_tree_depth` | 1,000 | PDF page-tree nesting |
@@ -122,7 +122,7 @@ provides an application-wide memory ceiling.
 | `max_layout_measurement_cache_entries` | 10,000 | Distinct width measurements retained in one render |
 | `max_table_grid_work` | 1,000,000 | Table row scans, column expansion and probes, preferred-width span updates, and collapsed-border edge visits, reserved before expansion |
 | `max_rendered_pages` | 1,000 | Generated PDF pages, also bounded by `max_pdf_pages` |
-| `max_rendered_pdf_bytes` | 50,000,000 | Serialized PDF output before flattening its iodata |
+| `max_rendered_pdf_bytes` | 50,000,000 | Serialized PDF output and cumulative encoded link annotations; annotation bytes are admitted before copying URI data |
 
 Work counters charge repeated processing rather than just retained results.
 Reaching a limit aborts the operation with an actionable diagnostic and clears

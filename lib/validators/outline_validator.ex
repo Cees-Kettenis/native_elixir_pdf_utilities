@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+  alias NativeElixirPdfUtilities.Validators.IncrementalValidator
 
   @item_keys [:title, :page, :view, :open, :children]
 
@@ -123,18 +124,8 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   @spec validate_incremental_capacity(PdfValidator.context(), [item()]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_incremental_capacity(context, items) do
-    case context do
-      %{document: %{trailer: %{"Size" => size}}} when is_integer(size) and size > 0 ->
-        generated_objects = if items == [], do: 0, else: count_items(items) + 1
-
-        case size + generated_objects <= Limits.get(:max_pdf_objects) + 1 do
-          true -> :ok
-          false -> limit_error("PDF object count cannot accommodate an outline update")
-        end
-
-      _ ->
-        error(:invalid_pdf_input, "active PDF trailer Size is malformed")
-    end
+    generated_objects = if items == [], do: 0, else: count_items(items) + 1
+    IncrementalValidator.validate_object_capacity(context, generated_objects)
   end
 
   defp normalize_items(items, page_count, depth, budget, normalized) do
@@ -249,8 +240,31 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
       end
 
     case valid? do
-      true -> {:ok, view}
-      false -> error(:invalid_outlines, "outline destination view is unsupported or malformed")
+      true ->
+        numbers = if is_tuple(view), do: view |> Tuple.to_list() |> tl(), else: []
+
+        Enum.reduce_while(numbers, {:ok, view}, fn
+          nil, result ->
+            {:cont, result}
+
+          number, result ->
+            case PdfValidator.validate_serialized_number(number) do
+              :ok ->
+                {:cont, result}
+
+              {:error, {reason, diagnostic}} ->
+                {:halt,
+                 {:error,
+                  {reason,
+                   Diagnostics.with_context(diagnostic,
+                     module: __MODULE__,
+                     source: "outline destination"
+                   )}}}
+            end
+        end)
+
+      false ->
+        error(:invalid_outlines, "outline destination view is unsupported or malformed")
     end
   end
 

@@ -25,29 +25,31 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineWriter do
       }
       when is_map(catalog) and is_list(pages) and is_binary(pdf) and is_map(trailer) and
              is_integer(previous_xref_offset) ->
-        size = Map.fetch!(trailer, "Size")
+        with :ok <- IncrementalValidator.validate_revision_capacity(context) do
+          size = Map.fetch!(trailer, "Size")
 
-        page_refs =
-          pages |> Enum.with_index(1) |> Map.new(fn {page, number} -> {number, page.ref} end)
+          page_refs =
+            pages |> Enum.with_index(1) |> Map.new(fn {page, number} -> {number, page.ref} end)
 
-        built = OutlineBuilder.build(items, &Map.fetch!(page_refs, &1), size)
+          built = OutlineBuilder.build(items, &Map.fetch!(page_refs, &1), size)
 
-        updated_catalog =
-          case built.root_ref do
-            nil -> Map.delete(catalog, "Outlines")
-            root_ref -> Map.put(catalog, "Outlines", {:ref, root_ref})
-          end
+          updated_catalog =
+            case built.root_ref do
+              nil -> Map.delete(catalog, "Outlines")
+              root_ref -> Map.put(catalog, "Outlines", {:ref, root_ref})
+            end
 
-        objects =
-          [{catalog_object, catalog_generation, updated_catalog} | built.objects]
+          objects =
+            [{catalog_object, catalog_generation, updated_catalog} | built.objects]
 
-        write_increment(
-          pdf,
-          trailer,
-          previous_xref_offset,
-          objects,
-          max(size, built.next_id)
-        )
+          write_increment(
+            pdf,
+            trailer,
+            previous_xref_offset,
+            objects,
+            max(size, built.next_id)
+          )
+        end
 
       _ ->
         error("prepared outline write context is malformed")
