@@ -45,6 +45,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
           put_in(wire, ["Style", "white_space"], {:string, "normal"}),
           Map.put(wire, "Fonts", [Map.put(font, "Unexpected", true)]),
           Map.put(wire, "Fonts", [Map.put(font, "Style", {:name, "unsupported"})]),
+          Map.put(wire, "Fonts", [Map.put(font, "Family", {:string, 42})]),
           Map.put(wire, "Fonts", [Map.put(font, "Data", {:ref, {99_999, 0}})])
         ] do
       assert {:error, {reason, diagnostic}} = FormAppearanceValidator.prepare(document, altered)
@@ -119,6 +120,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
     assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render([appearance])
     assert {:ok, text} = Text.extract(pdf, layout: false)
     assert text =~ "Updated ffi"
+  end
+
+  test "projection coordinates consume preparation entries before pair allocation", %{
+    document: document,
+    wire: wire
+  } do
+    projection = %{
+      "Matrix" => [1, 0, 0, 1, 0, 0],
+      "Bounds" => [0, 0, 100, 30],
+      "Polygons" => [[0, 0, 100, 0, 100, 30, 0, 30]]
+    }
+
+    wire = Map.put(wire, "Projections", [projection])
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_form_preparation_entries: 7})
+    assert {:ok, _} = FormAppearanceValidator.prepare(document, wire)
+    Limits.install(%{limits | max_pdf_form_preparation_entries: 3})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FormAppearanceValidator.prepare(document, wire)
+
+    assert diagnostic.stage == :forms and diagnostic.source == "Polygons"
   end
 
   test "resolved scalar painter denies foreign nodes and malformed geometry", %{editor: editor} do

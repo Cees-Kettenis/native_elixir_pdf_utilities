@@ -9336,6 +9336,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         )
 
       boxes = shift_layout_boxes(boxes, 0.0, -offset)
+      source_rows = boxes
       # A number's invisible initial spin button still occupies its fixed
       # native 15px width in the inner editor. Keep it outside the text clip.
       {boxes, clip} =
@@ -9468,20 +9469,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           []
         end
 
-      if clip.width > 0 and clip.height > 0 do
-        client_background ++
-          Enum.flat_map(boxes, fn box ->
-            {top, bottom} = PageGeometry.box_vertical_bounds(box)
+      result =
+        if clip.width > 0 and clip.height > 0 do
+          client_background ++
+            Enum.flat_map(boxes, fn box ->
+              {top, bottom} = PageGeometry.box_vertical_bounds(box)
 
-            if top > clip.y and bottom < clip.y + clip.height do
-              clip = if padding_clip, do: Map.put(clip, :inner_clip, padding_clip), else: clip
-              [box |> Map.put(:clip, clip) |> Map.put(:out_of_flow, true)]
-            else
-              []
-            end
-          end) ++ scrollbar_boxes
+              if top > clip.y and bottom < clip.y + clip.height do
+                clip = if padding_clip, do: Map.put(clip, :inner_clip, padding_clip), else: clip
+                [box |> Map.put(:clip, clip) |> Map.put(:out_of_flow, true)]
+              else
+                []
+              end
+            end) ++ scrollbar_boxes
+        else
+          []
+        end
+
+      if Map.get(style, :form_kind) == :listbox and result != [] do
+        model =
+          NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidator.capture(
+            source_rows,
+            style,
+            clip
+          )
+
+        [first | rest] = result
+        [Map.put(first, :listbox_rows, model) | rest]
       else
-        []
+        result
       end
     else
       boxes

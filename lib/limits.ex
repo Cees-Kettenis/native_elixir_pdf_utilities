@@ -85,6 +85,10 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_form_fields: 10_000,
     max_pdf_form_depth: 64,
     max_pdf_form_text_bytes: 1_000_000,
+    max_pdf_form_metadata_bytes: 10_000_000,
+    max_pdf_form_preparation_entries: 100_000,
+    max_pdf_form_font_uses: 100_000,
+    max_pdf_form_font_work_bytes: 1_000_000_000,
     max_aggregate_svg_source_bytes: 10_000_000,
     max_aggregate_svg_nodes: 50_000,
     max_aggregate_svg_path_bytes: 2_000_000,
@@ -242,6 +246,10 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_form_fields
           | :max_pdf_form_depth
           | :max_pdf_form_text_bytes
+          | :max_pdf_form_metadata_bytes
+          | :max_pdf_form_preparation_entries
+          | :max_pdf_form_font_uses
+          | :max_pdf_form_font_work_bytes
           | :max_aggregate_svg_source_bytes
           | :max_aggregate_svg_nodes
           | :max_aggregate_svg_path_bytes

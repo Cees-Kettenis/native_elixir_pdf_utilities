@@ -234,7 +234,11 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             control.appearance,
             %{
               control.appearance
-              | boxes: appearance_state_boxes(control.appearance.boxes, :background)
+              | boxes:
+                  if(control.type == :choice and control.choice_listbox,
+                    do: appearance_state_boxes(control.appearance.boxes, :list_box_background),
+                    else: appearance_state_boxes(control.appearance.boxes, :background)
+                  )
             }
           ]
         end
@@ -247,10 +251,10 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
   defp appearance_state_boxes(boxes, state) do
     Enum.flat_map(boxes, fn box ->
       case {box.type, state} do
-        {:text, :background} ->
+        {:text, state} when state in [:background, :list_box_background] ->
           []
 
-        {:glyph_group, :background} ->
+        {:glyph_group, state} when state in [:background, :list_box_background] ->
           []
 
         {:text, {:button, text}} ->
@@ -266,6 +270,9 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             end
 
           [box]
+
+        {_, :list_box_background} ->
+          if is_map(Map.get(box, :form_control)), do: [box], else: []
 
         _ ->
           [box]
@@ -336,11 +343,19 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           dictionary = field.dictionary |> Map.put("V", value) |> Map.delete("I")
 
           dictionary =
+            case List.first(field.appearances) do
+              %{choice_top_index: index} -> Map.put(dictionary, "TI", index)
+              _ -> dictionary
+            end
+
+          dictionary =
             if field.type == :choice and is_list(field.new_value) do
+              selected = MapSet.new(field.new_value)
+
               indexes =
                 field.choices
                 |> Enum.with_index()
-                |> Enum.filter(fn {choice, _} -> choice.value in field.new_value end)
+                |> Enum.filter(fn {choice, _} -> MapSet.member?(selected, choice.value) end)
                 |> Enum.map(&elem(&1, 1))
 
               Map.put(dictionary, "I", indexes)

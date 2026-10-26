@@ -64,6 +64,15 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           required(:subset_fonts) => boolean()
         }
 
+  @doc false
+  @spec use_compressed_stream?(non_neg_integer(), non_neg_integer(), non_neg_integer()) ::
+          boolean()
+  def use_compressed_stream?(source_bytes, compressed_bytes, minimum_size) do
+    source_bytes >= minimum_size and
+      (minimum_size == 0 or compressed_bytes + byte_size(" /Filter /FlateDecode") < source_bytes) and
+      source_bytes <= compressed_bytes * Limits.get(:max_pdf_decompression_ratio)
+  end
+
   @doc "Prepares the genuine top-down CSS print canvas and bounded curved stroke contours from validated writer geometry."
   @spec prepare_curved_border_paint(map(), number()) :: map()
   def prepare_curved_border_paint(box, page_height) do
@@ -2099,26 +2108,29 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     |> Enum.reduce_while({:ok, %{}, %{}}, fn box, {:ok, faces, glyph_faces} ->
       case Map.get(box, :font_face) do
         %{type: :embedded, id: id} = face ->
-          writer_data =
-            face
-            |> Map.take(@writer_font_fields)
-            |> Map.put(:kerning, Map.get(face, :kerning, %{}))
-
           glyph_faces =
             if Map.has_key?(box, :glyph_ids),
               do: Map.put(glyph_faces, id, face),
               else: glyph_faces
 
           case Map.fetch(faces, id) do
-            {:ok, ^writer_data} ->
+            {:ok, ^face} ->
               {:cont, {:ok, faces, glyph_faces}}
 
-            {:ok, _different_face} ->
-              {:halt, {:error, "PDF writer font ID #{inspect(id)} has conflicting face data"}}
+            {:ok, previous} ->
+              # Compare only serialized font facts when callers supply another
+              # face map. Reused immutable faces avoid rebuilding this projection
+              # for every glyph box, including list-box row appearances.
+              if Map.take(previous, @writer_font_fields) == Map.take(face, @writer_font_fields) and
+                   Map.get(previous, :kerning, %{}) == Map.get(face, :kerning, %{}) do
+                {:cont, {:ok, Map.put(faces, id, face), glyph_faces}}
+              else
+                {:halt, {:error, "PDF writer font ID #{inspect(id)} has conflicting face data"}}
+              end
 
             :error ->
               case valid_embedded_font_face?(face) do
-                true -> {:cont, {:ok, Map.put(faces, id, writer_data), glyph_faces}}
+                true -> {:cont, {:ok, Map.put(faces, id, face), glyph_faces}}
                 false -> {:halt, {:error, "PDF writer requires valid embedded font data"}}
               end
           end

@@ -271,6 +271,11 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     assert {:ok, [%{value: ["a"]}]} = Forms.fields(multi)
     assert {:ok, multi} = Forms.fill(multi, %{"field" => ["a", "b"]})
     assert {:ok, [%{value: ["a", "b"]}]} = Forms.fields(multi)
+
+    assert {:error, {:invalid_form_value, diagnostic}} =
+             Forms.fill(multi, %{"field" => ["a", "a"]})
+
+    assert diagnostic.message =~ "distinct declared export values"
     assert {:ok, _} = Forms.fill(multi, %{"field" => nil})
     {:ok, radio} = HtmlToPdf.render("<div><input type=\"radio\" name=\"a\" value=\"x\"></div>")
     assert {:error, {:invalid_form_value, _}} = Forms.fill(radio, %{"a" => "bad"})
@@ -838,6 +843,110 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
       )
 
     pdf
+  end
+
+  test "expanded parent names and decoded field metadata share one inspection allowance" do
+    pdf = external_pdf()
+    {:ok, context} = Reader.read_validated(pdf)
+
+    {:ok, pdf} =
+      IncrementalWriter.write(context, [
+        {5, 0, {:value, %{"Fields" => [{:ref, {10, 0}}]}}},
+        {10, 0, {:value, %{"T" => {:string, "root"}, "Kids" => [{:ref, {6, 0}}]}}}
+      ])
+
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_form_metadata_bytes: 17})
+    assert {:ok, [%{name: "root.field", value: "Old"}]} = Forms.fields(pdf)
+    Limits.install(%{limits | max_pdf_form_metadata_bytes: 13})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fields(pdf)
+
+    assert diagnostic.stage == :forms and diagnostic.operation == :fields and
+             diagnostic.module == Forms
+
+    assert diagnostic.message =~ "max_pdf_form_metadata_bytes"
+    assert diagnostic.source == "field"
+  end
+
+  test "choice and selection preparation preserves order and admits entries and metadata cumulatively" do
+    pdf =
+      external_pdf(%{
+        "FT" => {:name, "Ch"},
+        "Ff" => 2_097_152,
+        "Opt" => [{:string, "a"}, {:string, "b"}],
+        "V" => [{:string, "b"}, {:string, "a"}]
+      })
+
+    limits = Limits.effective()
+
+    Limits.install(%{
+      limits
+      | max_pdf_form_metadata_bytes: 11,
+        max_pdf_form_preparation_entries: 5
+    })
+
+    assert {:ok, [%{choices: [%{value: "a"}, %{value: "b"}], value: ["b", "a"]}]} =
+             Forms.fields(pdf)
+
+    for changed <- [
+          %{limits | max_pdf_form_metadata_bytes: 10},
+          %{limits | max_pdf_form_preparation_entries: 4}
+        ] do
+      Limits.install(changed)
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fields(pdf)
+
+      assert diagnostic.stage == :forms and diagnostic.operation == :fields and
+               diagnostic.source in ["Opt", "V"]
+    end
+  end
+
+  test "choice preparation grows linearly for shallow sibling options" do
+    measure = fn count ->
+      pdf =
+        external_pdf(%{
+          "FT" => {:name, "Ch"},
+          "Opt" => Enum.map(1..count, &{:string, Integer.to_string(&1)}),
+          "V" => nil
+        })
+
+      {:ok, context} = Reader.read_validated(pdf)
+
+      Task.async(fn ->
+        :erlang.garbage_collect()
+        {:reductions, before} = Process.info(self(), :reductions)
+        assert {:ok, _} = FormValidator.inspect_document(context)
+        {:reductions, after_work} = Process.info(self(), :reductions)
+        after_work - before
+      end)
+      |> Task.await()
+    end
+
+    measure.(1)
+    small = measure.(256)
+    assert measure.(1024) < small * 6
+  end
+
+  test "external list boxes respect alignment and reject widgets too small for fitted rows" do
+    for alignment <- [1, 2] do
+      source =
+        external_pdf(%{
+          "FT" => {:name, "Ch"},
+          "Opt" => [{:string, "Alpha"}, {:string, "Beta"}],
+          "V" => nil,
+          "Q" => alignment
+        })
+
+      assert {:ok, filled} = Forms.fill(source, %{"field" => "Beta"})
+      assert {:ok, _} = Forms.flatten(filled)
+    end
+
+    source =
+      external_pdf(%{"FT" => {:name, "Ch"}, "Opt" => [{:string, "Alpha"}], "V" => nil}, %{
+        "Rect" => [1, 1, 2, 2]
+      })
+
+    assert {:error, {:unsupported_form, diagnostic}} = Forms.fill(source, %{"field" => "Alpha"})
+    assert diagnostic.operation == :fill and diagnostic.source == "field"
   end
 
   defp external_pdf(field \\ %{}, widget \\ %{}, form \\ %{}) do

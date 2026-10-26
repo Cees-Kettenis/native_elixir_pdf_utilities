@@ -2266,6 +2266,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     html_inline_blank_viewports.html
     html_inline_fragment_allocation.html
     html_inline_select_controls.html
+    list_box_filled_appearances.html
     html_input_attribute_applicability.html
     html_light_tree_style_selection.html
     html_mixed_document_scopes.html

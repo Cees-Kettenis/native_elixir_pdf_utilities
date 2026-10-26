@@ -316,6 +316,10 @@ advice. Caller flags and unrelated mailbox messages are preserved.
 | `max_pdf_form_fields` | 10,000 | HTML controls and visited field/widget nodes |
 | `max_pdf_form_depth` | 64 | AcroForm field-tree nesting |
 | `max_pdf_form_text_bytes` | 1,000,000 | Field names and filled text values |
+| `max_pdf_form_metadata_bytes` | 10,000,000 | Aggregate expanded field names, decoded choice labels/values, appearance-state names and retained editor labels/font-family names during inspection |
+| `max_pdf_form_preparation_entries` | 100,000 | Aggregate widget references, choice/selection entries, appearance states, retained list-box rows and their scalar paint facts, editor descriptors and projection coordinates prepared during inspection |
+| `max_pdf_form_font_uses` | 100,000 | Editor font descriptors visited, including uses of cached streams |
+| `max_pdf_form_font_work_bytes` | 1,000,000,000 | Sum of font-program bytes referenced by inspected editor descriptors, including repeated uses |
 | `max_pdf_attachments` | 1,000 | Total embedded-file count |
 | `max_pdf_attachment_bytes` | 10,000,000 | One new attachment's bytes |
 | `max_pdf_attachment_total_bytes` | 25,000,000 | New payload bytes plus existing stored attachment stream bytes |
@@ -323,6 +327,18 @@ advice. Caller flags and unrelated mailbox messages are preserved.
 | `max_mime_container_entries` | 10,000 | ZIP central-directory entries inspected |
 
 Form appearances also use `max_pdf_objects` and the existing font limits.
+Form inspection checks expanded names before joining parent/child names and
+checks metadata and entry allowances before retaining prepared collections.
+Decoded editor fonts are cached by their resolved stream reference within one
+inspection. The PDF reader's aggregate decode/work limits apply across uncached
+font streams; repeated descriptors still consume font-use and logical font-byte
+work allowances. These work bytes are not a measure of retained memory. Each
+inspection starts a fresh scope, including the inspection preceding fill or
+flatten.
+Retained list-box rows also consume the metadata and preparation-entry
+allowances across all controls while a producer serializes their editor
+templates.
+
 Attachment metadata uses `max_pdf_info_value_bytes`; attachment name-tree
 traversal uses `max_pdf_name_tree_nodes` and `max_pdf_value_depth`. Existing
 attachment streams are counted as stored, without decompression. Declared

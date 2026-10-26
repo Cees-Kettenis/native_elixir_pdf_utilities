@@ -11,13 +11,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
     FormAppearanceComposition
   }
 
-  alias NativeElixirPdfUtilities.Pdf.Reader
-
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
     FormValidator,
+    FormInspectionValidator,
     HtmlFormValidator,
     HtmlValidator,
+    ListBoxAppearanceValidator,
     WriterValidator
   }
 
@@ -51,10 +51,12 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
         origin =
           Map.get(field.appearance, :paint_frame, %{x: 0, y: 0, width: width, height: height})
 
+        listbox = Enum.find_value(field.appearance.boxes, &Map.get(&1, :listbox_rows))
         leaves = text_leaves(field.appearance.boxes)
 
         fonts =
-          [primary | Enum.map(leaves, & &1.font_face)]
+          ([primary | Enum.map(leaves, & &1.font_face)] ++
+             if(listbox, do: listbox.fonts, else: []))
           |> Enum.filter(&match?(%{type: :embedded, data: data} when is_binary(data), &1))
           |> Enum.uniq_by(& &1.id)
           |> Enum.map(&Map.take(&1, [:family, :data, :weight, :style]))
@@ -77,7 +79,10 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
               {source_clip, first.y + HtmlValidator.text_baseline_depth(observed)}
 
             [] ->
-              {clip, top}
+              case listbox && Enum.find_value(field.appearance.boxes, &Map.get(&1, :clip)) do
+                nil -> {clip, top}
+                observed -> {observed, observed.y + observed.height - offset}
+              end
           end
 
         %{
@@ -99,6 +104,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
               :line_break
             ]),
           fonts: fonts,
+          listbox: listbox && Map.take(listbox, [:rows]),
           projections: []
         }
 
@@ -130,7 +136,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
   @spec encode_controls([map()], pos_integer()) ::
           {:ok, [map()], [tuple()], pos_integer()} | {:error, {atom(), map()}}
   def encode_controls(controls, next) do
-    FontValidator.with_budget(fn ->
+    FormInspectionValidator.with_active_scope(fn ->
       Enum.reduce_while(controls, {:ok, [], [], next, %{}}, fn control,
                                                                {:ok, controls, objects, next,
                                                                 fonts} ->
@@ -155,12 +161,20 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
 
                          :error ->
                            ref = {:ref, {next, 0}}
+                           compressed = FontCache.compressed(face.data)
+
+                           stream =
+                             if WriterValidator.use_compressed_stream?(
+                                  byte_size(face.data),
+                                  byte_size(compressed),
+                                  1_024
+                                ),
+                                do: {:stream, %{"Filter" => {:name, "FlateDecode"}}, compressed},
+                                else: {:stream, %{}, face.data}
 
                            {ref, next + 1,
                             [
-                              {next, 0,
-                               {:stream, %{"Filter" => {:name, "FlateDecode"}},
-                                FontCache.compressed(face.data)}}
+                              {next, 0, stream}
                               | added
                             ], Map.put(fonts, source, ref)}
                        end
@@ -204,7 +218,17 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                            )
                        }
                      end)
-                 } do
+                 },
+                 dictionary =
+                   if(Map.get(editor, :listbox),
+                     do:
+                       Map.put(
+                         dictionary,
+                         "ListBox",
+                         ListBoxAppearanceValidator.encode(editor.listbox)
+                       ),
+                     else: dictionary
+                   ) do
               {:cont,
                {:ok, [Map.put(control, :source_editor_pdf, dictionary) | controls],
                 added ++ objects, next, fonts}}
@@ -226,6 +250,10 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
   @doc "Loads a persisted source editor through canonical font/style/geometry validation, without font discovery or resolution."
   @spec prepare(map(), term()) :: {:ok, map() | nil} | {:error, {atom(), map()}}
   def prepare(document, value) do
+    FormInspectionValidator.with_scope(document, fn -> prepare_editor(document, value) end)
+  end
+
+  defp prepare_editor(document, value) do
     case value do
       nil ->
         {:ok, nil}
@@ -264,7 +292,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                      "Color",
                      "Style",
                      "Fonts",
-                     "Projections"
+                     "Projections",
+                     "ListBox"
                    ])
                ) and
                  Enum.all?(
@@ -273,6 +302,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                  ) and
                  length(fonts) <= Limits.get(:max_font_count) and
                  length(projections) <= Limits.get(:max_pdf_form_depth),
+             {:ok, listbox} <- ListBoxAppearanceValidator.decode(Map.get(value, "ListBox")),
+             :ok <-
+               FormInspectionValidator.reserve(
+                 :max_pdf_form_preparation_entries,
+                 length(fonts) + length(projections),
+                 "NEPUSourceEditor"
+               ),
              {:ok, fonts} <-
                collect(fonts, fn font ->
                  case font do
@@ -288,13 +324,14 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                               Map.keys(font),
                               &(&1 in ["Family", "Weight", "Style", "Data"])
                             ),
-                          {:ok, bytes} <- Reader.decoded_stream(document, source) do
-                       HtmlValidator.reserve_render_resource(
-                         :max_aggregate_font_source_bytes,
-                         byte_size(bytes),
-                         :forms
-                       )
-
+                          true <- is_binary(family),
+                          :ok <-
+                            FormInspectionValidator.reserve(
+                              :max_pdf_form_metadata_bytes,
+                              byte_size(family),
+                              "Fonts"
+                            ),
+                          {:ok, bytes} <- FormInspectionValidator.decoded_font(document, source) do
                        {:ok,
                         %{
                           family: family,
@@ -347,18 +384,31 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                               &(&1 in ["Matrix", "Bounds", "Polygons"])
                             ),
                           true <- length(polygons) <= Limits.get(:max_layout_boxes),
+                          :ok <-
+                            FormInspectionValidator.reserve(
+                              :max_pdf_form_preparation_entries,
+                              length(polygons),
+                              "Projections"
+                            ),
                           {:ok, polygons} <-
                             collect(polygons, fn polygon ->
                               if is_list(polygon) and length(polygon) >= 6 and
                                    length(polygon) <= 2 * Limits.get(:max_layout_boxes) and
-                                   rem(length(polygon), 2) == 0,
-                                 do:
-                                   {:ok,
-                                    Enum.chunk_every(polygon, 2) |> Enum.map(&List.to_tuple/1)},
-                                 else:
-                                   invalid(
-                                     "source editor projection polygons require actual coordinate pairs"
-                                   )
+                                   rem(length(polygon), 2) == 0 do
+                                with :ok <-
+                                       FormInspectionValidator.reserve(
+                                         :max_pdf_form_preparation_entries,
+                                         div(length(polygon), 2),
+                                         "Polygons"
+                                       ) do
+                                  {:ok,
+                                   Enum.chunk_every(polygon, 2) |> Enum.map(&List.to_tuple/1)}
+                                end
+                              else
+                                invalid(
+                                  "source editor projection polygons require actual coordinate pairs"
+                                )
+                              end
                             end) do
                        {:ok,
                         %{
@@ -394,6 +444,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                 color: List.to_tuple(color)
               }),
             fonts: fonts,
+            listbox: listbox,
             projections: projections
           })
         else
@@ -407,19 +458,15 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
       _ ->
         invalid("source editor requires a supported closed source paint template")
     end
-  catch
-    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
-      {:error,
-       {reason,
-        Diagnostics.with_context(diagnostic,
-          module: __MODULE__,
-          operation: :prepare_form_appearance
-        )}}
   end
 
   @doc "Validates exact editor paint facts and selected full byte font programs before source glyph layout."
   @spec validate(term()) :: {:ok, map()} | {:error, {atom(), map()}}
   def validate(editor) do
+    FormInspectionValidator.with_active_scope(fn -> validate_editor(editor) end)
+  end
+
+  defp validate_editor(editor) do
     case editor do
       %{
         size: {width, height},
@@ -433,7 +480,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
         projections: projections
       }
       when is_map(clip) and is_map(origin) and is_list(projections) and is_list(fonts) ->
-        with {:ok, {^width, ^height}} <- HtmlValidator.prepare_viewport_dimensions(width, height),
+        with {:ok, listbox} <- ListBoxAppearanceValidator.validate(Map.get(editor, :listbox)),
+             {:ok, {^width, ^height}} <- HtmlValidator.prepare_viewport_dimensions(width, height),
              true <-
                width > 0 and height > 0 and is_number(size) and size > 0 and
                  is_number(line) and line > 0,
@@ -451,11 +499,12 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                  0
                ]),
              {:ok, loaded} <-
-               FontValidator.with_budget(fn ->
+               FormInspectionValidator.loaded_fonts(fonts, fn ->
                  FontValidator.memo({__MODULE__, :byte_faces, fonts}, fn ->
                    Font.load_byte_faces(fonts)
                  end)
                end),
+             :ok <- ListBoxAppearanceValidator.validate_fonts(listbox, loaded),
              true <-
                Enum.all?(@styles, fn {key, values} ->
                  Map.get(style, key, default_style(key)) in values
@@ -548,7 +597,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                    error -> {:halt, error}
                  end
                end) do
-          {:ok, Map.put(editor, :loaded_fonts, loaded)}
+          {:ok, editor |> Map.put(:loaded_fonts, loaded) |> Map.put(:listbox, listbox)}
         else
           {:error, _} = error ->
             error
@@ -585,6 +634,30 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
   @doc "Prepares genuine source text with the original byte fonts, editor size/color/padding and shared layout/clip rules."
   @spec appearance(map(), map(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
   def appearance(field, editor, value) do
+    if field.type == :choice and (field.flags &&& 131_072) == 0 and Map.get(editor, :listbox) do
+      with {:ok, editor} <- validate(editor),
+           {:ok, frame} <- ListBoxAppearanceValidator.appearance(field, editor, value) do
+        Enum.reduce_while(editor.projections, {:ok, frame}, fn projection, {:ok, frame} ->
+          case FormAppearanceComposition.project_appearance(
+                 frame,
+                 projection.matrix,
+                 projection.polygons,
+                 projection.bounds
+               ) do
+            {:ok, projected} ->
+              {:cont, {:ok, Map.put(projected, :choice_top_index, frame.choice_top_index)}}
+
+            error ->
+              {:halt, error}
+          end
+        end)
+      end
+    else
+      text_appearance(field, editor, value)
+    end
+  end
+
+  defp text_appearance(field, editor, value) do
     with {:ok, editor} <- validate(editor),
          {:ok, text} <-
            (case field.type do
@@ -651,7 +724,9 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
       )}}
   end
 
-  defp text_leaves(boxes) do
+  @doc false
+  @spec text_leaves([map()]) :: [map()]
+  def text_leaves(boxes) do
     Enum.flat_map(boxes, fn box ->
       case box do
         %{type: :text, font_face: _} -> [box]

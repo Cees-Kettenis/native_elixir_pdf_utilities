@@ -2979,10 +2979,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          do: bounded_image_compression(data, ratio),
          else: compressed
 
-    if compress? and byte_size(data) >= minimum_size and
-         (minimum_size == 0 or
-            byte_size(compressed) + byte_size(" /Filter /FlateDecode") < byte_size(data)) and
-         byte_size(data) <= byte_size(compressed) * Limits.get(:max_pdf_decompression_ratio) do
+    if compress? and
+         WriterValidator.use_compressed_stream?(
+           byte_size(data),
+           byte_size(compressed),
+           minimum_size
+         ) do
       "<<#{entries} /Length #{byte_size(compressed)} /Filter /FlateDecode >>\nstream\n" <>
         compressed <> "\nendstream"
     else

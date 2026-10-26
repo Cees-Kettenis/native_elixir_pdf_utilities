@@ -193,10 +193,20 @@ values may be clipped. A value that the captured fonts cannot draw returns a
 diagnostic. Fields without a supported source template still use the default
 fitted appearance. `appearance: :fit` selects that default explicitly.
 
+Filling a list box preserves its visible option labels and redraws selection
+highlights, including when the selection is cleared. The view scrolls to reveal
+the first selected option. Dropdowns continue to show their selected label.
+New HTML list boxes retain row geometry, option visibility, group labels and
+row fonts for `appearance: :source`. Older templates without row geometry and
+external list boxes use rows reconstructed from their PDF choice entries.
+
 Library-generated HTML fields retain a validated appearance template containing
 approved embedded font bytes, text style, editor geometry and clip. The existing
 `NEPUSourceEditor` PDF format remains readable for these ordinary templates;
 it contains no SVG source, executable effect graph or external resource lookup.
+Retained editor fonts use the same compression decision as ordinary PDF streams.
+When compression would exceed the configured reader decompression ratio, the
+font program is stored uncompressed.
 
 PDFs depending on the removed custom SVG appearance programs remain inspectable,
 but modifying their fields returns an `unsupported_form` diagnostic. The

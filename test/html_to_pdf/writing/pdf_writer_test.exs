@@ -1125,7 +1125,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     assert message =~ "conflicting face data"
 
-    metadata_only = %{box | x: 20, font_face: %{font | source: :configured}}
+    metadata_only = %{box | x: 20, font_face: %{font | source: :caller_annotation}}
     assert {:ok, _pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box, metadata_only]}])
   end
 

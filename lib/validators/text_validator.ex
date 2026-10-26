@@ -488,6 +488,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
+  @compile {:inline, instruction_token: 6}
   defp instruction_token(token, operations, operands, depth, dictionaries, page) do
     case token do
       token when token in [:dict_start, :lbracket] ->
