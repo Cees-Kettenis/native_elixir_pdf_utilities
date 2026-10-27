@@ -102,10 +102,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                           "su"
                         )
   @css_escape_regex ~r/\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([^\n\r\f0-9a-fA-F]))/u
-  @css_syntax_unit_regex Regex.compile!(
-                           "#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|.",
-                           "su"
-                         )
   @css_attribute_selector_regex Regex.compile!(
                                   "\\A\\[[ \\t\\r\\n\\f]*(?<name>#{@css_identifier_pattern})(?:[ \\t\\r\\n\\f]*(?<operator>[~|^$*]?=)[ \\t\\r\\n\\f]*(?<value>\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*'|#{@css_identifier_pattern})(?:[ \\t\\r\\n\\f]+(?<flag>#{@css_identifier_pattern}))?)?[ \\t\\r\\n\\f]*\\](?<rest>.*)\\z",
                                   "su"
@@ -120,6 +116,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                           "su"
                         )
   @css_string_pattern "(?:\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*')"
+  # Consume an unterminated comment once, rather than retrying every opener.
+  @css_comment_pattern "/\\*(?:[^*]|\\*(?!/))*(?:\\*/|\\z)"
+  @css_syntax_unit_regex Regex.compile!(
+                           "#{@css_string_pattern}|#{@css_comment_pattern}|#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|.",
+                           "su"
+                         )
+  # CSS tokens, used only for comment seams. Tokenizing both sides prevents a
+  # comment from creating an identifier, dimension, hash or function token.
+  @css_number_pattern "[+-]?(?:[0-9]*\\.[0-9]+|[0-9]+)(?:[eE][+-]?[0-9]+)?"
+  @css_url_name_pattern Enum.map_join(~c"url", fn character ->
+                          "(?:#{<<character>>}|\\\\#{<<character>>}|\\\\0{0,4}(?:#{Integer.to_string(character, 16)}|#{Integer.to_string(character - 32, 16)})(?:\\r\\n|[ \\t\\n\\r\\f])?)"
+                        end)
+  @css_url_token_pattern "(?i:#{@css_url_name_pattern})\\([ \\t\\n\\r\\f]*(?![ \\t\\n\\r\\f\"'])(?:#{@css_escape_pattern}|[^)\\\\])*\\)"
+  @css_comment_token_regex Regex.compile!(
+                             "#{@css_comment_pattern}|#{@css_string_pattern}|#{@css_url_token_pattern}|#{@css_number_pattern}(?:#{@css_identifier_pattern}|%)?|#(?:[a-zA-Z0-9_\\x{80}-\\x{10FFFF}-]|#{@css_escape_pattern})+|@#{@css_identifier_pattern}|#{@css_identifier_pattern}\\(?|#{@css_escape_pattern}|.",
+                             "su"
+                           )
   @css_component_unit_regex Regex.compile!(
                               "#{@css_string_pattern}|<=|>=|#{Regex.source(@css_syntax_unit_regex)}",
                               "su"
@@ -212,7 +225,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec css_syntax_units(String.t()) :: [String.t()]
   def css_syntax_units(source) do
-    if String.contains?(source, "\\") do
+    if String.contains?(source, ["\\", "/*"]) do
       @css_syntax_unit_regex |> Regex.scan(source) |> Enum.map(&hd/1)
     else
       String.codepoints(source)
@@ -222,9 +235,80 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc "Returns CSS lexical units with quoted strings and escapes kept opaque for component parsing."
   @spec css_component_units(String.t()) :: [String.t()]
   def css_component_units(source) do
-    if String.contains?(source, ["\"", "'", "\\", "<=", ">="]),
+    if String.contains?(source, ["\"", "'", "\\", "/*", "<=", ">="]),
       do: @css_component_unit_regex |> Regex.scan(source) |> Enum.map(&hd/1),
       else: String.codepoints(source)
+  end
+
+  @doc "Normalizes comments without joining CSS tokens; syntax mode retains non-whitespace boundaries."
+  @spec normalize_css_comments(String.t(), :syntax | :value) :: String.t()
+  def normalize_css_comments(source, mode \\ :syntax) do
+    {text, _gaps} = css_comment_projection(source, mode)
+    text
+  end
+
+  @doc "Returns comment-normalized CSS and byte gaps for mapping spans to the authored source."
+  @spec css_comment_projection(String.t(), :syntax | :value) ::
+          {String.t(), [{non_neg_integer(), non_neg_integer()}]}
+  def css_comment_projection(source, mode \\ :syntax) do
+    if String.contains?(source, "/*") do
+      tokens = @css_comment_token_regex |> Regex.scan(source) |> Enum.map(&hd/1)
+      {parts, gaps, _cursor, _previous} = comment_tokens(tokens, mode, [], [], 0, nil)
+      {parts |> Enum.reverse() |> IO.iodata_to_binary(), Enum.reverse(gaps)}
+    else
+      {source, []}
+    end
+  end
+
+  defp comment_tokens(tokens, mode, parts, gaps, cursor, previous) do
+    case tokens do
+      [] ->
+        {parts, gaps, cursor, previous}
+
+      [<<"/*", _::binary>> = comment | _] ->
+        if String.ends_with?(comment, "*/") do
+          {comments, rest} =
+            Enum.split_while(
+              tokens,
+              &(String.starts_with?(&1, "/*") and String.ends_with?(&1, "*/"))
+            )
+
+          following = List.first(rest)
+          joined = if previous && following, do: previous <> following, else: ""
+
+          separate? =
+            not is_nil(previous) and not is_nil(following) and
+              (joined == "/*" or
+                 Regex.scan(@css_comment_token_regex, joined) != [[previous], [following]])
+
+          # A signed number must not become a whitespace-delimited binary + or -
+          # in calc(). Retain its real token boundary for the math grammar.
+          separator =
+            cond do
+              not separate? -> ""
+              mode == :value and previous not in ["+", "-"] and following not in ["+", "-"] -> " "
+              true -> "/**/"
+            end
+
+          removed = Enum.reduce(comments, 0, &(byte_size(&1) + &2)) - byte_size(separator)
+          cursor = cursor + byte_size(separator)
+
+          comment_tokens(
+            rest,
+            mode,
+            [separator | parts],
+            [{cursor, removed} | gaps],
+            cursor,
+            previous
+          )
+        else
+          # Preserve the existing strict treatment of unfinished comments.
+          {[comment | parts], gaps, cursor + byte_size(comment), previous}
+        end
+
+      [token | rest] ->
+        comment_tokens(rest, mode, [token | parts], gaps, cursor + byte_size(token), token)
+    end
   end
 
   @doc false
@@ -3820,7 +3904,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def validate_css_declaration(declaration) do
     case declaration do
       declaration when is_binary(declaration) ->
-        case String.split(declaration, ":", parts: 2) do
+        case String.split(normalize_css_comments(declaration, :value), ":", parts: 2) do
           [property, value] ->
             property = trim_css_whitespace(property)
 
@@ -6441,6 +6525,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         ) :: {:ok, term()} | :error
   @spec parse_css_size(String.t(), atom(), number() | nil) :: {:ok, term()} | :error
   def parse_css_size(value, context \\ :size, em_scale \\ nil) do
+    parse_css_size_at_depth(value, context, em_scale, 0)
+  end
+
+  defp parse_css_size_at_depth(value, context, em_scale, depth) do
+    check_render_resource(:max_css_calculation_depth, depth, :style)
     normalized = String.trim(value)
 
     cond do
@@ -6452,10 +6541,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              do: {:ok, {:percent, number / 100}}
 
       String.starts_with?(String.downcase(normalized), "min(") ->
+        reserve_render_resource(:max_css_work, byte_size(normalized), :style)
+
         case Regex.named_captures(~r/^min\((?<sizes>.+)\)$/u, String.downcase(normalized)) do
           %{"sizes" => sizes} ->
             parsed_sizes =
-              sizes |> split_css_comma() |> Enum.map(&parse_css_size(&1, :size, em_scale))
+              sizes
+              |> split_css_comma()
+              |> Enum.map(&parse_css_size_at_depth(&1, :size, em_scale, depth + 1))
 
             case Enum.all?(parsed_sizes, &match?({:ok, _size}, &1)) do
               true ->
@@ -8332,53 +8425,44 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec split_css_tokens(String.t()) :: [String.t()]
   def split_css_tokens(value) do
-    value
-    |> String.graphemes()
-    |> Enum.reduce({[], "", 0}, fn grapheme, {tokens, current, depth} ->
-      cond do
-        grapheme == "(" ->
-          {tokens, current <> grapheme, depth + 1}
-
-        grapheme == ")" ->
-          {tokens, current <> grapheme, max(depth - 1, 0)}
-
-        grapheme in [" ", "\t", "\n", "\r", "\f"] and depth == 0 ->
-          case current do
-            "" -> {tokens, "", depth}
-            current -> {tokens ++ [current], "", depth}
-          end
-
-        true ->
-          {tokens, current <> grapheme, depth}
-      end
-    end)
-    |> then(fn {tokens, current, _depth} ->
-      if current == "", do: tokens, else: tokens ++ [current]
-    end)
+    split_css_components(value, :whitespace)
   end
 
   @doc false
   @spec split_css_comma(String.t()) :: [String.t()]
-  def split_css_comma(value) do
-    value
-    |> String.graphemes()
-    |> Enum.reduce({[], "", 0}, fn grapheme, {tokens, current, depth} ->
-      cond do
-        grapheme == "(" ->
-          {tokens, current <> grapheme, depth + 1}
+  @spec split_css_comma(String.t(), boolean()) :: [String.t()]
+  def split_css_comma(value, keep_empty? \\ false) do
+    split_css_components(value, if(keep_empty?, do: :comma_keep_empty, else: :comma))
+  end
 
-        grapheme == ")" ->
-          {tokens, current <> grapheme, max(depth - 1, 0)}
+  defp split_css_components(value, separator) do
+    {tokens, current, _depth} =
+      value
+      |> css_component_units()
+      |> Enum.reduce({[], [], 0}, fn unit, {tokens, current, depth} ->
+        cond do
+          unit == "(" ->
+            {tokens, [unit | current], depth + 1}
 
-        grapheme == "," and depth == 0 ->
-          {tokens ++ [trim_ascii_whitespace(current)], "", depth}
+          unit == ")" ->
+            {tokens, [unit | current], max(depth - 1, 0)}
 
-        true ->
-          {tokens, current <> grapheme, depth}
-      end
+          depth == 0 and
+              ((separator in [:comma, :comma_keep_empty] and unit == ",") or
+                 (separator == :whitespace and unit in [" ", "\t", "\n", "\r", "\f"])) ->
+            {[current |> Enum.reverse() |> IO.iodata_to_binary() | tokens], [], depth}
+
+          true ->
+            {tokens, [unit | current], depth}
+        end
+      end)
+
+    [current |> Enum.reverse() |> IO.iodata_to_binary() | tokens]
+    |> Enum.reverse()
+    |> Enum.map(&trim_css_whitespace/1)
+    |> then(fn tokens ->
+      if separator == :comma_keep_empty, do: tokens, else: Enum.reject(tokens, &(&1 == ""))
     end)
-    |> then(fn {tokens, current, _depth} -> tokens ++ [trim_ascii_whitespace(current)] end)
-    |> Enum.reject(&(&1 == ""))
   end
 
   @doc false

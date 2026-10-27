@@ -223,7 +223,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
 
     source =
       source
-      |> NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments(" ")
+      |> HtmlValidator.normalize_css_comments(:value)
       |> HtmlValidator.trim_css_whitespace()
       |> String.downcase(:ascii)
 

@@ -1090,8 +1090,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
                stage: :css,
                reason: :invalid_css,
                line: 1,
-               column: 1,
-               source: "1bad: value"
+               column: 5,
+               source: "1/* hidden */bad: value"
              }}} = CssParser.parse_detailed("p { 1/* hidden */bad: value; }")
 
     assert {:error,

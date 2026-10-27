@@ -37,7 +37,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                             @source_padding_properties ++ @source_border_width_properties
   @source_position_properties ~w(object-position background-position)
   @source_color_properties ~w(color background-color background)
-  @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment list-style list-style-type list-style-position grid-template-columns grid-template-rows)
+  @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment list-style list-style-type list-style-position grid-template-columns grid-template-rows grid-auto-columns grid-auto-rows)
   @source_scalar_properties ~w(background-repeat font-weight font-style quotes content counter-reset counter-increment list-style list-style-type list-style-position)
   @source_decoration_properties ~w(text-decoration text-decoration-line text-decoration-style text-decoration-thickness text-decoration-color)
   @source_symbolic_properties @source_layout_properties ++
@@ -342,6 +342,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                        &HtmlValidator.prepare_css_length_source(&1, :length)
                      ),
                    do: {:ok, Map.merge(tokens, %{kind: :grid_tracks, tracks: tracks})}
+
+            property in ~w(grid-auto-columns grid-auto-rows) ->
+              with {:ok, track} <-
+                     parse_grid_track(
+                       value,
+                       &HtmlValidator.prepare_css_length_source(&1, :length)
+                     ),
+                   do: {:ok, Map.merge(tokens, %{kind: :grid_tracks, tracks: [track]})}
 
             property == "line-height" ->
               with {:ok, height} <-
@@ -2003,8 +2011,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     normalized = value |> String.trim() |> String.downcase()
 
     cond do
-      String.starts_with?(normalized, "minmax(") ->
+      String.starts_with?(normalized, "minmax(") and String.ends_with?(normalized, ")") ->
         parse_minmax_grid_track(normalized, parser)
+
+      true ->
+        parse_grid_track_leaf(normalized, parser)
+    end
+  end
+
+  defp parse_grid_track_leaf(normalized, parser) do
+    cond do
+      String.starts_with?(normalized, "minmax(") ->
+        :error
 
       normalized == "auto" ->
         {:ok, :auto}
@@ -2019,10 +2037,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp parse_minmax_grid_track(value, parser) do
-    case Regex.named_captures(~r/^minmax\((?<min>.+)\s*,\s*(?<max>.+)\)$/u, value) do
-      %{"min" => min_track, "max" => max_track} ->
-        with {:ok, minimum} <- parse_grid_track(min_track, parser),
-             {:ok, maximum} <- parse_grid_track(max_track, parser) do
+    arguments =
+      value |> binary_part(7, byte_size(value) - 8) |> HtmlValidator.split_css_comma(true)
+
+    case arguments do
+      [min_track, max_track] ->
+        with {:ok, minimum} <- parse_grid_track_leaf(min_track, parser),
+             {:ok, maximum} <- parse_grid_track_leaf(max_track, parser) do
           minimum_valid = minimum == :auto or match?({:length, _length}, minimum)
 
           maximum_valid =

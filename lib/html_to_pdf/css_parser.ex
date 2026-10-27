@@ -260,30 +260,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end)
   end
 
-  # Only the parser scans comments. Offset runs retain exact authored spans even
-  # when the established parser joins identifiers across a removed comment.
   defp source_projection(css) do
-    comments =
-      Regex.scan(
-        Regex.compile!("#{@css_opaque_pattern}(*SKIP)(*F)|/\\*.*?\\*/", "su"),
-        css,
-        return: :index
-      )
-
-    {parts, gaps, cursor, _removed} =
-      Enum.reduce(comments, {[], [], 0, 0}, fn [{offset, length}],
-                                               {parts, gaps, cursor, removed} ->
-        part = binary_part(css, cursor, offset - cursor)
-        {[part | parts], [{offset - removed, length} | gaps], offset + length, removed + length}
-      end)
-
-    tail = binary_part(css, cursor, byte_size(css) - cursor)
-
-    %{
-      original: css,
-      text: IO.iodata_to_binary(Enum.reverse([tail | parts])),
-      gaps: Enum.reverse(gaps)
-    }
+    {text, gaps} = HtmlValidator.css_comment_projection(css)
+    %{original: css, text: text, gaps: gaps}
   end
 
   defp source_record(projection, offset, length) do
@@ -526,9 +505,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     HtmlValidator.reserve_render_resource(:max_css_work, byte_size(detail.message), :css)
 
     message =
-      if source.provenance == :original_html,
-        do: String.replace(detail.message, ~r/\Aline [0-9]+:/, "line #{source.line}:"),
-        else: detail.message
+      detail.message
+      |> String.replace(~r/\Aline [0-9]+:/, "line #{source.line}:")
+      |> String.replace(~s("#{detail.source}"), ~s("#{source.text}"))
 
     NativeElixirPdfUtilities.Diagnostics.error(:css, reason, message,
       module: __MODULE__,
@@ -604,11 +583,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       records
       |> Enum.with_index()
       |> Enum.reduce({[], 0}, fn {record, index}, {acc, cursor} ->
-        {property, value} = record.declaration
+        {property, _value} = record.declaration
 
         if property == "src" do
           cursor = record.projected_offset - base
           finish = cursor + record.projected_length
+
+          [_property, value] =
+            block |> binary_part(cursor, record.projected_length) |> String.split(":", parts: 2)
 
           {items, cursor} =
             CssFontFaceValidator.source_candidates(value)
@@ -619,11 +601,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
               original = source_record(projection, base + at, bytes)
 
+              {normalized, gaps} = HtmlValidator.css_comment_projection(candidate, :value)
+              candidate_projection = %{original: candidate, text: normalized, gaps: gaps}
+
+              map_span = fn offset, length ->
+                local = source_record(candidate_projection, offset, length)
+                source_record(projection, base + at + local.offset, local.length)
+              end
+
               info =
-                case CssFontFaceValidator.validate_source_candidate(candidate, fn offset,
-                                                                                  length ->
-                       source_record(projection, base + at + offset, length)
-                     end) do
+                case CssFontFaceValidator.validate_source_candidate(normalized, map_span) do
                   {:ok, info} ->
                     info
 
@@ -633,8 +620,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
               references =
                 Enum.map(info.source_references, fn reference ->
-                  source =
-                    source_record(projection, base + at + reference.offset, reference.length)
+                  source = map_span.(reference.offset, reference.length)
 
                   reference |> Map.drop([:offset, :length]) |> Map.put(:source, source)
                 end)
@@ -663,13 +649,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
               {[item | items], at + bytes}
             end)
 
-          {acc ++ Enum.reverse(items), cursor}
+          {items ++ acc, cursor}
         else
           {acc, cursor}
         end
       end)
 
-    candidates
+    Enum.reverse(candidates)
   end
 
   defp source_page_records(projected, projection, media) do
@@ -866,12 +852,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
             case HtmlValidator.validate_css_declaration(declaration) do
               {:ok, parsed} ->
-                {:cont, {:ok, acc ++ [parsed]}}
+                {:cont, {:ok, [parsed | acc]}}
 
               {:error, :invalid_css} ->
                 {:halt,
                  {:error,
                   {:invalid_css, declaration_error_detail(css, declaration, offset), offset}}}
+            end
+          end)
+          |> then(fn result ->
+            case result do
+              {:ok, items} -> {:ok, Enum.reverse(items)}
+              error -> error
             end
           end)
 
@@ -881,10 +873,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end)
   end
 
-  @doc "Removes CSS comments while preserving quoted strings and escapes."
+  @doc "Removes CSS comments while preserving token boundaries, quoted strings and escapes."
   @spec strip_comments(String.t()) :: String.t()
+  def strip_comments(css) do
+    HtmlValidator.normalize_css_comments(css)
+  end
+
+  @doc "Removes CSS comments using an explicit separator, preserving quoted strings and escapes."
   @spec strip_comments(String.t(), String.t()) :: String.t()
-  def strip_comments(css, separator \\ "") do
+  def strip_comments(css, separator) do
     strip_comments(css, nil, false, [], separator)
   end
 
@@ -937,11 +934,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
       case parse_font_face(block) do
         {:ok, font_face} ->
-          {:cont, {:ok, acc ++ [font_face]}}
+          {:cont, {:ok, [font_face | acc]}}
 
         {:error, {message, source}} ->
           {:halt,
            {:error, {:invalid_css, font_face_error_detail(diagnostic_css, message, source)}}}
+      end
+    end)
+    |> then(fn result ->
+      case result do
+        {:ok, items} -> {:ok, Enum.reverse(items)}
+        error -> error
       end
     end)
   end
@@ -1075,15 +1078,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp quoted_character_state(character, quote, escaped?) do
+  defp quoted_character_state(character, quote, _escaped?) do
     cond do
-      match?(<<"\\", _, _::binary>>, character) -> {:quoted, quote, false}
-      not is_nil(quote) and escaped? -> {:quoted, quote, false}
-      not is_nil(quote) and character == "\\" -> {:quoted, quote, true}
-      character == quote -> {:quoted, nil, false}
-      not is_nil(quote) -> {:quoted, quote, false}
-      character in ["\"", "'"] -> {:quoted, character, false}
-      true -> :syntax
+      byte_size(character) > 1 and String.starts_with?(character, ["\"", "'", "/*"]) ->
+        {:quoted, quote, false}
+
+      match?(<<"\\", _, _::binary>>, character) ->
+        {:quoted, quote, false}
+
+      character == quote ->
+        {:quoted, nil, false}
+
+      not is_nil(quote) ->
+        {:quoted, quote, false}
+
+      character in ["\"", "'"] ->
+        {:quoted, character, false}
+
+      true ->
+        :syntax
     end
   end
 
@@ -1181,8 +1194,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {source, order}, {:ok, acc} ->
       case parse_rule(source, order) do
-        {:ok, rule} -> {:cont, {:ok, acc ++ [rule]}}
+        {:ok, rule} -> {:cont, {:ok, [rule | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> then(fn result ->
+      case result do
+        {:ok, items} -> {:ok, Enum.reverse(items)}
+        error -> error
       end
     end)
   end
@@ -1212,8 +1231,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> split_selector_list()
     |> Enum.reduce_while({:ok, []}, fn selector, {:ok, acc} ->
       case parse_selector(HtmlValidator.trim_css_whitespace(selector)) do
-        {:ok, parsed} -> {:cont, {:ok, acc ++ [parsed]}}
+        {:ok, parsed} -> {:cont, {:ok, [parsed | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> then(fn result ->
+      case result do
+        {:ok, items} -> {:ok, Enum.reverse(items)}
+        error -> error
       end
     end)
   end
@@ -1358,7 +1383,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                   end
 
                 {:cont,
-                 {:ok, parts ++ [Map.put(part, :combinator, combinator)], nil,
+                 {:ok, [Map.put(part, :combinator, combinator) | parts], nil,
                   language? or Map.get(part, :language_dependent, false)}}
 
               {:error, reason} ->
@@ -1372,6 +1397,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         {:error, :invalid_css}
 
       {:ok, parts, nil, language?} ->
+        parts = Enum.reverse(parts)
+
         case Enum.drop(parts, -1) |> Enum.any?(&(not is_nil(&1.pseudo_element))) do
           true ->
             {:error, :invalid_css}
@@ -1410,7 +1437,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         part =
           if is_binary(tag) and tag != part.tag, do: Map.put(part, :source_tag, tag), else: part
 
-        parse_selector_modifiers(modifiers, part)
+        case parse_selector_modifiers(modifiers, part) do
+          {:ok, part} ->
+            {:ok,
+             %{
+               part
+               | classes: Enum.reverse(part.classes),
+                 attributes: Enum.reverse(part.attributes),
+                 pseudo_classes: Enum.reverse(part.pseudo_classes),
+                 negations: Enum.reverse(part.negations)
+             }}
+
+          error ->
+            error
+        end
 
       :error ->
         {:error, :invalid_css}
@@ -1439,7 +1479,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                     {:error, :invalid_css}
 
                   {?., _id} ->
-                    parse_selector_modifiers(rest, %{part | classes: part.classes ++ [name]})
+                    parse_selector_modifiers(rest, %{part | classes: [name | part.classes]})
                 end
 
               :error ->
@@ -1491,7 +1531,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
               {:ok, attribute, rest} ->
                 parse_selector_modifiers(rest, %{
                   part
-                  | attributes: part.attributes ++ [attribute]
+                  | attributes: [attribute | part.attributes]
                 })
 
               :error ->
@@ -1503,7 +1543,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
             parse_selector_modifiers(rest, %{
               part
-              | pseudo_classes: part.pseudo_classes ++ [pseudo_class]
+              | pseudo_classes: [pseudo_class | part.pseudo_classes]
             })
 
           parsed = HtmlValidator.parse_css_nth_pseudo_class(modifiers) ->
@@ -1511,7 +1551,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
               {:ok, pseudo_class, rest} ->
                 parse_selector_modifiers(rest, %{
                   part
-                  | pseudo_classes: part.pseudo_classes ++ [pseudo_class]
+                  | pseudo_classes: [pseudo_class | part.pseudo_classes]
                 })
 
               :error ->
@@ -1525,7 +1565,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
                 parse_selector_modifiers(rest, %{
                   part
-                  | pseudo_classes: part.pseudo_classes ++ [pseudo_class]
+                  | pseudo_classes: [pseudo_class | part.pseudo_classes]
                 })
 
               :error ->
@@ -1544,7 +1584,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
                     parse_selector_modifiers(rest, %{
                       part
-                      | negations: part.negations ++ [negated]
+                      | negations: [negated | part.negations]
                     })
 
                   _ ->
@@ -1596,9 +1636,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   end
 
   defp css_error_detail(original_css, parsed_css) do
-    parsed_css
-    |> first_css_issue()
-    |> css_issue_to_detail(original_css)
+    {kind, snippet} = first_css_issue(parsed_css)
+    projection = source_projection(original_css)
+
+    case if(snippet == "", do: :nomatch, else: :binary.match(projection.text, snippet)) do
+      {offset, length} ->
+        source = source_record(projection, offset, length)
+        detail = css_issue_to_detail({kind, source.text}, original_css)
+
+        %{
+          detail
+          | line: source.line,
+            column: source.column,
+            message: css_issue_message(kind, source.line, source.text)
+        }
+
+      :nomatch ->
+        css_issue_to_detail({kind, snippet}, original_css)
+    end
   end
 
   defp first_css_issue(css) do

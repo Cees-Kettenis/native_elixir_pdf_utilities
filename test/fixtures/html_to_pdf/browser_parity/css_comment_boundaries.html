@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><style>
+@page { size:240pt 160pt; margin:12pt }
+html,body { margin:0; font-family:"DejaVu Sans"; font-size:12pt; line-height:16pt }
+p { margin:0; padding:0 }
+p/**/.sample { margin:6pt/**/9pt; padding:3pt/**/5pt; background:rgb(220/**/230/**/240); color/**/:rgb(20/**/40/**/60) }
+./**/box { width:min(60pt/**/,80pt); height:12pt; margin:2pt/**/4pt; background:#356 }
+.box/**/:first-child { border:1pt solid rgb(20/**/40/**/60) }
+</style></head><body>
+<p class="sample">Comment boundaries</p>
+<div><div class="box"></div></div>
+<p style="margin:5pt/**/7pt;color/**/:rgb(20/**/40/**/60)">Inline boundaries</p>
+<div style="width:calc(20pt +/**/ 15pt);height:8pt;background:#579"></div>
+</body></html>

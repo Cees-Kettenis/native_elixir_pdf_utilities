@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   """
   @spec evaluate(String.t(), map()) :: {:ok, numeric(), dimension()} | :error
   def evaluate(value, environment) do
-    value = Regex.replace(~r/\/\*.*?\*\//s, value, " ")
+    value = HtmlValidator.normalize_css_comments(value)
     value = value |> HtmlValidator.trim_css_whitespace() |> String.downcase(:ascii)
 
     if length(component_terms(value, true)) == 1 and not String.starts_with?(value, "("),

@@ -19,7 +19,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
 
   test "all media rules retain repeated original declaration spans across comments" do
     css =
-      "/* é\n */p{co/**/lor:red}\n@media screen { p { color: var(--inherited); } }\n@media only print { p { co/**/lor:blue; } }\np { co/**/lor:blue; }"
+      "/* é\n */p{color/**/:red}\n@media screen { p { color: var(--inherited); } }\n@media only print { p { color/**/:blue; } }\np { color/**/:blue; }"
 
     assert {:ok, prepared} = CssParser.prepare_source_stylesheet(css)
     assert {:ok, ordinary} = CssParser.prepare_stylesheet(css)
@@ -35,10 +35,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
       for rule <- prepared.authored_rules, record <- rule.source_declarations, do: record.source
 
     assert Enum.map(sources, & &1.text) == [
-             "co/**/lor:red",
+             "color/**/:red",
              "color: var(--inherited)",
-             "co/**/lor:blue",
-             "co/**/lor:blue"
+             "color/**/:blue",
+             "color/**/:blue"
            ]
 
     assert Enum.map(sources, & &1.line) == [2, 3, 4, 5]
@@ -64,7 +64,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
 
   test "matched cross-rule inherited failures identify the declaration without replay" do
     css =
-      "/* untouched */html { --bad:bananas }\np {width:3pt}\n@media print { p.target { wi/**/dth:var(--bad); } }"
+      "/* untouched */html { --bad:bananas }\np {width:3pt}\n@media print { p.target { width/**/:var(--bad); } }"
 
     assert {:ok, dom} = HtmlParser.parse_document_detailed("<p class='target'>Text</p>")
     budget = HtmlValidator.new_css_budget()
@@ -73,7 +73,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
              Style.with_source_style_contexts(dom, [css], budget, fn _, _, _ -> :ok end)
 
     assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-    assert diagnostic.source == "wi/**/dth:var(--bad)"
+    assert diagnostic.source == "width/**/:var(--bad)"
     assert diagnostic.line == 3 and diagnostic.column == 27
     assert diagnostic.operation == :source_style_contexts
     # Existing original html/head/body/p custom contexts plus the two p values.

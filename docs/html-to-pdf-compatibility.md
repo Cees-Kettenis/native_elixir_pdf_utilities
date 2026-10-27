@@ -167,6 +167,13 @@ See [PDF forms](pdf-forms.md) for naming, values, filling, flattening and limita
 
 ## CSS support
 
+CSS comments preserve token boundaries. `p/**/.notice` is a compound selector,
+and `margin:1pt/**/2pt` supplies two lengths. Comments cannot join `co/**/lor`
+into a property name or `1/**/0pt` into a length. Invalid declarations return
+CSS diagnostics with their authored source. Calculations retain their required
+operator whitespace. Grid `minmax()` accepts supported leaf tracks; nested
+`minmax()` tracks are unsupported.
+
 | I need | Supported CSS |
 | --- | --- |
 | Select elements | Tag, class, ID, universal, attribute presence, equality, token/dash/prefix/suffix/substring operators and case flags, descendant and child selectors; comma groups; `:lang()` with range lists, escapes and wildcard subtags; simple `:not()`; `:root`; first/last child and type selectors; integer An+B for `:nth-child`, `:nth-last-child`, `:nth-of-type`, `:nth-last-of-type`; `:only-child` and `:only-of-type` |
