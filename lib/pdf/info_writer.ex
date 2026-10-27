@@ -2,8 +2,7 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Pdf.InfoCodec
-  alias NativeElixirPdfUtilities.Validators.IncrementalValidator
+  alias NativeElixirPdfUtilities.Pdf.IncrementalWriter
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
@@ -12,121 +11,21 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoWriter do
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def write(context, dictionary) do
     case context do
-      %{
-        document: %{
-          binary: pdf,
-          trailer: trailer,
-          xref: xref,
-          xref_offset: previous_xref_offset
-        }
-      }
-      when is_binary(pdf) and is_map(trailer) and is_map(xref) and
-             is_integer(previous_xref_offset) and is_map(dictionary) ->
-        with :ok <- IncrementalValidator.validate_revision_capacity(context) do
-          write_increment(pdf, trailer, xref, previous_xref_offset, dictionary)
+      %{document: %{binary: pdf, trailer: trailer, xref: xref, xref_offset: previous}}
+      when is_binary(pdf) and is_map(trailer) and is_map(xref) and is_integer(previous) and
+             is_map(dictionary) ->
+        with :ok <- InfoValidator.validate_incremental_object_capacity(trailer, xref) do
+          object = Map.fetch!(trailer, "Size")
+          context = put_in(context.document.trailer["Info"], {:ref, {object, 0}})
+          IncrementalWriter.write(context, [{object, 0, {:value, dictionary}}])
         end
 
       _ ->
-        error("prepared information write context is malformed")
+        Diagnostics.error(
+          :incremental_write,
+          :invalid_pdf_input,
+          "prepared information write context is malformed"
+        )
     end
-  end
-
-  defp write_increment(pdf, trailer, xref, previous_xref_offset, dictionary) do
-    size = Map.get(trailer, "Size")
-
-    with :ok <- InfoValidator.validate_incremental_object_capacity(trailer, xref),
-         {:ok, dictionary_io} <- InfoCodec.serialize_value(dictionary),
-         {:ok, trailer_id} <-
-           IncrementalValidator.prepare_identifier(
-             Map.get(trailer, "ID"),
-             [pdf, dictionary_io]
-           ),
-         {:ok, root} <- active_root(Map.get(trailer, "Root")) do
-      separator = trailing_separator(pdf)
-      object_number = size
-      object_offset = byte_size(pdf) + byte_size(separator)
-
-      object = [
-        Integer.to_string(object_number),
-        " 0 obj\n",
-        dictionary_io,
-        "\nendobj\n"
-      ]
-
-      xref_offset = object_offset + :erlang.iolist_size(object)
-
-      incremental_trailer =
-        %{
-          "Size" => size + 1,
-          "Root" => root,
-          "Info" => {:ref, {object_number, 0}},
-          "Prev" => previous_xref_offset
-        }
-        |> maybe_put_identifier(trailer_id)
-
-      {:ok, trailer_io} = InfoCodec.serialize_value(incremental_trailer)
-
-      output = [
-        pdf,
-        separator,
-        object,
-        "xref\n",
-        Integer.to_string(object_number),
-        " 1\n",
-        padded_offset(object_offset),
-        " 00000 n \n",
-        "trailer\n",
-        trailer_io,
-        "\nstartxref\n",
-        Integer.to_string(xref_offset),
-        "\n%%EOF\n"
-      ]
-
-      with :ok <- IncrementalValidator.validate_output_size(IO.iodata_length(output)) do
-        {:ok, IO.iodata_to_binary(output)}
-      end
-    else
-      :error -> error("information dictionary cannot be serialized")
-      {:error, _} = writer_error -> writer_error
-    end
-  end
-
-  defp active_root(value) do
-    case value do
-      {:ref, {object, generation}} = root
-      when is_integer(object) and object >= 0 and is_integer(generation) and generation >= 0 ->
-        {:ok, root}
-
-      _ ->
-        error("active trailer Root is malformed")
-    end
-  end
-
-  defp maybe_put_identifier(trailer, identifier) do
-    case identifier do
-      nil -> trailer
-      identifier -> Map.put(trailer, "ID", identifier)
-    end
-  end
-
-  defp trailing_separator(pdf) do
-    case byte_size(pdf) do
-      0 ->
-        "\n"
-
-      _size ->
-        case :binary.last(pdf) in [?\n, ?\r] do
-          true -> ""
-          false -> "\n"
-        end
-    end
-  end
-
-  defp padded_offset(offset) do
-    offset |> Integer.to_string() |> String.pad_leading(10, "0")
-  end
-
-  defp error(message) do
-    Diagnostics.error(:incremental_write, :invalid_pdf_input, message)
   end
 end

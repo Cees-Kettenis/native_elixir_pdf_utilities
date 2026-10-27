@@ -64,27 +64,19 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   @spec validate_incremental_object_capacity(term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_incremental_object_capacity(trailer, xref) do
-    case {trailer, xref} do
-      {%{"Size" => size}, xref} when is_map(xref) ->
-        max_pdf_objects = Limits.get(:max_pdf_objects)
+    case NativeElixirPdfUtilities.Validators.IncrementalValidator.validate_object_capacity(
+           %{document: %{trailer: trailer, xref: xref}},
+           1
+         ) do
+      {:error, {:resource_limit_exceeded, _}} ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "PDF object count cannot accommodate an information update"
+        )
 
-        cond do
-          not is_integer(size) or size <= 0 ->
-            error(:incremental_write, "active trailer Size is malformed")
-
-          size > max_pdf_objects or map_size(xref) >= max_pdf_objects ->
-            Diagnostics.error(
-              :limits,
-              :resource_limit_exceeded,
-              "PDF object count cannot accommodate an information update"
-            )
-
-          true ->
-            :ok
-        end
-
-      _ ->
-        error(:incremental_write, "active cross-reference state is malformed")
+      result ->
+        result
     end
   end
 

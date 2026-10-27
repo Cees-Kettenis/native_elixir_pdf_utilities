@@ -18,6 +18,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     :ok
   end
 
+  test "standalone measurements return diagnostics at the work limit and recover afterward" do
+    assert {:ok, [font]} =
+             Font.load_configured_faces([
+               %{
+                 family: "Measured",
+                 data: File.read!(Paths.project("priv/fonts/dejavu/DejaVuSans.ttf"))
+               }
+             ])
+
+    width = Font.text_width("abc", font, 12)
+    assert is_number(width) and width > 0
+    limits = Limits.effective()
+    Limits.install(%{limits | max_layout_text_work: 1})
+
+    for {operation, run} <- [
+          {:text_width, fn -> Font.text_width("abc", font, 12) end},
+          {:css_text_width, fn -> Font.css_text_width("abc", font, 12) end},
+          {:css_glyph_advances, fn -> Font.css_glyph_advances("abc", font, 12) end}
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = run.()
+      assert diagnostic.module == Font and diagnostic.operation == operation
+      assert diagnostic.message =~ "max_layout_text_work" and diagnostic.source == font.family
+    end
+
+    Limits.install(limits)
+    assert Font.text_width("abc", font, 12) == width
+  end
+
   test "cold bundled math and monospace loads return shared resource diagnostics" do
     assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
 

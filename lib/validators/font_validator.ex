@@ -33,10 +33,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           {:ok, [map()]} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_configs(fonts) do
     with_budget(fn ->
-      case fonts do
-        fonts when is_list(fonts) and length(fonts) >= 0 ->
-          check(:max_font_count, length(fonts))
-
+      case validate_font_list(fonts, :max_font_count) do
+        :ok ->
           Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, prepared} ->
             case normalize_config(font) do
               {:ok, normalized} -> {:cont, {:ok, [normalized | prepared]}}
@@ -64,23 +62,41 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   end
 
   @doc "Prepares a nonblank UTF-8 default family or ordered family list."
-  @spec prepare_default_family(term()) :: {:ok, String.t() | [String.t()]} | :error
+  @spec prepare_default_family(term()) ::
+          {:ok, String.t() | [String.t()]} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_default_family(family) do
-    case family do
-      families when is_list(families) and length(families) > 0 ->
-        Enum.reduce_while(families, {:ok, []}, fn family, {:ok, prepared} ->
-          case prepare_family(family) do
-            {:ok, family} -> {:cont, {:ok, [family | prepared]}}
-            :error -> {:halt, :error}
+    with_budget(fn ->
+      case family do
+        families when is_list(families) and families != [] ->
+          with :ok <- validate_font_list(families, :max_font_candidates) do
+            Enum.reduce_while(families, {:ok, []}, fn family, {:ok, prepared} ->
+              case prepare_family(family) do
+                {:ok, family} -> {:cont, {:ok, [family | prepared]}}
+                :error -> {:halt, :error}
+              end
+            end)
+            |> case do
+              {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+              result -> result
+            end
           end
-        end)
-        |> case do
-          {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
-          result -> result
-        end
 
-      family ->
-        prepare_family(family)
+        family ->
+          prepare_family(family)
+      end
+    end)
+  catch
+    {:font_resource_limit, error} -> error
+  end
+
+  defp validate_font_list(values, limit) do
+    case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+           values,
+           Limits.get(limit)
+         ) do
+      {:ok, _count} -> :ok
+      :invalid -> :error
+      :limit_exceeded -> check(limit, Limits.get(limit) + 1)
     end
   end
 
@@ -139,10 +155,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           data when is_binary(data) and byte_size(data) > 0 ->
             {:ok, %{data: [data]}}
 
-          candidates when is_list(candidates) and length(candidates) >= 0 ->
-            check(:max_font_candidates, length(candidates))
-
-            case candidates != [] and
+          candidates when is_list(candidates) ->
+            case validate_font_list(candidates, :max_font_candidates) == :ok and candidates != [] and
                    Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0)) do
               true -> {:ok, %{data: candidates}}
               false -> :error
@@ -165,10 +179,9 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           path -> {:ok, [path]}
         end
 
-      paths when is_list(paths) and length(paths) >= 0 ->
-        check(:max_font_candidates, length(paths))
-
-        case paths != [] and Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
+      paths when is_list(paths) ->
+        case validate_font_list(paths, :max_font_candidates) == :ok and paths != [] and
+               Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
           true -> {:ok, Enum.map(paths, &String.trim/1)}
           false -> :error
         end
@@ -479,7 +492,13 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   def prepare_byte_faces(descriptors) do
     case descriptors do
       faces when is_list(faces) and faces != [] ->
-        if length(faces) <= Limits.get(:max_font_count) and
+        if match?(
+             {:ok, _},
+             NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+               faces,
+               Limits.get(:max_font_count)
+             )
+           ) and
              Enum.all?(faces, fn face ->
                case face do
                  %{family: family, data: bytes, weight: weight, style: style}

@@ -37,7 +37,8 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
       }
       when is_binary(pdf) and is_map(trailer) and is_integer(previous_xref_offset) and
              is_list(objects) ->
-        with :ok <- IncrementalValidator.validate_revision_capacity(context) do
+        with :ok <- IncrementalValidator.validate_revision_capacity(context),
+             :ok <- IncrementalValidator.validate_root(trailer) do
           write_increment(pdf, trailer, previous_xref_offset, objects)
         end
 

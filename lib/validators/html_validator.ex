@@ -6864,6 +6864,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       {:ok, _family} ->
         :ok
 
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          diagnostic
+          |> Map.drop([:operation, :module, :source])
+          |> Diagnostics.with_context(source: "default_font")}}
+
       :error ->
         Diagnostics.error(
           :style,

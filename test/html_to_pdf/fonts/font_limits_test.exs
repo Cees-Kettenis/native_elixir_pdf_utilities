@@ -150,6 +150,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontLimitsTest do
              end)
   end
 
+  test "malformed font candidate and closed-face list tails return diagnostics" do
+    for config <- [
+          %{family: "Bad", data: ["bytes" | :bad]},
+          %{family: "Bad", path: ["path" | :bad]}
+        ] do
+      assert :error = Font.normalize_configs([config])
+      assert {:error, {_reason, diagnostic}} = Font.load_configured_faces([config])
+      assert diagnostic.operation == :load_configured_faces
+    end
+
+    assert {:error, {:invalid_font, diagnostic}} =
+             FontValidator.prepare_byte_faces([%{} | :bad])
+
+    assert diagnostic.operation == :prepare_byte_faces
+
+    Limits.install(%{Limits.effective() | max_font_candidates: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p>A</p>", default_font: ["A", "B"])
+
+    assert diagnostic.operation == :render and diagnostic.source == "default_font"
+    assert diagnostic.message =~ "max_font_candidates"
+  end
+
   test "discovery charges cache hits and returned data rather than swallowing limits" do
     assert {:ok, registry} = Font.load_registry([])
     Limits.install(%{Limits.effective() | max_font_discoveries: 1})

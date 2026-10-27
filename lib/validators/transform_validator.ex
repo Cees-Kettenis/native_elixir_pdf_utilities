@@ -62,14 +62,23 @@ defmodule NativeElixirPdfUtilities.Validators.TransformValidator do
   @spec expand_page_selection(term(), non_neg_integer(), boolean()) ::
           {:ok, [pos_integer()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def expand_page_selection(selection, page_count, allow_empty) do
-    case is_list(selection) and is_integer(page_count) and page_count >= 0 do
-      true ->
+    admission =
+      NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+        selection,
+        NativeElixirPdfUtilities.Limits.get(:max_pdf_pages)
+      )
+
+    case admission do
+      {:ok, _count} when is_integer(page_count) and page_count >= 0 ->
         with {:ok, page_numbers} <- expand_selectors(selection, page_count),
              :ok <- validate_selection_presence(page_numbers, allow_empty) do
           {:ok, page_numbers}
         end
 
-      false ->
+      :limit_exceeded ->
+        error(:page_selection, :resource_limit_exceeded, "page selection exceeds max_pdf_pages")
+
+      _ ->
         selection_error("page selection must be a list of page numbers or ascending ranges")
     end
   end

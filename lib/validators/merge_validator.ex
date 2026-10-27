@@ -52,52 +52,51 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   @spec validate_inputs(term()) ::
           {:ok, [binary()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_inputs(inputs) do
-    case inputs do
-      [] ->
-        Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
-          operation: :merge,
-          module: __MODULE__
-        )
+    result =
+      case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+             inputs,
+             Limits.get(:max_merge_inputs)
+           ) do
+        {:ok, 0} ->
+          Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
+            operation: :merge,
+            module: __MODULE__
+          )
 
-      inputs when is_list(inputs) ->
-        inputs
-        |> Enum.reduce_while({:ok, 0, 0}, fn input, {:ok, count, aggregate_bytes} ->
-          cond do
-            not is_binary(input) ->
-              {:halt, :invalid}
+        {:ok, _count} ->
+          Enum.reduce_while(inputs, {:ok, 0}, fn input, {:ok, aggregate_bytes} ->
+            cond do
+              not is_binary(input) ->
+                {:halt, :invalid}
 
-            count >= Limits.get(:max_merge_inputs) ->
-              {:halt, resource_limit_error("merge input count exceeds the limit")}
+              aggregate_bytes + byte_size(input) > Limits.get(:max_aggregate_merge_input_bytes) ->
+                {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
 
-            aggregate_bytes + byte_size(input) > Limits.get(:max_aggregate_merge_input_bytes) ->
-              {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
-
-            true ->
-              {:cont, {:ok, count + 1, aggregate_bytes + byte_size(input)}}
+              true ->
+                {:cont, {:ok, aggregate_bytes + byte_size(input)}}
+            end
+          end)
+          |> case do
+            {:ok, _bytes} -> {:ok, inputs}
+            result -> result
           end
-        end)
-        |> case do
-          {:ok, _count, _aggregate_bytes} ->
-            {:ok, inputs}
 
-          :invalid ->
-            Diagnostics.error(
-              :merge,
-              :invalid_pdf_input,
-              "merge/1 expects a list of PDF binaries",
-              operation: :merge,
-              module: __MODULE__
-            )
+        :limit_exceeded ->
+          resource_limit_error("merge input count exceeds the limit")
 
-          {:error, _} = limit_error ->
-            limit_error
-        end
+        :invalid ->
+          :invalid
+      end
 
-      _ ->
+    case result do
+      :invalid ->
         Diagnostics.error(:merge, :invalid_pdf_input, "merge/1 expects a list of PDF binaries",
           operation: :merge,
           module: __MODULE__
         )
+
+      result ->
+        result
     end
   end
 
@@ -720,24 +719,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp object_references(object) do
     case Map.fetch(object, :value_override) do
-      {:ok, value} -> value_references(value)
+      {:ok, value} -> NativeElixirPdfUtilities.Pdf.ObjectMapping.references(value)
       :error -> token_references(object.tokens)
-    end
-  end
-
-  defp value_references(value) do
-    case value do
-      {:ref, ref} ->
-        [ref]
-
-      values when is_list(values) ->
-        Enum.flat_map(values, &value_references/1)
-
-      dictionary when is_map(dictionary) ->
-        dictionary |> Map.values() |> Enum.flat_map(&value_references/1)
-
-      _ ->
-        []
     end
   end
 

@@ -134,6 +134,17 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert defaults.max_frameset_cells == 65_536
   end
 
+  test "the public key type exactly describes every accepted limit" do
+    assert {:ok, types} = Code.Typespec.fetch_types(Limits)
+
+    assert {:type, {:key, {:type, _, :union, members}, []}} =
+             Enum.find(types, fn {_kind, {name, _definition, _arguments}} -> name == :key end)
+
+    keys = Enum.map(members, fn {:atom, _, key} -> key end)
+    assert MapSet.new(keys) == MapSet.new(Map.keys(Limits.defaults()))
+    assert length(keys) == map_size(Limits.defaults())
+  end
+
   test "accepts a partial override for every configurable resource limit" do
     Enum.each(Limits.defaults(), fn {key, default} ->
       configured =

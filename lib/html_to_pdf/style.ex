@@ -4476,12 +4476,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     case first_author_css_error(dom, opts) do
       nil ->
         {:invalid_document,
-         %{
-           stage: :style,
-           reason: :invalid_document,
-           message:
-             "document style validation failed; check fonts, images, attributes, and supported CSS values"
-         }}
+         Diagnostics.diagnostic(
+           :style,
+           :invalid_document,
+           "document style validation failed; check fonts, images, attributes, and supported CSS values"
+         )}
 
       css_error ->
         css_error
@@ -4525,11 +4524,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               {:halt,
                {:error,
                 {:invalid_document,
-                 %{
-                   stage: :style,
-                   reason: :invalid_document,
-                   message: "configured stylesheet file could not be read"
-                 }}}}
+                 Diagnostics.diagnostic(
+                   :style,
+                   :invalid_document,
+                   "configured stylesheet file could not be read"
+                 )}}}
           end
         end)
     end

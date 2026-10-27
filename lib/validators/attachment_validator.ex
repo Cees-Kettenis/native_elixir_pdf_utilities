@@ -8,14 +8,20 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   @doc false
   @spec prepare(term(), term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
   def prepare(attachments, opts) do
+    count =
+      NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+        attachments,
+        Limits.get(:max_pdf_attachments)
+      )
+
     cond do
       opts != [] ->
         error("attachment options must be an empty keyword list")
 
-      not is_list(attachments) ->
+      count == :invalid ->
         error("attachments must be a list of maps")
 
-      length(attachments) > Limits.get(:max_pdf_attachments) ->
+      count == :limit_exceeded ->
         limit("attachment count exceeds max_pdf_attachments")
 
       true ->

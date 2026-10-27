@@ -62,6 +62,14 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     assert {:ok, _} = Reader.read_validated(removed)
   end
 
+  test "the shared incremental serializer rejects unsupported copied trailer entries", ctx do
+    assert {:ok, context} = Reader.read_validated(ctx.pdf)
+    context = put_in(context.document.trailer["Info"], :unsupported)
+    assert {:error, {:invalid_pdf_input, diagnostic}} = IncrementalWriter.write(context, [])
+    assert diagnostic.stage == :incremental_write
+    assert diagnostic.message =~ "trailer cannot be serialized"
+  end
+
   test "outline additions and removals reserve an incremental revision before writing", ctx do
     Limits.install(%{ctx.limits | max_pdf_xref_revisions: 1})
 

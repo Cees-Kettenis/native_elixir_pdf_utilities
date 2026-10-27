@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   renderer's supported property set.
   """
 
+  alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator
@@ -982,14 +983,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp font_face_error_detail(css, message, source) do
     {line, column} = source_location(css, source)
 
-    %{
-      stage: :css,
-      reason: :invalid_css,
-      message: "line #{line}: #{message}",
+    Diagnostics.diagnostic(:css, :invalid_css, "line #{line}: #{message}",
       line: line,
       column: column,
       source: source
-    }
+    )
   end
 
   defp page_rule_blocks(css) do
@@ -1774,14 +1772,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     source = HtmlValidator.trim_css_whitespace(source)
     {line, column} = source_location(css, source)
 
-    %{
-      stage: :css,
-      reason: :invalid_css,
-      message: css_issue_message(kind, line, source),
+    Diagnostics.diagnostic(:css, :invalid_css, css_issue_message(kind, line, source),
       line: line,
       column: column,
       source: source
-    }
+    )
   end
 
   defp css_issue_message(kind, line, source) do
@@ -1796,28 +1791,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     source = HtmlValidator.trim_css_whitespace(declaration)
     {line, column} = source_location(css, source, offset)
 
-    %{
-      stage: :css,
-      reason: :invalid_css,
-      message: ~s(line #{line}: declaration "#{source}" is invalid or unsupported),
+    Diagnostics.diagnostic(
+      :css,
+      :invalid_css,
+      ~s(line #{line}: declaration "#{source}" is invalid or unsupported),
       line: line,
       column: column,
       source: source
-    }
+    )
   end
 
   defp page_rule_error_detail(css, page_rule) do
     source = String.trim(page_rule)
     {line, column} = source_location(css, source)
 
-    %{
-      stage: :css,
-      reason: :invalid_css,
-      message: ~s(line #{line}: page rule "#{source}" is invalid or unsupported),
+    Diagnostics.diagnostic(
+      :css,
+      :invalid_css,
+      ~s(line #{line}: page rule "#{source}" is invalid or unsupported),
       line: line,
       column: column,
       source: source
-    }
+    )
   end
 
   defp source_location(source, snippet, offset \\ nil) do

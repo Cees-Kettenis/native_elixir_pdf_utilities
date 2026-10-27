@@ -129,7 +129,19 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   end
 
   defp normalize_items(items, page_count, depth, budget, normalized) do
+    count =
+      NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+        items,
+        max(Limits.get(:max_pdf_outline_items) - budget.items, 0)
+      )
+
     cond do
+      count == :invalid ->
+        error(:invalid_outlines, "outline items must form a proper list")
+
+      count == :limit_exceeded ->
+        limit_error("outline item count exceeds the limit")
+
       items != [] and depth > Limits.get(:max_pdf_outline_depth) ->
         limit_error("outline nesting depth exceeds the limit")
 

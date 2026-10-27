@@ -333,8 +333,13 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
               {:ok, object} ->
                 nested_references =
                   case Map.fetch(overrides, ref) do
-                    {:ok, value} -> value_references(value)
-                    :error -> value_references(Map.get(object, :value_override, object.value))
+                    {:ok, value} ->
+                      NativeElixirPdfUtilities.Pdf.ObjectMapping.references(value)
+
+                    :error ->
+                      NativeElixirPdfUtilities.Pdf.ObjectMapping.references(
+                        Map.get(object, :value_override, object.value)
+                      )
                   end
 
                 walk_references(
@@ -354,22 +359,6 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
                 )
             end
         end
-    end
-  end
-
-  defp value_references(value) do
-    case value do
-      {:ref, ref} ->
-        [ref]
-
-      values when is_list(values) ->
-        Enum.flat_map(values, &value_references/1)
-
-      dictionary when is_map(dictionary) ->
-        dictionary |> Map.values() |> Enum.flat_map(&value_references/1)
-
-      _ ->
-        []
     end
   end
 

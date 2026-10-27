@@ -366,7 +366,16 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_font_subset_checksum_work
           | :max_font_cache_entries
           | :max_system_font_cache_entries
-
+          | :max_html_form_value_bytes
+          | :max_html_form_value_memory_bytes
+          | :max_html_form_value_timeout_ms
+          | :max_html_pattern_bytes
+          | :max_html_pattern_compile_work
+          | :max_html_pattern_depth
+          | :max_html_pattern_match_work
+          | :max_html_pattern_values
+          | :max_image_map_coordinates
+          | :max_image_map_geometry_work
   @typedoc "The complete validated resource-limit configuration."
   @type t :: %{required(key()) => pos_integer()}
 

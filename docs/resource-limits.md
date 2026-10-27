@@ -244,6 +244,11 @@ weight and style use their defaults; explicitly invalid values return a diagnost
 
 See [font configuration](html-to-pdf-compatibility.md#fonts-and-text).
 
+Standalone `Font.text_width/4`, `Font.css_text_width/4` and
+`Font.css_glyph_advances/4` return the shared diagnostic error when measurement
+exceeds its work allowance. Successful calls return numeric widths or glyph
+advance lists as documented by each function.
+
 ## Metadata and bookmarks
 
 | Setting | Default | Applies to |
@@ -409,7 +414,7 @@ return the original PDF do not consume another revision.
 | `max_font_source_bytes` | 10,000,000 | One configured, document-selected, bundled, or discovered font |
 | `max_aggregate_font_source_bytes` | 40,000,000 | Distinct font byte payloads used during one render, including furniture |
 | `max_font_count` | 128 | Family/weight/style combinations, including bundled fallbacks |
-| `max_font_candidates` | 256 | Font source lookup and parse attempts; repeated file snapshots reuse the render-local result |
+| `max_font_candidates` | 256 | Font source lookup and parse attempts, source candidate lists and default-family lists; repeated file snapshots reuse the render-local result |
 | `max_font_discoveries` | 64 | Distinct system discovery requests in one render, including process-cache hits |
 | `max_font_cache_bytes` | 100,000,000 | Retained font-file cache entries |
 | `max_system_font_cache_bytes` | 100,000,000 | Retained system-discovery cache entries |
