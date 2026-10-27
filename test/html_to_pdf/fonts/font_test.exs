@@ -44,6 +44,140 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
   end
 
   describe "configured font isolation and internal family identity" do
+    test "shared family-name ranges are decoded once within cumulative byte admission" do
+      text = :binary.copy(<<0x0800::16>>, 128)
+      count = 100
+      storage = 6 + count * 12
+
+      records =
+        for _ <- 1..count,
+            into: <<>>,
+            do: <<3::16, 1::16, 0x0409::16, 16::16, byte_size(text)::16, 0::16>>
+
+      names = <<0::16, count::16, storage::16, records::binary, text::binary>>
+      data = valid_tables() |> Map.put("name", names) |> ttf_fixture()
+      limits = Limits.effective()
+      Limits.install(Map.put(limits, :max_font_name_bytes, byte_size(text) * 2))
+      assert {:ok, family} = FontValidator.prepare_font_family_name(data)
+      assert family == :binary.copy(<<0x0800::utf8>>, 128)
+
+      Limits.install(Map.put(limits, :max_font_name_bytes, byte_size(text) * 2 - 1))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FontValidator.prepare_font_family_name(data)
+
+      assert diagnostic.stage == :font and diagnostic.message =~ "max_font_name_bytes"
+
+      # Invalid candidates share one range too. The valid fallback has distinct
+      # bytes and must consume the remaining allowance before being decoded.
+      bad = :binary.copy(<<0xD800::16>>, 128)
+
+      fallback =
+        <<0::16, count + 1::16, storage + 12::16, records::binary, 3::16, 1::16, 0x0409::16,
+          16::16, byte_size(text)::16, byte_size(bad)::16, bad::binary, text::binary>>
+
+      fallback_data = valid_tables() |> Map.put("name", fallback) |> ttf_fixture()
+      expected_work = count + 1 + byte_size(bad) + byte_size(text)
+
+      Limits.install(
+        %{limits | max_font_math_work: expected_work}
+        |> Map.put(:max_font_name_bytes, 4 * byte_size(text))
+      )
+
+      assert {:ok, ^family} = FontValidator.prepare_font_family_name(fallback_data)
+
+      Limits.install(Map.put(Limits.effective(), :max_font_name_bytes, 4 * byte_size(text) - 1))
+
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+               FontValidator.prepare_font_family_name(fallback_data)
+
+      assert message =~ "max_font_name_bytes"
+
+      Limits.install(%{limits | max_font_math_work: expected_work - 1})
+
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+               FontValidator.prepare_font_family_name(fallback_data)
+
+      assert message =~ "max_font_math_work"
+    end
+
+    test "family lookup skips unused long records after selecting the preferred name" do
+      unicode = :unicode.characters_to_binary("Chosen", :utf8, {:utf16, :big})
+
+      data =
+        valid_tables()
+        |> Map.put(
+          "name",
+          family_name_table([
+            {3, 1, 0x0409, 1, :binary.copy(<<0x0800::16>>, 1000)},
+            {3, 1, 0x0409, 16, unicode}
+          ])
+        )
+        |> ttf_fixture()
+
+      Limits.install(
+        Limits.effective()
+        |> Map.put(:max_font_name_bytes, 2 * byte_size(unicode))
+        |> Map.put(:max_font_math_work, 2 + byte_size(unicode))
+      )
+
+      assert {:ok, "Chosen"} = FontValidator.prepare_font_family_name(data)
+    end
+
+    test "invalid family text and explicit invalid style or weight return public diagnostics" do
+      bytes = File.read!(Paths.project("priv/fonts/dejavu/DejaVuSans.ttf"))
+
+      for config <- [
+            %{family: <<255>>, data: bytes},
+            %{family: "Bad", data: bytes, weight: false},
+            %{family: "Bad", data: bytes, style: false},
+            %{"family" => "Bad", "data" => bytes, "weight" => nil}
+          ] do
+        assert :error = Font.normalize_configs([config])
+
+        assert {:error, {_reason, diagnostic}} =
+                 HtmlToPdf.render("<p>Hello</p>", fonts: [config], system_font_discovery: false)
+
+        assert diagnostic.operation == :render and diagnostic.module == HtmlToPdf
+        assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
+        assert diagnostic.source == "fonts" and diagnostic.message =~ "UTF-8"
+      end
+
+      for family <- [<<255>>, ["DejaVu Sans", <<255>>], [""]] do
+        assert {:error, {_reason, diagnostic}} =
+                 HtmlToPdf.render("<p>Hello</p>",
+                   fonts: [%{family: "DejaVu Sans", data: bytes}],
+                   default_font: family,
+                   system_font_discovery: false
+                 )
+
+        assert diagnostic.operation == :render and diagnostic.module == HtmlToPdf
+        assert diagnostic.source == "default_font" and diagnostic.message =~ "UTF-8"
+      end
+
+      assert {:ok, [family]} = FontValidator.prepare_default_family(["  Valid  "])
+      assert family == "Valid"
+
+      for value <- [["Valid" | :bad_tail], [<<255>>], [], "", <<255>>] do
+        assert :error = FontValidator.prepare_default_family(value)
+      end
+
+      assert :error = Font.normalize_configs([%{family: "Valid", data: bytes} | :bad_tail])
+
+      Limits.install(%{Limits.effective() | max_font_count: 1})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render("<p>Hello</p>",
+                 fonts: [
+                   %{family: "First", data: bytes},
+                   %{family: "Second", data: bytes}
+                 ]
+               )
+
+      assert diagnostic.operation == :render and diagnostic.module == HtmlToPdf
+      assert diagnostic.message =~ "max_font_count"
+    end
+
     test "independent text image defaults resolve the permitted serif bytes" do
       assert {:ok, registry} = Font.load_registry(system_font_discovery: true)
       assert {:ok, ["serif"], selected} = Font.resolve("serif", 400, :normal, registry)

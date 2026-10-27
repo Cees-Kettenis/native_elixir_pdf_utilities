@@ -5,6 +5,211 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.MathFontValidator
 
+  @doc "Normalizes supported font options through the canonical font configuration rules."
+  @spec prepare_options(term()) ::
+          {:ok, keyword()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_options(opts) do
+    if Keyword.keyword?(opts) do
+      with {:ok, fonts} <- prepare_configs(Keyword.get(opts, :fonts, [])) do
+        case Keyword.fetch(opts, :default_font) do
+          :error ->
+            {:ok, Keyword.put(opts, :fonts, fonts)}
+
+          {:ok, family} ->
+            with {:ok, family} <- prepare_default_family(family) do
+              {:ok, opts |> Keyword.put(:fonts, fonts) |> Keyword.put(:default_font, family)}
+            end
+        end
+      end
+    else
+      :error
+    end
+  catch
+    {:font_resource_limit, error} -> error
+  end
+
+  @doc "Prepares maps, keyword entries and family/path tuples as canonical font configurations."
+  @spec prepare_configs(term()) ::
+          {:ok, [map()]} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_configs(fonts) do
+    with_budget(fn ->
+      case fonts do
+        fonts when is_list(fonts) and length(fonts) >= 0 ->
+          check(:max_font_count, length(fonts))
+
+          Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, prepared} ->
+            case normalize_config(font) do
+              {:ok, normalized} -> {:cont, {:ok, [normalized | prepared]}}
+              :error -> {:halt, :error}
+            end
+          end)
+          |> case do
+            {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+            result -> result
+          end
+
+        _ ->
+          :error
+      end
+    end)
+  end
+
+  @doc "Checks that font configurations already use their canonical prepared representation."
+  @spec validate_configs(term()) :: :ok | :error
+  def validate_configs(fonts) do
+    case prepare_configs(fonts) do
+      {:ok, ^fonts} -> :ok
+      _ -> :error
+    end
+  end
+
+  @doc "Prepares a nonblank UTF-8 default family or ordered family list."
+  @spec prepare_default_family(term()) :: {:ok, String.t() | [String.t()]} | :error
+  def prepare_default_family(family) do
+    case family do
+      families when is_list(families) and length(families) > 0 ->
+        Enum.reduce_while(families, {:ok, []}, fn family, {:ok, prepared} ->
+          case prepare_family(family) do
+            {:ok, family} -> {:cont, {:ok, [family | prepared]}}
+            :error -> {:halt, :error}
+          end
+        end)
+        |> case do
+          {:ok, prepared} -> {:ok, Enum.reverse(prepared)}
+          result -> result
+        end
+
+      family ->
+        prepare_family(family)
+    end
+  end
+
+  defp prepare_family(family) do
+    if is_binary(family) and String.valid?(family) do
+      case String.trim(family) do
+        "" -> :error
+        family -> {:ok, family}
+      end
+    else
+      :error
+    end
+  end
+
+  defp normalize_config(font) do
+    case font do
+      {family, path} ->
+        normalize_config(%{family: family, path: path})
+
+      font when is_list(font) ->
+        case Keyword.keyword?(font) do
+          true -> normalize_config(Map.new(font))
+          false -> :error
+        end
+
+      font when is_map(font) ->
+        family = Map.get(font, :family, Map.get(font, "family"))
+        path = Map.get(font, :path, Map.get(font, "path"))
+        data = Map.get(font, :data, Map.get(font, "data"))
+        weight = Map.get(font, :weight, Map.get(font, "weight", 400))
+        style = Map.get(font, :style, Map.get(font, "style", :normal))
+
+        with {:ok, family} <- prepare_family(family),
+             {:ok, source} <- normalize_font_source(path, data),
+             {:ok, weight} <- normalize_weight(weight),
+             {:ok, style} <- normalize_style(style) do
+          {:ok,
+           source
+           |> Map.merge(%{family: family, weight: weight, style: style})}
+        else
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_font_source(path, data) do
+    case {path, data} do
+      {path, nil} ->
+        with {:ok, paths} <- normalize_paths(path), do: {:ok, %{path: paths}}
+
+      {nil, data} ->
+        case data do
+          data when is_binary(data) and byte_size(data) > 0 ->
+            {:ok, %{data: [data]}}
+
+          candidates when is_list(candidates) and length(candidates) >= 0 ->
+            check(:max_font_candidates, length(candidates))
+
+            case candidates != [] and
+                   Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0)) do
+              true -> {:ok, %{data: candidates}}
+              false -> :error
+            end
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_paths(path) do
+    case path do
+      path when is_binary(path) ->
+        case String.trim(path) do
+          "" -> :error
+          path -> {:ok, [path]}
+        end
+
+      paths when is_list(paths) and length(paths) >= 0 ->
+        check(:max_font_candidates, length(paths))
+
+        case paths != [] and Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
+          true -> {:ok, Enum.map(paths, &String.trim/1)}
+          false -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_weight(weight) do
+    case weight do
+      weight when is_number(weight) and weight >= 100 and weight <= 900 ->
+        {:ok, weight}
+
+      "normal" ->
+        {:ok, 400}
+
+      "bold" ->
+        {:ok, 700}
+
+      weight when is_binary(weight) ->
+        case Integer.parse(String.trim(weight)) do
+          {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp normalize_style(style) do
+    case style do
+      :normal -> {:ok, :normal}
+      :italic -> {:ok, :italic}
+      "normal" -> {:ok, :normal}
+      "italic" -> {:ok, :italic}
+      _ -> :error
+    end
+  end
+
   @doc "Loads explicitly authorized image faces in an independent scope, excluding host CSS faces, bundled fallback and automatic system discovery."
   @spec prepare_svg_image_fonts(term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
   def prepare_svg_image_fonts(fonts) do
@@ -158,43 +363,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                         offset::16>> = binary_part(names, 6 + index * 12, 12),
                       name_id in [1, 16],
                       storage + offset + length <= byte_size(names) do
-                    bytes = binary_part(names, storage + offset, length)
                     unicode? = platform == 0 or (platform == 3 and encoding in [0, 1])
                     mac? = platform == 1 and encoding == 0
-
-                    family =
-                      cond do
-                        unicode? ->
-                          case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
-                            family when is_binary(family) -> family
-                            _ -> nil
-                          end
-
-                        mac? ->
-                          Enum.map_join(:binary.bin_to_list(bytes), fn code ->
-                            case Map.fetch(@font_name_mac_roman, code) do
-                              {:ok, character} ->
-                                character
-
-                              :error ->
-                                if code < 128 do
-                                  <<code>>
-                                else
-                                  {:ok, character} =
-                                    NativeElixirPdfUtilities.Pdf.TextEncoding.character(
-                                      "MacRomanEncoding",
-                                      code,
-                                      %{}
-                                    )
-
-                                  character
-                                end
-                            end
-                          end)
-
-                        true ->
-                          nil
-                      end
 
                     %{
                       id: name_id,
@@ -202,25 +372,39 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                       mac?: mac?,
                       english?:
                         (platform == 3 and language == 0x0409) or (mac? and language == 0),
-                      family: family
+                      offset: storage + offset,
+                      length: length
                     }
                   end
 
-                Enum.find_value([16, 1], fn id ->
-                  candidates =
-                    Enum.filter(
-                      records,
-                      &(&1.id == id and is_binary(&1.family) and &1.family != "")
-                    )
+                identity = :crypto.hash(:sha256, names)
 
+                decode = fn record ->
+                  case decode_family_record(names, identity, record) do
+                    family when is_binary(family) and family != "" ->
+                      %{family: family, english?: record.english?}
+
+                    _ ->
+                      nil
+                  end
+                end
+
+                Enum.find_value([16, 1], fn id ->
+                  candidates = Enum.filter(records, &(&1.id == id))
                   unicode = Enum.filter(candidates, & &1.unicode?)
 
-                  candidates =
-                    if Enum.any?(unicode, & &1.english?),
-                      do: unicode,
-                      else: unicode ++ Enum.take(Enum.filter(candidates, & &1.mac?), 1)
+                  english =
+                    Enum.find_value(unicode, fn record ->
+                      if record.english?, do: decode.(record)
+                    end)
 
-                  selected = Enum.find(candidates, & &1.english?) || List.first(candidates)
+                  selected =
+                    english ||
+                      case Enum.find_value(Enum.filter(candidates, & &1.mac?), decode) do
+                        %{english?: true} = mac -> mac
+                        mac -> Enum.find_value(unicode, decode) || mac
+                      end
+
                   if selected, do: {:ok, selected.family}
                 end) || :error
               else
@@ -248,6 +432,44 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             module: __MODULE__,
             operation: :prepare_font_family_name
           )
+      end
+    end)
+  end
+
+  # Name records can alias the same bytes. Decode only candidates needed by
+  # the selection policy and reserve conservative UTF-8 expansion before work.
+  defp decode_family_record(names, identity, record) do
+    memo({:family_string, identity, record.unicode?, record.offset, record.length}, fn ->
+      reserve(:max_font_math_work, record.length)
+      reserve(:max_font_name_bytes, record.length * if(record.unicode?, do: 2, else: 3))
+      bytes = binary_part(names, record.offset, record.length)
+
+      if record.unicode? do
+        case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
+          family when is_binary(family) -> family
+          _ -> nil
+        end
+      else
+        Enum.map_join(:binary.bin_to_list(bytes), fn code ->
+          case Map.fetch(@font_name_mac_roman, code) do
+            {:ok, character} ->
+              character
+
+            :error ->
+              if code < 128 do
+                <<code>>
+              else
+                {:ok, character} =
+                  NativeElixirPdfUtilities.Pdf.TextEncoding.character(
+                    "MacRomanEncoding",
+                    code,
+                    %{}
+                  )
+
+                character
+              end
+          end
+        end)
       end
     end)
   end
@@ -573,9 +795,16 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
   @doc false
   @spec reserve_source(binary()) :: :ok
-  def reserve_source(data) do
+  @spec reserve_source(binary(), binary() | nil) :: :ok
+  def reserve_source(data, cached_fingerprint \\ nil) do
     check(:max_font_source_bytes, byte_size(data))
-    reserve_source_fingerprint(:crypto.hash(:sha256, data), byte_size(data))
+
+    # Cache-owned fingerprints describe these immutable bytes. Retain the
+    # admission by exact payload so later stages need no additional SHA pass.
+    memo({:source_admission, data}, fn ->
+      fingerprint = cached_fingerprint || :crypto.hash(:sha256, data)
+      reserve_source_fingerprint(fingerprint, byte_size(data))
+    end)
   end
 
   @doc false
@@ -1466,30 +1695,63 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     end
   end
 
-  defp table_directory(data) do
-    with {:ok, scaler_type} <- read_u32(data, 0),
-         true <- scaler_type in [0x0001_0000, 0x7472_7565],
-         {:ok, table_count} <- read_u16(data, 4),
-         true <- table_count > 0,
-         true <- byte_size(data) >= 12 + table_count * 16 do
-      records =
-        0..(table_count - 1)
-        |> Enum.reduce(%{}, fn index, acc ->
-          offset = 12 + index * 16
-          tag = binary_part(data, offset, 4)
-          <<_checksum::32, table_offset::32, length::32>> = binary_part(data, offset + 4, 12)
-          Map.put(acc, tag, {table_offset, length})
-        end)
+  @doc "Admits one standalone TrueType directory for loading, metrics and subsetting. This library requires unique tags and validates every range, including opaque custom tables."
+  @spec prepare_table_directory(term()) ::
+          {:ok, non_neg_integer(), %{binary() => {non_neg_integer(), non_neg_integer()}}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_table_directory(data) do
+    case data do
+      <<scaler::32, count::16, _search::16, _selector::16, _shift::16, rest::binary>>
+      when scaler in [0x0001_0000, 0x7472_7565] and count > 0 and
+             byte_size(rest) >= count * 16 ->
+        directory_bytes = 12 + count * 16
 
-      {:ok, records}
-    else
-      _ -> :error
+        Enum.reduce_while(0..(count - 1), {:ok, %{}}, fn index, {:ok, tables} ->
+          <<tag::binary-size(4), _checksum::32, offset::32, length::32>> =
+            binary_part(rest, index * 16, 16)
+
+          cond do
+            Map.has_key?(tables, tag) ->
+              {:halt,
+               directory_error(
+                 "TrueType table directory repeats a tag; this library requires unique table tags"
+               )}
+
+            offset < directory_bytes or offset + length > byte_size(data) ->
+              {:halt, directory_error("TrueType table directory points outside the font")}
+
+            true ->
+              {:cont, {:ok, Map.put(tables, tag, {offset, length})}}
+          end
+        end)
+        |> case do
+          {:ok, tables} -> {:ok, scaler, tables}
+          error -> error
+        end
+
+      _ ->
+        directory_error("font requires a standalone TrueType sfnt")
+    end
+  end
+
+  defp directory_error(message) do
+    Diagnostics.error(:font, :invalid_document, message,
+      operation: :prepare_table_directory,
+      module: __MODULE__,
+      source: "TrueType table directory"
+    )
+  end
+
+  defp table_directory(data) do
+    case prepare_table_directory(data) do
+      {:ok, _scaler, tables} -> {:ok, tables}
+      {:error, _} -> :error
     end
   end
 
   defp table(data, tables, tag) do
     case Map.get(tables, tag) do
-      {offset, length} when offset >= 0 and length >= 0 and byte_size(data) >= offset + length ->
+      {offset, length} ->
         {:ok, binary_part(data, offset, length)}
 
       _ ->
@@ -1591,17 +1853,6 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     case byte_size(data) >= offset + 2 do
       true ->
         <<value::signed-16>> = binary_part(data, offset, 2)
-        {:ok, value}
-
-      false ->
-        :error
-    end
-  end
-
-  defp read_u32(data, offset) do
-    case byte_size(data) >= offset + 4 do
-      true ->
-        <<value::32>> = binary_part(data, offset, 4)
         {:ok, value}
 
       false ->

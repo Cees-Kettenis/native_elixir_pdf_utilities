@@ -218,10 +218,29 @@ See [render options and supported formats](html-to-pdf-compatibility.md) and
 | --- | ---: | --- |
 | `max_font_kerning_pairs` | 100,000 | Kerning subtables and glyph pairs inspected per font |
 | `max_font_cmap_work` | 1,000,000 | Encoding records, segments, and codepoint visits prepared per TTF character map |
-| `max_font_math_work` | 1,000,000 | Decoded MATH, selected math GSUB, and glyph-location/header bytes, plus explicit glyph IDs, variant/part searches and expanded geometry, coverage, and device entries per font-budget scope |
+| `max_font_math_work` | 1,000,000 | Decoded MATH, selected math GSUB, family-name records/input bytes, and glyph-location/header bytes, plus explicit glyph IDs, variant/part searches and expanded geometry, coverage, and device entries per font-budget scope |
+| `max_font_name_bytes` | 1,000,000 | Conservative UTF-8 decoding allowance across selected internal family-name ranges in one font-budget scope |
 | `max_font_subset_work` | 100,000 | Glyphs and composite components visited while building a TrueType subset |
+| `max_font_subset_bytes` | 40,000,000 | Padded output bytes across rebuilt TrueType subsets in one font-budget scope |
+| `max_font_subset_checksum_work` | 10,000,000 | Padded 32-bit words checksummed across rebuilt subsets, including their directories |
 | `max_font_cache_entries` | 64 | Parsed font files retained by the cache |
 | `max_system_font_cache_entries` | 64 | Positive and negative installed-font discovery results retained by the cache |
+
+Family lookup selects needed records before decoding and reuses identical string
+ranges. Each unique decoded range also charges its input bytes to
+`max_font_math_work`. The name-byte allowance reserves up to twice the UTF-16
+input size or three times the MacRoman input size before decoding.
+
+Subset preparation admits all padded output bytes and checksum words before
+copying glyphs, assembling tables or checksumming payloads. Distinct table tags
+may share source storage; each output payload occurrence counts separately.
+One PDF writer call shares these allowances across its subset fonts.
+
+Loading, glyph metrics and subsetting share the same table-directory policy.
+This library requires unique table tags and ranges that follow the directory
+and fit within the source font, including opaque custom tables.
+Configured family names and default families must be nonblank UTF-8. Omitted
+weight and style use their defaults; explicitly invalid values return a diagnostic.
 
 See [font configuration](html-to-pdf-compatibility.md#fonts-and-text).
 

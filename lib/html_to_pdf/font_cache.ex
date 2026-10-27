@@ -39,8 +39,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
                FontValidator.read_limit()
              ) do
           {:ok, data} ->
-            FontValidator.reserve_source(data)
             fingerprint = :crypto.hash(:sha256, data)
+            FontValidator.reserve_source(data, fingerprint)
 
             case cached(absolute_path, fingerprint) do
               {:hit, result} ->
@@ -89,7 +89,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
             case :ets.lookup(@table, absolute_path) do
               [{^absolute_path, fingerprint, data, result, _sequence}] ->
                 FontValidator.reserve(:max_font_candidates, 1)
-                FontValidator.reserve_source_fingerprint(fingerprint, byte_size(data))
+                FontValidator.reserve_source(data, fingerprint)
                 result
 
               _ ->

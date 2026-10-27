@@ -6717,33 +6717,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec validate_font_configs(term()) :: :ok | :error
   def validate_font_configs(fonts) do
-    valid? =
-      is_list(fonts) and
-        Enum.all?(fonts, fn font ->
-          case font do
-            %{family: family, path: paths, weight: weight, style: style}
-            when map_size(font) == 4 and is_binary(family) and is_list(paths) and
-                   is_number(weight) and weight >= 100 and weight <= 900 and
-                   style in [:normal, :italic] ->
-              String.trim(family) != "" and paths != [] and
-                Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != ""))
-
-            %{family: family, data: candidates, weight: weight, style: style}
-            when map_size(font) == 4 and is_binary(family) and is_list(candidates) and
-                   is_number(weight) and weight >= 100 and weight <= 900 and
-                   style in [:normal, :italic] ->
-              String.trim(family) != "" and candidates != [] and
-                Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0))
-
-            _ ->
-              false
-          end
-        end)
-
-    case valid? do
-      true -> :ok
-      false -> :error
-    end
+    FontValidator.validate_configs(fonts)
   end
 
   @doc false
@@ -6886,16 +6860,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp validate_default_font(default_font) do
-    valid? =
-      case default_font do
-        font when is_binary(font) -> String.trim(font) != ""
-        fonts when is_list(fonts) -> fonts != [] and Enum.all?(fonts, &is_binary/1)
-        _ -> false
-      end
+    case FontValidator.prepare_default_family(default_font) do
+      {:ok, _family} ->
+        :ok
 
-    case valid? do
-      true -> :ok
-      false -> invalid_style_configuration()
+      :error ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "default_font requires a nonblank UTF-8 family name or list of family names",
+          source: "default_font"
+        )
     end
   end
 
@@ -6936,7 +6911,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
          :ok <- validate_font_configs(fonts) do
       :ok
     else
-      _ -> invalid_style_configuration()
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason,
+          diagnostic
+          |> Map.drop([:operation, :module])
+          |> Diagnostics.with_context(source: "fonts")}}
+
+      _ ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "fonts require nonblank UTF-8 family names, path or data candidates, weight 100..900 and normal or italic style",
+          source: "fonts"
+        )
     end
   end
 

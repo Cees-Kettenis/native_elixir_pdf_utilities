@@ -2766,35 +2766,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         {:ok, resources}
 
       true ->
-        Enum.reduce_while(resources, {:ok, %{}}, fn {key, resource}, {:ok, prepared} ->
-          case Map.get(resource, :font_face) do
-            %{type: :embedded} = font ->
-              glyph_ids =
-                resource.encoding.cid_to_gid |> Map.values() |> Enum.uniq() |> Enum.sort()
+        NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+          Enum.reduce_while(resources, {:ok, %{}}, fn {key, resource}, {:ok, prepared} ->
+            case Map.get(resource, :font_face) do
+              %{type: :embedded} = font ->
+                glyph_ids =
+                  resource.encoding.cid_to_gid |> Map.values() |> Enum.uniq() |> Enum.sort()
 
-              case TrueTypeSubset.subset(font, glyph_ids) do
-                {:ok, data} when data == font.data ->
-                  {:cont, {:ok, Map.put(prepared, key, resource)}}
+                case TrueTypeSubset.subset(font, glyph_ids) do
+                  {:ok, data} when data == font.data ->
+                    {:cont, {:ok, Map.put(prepared, key, resource)}}
 
-                {:ok, data} ->
-                  digest = :crypto.hash(:sha256, :erlang.term_to_binary({font.id, glyph_ids}))
+                  {:ok, data} ->
+                    digest = :crypto.hash(:sha256, :erlang.term_to_binary({font.id, glyph_ids}))
 
-                  prefix =
-                    for <<byte <- binary_part(digest, 0, 6)>>,
-                      into: "",
-                      do: <<?A + rem(byte, 26)>>
+                    prefix =
+                      for <<byte <- binary_part(digest, 0, 6)>>,
+                        into: "",
+                        do: <<?A + rem(byte, 26)>>
 
-                  resource = %{resource | pdf_name: prefix <> "+" <> resource.pdf_name}
+                    resource = %{resource | pdf_name: prefix <> "+" <> resource.pdf_name}
 
-                  {:cont, {:ok, Map.put(prepared, key, Map.put(resource, :font_file_data, data))}}
+                    {:cont,
+                     {:ok, Map.put(prepared, key, Map.put(resource, :font_file_data, data))}}
 
-                {:error, _reason} = error ->
-                  {:halt, error}
-              end
+                  {:error, _reason} = error ->
+                    {:halt, error}
+                end
 
-            _ ->
-              {:cont, {:ok, Map.put(prepared, key, resource)}}
-          end
+              _ ->
+                {:cont, {:ok, Map.put(prepared, key, resource)}}
+            end
+          end)
         end)
     end
   end

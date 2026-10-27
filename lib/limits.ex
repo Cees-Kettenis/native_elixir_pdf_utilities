@@ -192,7 +192,10 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_font_kerning_pairs: 100_000,
     max_font_cmap_work: 1_000_000,
     max_font_math_work: 1_000_000,
+    max_font_name_bytes: 1_000_000,
     max_font_subset_work: 100_000,
+    max_font_subset_bytes: 40_000_000,
+    max_font_subset_checksum_work: 10_000_000,
     max_font_cache_entries: 64,
     max_system_font_cache_entries: 64
   }
@@ -357,7 +360,10 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_font_kerning_pairs
           | :max_font_cmap_work
           | :max_font_math_work
+          | :max_font_name_bytes
           | :max_font_subset_work
+          | :max_font_subset_bytes
+          | :max_font_subset_checksum_work
           | :max_font_cache_entries
           | :max_system_font_cache_entries
 

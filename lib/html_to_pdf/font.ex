@@ -120,39 +120,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   @spec normalize_options(term()) ::
           {:ok, keyword()} | :error | {:error, {:resource_limit_exceeded, map()}}
   def normalize_options(opts) do
-    case Keyword.keyword?(opts) do
-      true ->
-        case normalize_configs(Keyword.get(opts, :fonts, [])) do
-          {:ok, fonts} -> {:ok, Keyword.put(opts, :fonts, fonts)}
-          {:error, {_reason, _diagnostic}} = error -> error
-          :error -> :error
-        end
-
-      false ->
-        :error
-    end
+    FontValidator.prepare_options(opts)
   end
 
   @doc false
   @spec normalize_configs(term()) ::
           {:ok, [map()]} | :error | {:error, {:resource_limit_exceeded, map()}}
   def normalize_configs(fonts) do
-    FontValidator.with_budget(fn ->
-      case is_list(fonts) do
-        true ->
-          FontValidator.check(:max_font_count, length(fonts))
-
-          Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, prepared} ->
-            case normalize_config(font) do
-              {:ok, normalized} -> {:cont, {:ok, prepared ++ [normalized]}}
-              :error -> {:halt, :error}
-            end
-          end)
-
-        false ->
-          :error
-      end
-    end)
+    FontValidator.prepare_configs(fonts)
   end
 
   @doc "Loads only explicit caller TrueType configurations, without bundled fonts or system discovery."
@@ -160,7 +135,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   def load_configured_faces(configs) do
     FontValidator.with_budget(fn ->
       with {:ok, normalized} <- normalize_configs(configs),
-           :ok <- HtmlValidator.validate_font_configs(normalized),
            {:ok, faces} <- load_fonts(normalized, :configured) do
         {:ok, faces}
       else
@@ -185,7 +159,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     FontValidator.with_budget(fn ->
       with {:ok, configs} <- FontValidator.prepare_byte_faces(descriptors),
            {:ok, normalized} <- normalize_configs(configs),
-           :ok <- HtmlValidator.validate_font_configs(normalized),
            {:ok, faces} <- load_fonts(normalized, :configured) do
         {:ok, faces}
       else
@@ -218,9 +191,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   def load_registry(opts) do
     FontValidator.with_budget(fn ->
       with {:ok, prepared_opts} <- normalize_options(opts),
-           :ok <- HtmlValidator.validate_font_configs(Keyword.fetch!(prepared_opts, :fonts)),
            {:ok, bundled_configs} <- normalize_configs(bundled_font_configs()),
-           :ok <- HtmlValidator.validate_font_configs(bundled_configs),
            {:ok, registry} <-
              FontValidator.with_registry_loads(
                Keyword.fetch!(prepared_opts, :fonts),
@@ -755,121 +726,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         :error -> {:halt, :error}
       end
     end)
-  end
-
-  defp normalize_config(font) do
-    case font do
-      {family, path} ->
-        normalize_config(%{family: family, path: path})
-
-      font when is_list(font) ->
-        case Keyword.keyword?(font) do
-          true -> normalize_config(Map.new(font))
-          false -> :error
-        end
-
-      font when is_map(font) ->
-        family = Map.get(font, :family) || Map.get(font, "family")
-        path = Map.get(font, :path) || Map.get(font, "path")
-        data = Map.get(font, :data) || Map.get(font, "data")
-        weight = Map.get(font, :weight) || Map.get(font, "weight") || 400
-        style = Map.get(font, :style) || Map.get(font, "style") || :normal
-
-        with true <- is_binary(family) and String.trim(family) != "",
-             {:ok, source} <- normalize_font_source(path, data),
-             {:ok, weight} <- normalize_weight(weight),
-             {:ok, style} <- normalize_style(style) do
-          {:ok,
-           source
-           |> Map.merge(%{family: String.trim(family), weight: weight, style: style})}
-        else
-          _ -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp normalize_font_source(path, data) do
-    case {path, data} do
-      {path, nil} ->
-        with {:ok, paths} <- normalize_paths(path), do: {:ok, %{path: paths}}
-
-      {nil, data} ->
-        case data do
-          data when is_binary(data) and byte_size(data) > 0 ->
-            {:ok, %{data: [data]}}
-
-          candidates when is_list(candidates) ->
-            FontValidator.check(:max_font_candidates, length(candidates))
-
-            case candidates != [] and
-                   Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0)) do
-              true -> {:ok, %{data: candidates}}
-              false -> :error
-            end
-
-          _ ->
-            :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp normalize_paths(path) do
-    case path do
-      path when is_binary(path) ->
-        case String.trim(path) do
-          "" -> :error
-          path -> {:ok, [path]}
-        end
-
-      paths when is_list(paths) ->
-        FontValidator.check(:max_font_candidates, length(paths))
-
-        case paths != [] and Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
-          true -> {:ok, Enum.map(paths, &String.trim/1)}
-          false -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp normalize_weight(weight) do
-    case weight do
-      weight when is_number(weight) and weight >= 100 and weight <= 900 ->
-        {:ok, weight}
-
-      "normal" ->
-        {:ok, 400}
-
-      "bold" ->
-        {:ok, 700}
-
-      weight when is_binary(weight) ->
-        case Integer.parse(String.trim(weight)) do
-          {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
-          _ -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp normalize_style(style) do
-    case style do
-      :normal -> {:ok, :normal}
-      :italic -> {:ok, :italic}
-      "normal" -> {:ok, :normal}
-      "italic" -> {:ok, :italic}
-      _ -> :error
-    end
   end
 
   defp bundled_font_configs do

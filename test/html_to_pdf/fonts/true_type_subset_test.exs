@@ -7,6 +7,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator
+  alias NativeElixirPdfUtilities.Validators.FontValidator
 
   setup do
     original_limits = Limits.effective()
@@ -141,6 +142,137 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
 
     assert {:ok, _, subset_face} = Font.resolve("Subset Fixture", 400, :normal, loaded)
     assert subset_face.cmap[?é] == glyph_id
+  end
+
+  test "aliased opaque tables are admitted by padded output size before subset construction", %{
+    font: font
+  } do
+    payload = :binary.copy(<<1>>, 32_769)
+    offset = byte_size(font.data)
+
+    data =
+      Enum.reduce([{"FFTM", "TST1"}, {"prep", "TST2"}, {"gasp", "TST3"}], font.data, fn
+        {original, replacement}, data ->
+          record = table_record_offset(data, original)
+
+          data
+          |> replace_bytes(record, 4, replacement)
+          |> replace_u32(record + 8, offset)
+          |> replace_u32(record + 12, byte_size(payload))
+      end) <> payload
+
+    aliased = %{font | data: data}
+    assert {:ok, _} = FontValidator.prepare_ttf(data)
+    assert {:ok, _} = TrueTypeSubsetValidator.prepare_glyph_bounds(data)
+    assert {:ok, result} = TrueTypeSubset.subset(aliased, [font.cmap[?A]])
+    assert {:ok, plan} = TrueTypeSubsetValidator.prepare(aliased, [font.cmap[?A]])
+    assert plan.output_bytes == byte_size(result)
+    limits = Limits.effective()
+    Limits.install(Map.put(limits, :max_font_subset_bytes, byte_size(result) - 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TrueTypeSubset.subset(aliased, [font.cmap[?A]])
+
+    assert diagnostic.message =~ "max_font_subset_bytes"
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TrueTypeSubsetValidator.prepare(aliased, [font.cmap[?A]])
+
+    Limits.install(Map.put(limits, :max_font_subset_bytes, byte_size(result)))
+    assert {:ok, ^result} = TrueTypeSubset.subset(aliased, [font.cmap[?A]])
+    Limits.install(Map.put(limits, :max_font_subset_checksum_work, div(byte_size(result), 4)))
+    assert {:ok, ^result} = TrueTypeSubset.subset(aliased, [font.cmap[?A]])
+    Limits.install(Map.put(limits, :max_font_subset_checksum_work, div(byte_size(result), 4) - 1))
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             TrueTypeSubsetValidator.prepare(aliased, [font.cmap[?A]])
+
+    assert message =~ "max_font_subset_checksum_work"
+
+    Limits.install(Map.put(limits, :max_font_subset_bytes, 2 * byte_size(result) - 1))
+
+    Limits.install(Map.put(limits, :max_font_subset_bytes, 2 * byte_size(result) - 1))
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             FontValidator.with_budget(fn ->
+               assert {:ok, ^result} = TrueTypeSubset.subset(aliased, [font.cmap[?A]])
+               TrueTypeSubset.subset(aliased, [font.cmap[?A]])
+             end)
+
+    assert message =~ "max_font_subset_bytes"
+
+    box = %{
+      type: :text,
+      text: "A",
+      x: 0,
+      y: 20,
+      font: Font.pdf_name(aliased),
+      font_face: aliased,
+      font_size: 10,
+      color: {0, 0, 0}
+    }
+
+    second = %{aliased | id: aliased.id <> "-second"}
+    second_box = %{box | font_face: second, font: Font.pdf_name(second)}
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box, second_box]}])
+
+    assert diagnostic.operation == :write_pdf and diagnostic.source == "TrueType subset"
+    assert diagnostic.message =~ "max_font_subset_bytes"
+
+    Limits.install(Map.put(limits, :max_font_subset_checksum_work, 1))
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
+
+    assert message =~ "max_font_subset_checksum_work"
+  end
+
+  test "directory policy agrees for loading, glyph metrics and subsetting", %{font: font} do
+    duplicate = replace_bytes(font.data, table_record_offset(font.data, "prep"), 4, "name")
+    outside = replace_u32(font.data, table_record_offset(font.data, "FFTM") + 8, 0)
+
+    for data <- [duplicate, outside] do
+      assert :error = FontValidator.prepare_ttf(data)
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               TrueTypeSubsetValidator.prepare_glyph_bounds(data)
+
+      assert diagnostic.source == "TrueType table directory"
+      assert {:error, {:invalid_document, _}} = TrueTypeSubset.subset(%{font | data: data}, [0])
+      assert {:error, {_reason, _}} = Font.load_configured_faces([%{family: "Bad", data: data}])
+    end
+  end
+
+  test "subset admission respects fixed sfnt output directory field capacities", %{font: font} do
+    <<scaler::32, count::16, _::48, rest::binary>> = font.data
+    extra = 4096 - count
+    old_directory_bytes = 12 + count * 16
+
+    records =
+      for <<tag::binary-size(4), checksum::32, offset::32,
+            length::32 <-
+              binary_part(rest, 0, count * 16)>>,
+          into: <<>> do
+        <<tag::binary, checksum::32, offset + extra * 16::32, length::32>>
+      end
+
+    custom =
+      for index <- 1..extra, into: <<>> do
+        tag = index |> Integer.to_string(36) |> String.pad_leading(4, "0")
+        <<tag::binary-size(4), 0::32, 12 + 4096 * 16::32, 0::32>>
+      end
+
+    payload =
+      binary_part(font.data, old_directory_bytes, byte_size(font.data) - old_directory_bytes)
+
+    data = <<scaler::32, 4096::16, 0::48, records::binary, custom::binary, payload::binary>>
+
+    assert {:error, {:invalid_document, %{message: message}}} =
+             TrueTypeSubsetValidator.prepare(%{font | data: data}, [0])
+
+    assert message =~ "sfnt directory field capacity"
   end
 
   test "rejects malformed fonts, offsets, and glyph requests with diagnostics", %{font: font} do

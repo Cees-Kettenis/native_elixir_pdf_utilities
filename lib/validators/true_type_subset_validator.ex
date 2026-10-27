@@ -15,57 +15,68 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
           offsets: tuple(),
           retained: MapSet.t(),
           glyph_count: pos_integer(),
-          location_format: 0 | 1
+          location_format: 0 | 1,
+          output_bytes: pos_integer()
         }
 
   @doc false
   @spec prepare(map(), [non_neg_integer()]) ::
           {:ok, plan() | :keep_full} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(font, glyph_ids) do
-    case {font, glyph_ids} do
-      {%{data: data} = font, glyph_ids} when is_binary(data) and is_list(glyph_ids) ->
-        with {:ok, scaler, tables} <- table_directory(data),
-             {:ok, head} <- required_table(tables, "head"),
-             {:ok, maxp} <- required_table(tables, "maxp"),
-             {:ok, glyf} <- required_table(tables, "glyf"),
-             {:ok, loca} <- required_table(tables, "loca"),
-             {:ok, embedding_mode} <- embedding_mode(font, tables),
-             {:ok, glyph_count, location_format} <- font_header(head, maxp),
-             {:ok, offset_list} <- glyph_offsets(loca, glyf, glyph_count, location_format),
-             :ok <- validate_glyph_ids(glyph_ids, glyph_count) do
-          case embedding_mode do
-            :keep_full ->
-              {:ok, :keep_full}
+    FontValidator.with_budget(fn ->
+      case {font, glyph_ids} do
+        {%{data: data} = font, glyph_ids} when is_binary(data) and is_list(glyph_ids) ->
+          FontValidator.reserve_source(data)
 
-            :subset ->
-              offsets = List.to_tuple(offset_list)
+          with {:ok, scaler, tables} <- table_directory(data),
+               {:ok, head} <- required_table(tables, "head"),
+               {:ok, maxp} <- required_table(tables, "maxp"),
+               {:ok, glyf} <- required_table(tables, "glyf"),
+               {:ok, loca} <- required_table(tables, "loca"),
+               {:ok, embedding_mode} <- embedding_mode(font, tables),
+               {:ok, glyph_count, location_format} <- font_header(head, maxp),
+               {:ok, offset_list} <- glyph_offsets(loca, glyf, glyph_count, location_format),
+               :ok <- validate_glyph_ids(glyph_ids, glyph_count) do
+            case embedding_mode do
+              :keep_full ->
+                {:ok, :keep_full}
 
-              with {:ok, retained} <-
-                     retain_dependencies(
-                       Enum.map([0 | glyph_ids], &{:enter, &1}),
-                       %{},
-                       %{},
-                       0,
-                       offsets,
-                       glyf
-                     ) do
-                {:ok,
-                 %{
-                   scaler: scaler,
-                   tables: tables,
-                   glyf: glyf,
-                   offsets: offsets,
-                   retained: MapSet.new(Map.keys(retained)),
-                   glyph_count: glyph_count,
-                   location_format: location_format
-                 }}
-              end
+              :subset ->
+                offsets = List.to_tuple(offset_list)
+
+                with {:ok, retained} <-
+                       retain_dependencies(
+                         Enum.map([0 | glyph_ids], &{:enter, &1}),
+                         %{},
+                         %{},
+                         0,
+                         offsets,
+                         glyf
+                       ) do
+                  retained = MapSet.new(Map.keys(retained))
+
+                  with {:ok, output_bytes} <-
+                         admit_rebuild(tables, offsets, retained, location_format, glyph_count) do
+                    {:ok,
+                     %{
+                       scaler: scaler,
+                       tables: tables,
+                       glyf: glyf,
+                       offsets: offsets,
+                       retained: retained,
+                       output_bytes: output_bytes,
+                       glyph_count: glyph_count,
+                       location_format: location_format
+                     }}
+                  end
+                end
+            end
           end
-        end
 
-      _ ->
-        invalid("font subsetting requires a TrueType font and glyph IDs")
-    end
+        _ ->
+          invalid("font subsetting requires a TrueType font and glyph IDs")
+      end
+    end)
   end
 
   @doc false
@@ -115,42 +126,59 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
     end)
   end
 
-  defp table_directory(data) do
-    case data do
-      <<scaler::32, count::16, _search::16, _selector::16, _shift::16, rest::binary>>
-      when scaler in [0x0001_0000, 0x7472_7565] and count > 0 and
-             byte_size(rest) >= count * 16 ->
-        directory_bytes = 12 + count * 16
+  # Account for every retained payload occurrence, not unique source ranges.
+  # This runs before glyph copying, padding, checksumming and font assembly.
+  defp admit_rebuild(tables, offsets, retained, location_format, glyph_count) do
+    glyf_bytes =
+      Enum.reduce(retained, 0, fn glyph, total ->
+        bytes = elem(offsets, glyph + 1) - elem(offsets, glyph)
+        total + bytes + rem(bytes, 2)
+      end)
 
-        records =
-          for <<tag::binary-size(4), _checksum::32, offset::32,
-                length::32 <-
-                  binary_part(rest, 0, count * 16)>> do
-            {tag, offset, length}
+    loca_bytes = (glyph_count + 1) * if(location_format == 0, do: 2, else: 4)
+    retained_tables = Enum.reject(tables, &(elem(&1, 0) == "DSIG"))
+    count = length(retained_tables)
+
+    output_bytes =
+      Enum.reduce(retained_tables, 12 + count * 16, fn {tag, data}, total ->
+        bytes =
+          case tag do
+            "glyf" -> glyf_bytes
+            "loca" -> loca_bytes
+            _ -> byte_size(data)
           end
 
-        cond do
-          length(Enum.uniq_by(records, &elem(&1, 0))) != count ->
-            invalid("TrueType table directory repeats a tag")
+        total + bytes + rem(4 - rem(bytes, 4), 4)
+      end)
 
-          Enum.any?(records, fn {_tag, offset, length} ->
-            offset < directory_bytes or offset + length > byte_size(data)
-          end) ->
-            invalid("TrueType table directory points outside the font")
+    # Fixed sfnt field capacities, not configurable resource ceilings: offsets
+    # are 32-bit and the power-of-two searchRange is a 16-bit byte count.
+    if output_bytes <= 0xFFFF_FFFF and count < 4096 do
+      FontValidator.reserve(:max_font_subset_bytes, output_bytes)
+      FontValidator.reserve(:max_font_subset_checksum_work, div(output_bytes, 4))
+      {:ok, output_bytes}
+    else
+      invalid("TrueType subset exceeds sfnt directory field capacity")
+    end
+  catch
+    {:font_resource_limit, {:error, {reason, diagnostic}}} ->
+      Diagnostics.error(:font, reason, "font subsetting: #{diagnostic.message}",
+        operation: :write_pdf,
+        module: __MODULE__,
+        source: "TrueType subset"
+      )
+  end
 
-          true ->
-            tables =
-              records
-              |> Enum.map(fn {tag, offset, length} ->
-                {tag, binary_part(data, offset, length)}
-              end)
-              |> Enum.sort_by(&elem(&1, 0))
+  defp table_directory(data) do
+    with {:ok, scaler, records} <- FontValidator.prepare_table_directory(data) do
+      tables =
+        records
+        |> Enum.map(fn {tag, {offset, length}} ->
+          {tag, binary_part(data, offset, length)}
+        end)
+        |> Enum.sort_by(&elem(&1, 0))
 
-            {:ok, scaler, tables}
-        end
-
-      _ ->
-        invalid("font subsetting requires a standalone TrueType sfnt")
+      {:ok, scaler, tables}
     end
   end
 
