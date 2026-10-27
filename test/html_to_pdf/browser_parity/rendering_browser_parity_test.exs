@@ -226,20 +226,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
   @tag math_tokens: true
   test "Core reference spacing follows transitions, explicit sizes and nested row ends" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout}
-    {:ok, registry} = Font.load_registry(system_font_discovery: false)
-    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
-    {:ok, x} = MathLayout.glyph("x", font, 12, text_transform: :math_auto)
-    {:ok, y} = MathLayout.glyph("y", font, 20, text_transform: :math_auto)
-
     html =
       ~s(<math><mi data-core-reference="x">x</mi><mi data-core-reference="y" style="font-size:20pt">y</mi><mn>1</mn><mrow data-core-reference="row"><mi data-core-reference="end">x</mi></mrow><mn>2</mn><mi data-core-reference="space"> x </mi><mn>3</mn></math>)
 
     adjusted = math_token_italic_reference(html)
     assert adjusted =~ ~s(data-core-reference="x" style='margin-right:0.0pt')
-    assert adjusted =~ ~s(style="font-size:20pt;margin-right:#{y.italic_correction}pt")
-    assert adjusted =~ ~s(data-core-reference="row" style='margin-right:#{x.italic_correction}pt')
-    assert adjusted =~ ~s(data-core-reference="end" style='margin-right:#{x.italic_correction}pt')
+    assert adjusted =~ ~s(style="font-size:20pt;margin-right:0.3pt")
+    assert adjusted =~ ~s(data-core-reference="row" style='margin-right:0.12pt')
+    assert adjusted =~ ~s(data-core-reference="end" style='margin-right:0.12pt')
     assert adjusted =~ ~s(data-core-reference="space" style='margin-right:0.0pt')
     assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
     assert {:ok, "xy1x2x3"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
@@ -1551,21 +1545,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     |> String.replace("</head>", css <> "</head>", global: false)
   end
 
-  @doc "Adds the selected font's Core italic spacing omitted by Chromium's math-auto tokens."
+  @doc "Adds independently recorded STIX Core italic spacing omitted by Chromium math-auto tokens."
   @spec math_token_italic_reference(String.t()) :: String.t()
   def math_token_italic_reference(html) do
-    alias NativeElixirPdfUtilities.HtmlToPdf.Font
-    {:ok, registry} = Font.load_registry(system_font_discovery: false)
-    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+    manifest =
+      Paths.fixture("html_to_pdf/browser_parity/assets/math-token-italic-reference.json")
+      |> File.read!()
+      |> :json.decode()
 
-    {:ok, dom} = NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(html)
-    {_italic, corrections} = math_reference_corrections(dom, font, 12.0)
+    source_hash = :crypto.hash(:sha256, html) |> Base.encode16(case: :lower)
+    reference = Enum.find(manifest["cases"], &(&1["sha256"] == source_hash))
+    assert reference, "Regenerate the independent token reference for changed HTML"
 
     Regex.replace(
       ~r/<(mi|mn|mtext|ms|mrow)([^>]*data-core-reference="([^"]+)"[^>]*)>/u,
       html,
       fn _, tag, attributes, identity ->
-        correction = Map.fetch!(corrections, identity)
+        correction = Map.fetch!(reference["margins"], identity)["points"]
 
         attributes =
           if Regex.match?(~r/\bstyle=["']/, attributes) do
@@ -1579,89 +1575,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
         "<#{tag}#{attributes}>"
       end
     )
-  end
-
-  defp math_reference_corrections(node, font, inherited_size) do
-    attributes = Map.get(node, :attributes, %{})
-
-    size =
-      case Regex.run(~r/font-size:\s*([0-9.]+)pt/, Map.get(attributes, "style", "")) do
-        [_, value] ->
-          {size, ""} = Float.parse(value)
-          size
-
-        nil ->
-          inherited_size
-      end
-
-    children = Map.get(node, :children, [])
-    prepared = Enum.map(children, &math_reference_corrections(&1, font, size))
-
-    corrections =
-      Enum.reduce(prepared, %{}, fn {_, corrections}, acc -> Map.merge(acc, corrections) end)
-
-    math_children =
-      children
-      |> Enum.zip(prepared)
-      |> Enum.filter(fn {child, _} -> Map.get(child, :namespace) == :mathml end)
-
-    if Map.get(node, :namespace) == :mathml and node.tag in ["math", "mrow"] do
-      corrections =
-        math_children
-        |> Enum.with_index()
-        |> Enum.reduce(corrections, fn {{child, {italic, _}}, index}, acc ->
-          next = Enum.at(math_children, index + 1)
-
-          contributes =
-            case next do
-              nil -> true
-              {_, {next_italic, _}} -> next_italic == 0
-            end
-
-          case Map.get(child.attributes, "data-core-reference") do
-            nil -> acc
-            identity -> Map.put(acc, identity, if(contributes, do: italic, else: 0.0))
-          end
-        end)
-
-      italic =
-        case List.last(math_children) do
-          nil -> 0.0
-          {_, {italic, _}} -> italic
-        end
-
-      {italic, corrections}
-    else
-      original = Enum.map_join(children, &Map.get(&1, :text, ""))
-      text = String.trim(original)
-
-      italic =
-        if Map.get(node, :namespace) == :mathml and node.tag in ~w(mi mn mtext ms) and
-             length(String.to_charlist(text)) == 1 do
-          auto? =
-            case Regex.run(
-                   ~r/text-transform:\s*(math-auto|none)/,
-                   Map.get(attributes, "style", "")
-                 ) do
-              [_, value] -> value == "math-auto"
-              nil -> node.tag == "mi" and Map.get(attributes, "mathvariant") != "normal"
-            end
-
-          transform =
-            if auto? and length(String.codepoints(original)) == 1, do: :math_auto, else: :none
-
-          {:ok, measured} =
-            NativeElixirPdfUtilities.HtmlToPdf.MathLayout.glyph(text, font, size,
-              text_transform: transform
-            )
-
-          measured.italic_correction
-        else
-          0.0
-        end
-
-      {italic, corrections}
-    end
   end
 
   @doc "Runs the public renderer with the project root authorizing the same local font bytes as Chromium."

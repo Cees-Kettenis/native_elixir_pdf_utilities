@@ -28,6 +28,47 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           optional(:strict_vector_comparison) => map()
         }
 
+  @doc "Rasterizes PDF bytes with Poppler and returns RGB pixels for each page."
+  @spec rasterize_pdf!(binary(), keyword()) :: [map()]
+  def rasterize_pdf!(pdf, opts) do
+    directory = Keyword.fetch!(opts, :artifact_dir)
+    File.rm_rf!(directory)
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "input.pdf")
+    File.write!(path, pdf)
+
+    rasterize_pdf!(
+      pdftoppm_bin!(),
+      path,
+      Path.join(directory, "page"),
+      Keyword.get(opts, :dpi, 72)
+    )
+    |> Enum.map(&read_ppm!/1)
+  end
+
+  @doc "Measures changed Poppler pixels and their bounds without using native layout geometry."
+  @spec assert_pdf_visual_change!(binary(), binary(), keyword()) :: [map()]
+  def assert_pdf_visual_change!(before_pdf, after_pdf, opts) do
+    directory = Keyword.fetch!(opts, :artifact_dir)
+
+    before =
+      rasterize_pdf!(before_pdf, Keyword.put(opts, :artifact_dir, Path.join(directory, "before")))
+
+    after_pages =
+      rasterize_pdf!(after_pdf, Keyword.put(opts, :artifact_dir, Path.join(directory, "after")))
+
+    assert length(before) == length(after_pages), "Raster comparison page count changed"
+
+    before
+    |> Enum.zip(after_pages)
+    |> Enum.with_index(1)
+    |> Enum.map(fn {{reference, actual}, number} ->
+      stats = visual_change_stats!(reference, actual, number, directory)
+      assert stats.changed_pixels > 0, "No changed pixels on page #{number}"
+      stats
+    end)
+  end
+
   @doc false
   @spec gauge_reference(String.t()) :: String.t()
   def gauge_reference(html) do
@@ -995,6 +1036,58 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       end
 
     Map.merge(stats, %{page: page_number, regions: regions})
+  end
+
+  defp visual_change_stats!(before, after_image, page_number, artifact_dir) do
+    assert {before.width, before.height} == {after_image.width, after_image.height},
+           "Visual comparison page dimensions changed on page #{page_number}; artifacts: #{Path.expand(artifact_dir)}"
+
+    initial = %{
+      changed_pixels: 0,
+      min_x: before.width,
+      min_y: before.height,
+      max_x: 0,
+      max_y: 0
+    }
+
+    changes =
+      Enum.reduce(0..(before.width * before.height - 1), initial, fn pixel, acc ->
+        offset = pixel * 3
+
+        changed? =
+          Enum.any?(0..2, fn channel ->
+            abs(
+              :binary.at(before.pixels, offset + channel) -
+                :binary.at(after_image.pixels, offset + channel)
+            ) > 12
+          end)
+
+        case changed? do
+          true ->
+            x = rem(pixel, before.width)
+            y = div(pixel, before.width)
+
+            %{
+              changed_pixels: acc.changed_pixels + 1,
+              min_x: min(acc.min_x, x),
+              min_y: min(acc.min_y, y),
+              max_x: max(acc.max_x, x),
+              max_y: max(acc.max_y, y)
+            }
+
+          false ->
+            acc
+        end
+      end)
+
+    %{
+      page: page_number,
+      width: before.width,
+      height: before.height,
+      changed_pixels: changes.changed_pixels,
+      changed_ratio: changes.changed_pixels / (before.width * before.height),
+      bounds: {changes.min_x, changes.min_y, changes.max_x, changes.max_y}
+    }
   end
 
   defp crop_pixels(image, width, height, x \\ 0, y \\ 0) do

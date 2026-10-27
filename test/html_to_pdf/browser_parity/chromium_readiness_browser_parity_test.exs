@@ -16,7 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
   end
 
   test "capture waits for nested documents fonts and images while author scripts stay disabled" do
-    font = File.read!(Paths.project("priv/fonts/dejavu/DejaVuSans.ttf"))
+    font = File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/math-glyph-reference.ttf"))
     image = File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/embedded-neutral.jpg"))
 
     parent = """
@@ -29,7 +29,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
 
     child = """
     <style>@font-face{font-family:Delayed;src:url(/font)}body{margin:0;font-family:Delayed}</style>
-    <p>Child ready</p><iframe src="/leaf"></iframe><object data="/vector" type="image/svg+xml"></object>
+    <p>Child ready <span>𝑥</span></p><iframe src="/leaf"></iframe><object data="/vector" type="image/svg+xml"></object>
     """
 
     url =
@@ -80,6 +80,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
     assert length(Regex.scan(~r/Child ready/, text)) == 3
     assert length(Regex.scan(~r/Nested leaf ready/, text)) == 3
     refute text =~ "Author script ran"
+    {fonts, 0} = System.cmd(System.find_executable("pdffonts"), [output])
+    assert fonts =~ ~r/\b[A-Z]{6}\+MathGlyphTestReference\b/
+
     frames = output |> Kernel.<>(".readiness.json") |> File.read!() |> :json.decode()
     assert Enum.all?(frames, &(&1["ready"] == "complete" and &1["fonts"] == "loaded"))
     assert Enum.count(frames, &String.ends_with?(&1["url"], "/child")) == 3

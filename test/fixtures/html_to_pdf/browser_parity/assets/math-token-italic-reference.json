@@ -1,0 +1,99 @@
+{
+  "cases": [
+    {
+      "margins": {
+        "x": {
+          "applied": true,
+          "points": 0.12,
+          "size_pt": 12,
+          "token": "x"
+        },
+        "y": {
+          "applied": true,
+          "points": 0.3,
+          "size_pt": 20,
+          "token": "y"
+        },
+        "z": {
+          "applied": true,
+          "points": 0.3,
+          "size_pt": 30,
+          "token": "z"
+        }
+      },
+      "name": "mathml_tokens_rows",
+      "sha256": "d3e63db0f8278988e3e31316ad136f254a9d815a5e96b318c0e774410ad5e276",
+      "source": "test/fixtures/html_to_pdf/browser_parity/mathml_tokens_rows.html"
+    },
+    {
+      "html": "<math><mi data-core-reference=\"x\">x</mi><mi data-core-reference=\"y\" style=\"font-size:20pt\">y</mi><mn>1</mn><mrow data-core-reference=\"row\"><mi data-core-reference=\"end\">x</mi></mrow><mn>2</mn><mi data-core-reference=\"space\"> x </mi><mn>3</mn></math>",
+      "margins": {
+        "end": {
+          "applied": true,
+          "points": 0.12,
+          "size_pt": 12,
+          "token": "x"
+        },
+        "row": {
+          "applied": true,
+          "points": 0.12,
+          "size_pt": 12,
+          "token": "x"
+        },
+        "space": {
+          "applied": false,
+          "points": 0.0,
+          "size_pt": 12,
+          "token": "x"
+        },
+        "x": {
+          "applied": false,
+          "points": 0.0,
+          "size_pt": 12,
+          "token": "x"
+        },
+        "y": {
+          "applied": true,
+          "points": 0.3,
+          "size_pt": 20,
+          "token": "y"
+        }
+      },
+      "name": "row_transitions",
+      "sha256": "94c655c7ac69700c59b99c366833d4e6c37656b00d5d6d654bddacb9f1e6ff6c"
+    }
+  ],
+  "font": {
+    "path": "priv/fonts/stix/STIXTwoMath-Regular.ttf",
+    "sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+    "units_per_em": 1000
+  },
+  "fonttools": "4.60.1",
+  "generator": "scripts/fixtures/generate-mathml-token-reference.py",
+  "glyphs": {
+    "x": {
+      "codepoint": 119909,
+      "correction_units": 10,
+      "glyph": "u1D465",
+      "glyph_id": 3354
+    },
+    "y": {
+      "codepoint": 119910,
+      "correction_units": 15,
+      "glyph": "u1D466",
+      "glyph_id": 3355
+    },
+    "z": {
+      "codepoint": 119911,
+      "correction_units": 10,
+      "glyph": "u1D467",
+      "glyph_id": 3356
+    },
+    "\u03b1": {
+      "codepoint": 120572,
+      "correction_units": 0,
+      "glyph": "u1D6FC",
+      "glyph_id": 4015
+    }
+  }
+}
