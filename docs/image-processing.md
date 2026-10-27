@@ -25,25 +25,18 @@ PDF viewers decode the embedded image.
 
 ## SVG images
 
-SVGs appear as PNG artwork in the PDF through the published `resvg` Hex dependency.
-Elixir prepares source, dimensions, permitted font bytes and selected nested image
-resources. The converter cannot read arbitrary caller paths or fetch network
-resources. DTD/entity declarations and escaped CSS resource syntax are rejected.
+SVGs appear as PNG artwork in the PDF. SVG text is rasterized and links inside
+an SVG are inactive. Wrap the image in an HTML anchor to make it clickable.
 
-The library diagnoses known unsupported converter features before returning an
-incomplete image. These include `foreignObject`, non-scaling strokes and SVG2
-inline `textPath` path data. SVG text is rasterized and internal SVG links are
-inert. An ordinary HTML anchor around the image remains clickable.
+Provide images and fonts through the supported [asset sources](html-to-pdf-compatibility.md#assets-and-local-files).
+The converter cannot read arbitrary files or fetch network resources.
+DTD/entity declarations and escaped CSS resource syntax are rejected.
 
-SVG conversion does not provide complete browser SVG support. See
-[HTML and CSS support](html-to-pdf-compatibility.md) for the supported rendering
-profile and [diagnostics](diagnostics.md) for handling conversion failures.
+`foreignObject`, non-scaling strokes and SVG2 inline `textPath` path data return
+a diagnostic. Use a same-document path reference for supported text paths.
 
-Known converter differences include linear-RGB gradient and mask interpolation,
-filter inputs moved from outside their filter region, some automatic marker
-orientations and clipping, fractional pattern spacing, text-path positioning,
-transformed image viewports, filter-image paint servers and strokes on very small
-canvases. These can affect visible output even when conversion succeeds. Some
-fixes are already merged into Rust resvg and still await a published Elixir
-wrapper release. Converter-dependent browser tests retain explicit, bounded
-allowances while those updates are pending.
+SVG conversion uses Resvg and can differ from browser rendering, particularly
+for gradients, filters, masks, markers and text paths. Check complex artwork
+against the output you need. See [diagnostics](diagnostics.md) for conversion
+failures and [HTML and CSS support](html-to-pdf-compatibility.md#images-and-backgrounds)
+for image sizing and styling.

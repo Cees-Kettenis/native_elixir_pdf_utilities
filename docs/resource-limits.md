@@ -74,45 +74,17 @@ These limits apply when reading existing PDFs.
 | `max_pdf_xref_length_candidates` | 1,000 | Candidate indirect `/Length` objects |
 | `max_pdf_xref_revisions` | 1,000 | Incremental cross-reference revisions |
 
-Reader budgets span the complete synchronous operation, including nested probes
-and candidate recovery. A failed candidate does not refund its work. Exhaustion
-returns a diagnostic and releases the budget before another call starts. Stream
-decoding requested separately through `Reader.decoded_stream/2` gets a fresh
-budget; callers repeatedly decoding content still need their operation's own
-aggregate limit, as text extraction already has. Flate output is drained in
-bounded chunks, and expanding filters stop at the remaining decoded allowance.
-Reference caches retain terminal identities and chain depths, while resolved
-values remain in the document object table. Separate object tables and recovery
-candidates have separate caches but share an active reader's reference allowance.
-Standalone validator calls retain their own bounded resolution scopes.
+Reader limits apply across one operation, including nested parsing and decoding.
+Repeated work counts even when results are cached. Separate calls to
+`Reader.decoded_stream/2` have separate allowances.
 
-Geometry validators admit derived scales, translations and complete placement
-matrices before writing. Unrepresentable arithmetic returns a contextual
-diagnostic. Serialized coefficients also obey the shared numeric magnitude and
-token-byte limits; representable small nonzero scales retain their precision.
-Intermediate appearance bounds may exceed the output magnitude limit when the
-final validated placement remains within it.
+Page sizes and transforms must fit the supported numeric range. Unrepresentable
+calculations return a diagnostic; valid small nonzero scales are preserved.
+PDF drawing imports share the reader's parsing and decoding limits.
 
-PDF Form drawing imports share one reader allowance across source preparation
-and decoded content occurrences, including joining newlines. The writer reuses
-the validator's prepared import for identical sources. Encoded single-stream
-Forms retain their original filters and bytes. Overlay resource collection visits
-each unique source page before expanding placements, charges visited values to
-`max_pdf_reader_work`, and charges newly followed indirect references to
-`max_pdf_reference_resolution_work`.
-
-Predictors process packed rows and predecessor pixels without per-sample maps.
-Their buffer allowance counts the input bytes, twice the output bytes, two row
-buffers and two pixel buffers. Empty predictor input requires no reconstruction
-buffers. This is conservative buffer accounting, not an exact BEAM heap or
-native-memory measurement. TIFF sample/pixel visits and PNG byte/group/filter
-visits are charged before reconstruction; invalid row dimensions, incomplete
-rows and unsupported filter bytes return diagnostics. LZW clear codes reuse the
-fixed initial dictionary and consume work even when they produce no output.
-
-These counters bound parsing work and retained structures. Document API calls
-also have the operation deadline and worker-memory allowance above. Neither
-provides an application-wide memory ceiling.
+Decompression and image predictors also need working buffers, so they can reach
+a working-memory limit before the decoded-byte limit. These estimates are not
+hard memory caps. The operation deadline and worker-memory allowance also apply.
 
 ## HTML processing and output
 
@@ -139,12 +111,9 @@ provides an application-wide memory ceiling.
 | `max_rendered_pages` | 1,000 | Generated PDF pages, also bounded by `max_pdf_pages` |
 | `max_rendered_pdf_bytes` | 50,000,000 | Serialized PDF output and cumulative encoded link annotations; annotation bytes are admitted before copying URI data |
 
-Work counters charge repeated processing rather than just retained results.
-Reaching a limit aborts the operation with an actionable diagnostic and clears
-its budget. Standalone parser, style, layout, pagination, furniture, and writer
-calls create their own budget. Nested pipeline stages share the active budget.
-CSS source validation retains its `:invalid_css` diagnostic contract; other new
-render limits return `:resource_limit_exceeded`.
+Repeated processing counts toward work limits even when the result is cached.
+Nested rendering stages share an allowance. Calling a parser, layout or writer
+separately starts a new one. Failures identify the affected limit in a diagnostic.
 
 ## HTML, images, and layout
 
@@ -174,40 +143,17 @@ render limits return `:resource_limit_exceeded`.
 | `max_css_numeric_magnitude` | 1,000,000,000 | Absolute CSS numeric operands and converted lengths, excluding identifiers and quoted text |
 | `max_layout_cardinality` | 1,000 | Grid tracks, placements, and table spans |
 
-CSS budgets include unused custom properties. Dependencies are memoized during
-each custom-property computation, and output sizes are checked before building
-expanded binaries. Cycles and missing variables retain their existing invalid-value
-behavior. A limit failure returns `:resource_limit_exceeded` at the `:limits` stage.
+CSS limits include unused custom properties and expanded values. Calculations
+outside the supported numeric range return a diagnostic with the expression.
 
-CSS calculations also reject finite arithmetic that overflows the runtime's
-floating-point range, including intermediate results during dimension checking.
-This returns `:resource_limit_exceeded` at the `:style` stage with the expression
-and guidance for reducing it. The runtime numeric range is a fixed invariant,
-not a configurable resource limit. Small nonzero values remain accepted when
-their calculations fit the supported range. Explicit CSS infinity and NaN keep
-their existing calculation semantics.
+PNG limits include color and alpha samples. A 16-bit RGBA image needs eight
+sample bytes per pixel, plus decoding buffers. An image can reach the working
+buffer limit before its decoded-image limit.
 
-PNG decoded-image budgets count bytes per sample, including alpha when present.
-A 16-bit RGBA image reserves eight bytes per pixel before decoding. The working
-allowance also covers inflated scanlines and reconstruction buffers. It can reject
-an image below the decoded-image limit; raising one limit does not bypass another.
-The estimate reserves three times the inflated bytes, three times the final sample
-bytes, 64 times the largest packed row, and 64 bytes per pass row. These allowances
-account for retained buffers and row-processing overhead, not a hard BEAM memory cap.
-
-SVG structure limits apply before Resvg conversion. They bound input structure,
-not expanded reference work or native allocations. SVG output is checked after
-conversion and then validated and decoded through the PNG pipeline. Returned
-converter errors become diagnostics, but native resource exhaustion and all
-renderer warnings cannot be recovered through that contract.
-
-The turbulence octave limit rejects oversized requests with a
-`:resource_limit_exceeded` diagnostic. Counts must be finite nonnegative unitless
-numbers within the shared numeric bounds. The limit applies to the authored
-number before converter rounding, including fractional counts. It bounds one
-primitive's octave count, not total filter CPU time; image size, repeated artwork
-and filter count still affect rendering cost. It does not change native converter
-scheduling.
+SVG structure limits apply before conversion; output image limits are checked
+afterward. They do not cap native converter allocations. The turbulence limit
+bounds each primitive's authored octave count, including fractional counts;
+image size and repeated filters still affect total rendering cost.
 
 See [render options and supported formats](html-to-pdf-compatibility.md) and
 [image processing and recovery](image-processing.md).
@@ -226,21 +172,13 @@ See [render options and supported formats](html-to-pdf-compatibility.md) and
 | `max_font_cache_entries` | 64 | Parsed font files retained by the cache |
 | `max_system_font_cache_entries` | 64 | Positive and negative installed-font discovery results retained by the cache |
 
-Family lookup selects needed records before decoding and reuses identical string
-ranges. Each unique decoded range also charges its input bytes to
-`max_font_math_work`. The name-byte allowance reserves up to twice the UTF-16
-input size or three times the MacRoman input size before decoding.
+Family-name decoding and font subsetting reserve space before expanding data.
+Repeated output tables count separately even when they share source bytes.
+One PDF writer call shares the subset allowances across its fonts.
 
-Subset preparation admits all padded output bytes and checksum words before
-copying glyphs, assembling tables or checksumming payloads. Distinct table tags
-may share source storage; each output payload occurrence counts separately.
-One PDF writer call shares these allowances across its subset fonts.
-
-Loading, glyph metrics and subsetting share the same table-directory policy.
-This library requires unique table tags and ranges that follow the directory
-and fit within the source font, including opaque custom tables.
-Configured family names and default families must be nonblank UTF-8. Omitted
-weight and style use their defaults; explicitly invalid values return a diagnostic.
+Font tables must have unique tags and valid source ranges. Family names must
+be nonblank UTF-8. Omitted weight and style use their defaults; explicitly
+invalid values return a diagnostic.
 
 See [font configuration](html-to-pdf-compatibility.md#fonts-and-text).
 
@@ -316,16 +254,10 @@ limits apply across all returned PDFs. See [Merging](pdf-merging.md) and
 | `max_cid_width_entries` | 65,536 | Width declarations expanded for one CID font, including overwritten entries |
 | `max_form_xobject_depth` | 20 | Form XObject nesting |
 
-Reconstructed whitespace counts added padding, not original text or page
-separators. It applies only to `layout: true`. The PDF CID range is fixed at
-0 through 65,535, so `max_cid_width_entries` cannot exceed 65,536.
-Token, value and instruction admission happens while parsing, before retaining
-the next item. These counters span pages and Forms; cached content reuses its
-parsed values and still counts toward instruction-use limits. Container nesting
-uses `max_pdf_value_depth`. Font work is admitted before expanding widths or
-Differences. Indirect fonts reuse their prepared encodings, and Type0 fonts
-sharing the same indirect descendant reuse its width map.
-See [Text extraction](text-extraction.md).
+Reconstructed whitespace counts added padding in `layout: true` output.
+Parsing and instruction-use limits apply across pages and reused content.
+The PDF CID range is fixed at 0 through 65,535, so `max_cid_width_entries`
+cannot exceed 65,536. See [Text extraction](text-extraction.md).
 
 ## Check active settings
 
@@ -334,23 +266,20 @@ See [Text extraction](text-extraction.md).
 
 ## Initial HTML form values
 
-Pattern and URL checks run in a disposable BEAM worker with an external deadline.
-`max_html_pattern_compile_work` charges syntax and property expansion.
-`max_html_pattern_match_work` is shared by all values in a request and across the
-render. Native assertion matching charges transitions and copied/scanned bytes.
-OTP does not expose successful regex step counts, so each run debits its entire
-granted engine allowance, including unsuccessful retries. A token never receives
-a fresh full allowance. `max_html_pattern_depth` bounds syntax and matching depth.
+| Setting | Default | Applies to |
+| --- | ---: | --- |
+| `max_html_pattern_bytes` | 65,536 | HTML pattern source bytes across a render |
+| `max_html_form_value_bytes` | 1,000,000 | URL sources and checked initial values across a render |
+| `max_html_pattern_values` | 10,000 | Initial values checked across a render |
+| `max_html_pattern_compile_work` | 2,000,000 | Pattern parsing and expansion work |
+| `max_html_pattern_match_work` | 5,000,000 | Pattern matching work across a render |
+| `max_html_pattern_depth` | 128 | Pattern and matching nesting |
+| `max_html_form_value_memory_bytes` | 32,000,000 | Memory for pattern and URL checks |
+| `max_html_form_value_timeout_ms` | 5,000 | Milliseconds allowed for one checking request |
 
-`max_html_form_value_memory_bytes` checks observed worker memory before and after
-execution, checks expanded expressions, and configures a GC-triggered BEAM heap
-cap including shared binaries. BEAM checks that cap at garbage collection, with
-its platform minimum heap size. This is not an instantaneous allocation ceiling
-and excludes native regex allocations. An observed excess returns the named
-resource diagnostic. A GC heap kill and an unexpected external kill have the
-same exit reason, so both return the worker failure diagnostic with heap-limit
-advice. Caller flags and unrelated mailbox messages are preserved.
-`max_html_form_value_timeout_ms` independently terminates a stalled worker.
+Pattern and URL checks run in a separate worker. A stopped or memory-killed
+worker returns a diagnostic. The memory check does not provide an instantaneous
+allocation ceiling or cover native regex allocations.
 
 ## Forms and attachments
 
@@ -369,25 +298,14 @@ advice. Caller flags and unrelated mailbox messages are preserved.
 | `max_mime_container_bytes` | 10,000,000 | ZIP bytes inspected for MIME evidence |
 | `max_mime_container_entries` | 10,000 | ZIP central-directory entries inspected |
 
-Form appearances also use `max_pdf_objects` and the existing font limits.
-Form inspection checks expanded names before joining parent/child names and
-checks metadata and entry allowances before retaining prepared collections.
-Decoded editor fonts are cached by their resolved stream reference within one
-inspection. The PDF reader's aggregate decode/work limits apply across uncached
-font streams; repeated descriptors still consume font-use and logical font-byte
-work allowances. These work bytes are not a measure of retained memory. Each
-inspection starts a fresh scope, including the inspection preceding fill or
-flatten.
-Retained list-box rows also consume the metadata and preparation-entry
-allowances across all controls while a producer serializes their editor
-templates.
+Form inspection counts expanded names, option rows, metadata and font uses.
+Repeated font references still consume work allowances even when their bytes
+are cached. Filling and flattening include an inspection. Form appearances also
+use the existing object, layout and font limits.
 
-Attachment metadata uses `max_pdf_info_value_bytes`; attachment name-tree
-traversal uses `max_pdf_name_tree_nodes` and `max_pdf_value_depth`. Existing
-attachment streams are counted as stored, without decompression. Declared
-uncompressed sizes are metadata, not a decompressed-byte budget. Document
-reading also enforces the existing PDF input limits. Incremental updates retain
-the original binary, which counts toward the output byte limit described below.
+Attachment metadata uses `max_pdf_info_value_bytes`. Existing attachment streams
+count as stored, without decompression; declared uncompressed sizes are metadata.
+The original PDF also counts toward the updated document's output-byte limit.
 
 ## Appearance expansion and incremental output
 
@@ -395,13 +313,13 @@ the original binary, which counts toward the output byte limit described below.
 appearances. Repeating text on multiple pages or widgets charges each copy.
 `max_appearance_widgets` defaults to 10,000 generated appearances or selected
 widgets; HTML controls reserve both their normal and alternate appearances.
-These limits are checked before appearance rendering. Native appearance frames do not count as document pages; `max_rendered_pages` and `max_pdf_pages` still bound actual PDF pages. Appearance resources retain the existing layout, font, reader, object and output-byte budgets.
+Appearances have their own limits and do not count as document pages.
+`max_rendered_pages` and `max_pdf_pages` still bound the actual PDF. Layout,
+font, reader, object and output-byte limits also apply.
 
-The shared incremental writer checks serialized pieces as they accumulate. All
-incremental writers also check the complete iodata before
-flattening it. Output must fit both `max_pdf_input_bytes` and
-`max_rendered_pdf_bytes`, so an edit cannot return a document already too large
-for the reader under the current byte limit. Other reader limits still apply.
+Updated PDFs must fit both `max_pdf_input_bytes` and `max_rendered_pdf_bytes`.
+The limit includes the original PDF and the appended revision. Other reader
+limits still apply.
 
 Incremental updates reserve space in `max_pdf_xref_revisions` before writing.
 A form fill with `flatten: true` reserves two revisions. Empty updates that
@@ -419,15 +337,9 @@ return the original PDF do not consume another revision.
 | `max_font_cache_bytes` | 100,000,000 | Retained font-file cache entries |
 | `max_system_font_cache_bytes` | 100,000,000 | Retained system-discovery cache entries |
 
-File reads bind the regular-file and size checks to the opened handle and read
-at most the available byte allowance plus one sentinel byte. Actual returned
-bytes are checked again. Caller-configured paths are trusted. Document-selected local assets also undergo the path checks described below.
-
-Configured bytes and document asset callbacks undergo the same font budgets.
-Repeated sources and parsed payloads are reused within a render. Process-wide
-caches evict entries by both count and retained size, conservatively including
-heap structures and binary payloads. Oversized cache entries can still serve a
-bounded request but are not retained. Resource failures are not cached.
+Configured font files, supplied bytes and resolved assets use the same font
+limits. Repeated sources can be reused within a render. Shared caches also have
+entry-count and memory limits; resource failures are not cached.
 
 System discovery reads trusted installed fonts through its native dependency,
 which returns complete bytes rather than a file handle or path. Request count
@@ -440,24 +352,12 @@ or native-memory cap.
 
 ## File input and local assets
 
-HTML source files, configured CSS files, and PDF text-extraction files use
-bounded regular-file reads before parsing. Their ceilings are
-`max_html_source_bytes`, `max_css_source_bytes`, and `max_pdf_input_bytes`.
-Image and font asset reads use the smaller of the individual source allowance
-and the remaining aggregate allowance. Metadata and reads use the same opened
-handle, and reads stop at the allowance plus one sentinel byte even if a file
-grows after its metadata is checked.
+HTML, CSS and PDF file reads accept regular files within their source-byte
+limits. Image and font reads also respect the remaining aggregate allowance.
+File type and size are checked before opening and on the opened handle.
 
-The reader also checks file type and size before opening the path, so an
-existing FIFO is rejected without waiting for a writer. The opened-handle
-checks remain necessary because a file can change after the pathname check.
-
-Local asset reads use the same portable reader on Windows, macOS, and Linux.
-No Python installation is required. `:base_url` rejects traversal and existing
-symlinks beneath the base directory before opening a file. These pathname
-checks cannot prevent concurrent filesystem changes. Keep file paths and asset
-directories under trusted control, or supply approved bytes through `:assets`
-or `:asset_resolver`. In particular, replacing a regular file with a FIFO between
-the pathname check and opening can still block. The portable Erlang file API
-does not provide a nonblocking-open option. Byte limits do not impose an I/O
-timeout.
+`:base_url` rejects path traversal and existing symlinks beneath its directory.
+Keep paths and asset directories under trusted control, or supply approved bytes
+through `:assets` or `:asset_resolver`. Concurrent filesystem changes can race
+these checks. Replacing a file with a FIFO during opening can still block;
+byte limits do not impose an I/O timeout.

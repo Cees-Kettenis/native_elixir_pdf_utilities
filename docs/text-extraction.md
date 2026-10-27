@@ -32,23 +32,19 @@ operands by default. Set `actual_text: true` to request replacement spans:
 {:ok, document} = Text.extract_spans(pdf, actual_text: true)
 ```
 
-In that view, replacement text is emitted once. This preserves a ligature or an
-assembled mathematical symbol as its original Unicode. Literal strings, Unicode
-strings, named `/Properties` lists,
-and indirect property values use the shared PDF text-string codec.
+Replacement text is emitted once per group. Nested groups use the outermost
+replacement; an empty replacement suppresses the covered pieces. Adjacent
+groups join without an added word break in `layout: false` output.
 
-Nested replacements use the outermost string. Empty replacements suppress their
-pieces. Adjacent replacement groups join without an inserted word break in
-`layout: false` output. Spans use the first piece's baseline and font context and
-the last piece's endpoint, with painting and clipping flags combined across the
-pieces. These endpoints do not describe the group's bounding box.
+Replacement spans use the first text piece's baseline and the last piece's
+endpoint, rather than the group's bounding box. An image drawn with an
+`ActualText` label can also supply replacement text, using its transformed
+position. This reads the label; it does not perform OCR.
 
-Physical operands still require reliable font mappings and valid geometry.
-Replacement strings and decoded pieces share the cumulative extraction byte
-budget; suppressed pieces still count toward the per-page span limit. Extraction
-checks balanced marked-content scopes and the configured nesting limit. This
-support applies to groups containing text operands. It does not recover text
-from a structure tree or a group containing only vector paths or images.
+Covered text still needs reliable font mappings and valid geometry. Text and
+labels share the [extraction limits](resource-limits.md#text-extraction).
+Unbalanced marked-content groups return diagnostics. Structure-tree recovery
+and replacement text for vector-only artwork are unsupported.
 
 ## Positioned text
 

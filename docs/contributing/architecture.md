@@ -1,31 +1,27 @@
 # Project architecture
 
-This library has public PDF operations, shared PDF readers and writers, an HTML
-rendering pipeline, and validators that own input and semantic rules.
-
-See [Contributing](../../CONTRIBUTING.md) for setup and the contribution workflow.
+See [Contributing](../../CONTRIBUTING.md) for setup and [testing](testing.md) for checks.
 
 ## Source layout
 
-| Location | Responsibility |
+| Location | Owns |
 | --- | --- |
-| `lib/*.ex` | Public operations such as `Merge`, `Forms`, `Text`, `Tokenizer` and `HtmlToPdf`, plus application setup, diagnostics, file reading and limits |
-| `lib/pdf/` | PDF object reading, encoding, object remapping and operation-specific writers |
-| `lib/html_to_pdf/` | HTML/CSS parsing, composition, fonts, images, layout, pagination and PDF paint |
+| `lib/*.ex` | Public APIs, application setup, diagnostics, file reading and limits |
+| `lib/pdf/` | PDF reading, encoding, object remapping and operation-specific writers |
+| `lib/html_to_pdf/` | HTML/CSS parsing, composition, fonts, images, layout, pagination and painting |
 | `lib/validators/` | Input, option, document, resource and semantic validation |
-| `priv/fonts/`, `priv/licenses/` | Bundled font/data inputs and their licenses |
-| `test/` | Tests grouped by API, implementation area and feature |
-| `scripts/` | Quality checks, benchmarks, example builders and reproducible data/fixture generators |
-| `dev/manual_web/` | A separate Mix application for manually exercising the library |
-| `docs/` | User guides, examples and supported behavior |
-| `docs/contributing/` | Maintained contributor architecture, testing and script guides |
-| `tmp/development/` | Ignored local plans, investigations, audits and work records |
+| `priv/fonts/`, `priv/licenses/` | Bundled fonts/data and licenses |
+| `test/` | API, feature and integration tests; see [test organization](testing.md#test-organization) |
+| `scripts/` | Checks, benchmarks and generators; see [scripts](scripts.md) |
+| `dev/manual_web/` | Separate development application |
+| `docs/`, `docs/contributing/` | User guides and public contributor guidance |
 
-An Elixir source path follows its module after the `NativeElixirPdfUtilities`
-prefix. `NativeElixirPdfUtilities.Merge` lives in `lib/merge.ex`;
-`NativeElixirPdfUtilities.HtmlToPdf.Layout` lives in
-`lib/html_to_pdf/layout.ex`. Public module names and function signatures are
-independent of how tests and fixtures are grouped.
+Paths follow the module after `NativeElixirPdfUtilities`:
+
+| Module | File |
+| --- | --- |
+| `NativeElixirPdfUtilities.Merge` | `lib/merge.ex` |
+| `NativeElixirPdfUtilities.HtmlToPdf.Layout` | `lib/html_to_pdf/layout.ex` |
 
 ## Execution paths
 
@@ -42,51 +38,34 @@ flowchart LR
   Pages --> PDF[PdfWriter]
 ```
 
-Each HTML stage delegates its admission rules to the appropriate validator.
-Validators produce the canonical values consumed downstream. Keep a rule in one
-validator rather than repeating it in a parser, public facade or execution module.
-The PDF reader supplies one object model to merging, transforms, text, forms,
-attachments, metadata and outlines.
+| Owner | Rule |
+| --- | --- |
+| Validators | Own validation rules; downstream code uses validated results without duplicating checks |
+| `Pdf.Reader` | Shared object model for PDF operations |
+| `ResourceContext` | Preserve resource permissions through composition, child viewports, images, fonts and caches; tests use public preparation |
+| `Diagnostics` | Shared recoverable failure maps |
+| `Limits` | All configurable resource ceilings |
 
-`ResourceContext` carries document/resource authority through HTML composition
-and embedded viewports. Fonts, images and caches retain that scope. A test that
-needs an issued context creates it through the public preparation path.
-`Diagnostics` owns recoverable failure maps and `Limits` owns configurable
-resource ceilings.
+Extract components when they have a clear responsibility and contract.
 
 ## Tests and fixtures
 
-See [test organization](testing.md). API tests exercise caller-visible
-behavior. Feature tests cover the relevant parser, style, layout, writer or
-validator. Integration tests cover interactions among those owners.
+| Test type | Checks |
+| --- | --- |
+| API | Caller-visible behavior |
+| Feature | Its parser, style, layout, writer or validator |
+| Integration | Interactions between features |
+| Browser parity | Chromium comparisons using the shared helper and authored fixtures |
 
-Browser comparisons use named source fixtures and the shared Chromium helper.
-The browser corpus retains one resource directory so relative authored URLs and
-resource authorization keep the same meaning. Its descriptive filenames identify
-the feature and scenario. Larger document examples and JPEG inputs have separate
-fixture directories.
+See [shared paths and fixtures](testing.md#shared-paths-and-fixtures) for locations and resource-base rules.
 
 ## Maintained files and local artifacts
 
-Feature names belong in maintained source, test and fixture paths. Work sequence
-numbers and temporary audit labels belong in local work records.
-For example, use `atomic_table_hidden_overflow.html` and
-`atomic_table_overflow_test.exs`.
-
-Generated library data belongs in its owning module and records its generator
-under `scripts/data/`. Checked-in reference fixtures record their generators
-under `scripts/fixtures/`. Generated examples live under `docs/assets/`.
-Keep reusable contributor guidance in `docs/contributing/`. Plans, work records,
-audits and experimental outputs go under ignored `tmp/`; validation logs and runtime caches
-go under ignored `.quality/`.
-
-The quality matrix snapshots the current maintained source, including uncommitted
-changes, into a separate workspace for each runtime. Runtime checks run in parallel
-with separate test outputs, build paths and tool caches. Each lane cleans the
-application build before compiling. The latest runtime runs performance checks
-after all correctness lanes finish.
-
-Large owners such as `Layout`, `Style` and `HtmlValidator` still contain several
-related features. Extract a component when it has a clear responsibility and
-contract, rather than creating files named after a development batch or adding
-another general-purpose helper module.
+| Content | Location or naming |
+| --- | --- |
+| Source, tests, fixtures, tags and artifacts | Feature/scenario names, such as `atomic_table_hidden_overflow.html`; no batch numbers or audit labels |
+| Generated library data | Owning module; generator and provenance under `scripts/data/` |
+| Reference fixtures | Feature directories under `fixtures/`; generators under `scripts/fixtures/` |
+| Generated examples | `docs/assets/` |
+| Plans, investigations and experiments | Ignored `tmp/`, preferably `tmp/development/` |
+| Validation logs and runtime caches | Ignored `.quality/`; see [matrix isolation](testing.md#full-quality-matrix) |

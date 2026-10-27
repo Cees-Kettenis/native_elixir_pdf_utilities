@@ -4,23 +4,6 @@ The project code uses the MIT license. Bundled fonts and derived data have the
 notices below. Dependencies retain their own license terms. For custom font
 support, see [Fonts](html-to-pdf-compatibility.md#fonts-and-text).
 
-## SVG converter dependency
-
-SVG conversion uses the published [Resvg Hex package](https://hex.pm/packages/resvg).
-The Elixir binding retains its [MIT license](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/LICENSE.md).
-Its Rust `resvg` and `usvg` 0.47.0 crates declare `Apache-2.0 OR MIT`, and
-`tiny-skia` 0.12.0 declares `BSD-3-Clause`. Other transitive crates retain their
-own notices and license terms.
-
-The dependency's [native loader](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/lib/resvg/native.ex)
-selects a platform-specific archive from the upstream GitHub release.
-Its [checksum manifest](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/checksum-Elixir.Resvg.Native.exs)
-records the archive names, NIF ABI versions, platform targets and SHA-256 hashes.
-RustlerPrecompiled verifies the downloaded archive against that manifest.
-These hashes identify the expected downloads. Verifying the Rust dependencies
-compiled into a binary also requires the corresponding build inputs or build
-provenance.
-
 ## Project: MIT License
 
 Copyright (c) 2025 Cees Kettenis
@@ -100,7 +83,7 @@ copyright and permission notice. File hashes and the release download URL are in
 [monospace-provenance.json](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/fonts/dejavu/monospace-provenance.json).
 
 Arev Fonts Copyright
-------------------------------
+--------------------
 
 Copyright (c) 2006 by Tavmjong Bah. All Rights Reserved.
 
@@ -149,6 +132,7 @@ from Tavmjong Bah. For further information, contact: tavmjong @ free
 
 TeX Gyre DJV Math
 -----------------
+
 Fonts are (c) Bitstream (see below). DejaVu changes are in public domain.
 
 Math extensions done by B. Jackowski, P. Strzelczyk and P. Pianowski
@@ -236,7 +220,6 @@ given a different name.
 
 $Id$
 
-
 ## WHATWG entity data: BSD 3-Clause License
 
 Copyright © WHATWG (Apple, Google, Mozilla, Microsoft).
@@ -246,11 +229,9 @@ modification, are permitted provided that the following conditions are met:
 
 1. Redistributions of source code must retain the above copyright notice, this
    list of conditions and the following disclaimer.
-
 2. Redistributions in binary form must reproduce the above copyright notice,
    this list of conditions and the following disclaimer in the documentation
    and/or other materials provided with the distribution.
-
 3. Neither the name of the copyright holder nor the names of its contributors
    may be used to endorse or promote products derived from this software without
    specific prior written permission.
@@ -279,11 +260,9 @@ modification, are permitted provided that the following conditions are met:
 
 1. Redistributions of source code must retain the above copyright notice, this
    list of conditions and the following disclaimer.
-
 2. Redistributions in binary form must reproduce the above copyright notice,
    this list of conditions and the following disclaimer in the documentation
    and/or other materials provided with the distribution.
-
 3. Neither the name of Adobe nor the names of its contributors may be used to
    endorse or promote products derived from this software without specific
    prior written permission.
@@ -338,3 +317,20 @@ The generated modules record the original Unicode data URLs and SHA-256 hashes.
 Rounded native control contours adapt Skia's conic subdivision and quadratic
 conversion algorithms under its [BSD 3-Clause license](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/skia-BSD-3-Clause.txt).
 Source references and adaptation notes are retained in `DrawingGeometry`.
+
+## SVG converter dependency
+
+SVG conversion uses the published [Resvg Hex package](https://hex.pm/packages/resvg).
+The Elixir binding retains its [MIT license](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/LICENSE.md).
+Its Rust `resvg` and `usvg` 0.47.0 crates declare `Apache-2.0 OR MIT`, and
+`tiny-skia` 0.12.0 declares `BSD-3-Clause`. Other transitive crates retain their
+own notices and license terms.
+
+The dependency's [native loader](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/lib/resvg/native.ex)
+selects a platform-specific archive from the upstream GitHub release.
+Its [checksum manifest](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/checksum-Elixir.Resvg.Native.exs)
+records the archive names, NIF ABI versions, platform targets and SHA-256 hashes.
+RustlerPrecompiled verifies the downloaded archive against that manifest.
+These hashes identify the expected downloads. Verifying the Rust dependencies
+compiled into a binary also requires the corresponding build inputs or build
+provenance.

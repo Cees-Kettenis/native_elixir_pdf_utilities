@@ -212,11 +212,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   Initial local and `srcdoc` iframe documents render in isolated, clipped
   viewports. `srcdoc` takes precedence; absent, empty and `about:blank` sources
   initialize a blank document. Child documents share cumulative rendering
-  budgets and caches. Their resources use local authorization before every
-  read or cache lookup, and never invoke the asset resolver. `forms: :static`
-  preserves child control artwork; interactive child widgets return an
-  `:unsupported_form` diagnostic pending transformed widget support. Child HTML
-  overflow selects classic scrollbars and reflows within their reduced client
+  limits. Their resources require local authorization and never invoke the
+  asset resolver. Supported child controls remain editable; see the
+  [forms guide](pdf-forms.html) for their names. Child control documents cannot
+  repeat across pages or page furniture. Unsupported widget transforms return
+  a diagnostic. Use `forms: :static` for child artwork without fields. Child
+  HTML overflow selects classic scrollbars and reflows within their reduced client
   area. The PDF captures the initial scroll position. Cyclic percentage sizing
   that cannot settle on a client area returns an actionable `:not_implemented`
   diagnostic. Author `html` or `body` with `overflow:hidden` for a static clipped

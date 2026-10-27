@@ -1,521 +1,181 @@
 # HTML and CSS support
 
-Use the renderer for reports, invoices, statements, forms, and labels. Start
-with [a working example](html-to-pdf-examples.md#render-html), then choose the
-features you need below. Unsupported HTML tags and CSS properties return an
-[error](diagnostics.md). Some accepted `@page` declarations have no rendering
-effect; see [page declarations without an effect](#page-declarations-without-an-effect).
+Render static reports, invoices, forms and labels. Start with the
+[examples](html-to-pdf-examples.md). Unsupported features return
+[diagnostics](diagnostics.md).
 
 ## HTML support
 
-The renderer prints the initial static document. It does not run JavaScript,
-fetch remote resources, or simulate clicks, scrolling, submission or navigation.
-
-| Content | Supported elements and behavior |
+| Content | Supported |
 | --- | --- |
-| Document | `html`, `head`, `body`, `title`, supported `meta`, `style`, and an HTML doctype |
-| Sections and text | Headings, paragraphs, ordinary section containers, preformatted text, inline emphasis, `sub`/`sup`, quotations and character references |
-| Lists | Ordered, unordered and description lists, including nested lists and authored numbering |
-| Tables | Captions, column groups, row groups, spanning cells and repeated headings. See [tables](#tables). |
-| Images | PNG, JPEG and SVG; supported `picture`, `srcset` and `sizes` source selection. See [images](#images-and-backgrounds). |
-| Links | Supported URI and document-fragment destinations, including static image maps |
-| Forms | Initial control artwork and supported editable PDF fields. See [forms](#forms). |
-| Disclosure content | Initial open/closed `details` and nonmodal `dialog`, plus authored static popover artwork |
-| Composition | Supported declarative shadow roots, slots and initial selected content; unused template contents stay inert |
-| Embedded content | Authorized local HTML, plaintext and supported image child documents in isolated viewports |
-| Math | Supported MathML through native layout and PDF text; unsupported structures return diagnostics |
-| Custom containers | Valid unregistered HTML custom names with ordinary inline defaults and supported transparent contents |
+| Text | Headings, paragraphs, sections, inline formatting, quotations and preformatted text |
+| Lists | Ordered, unordered and description lists, including nesting and numbering |
+| Tables | Captions, column/row groups, spanning cells and repeated headings |
+| Images | PNG, JPEG, SVG and responsive `picture`/`srcset`/`sizes` selection |
+| Links | URI and same-document fragment destinations, including static image maps |
+| Forms | Initial artwork and supported editable PDF fields |
+| Embedded documents | Authorized local HTML, plaintext and supported images; iframe `srcdoc` |
+| Math | Native MathML equations |
 
-Use `id`, `class` and `style` for styling. Supported attributes retain their
-ordinary initial-state meaning. Boolean attributes depend on presence, so
-`disabled="false"` still disables a control and `open="false"` still opens details.
-
-HTML must be UTF-8. A leading BOM and supported HTML doctypes are accepted.
-`html`, `head` and `body` wrappers may be omitted. Authored nonvoid HTML elements
-require closing tags by default. Set `html_recovery: true` to accept optional end tags, close
-unclosed HTML elements at end of input, and treat `<div/>` as an opening tag.
-Other invalid structure, duplicate attributes and executable content return
-[diagnostics](diagnostics.md). Script execution and linked stylesheet loading
-remain excluded in both modes.
-Comments paint nothing. Plain text and supported inline content may appear
-directly in the body. An empty document produces one blank page.
-
-### Text, lists and metadata
-
-Preformatted text preserves spaces, line breaks and default eight-space tab
-stops. `pre`, `listing`, `code`, `samp`, `kbd` and `tt` use the bundled monospace
-family by default. Author CSS can change the font.
-
-`sub` and `sup` print smaller text below or above the surrounding baseline, as
-in `H<sub>2</sub>O` and `10 m<sup>2</sup>`. Scripts can nest and wrap across
-lines and pages. They inherit the surrounding font family, weight and color;
-author CSS can override their font size, line height and vertical alignment.
-
-Ordered lists support `start`, `reversed`, per-item `value` and decimal,
-alphabetic or Roman markers. Nested unordered lists use disc, circle and square
-markers. Supported CSS marker types include decimal-leading-zero and `none`.
-Inside markers wrap with the text; outside markers retain item padding.
-
-Underline, overline and line-through support solid strokes with authored color
-and thickness. Decorations follow wrapping, relative positioning and pagination.
-Interrupted inline fragments preserve backgrounds, borders, padding and links
-around nested blocks. Inline blocks use their last normal-flow baseline; empty
-or clipped inline blocks use the bottom margin edge. Supported vertical alignment
-includes sub, super, top, middle, bottom and numeric offsets.
-
-The first nonempty HTML title supplies the PDF title. Head author, description
-and keyword metadata supply corresponding PDF information unless caller metadata
-overrides them. Shadow, child-document and unused-template metadata do not replace
-the enclosing document's metadata. See [metadata options](html-to-pdf-examples.md#set-pdf-metadata).
-
-`lang` and supported Content-Language metadata affect language inheritance and
-`:lang()` matching. Case transforms preserve word context across inline elements
-and use inherited language for Turkish and Azerbaijani dotted and dotless I.
-Direct body text follows the same whitespace processing as text inside blocks.
-Directional layout and complex-script shaping remain outside
-the supported text profile.
+HTML must be UTF-8. Close nonvoid elements by default; `html_recovery: true`
+accepts supported omitted closing tags and nonvoid trailing slashes. JavaScript,
+event handlers and linked stylesheets are excluded. Supply CSS through `:stylesheets`.
 
 ### Visibility and composition
 
-`display:none` suppresses painting. The global `hidden` attribute supplies a
-lower-priority display default that author CSS can override. `hidden="until-found"`
-and supported `content-visibility` rules preserve the initial box while suppressing
-its contents. `inert` preserves artwork and extractable text while suppressing
-active PDF fields and links.
-
-Closed details, closed dialogs, unused templates and initial hidden popovers
-omit their hidden artwork and fields. Hidden markup still undergoes input
-validation. Executable scripts and event-handler attributes remain unsupported,
-including in hidden content. Non-executable script data blocks retain literal
-text and default to hidden. Canvas renders supported authored fallback content.
-
-Declarative shadow roots and slots provide initial static composition. Document
-styles and shadow styles retain their own scope. Initial selected-content copies
-follow the selected option, including clonable shadow roots. Same-named
-`@font-face` families in separate shadow roots select their own authorized font
-bytes. Inherited font families keep the scope where the declaration originated.
-Chromium currently ignores shadow `@font-face` definitions, a
-[documented browser limitation](https://issues.chromium.org/issues/41085401).
-
-Processing-instruction markers can appear inside shadow content without painting
-anything. Nested roots retain their own slot assignments and fallback content.
-For a template carrying both attributes, a valid `shadowrootmode="open"` or
-`"closed"` takes priority over `for`. It attempts shadow composition and does not
-consume a replacement marker, even if the host is ineligible or already has a
-root. With an absent or invalid shadow mode, `for` retains replacement semantics.
-
-Parser-time `<template for="name">` replacement supports earlier named markers
-and ranges, including within a shadow root's own content. Marker names use quoted
-processing-instruction pseudo-attributes, such as `<?marker name="label">`.
-Replacement stays within its insertion scope. Original content is validated before
-mutation, including removed
-text, controls, hidden backgrounds, conditional fallback and responsive images.
-Supply authorized resources for that original content as well as the inserted
-tree. Original validation shares the render's resource and work limits.
-Registration, custom-element upgrades, scripts and later DOM updates are not
-performed.
-
-### Embedded documents and SVG
-
-Use `srcdoc` or authorized local HTML for supported iframe child documents.
-`object`, `embed` and bounded framesets support their admitted static
-child-document profiles, including legacy frame borders, margins and initial
-scrollbars. Child documents share resource limits and remain clipped
-to their viewport. Unsupported MIME types, resource failures and unsupported
-child behavior return diagnostics. Use `forms: :static` for child control artwork.
-Embedded PDF rendering and general browser frameset behavior are unsupported.
-
-SVG artwork uses Resvg and is embedded as PNG. SVG text is rasterized and internal
-SVG links are inert; an ordinary HTML link around the image remains active.
-Standalone SVG XML keeps case-sensitive names and namespace bindings, including
-attributes such as `width` and `WIDTH` on the same element. Inline SVG in HTML
-uses HTML attribute admission rules. Images and backgrounds retain authored
-`viewBox` and `preserveAspectRatio` behavior at their CSS viewport dimensions.
-`foreignObject`, non-scaling strokes and SVG2 inline `textPath` path data return
-`unsupported_html`. Use a same-document path reference for supported `textPath`
-content. The published `resvg` Elixir package supplies the Rust renderer. Its
-current renderer has known differences in fractional pattern spacing, `linearRGB`
-gradients and luminance masks, automatic marker directions, text-path positioning,
-marker clipping and thin strokes on small rasters. Transformed SVG image viewports
-and some filter-image paint servers can also differ from browser output. These
-limitations remain until upstream fixes reach the published converter package.
-Filter inputs outside the filter region are clipped as required by the published
-[Filter Effects specification](https://www.w3.org/TR/filter-effects-1/#FilterPrimitiveSubRegion),
-which differs from Chromium in some offset chains. Other SVG features may differ
-from browser rendering. See
-[Images](image-processing.md) for image behavior and restrictions.
+Supports initial disclosure states, hidden/inert content, declarative shadow
+roots, slots and named template replacement. Scripts and later DOM updates do
+not run. Hidden or replaced source content still requires valid, authorized resources.
 
 ### Forms
 
-Text-entry controls, textareas, checkboxes, radios and supported single/multiple
-selects create editable AcroForm fields by default. Buttons produce static artwork.
-Hidden inputs produce neither artwork nor fields. Set `forms: :static` when you
-want initial artwork without editable fields.
+Text inputs, textareas, checkboxes, radios and supported selects become editable
+fields. Buttons stay artwork; hidden inputs produce no output. Use `forms: :static`
+for artwork only. Other input types have restrictions; mutable sliders and temporal
+pickers are unsupported. See [PDF forms](pdf-forms.md) for names, values and filling.
 
-Initial values follow the supported input state's sanitation rules. Invalid
-initial values may still render and participate in `:valid` or `:invalid` matching.
-HTML `pattern`, required, bounds and step constraints describe initial HTML state;
-filling an existing PDF uses the PDF form API.
-
-Number inputs use PDF text fields. Range, temporal, color, file and image controls
-have bounded initial-state artwork and interactive restrictions. Mutable sliders
-and temporal pickers are unsupported. Temporal artwork uses the English/en-US or
-unspecified-locale profile. Unsupported control modes return a diagnostic; use
-static mode when appropriate.
-
-Readonly and disabled controls preserve their applicable field restrictions.
-Names must satisfy PDF field-name rules, and separate controls must not accidentally
-share a name. Radio groups follow form ownership and effective initial checkedness.
-See [PDF forms](pdf-forms.md) for naming, values, filling, flattening and limitations.
+Supported child-document controls remain editable but cannot repeat across pages
+or page furniture. Unsupported widget transforms return diagnostics.
 
 ## CSS support
 
-CSS comments preserve token boundaries. `p/**/.notice` is a compound selector,
-and `margin:1pt/**/2pt` supplies two lengths. Comments cannot join `co/**/lor`
-into a property name or `1/**/0pt` into a length. Invalid declarations return
-CSS diagnostics with their authored source. Calculations retain their required
-operator whitespace. Grid `minmax()` accepts supported leaf tracks; nested
-`minmax()` tracks are unsupported.
-
-| I need | Supported CSS |
+| Area | Supported |
 | --- | --- |
-| Select elements | Tag, class, ID, universal, attribute presence, equality, token/dash/prefix/suffix/substring operators and case flags, descendant and child selectors; comma groups; `:lang()` with range lists, escapes and wildcard subtags; simple `:not()`; `:root`; first/last child and type selectors; integer An+B for `:nth-child`, `:nth-last-child`, `:nth-of-type`, `:nth-last-of-type`; `:only-child` and `:only-of-type` |
-| Reuse styles | The cascade, `!important`, inherited text styles, custom properties, `var()`, `currentColor` |
-| Arrange content | Block, inline, inline-block, flex, and grid layouts; relative and absolute positioning; `z-index` |
-| Transform artwork | Static 2D `transform` function lists and `transform-origin`; see [positioning and transforms](#positioning-and-transforms). |
-| Set sizes and spacing | Width/height, min/max sizes, `min()`, aspect ratio, box sizing, margins, padding, gaps |
-| Style text | Font family/size/weight/style, line height, alignment, text transform, letter spacing, line and word breaking, `white-space: normal`, `pre-line`, `nowrap`, `pre`, `pre-wrap`, or `break-spaces` |
-| Decorate text | `text-decoration`, `text-decoration-line`, `text-decoration-color`, `text-decoration-thickness: auto/from-font/length/percentage`, and solid `text-decoration-style` |
-| Style lists | `list-style-type`, `list-style-position: inside/outside`, and the supported type/position forms of `list-style` |
-| Decorate boxes | Colors, borders, rounded corners, background images, sizing, positioning, and repetition |
-| Generate text | `::before`, `::after`, quoted `content`, `attr()`, `counter()`, counter reset and increment |
-| Control pages | Bare `@page` size/margins, print media rules, page breaks, and best-effort `break-inside: avoid` |
+| Selectors | Tags, classes, IDs, attributes, descendants/children, positional selectors, `:lang()`, simple `:not()` and initial control states |
+| Styles | Cascade, inheritance, `!important`, custom properties, `var()` and `currentColor` |
+| Layout | Block, inline, inline-block, flex, grid, sizing, margins, padding and gaps |
+| Text | Fonts, alignment, spacing, wrapping, whitespace, list markers and solid text decorations |
+| Boxes | Colors, borders, rounded corners and background images |
+| Generated content | `::before`, `::after`, strings, `attr()` and counters |
+| Printing | Print media queries, bare `@page` size/margins and page breaks |
 
-Attribute selectors support the applicable HTML case rules and explicit `i`
-or `s` flags. Supported initial control selectors include enabled/disabled,
-checked, required/optional and valid/invalid states. Positional selectors count
-authored element siblings, including hidden elements. Namespace selector syntax
-and the An+B `of` selector-list syntax remain unsupported.
-
-Body lengths support `pt`, `px`, `mm`, `cm`, `in`, `rem`, supported percentages,
-and unitless `0`. Leading decimals such as `.5mm` are accepted. Letter spacing
-also accepts `em`. Flex and grid support gaps, alignment, ordering, and
-track/item sizing, but not every browser layout rule.
-
-`white-space: nowrap` collapses whitespace and prevents automatic wrapping.
-Explicit `<br>` breaks still apply; long lines can overflow their container.
-`break-spaces` retains ordinary Unicode line opportunities, including CJK and
-word hyphens, and allows a break after each preserved space, tab or other
-Unicode space separator except no-break space. Spaces keep their measured
-width at line ends. These opportunities and styled inline boundaries share
-the same Unicode line breaking validator.
+Support is a subset of browser CSS. Common body lengths include `pt`, `px`,
+`mm`, `cm`, `in`, `rem` and supported percentages.
 
 ### Positioning and transforms
 
-Ordinary HTML supports static, relative and absolute positioning. Fixed
-positioning is limited to MathML owners and static popover artwork; it is not
-available for arbitrary HTML elements.
-
-Supported transformable boxes accept `transform: none` or lists of `matrix()`,
-`translate()`, `translateX()`, `translateY()`, `scale()`, `scaleX()`, `scaleY()`,
-`rotate()`, `skew()`, `skewX()` and `skewY()` functions. For example,
-`transform: translate(6pt, 3pt) rotate(5deg)` moves and rotates the artwork.
-
-`transform-origin` defaults to `50% 50%` of the laid-out border box. Percentage
-translations use that box's width and height. Transforms affect painting without
-reflowing surrounding content; link regions and supported form appearances follow
-the transformed artwork. Source flow paginates before transform painting.
-
-3D transforms, perspective, the separate `translate`, `rotate` and `scale` CSS
-properties, and animations remain unsupported.
+Static, relative and absolute positioning and 2D `transform` lists are supported.
+Transforms move artwork without reflowing surrounding content. Fixed positioning
+is limited to MathML owners and static popover artwork. Floats, 3D transforms,
+perspective and animations are unsupported.
 
 ## Render options
 
-Pass options to `HtmlToPdf.render(html, options)` or `render_file/3`.
+Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 
-| Option | Use it to | Default | Supported values |
-| --- | --- | --- | --- |
-| `:html_recovery` | Recover supported omitted or unclosed HTML end tags and ignore nonvoid trailing slashes | `false` | Boolean; other malformed structures and resource restrictions still return diagnostics |
-| `:page_size` | Set page dimensions | `:a4` | Named size, orientation tuple, size string, or numeric tuple. See [page sizes](#page-size-and-margins). |
-| `:margin` | Set page margins | `0` | Nonnegative point number, CSS string, or side map. See [margin formats](#page-size-and-margins). |
-| `:stylesheets` | Add CSS | `[]` | List of `{:css, css}` or `{:file, path}` entries |
-| `:base_url` | Allow local images/fonts | None | Directory path such as `"priv/static"`. See [asset sources](#assets-and-local-files). |
-| `:assets` | Map asset references | `%{}` | Map of references to `{:bytes, binary}` or `{:file, path}` |
-| `:asset_resolver` | Resolve asset references | None | One-argument function or `nil`. See the [callback contract](#assets-and-local-files). |
-| `:default_font` | Choose text fonts | `"DejaVu Sans"` | Family name string or a list of family names in fallback order |
-| `:fonts` | Register TrueType fonts | `[]` | List of font definitions with `:family` and `:path` or `:data`. See [font registration](html-to-pdf-examples.md#register-a-font). |
-| `:system_font_discovery` | Look up installed fonts | `true` | `true` or `false` |
-| `:compress_streams` | Compress eligible PDF streams when smaller | `true` | Boolean; set `false` to favor render speed over file size |
-| `:subset_fonts` | Omit unused TrueType outlines | `true` | Boolean; set `false` to embed full fonts |
-| `:unsupported_glyphs` | Handle missing characters | `:replace` | `:replace` or `:error` |
-| `:forms` | Create AcroForm fields | `:interactive` | `:interactive` or `:static`; see [PDF forms](pdf-forms.md). |
-| `:metadata` | Set document information | HTML title when present | Metadata fields such as `:title` and `:author`. See [metadata options](html-to-pdf-examples.md#set-pdf-metadata). |
-| `:outlines` | Add PDF bookmarks | Disabled | `:headings`, bookmark list, `false`, or `nil`. See [bookmark examples](html-to-pdf-examples.md#create-bookmarks-from-headings). |
-| `:page_furniture` | Add headers and footers | Disabled | Keyword list or map of templates. See [template options](html-to-pdf-examples.md#add-headers-footers-and-page-numbers). |
+| Option | Default | Use |
+| --- | --- | --- |
+| `:page_size` | `:a4` | Named size, orientation tuple, dimension string or numeric tuple |
+| `:margin` | `0` | Points, CSS string or side map |
+| `:html_recovery` | `false` | Enable supported HTML recovery |
+| `:stylesheets` | `[]` | List of `{:css, css}` or `{:file, path}` |
+| `:base_url` | None | URL resolution base; a local directory also authorizes assets beneath it |
+| `:assets` | `%{}` | Map references to `{:bytes, bytes}` or `{:file, path}` |
+| `:asset_resolver` | None | Callback supplying approved asset bytes |
+| `:print_viewport` | Page-derived | Positive `{width, height}` in CSS pixels |
+| `:image_selection_density` | `1` | Positive responsive-image density |
+| `:default_font` | `"DejaVu Sans"` | Family name or fallback list |
+| `:fonts` | `[]` | Font definitions with `:family` and `:path` or `:data` |
+| `:system_font_discovery` | `true` | Look up installed fonts |
+| `:unsupported_glyphs` | `:replace` | Replace missing characters or use `:error` |
+| `:compress_streams` | `true` | Compress eligible PDF streams |
+| `:subset_fonts` | `true` | Embed only needed TrueType outlines when permitted |
+| `:forms` | `:interactive` | Editable fields or `:static` artwork |
+| `:metadata` | HTML title | Document information such as title and author |
+| `:outlines` | Disabled | `:headings` or an explicit bookmark list |
+| `:page_furniture` | Disabled | Header/footer templates and page-number tokens |
 
 ### Page size and margins
 
-| Page-size format | Supported values or example |
+| Setting | Examples and limits |
 | --- | --- |
-| Named size | `:a5`, `:a4`, `:a3`, `:b5`, `:b4`, `:jis_b5`, `:jis_b4`, `:letter`, `:legal`, `:ledger` |
-| Named size with orientation | `{:a4, :landscape}` or `{:a4, :portrait}` |
-| Size string | `"a4 landscape"` or custom dimensions such as `"100mm 60mm"` |
-| Numeric `{width, height}` | `{8.5, 11}` uses inches; `{612, 792}` uses points. Both values use inches when both are at most 20; otherwise both use points. |
-
-Prefer size strings with explicit units for custom dimensions.
-
-| Margin format | Example | Meaning |
-| --- | --- | --- |
-| Point number | `36` | 36 points on every side |
-| CSS string with one value | `"12mm"` | Same margin on every side |
-| CSS string with two values | `"18mm 12mm"` | Top/bottom, then left/right |
-| CSS string with three values | `"18mm 12mm 10mm"` | Top, left/right, bottom |
-| CSS string with four values | `"18mm 12mm 10mm 8mm"` | Top, right, bottom, left |
-| Side map | `%{top: 36, bottom: "12mm"}` | Set individual sides; omitted sides are zero |
-
-Page-size and margin strings accept `pt`, `px`, `mm`, `cm`, `in`, `q`, and `pc`.
-Explicit `:page_size` and `:margin` options override `@page`.
-
-### Page declarations without an effect
-
-Only `size` and page-margin declarations that can be normalized to the formats
-above change the output. The parser also accepts these page-context declarations
-without applying them:
-
-| Accepted declaration | What is not applied |
-| --- | --- |
-| `page-orientation`, `marks`, `bleed` | Page rotation, printer marks, and bleed settings |
-| Other accepted page-context properties, such as backgrounds, borders, fonts, counters, padding, and width/height | Page decoration, typography, counters, and box layout specified inside `@page` |
-| Page margins using percentages, relative units such as `em` or `vw`, negative lengths, or `auto` | Margin values that cannot become nonnegative absolute point lengths |
-| `size: auto`, a single-length `size`, relative page sizes, CSS-wide keywords, and functions such as `calc()` or `var()` in page size/margins | Values that cannot be normalized to a supported page size or margin |
-
-These declarations leave earlier applicable page settings, explicit render
-options, or library defaults in effect. For example, this rule is accepted but
-does not rotate the page or apply a percentage margin:
-
-```css
-@page { page-orientation: rotate-left; margin: 10%; }
-```
-
-Use `size: A4 landscape` to change page orientation and an absolute margin such
-as `12mm`, or pass explicit `:page_size` and `:margin` options. Successful
-rendering alone does not confirm that every `@page` declaration was applied.
-Malformed declarations, unknown page properties, and named or selector-based
-page rules still return errors.
+| Page size | `:a4`, `:letter`, `{:a4, :landscape}` or `"100mm 60mm"` |
+| Numeric sizes | Both values ≤ 20: inches; otherwise points |
+| Margins | `36`, `"18mm 12mm"` or `%{top: 36, bottom: "12mm"}` |
+| `@page` | Supported size and absolute margins only; explicit options take priority |
+| Ignored page settings | Rotation, marks, bleed, decoration and unsupported size/margin values |
 
 ## Tables
 
-| Feature | Support and limits |
+| Feature | Support |
 | --- | --- |
-| Column sizing | Automatic sizing or `table-layout: fixed` |
-| Spanning cells | `colspan` and `rowspan`; a `rowspan` ends at its row-group boundary |
-| Nested tables | Supported inside cells |
-| Borders | Separate or collapsed borders; collapsed tables retain the requested bottom border at page breaks |
-| Headers across pages | Rows in `<thead>` repeat when the table continues on another page |
-| Keeping row groups together | Set `break-inside: avoid` on each `<tbody>` that should stay together; groups too tall for a page split between rows |
-
-Automatic columns measure inline text and block children, including child widths,
-min/max widths, padding, borders and margins. Stacked blocks contribute their
-widest child. Spanning cells constrain the columns they cover; indivisible content
-can expand a table beyond its authored width. Percentage columns reserve their
-share of the table width. Use `table-layout: fixed` for allocation based on column
-hints and the first row instead of later cell contents.
+| Layout | Automatic/fixed sizing, nested tables, separate/collapsed borders |
+| Spans | `colspan` and `rowspan`; rowspans stop at row-group boundaries |
 
 ### Table page breaks
 
-Table width/height, spacing, cell padding, background color and supported
-alignment hints have lower priority than authored CSS. Captions support top and
-bottom placement. Row and group background layers preserve separated gaps and
-colspan coverage. Baseline cells use measured flow baselines. Descendants with
-percentage heights, including percentage calculations, resolve their baseline
-after row, cell and spanning allocation. Legacy border/frame/rules hints enter
-below authored CSS. Collapsed edges
-resolve hidden suppression, width, style, origin and positional conflicts across
-cells and spans. All-none grids retain their geometry and background layers
-without computing paint edges. Ragged collapsed grids retain empty-slot border geometry. CSS table formatting
-creates anonymous rows and cells around admitted visible content without changing
-authored selector matching.
+| Content | Behavior |
+| --- | --- |
+| `<thead>` | Repeats in ordinary tables |
+| `<tbody>` | `break-inside: avoid` keeps fitting groups together; larger groups split between rows |
+| Individual rows | Never split; oversized rows may overflow |
+| Oversized inline-block tables | Slice across pages without repeating headings |
 
-Fitting inline-block tables remain together. Oversized atomic table lines move
-to a fresh page and slice their continuous print geometry across pages. Captions,
-rowspans and links retain source placement; this monolithic path does not repeat
-headers. A fixed-height atomic owner keeps its allocated flow height. Visible
-table overflow continues across pages beside following flow; hidden overflow
-stays clipped to the owner. Ordinary block tables retain their existing row
-fragmentation and repeated-header behavior. This follows the permitted monolithic slicing policy
-in [CSS Fragmentation 3](https://www.w3.org/TR/css-break-3/#unforced-breaks).
-
-Page breaks use measured content height. The printable area is the page height minus its top and bottom margins.
-
-- `<thead>` repeats when a table continues onto another page and
-  stays with the first body row when both fit. Body rows do not repeat.
-- Set `break-inside: avoid` on each `<tbody>` to keep its rows
-  together. A group that fits on a fresh page with its heading moves there if
-  needed. Larger groups split between rows. Without this CSS, groups can split even when they would fit on a fresh page.
-- With `border-collapse: collapse`, each page's final cells retain
-  their configured bottom border. `border-bottom: none` remains absent.
-
-A single row that cannot fit on a fresh page with its heading may overflow;
-this behavior does not split individual rows. Divide its content into multiple
-rows or reduce its height before rendering.
-
-See the [grouped table example](html-to-pdf-examples.md#paginate-a-table-with-row-groups).
+[Grouped table example](html-to-pdf-examples.md#paginate-a-table-with-row-groups).
 
 ## Images and backgrounds
 
-| Format | Supported content |
+| Feature | Support |
 | --- | --- |
-| JPEG | Grayscale, RGB, and CMYK |
-| PNG | Greyscale, RGB, indexed palettes, greyscale with alpha, and RGBA at all legal static PNG sample depths, including Adam7 interlacing. Color and alpha retain 16-bit precision. Chunk CRCs, ordering, palettes, transparency, and scanlines are validated. |
-| SVG | Self-contained SVG through Resvg, with bounded source size, raster dimensions, nodes, nesting, path data, filters, and references. DTD/entity declarations and escaped CSS resource syntax are rejected; resources require explicit authorization. |
-
-| Image styling | Supported values or behavior |
-| --- | --- |
-| `object-fit` | `fill`, `contain`, `cover`, `none`, or `scale-down` |
-| `object-position` | Position an image within its box |
-| `background-size` | Explicit sizes, `cover`, or `contain` |
-| `background-position` | Position a background within its box |
-| `background-repeat` | `repeat`, `repeat-x`, `repeat-y`, or `no-repeat` |
-
-Responsive image selection uses supported `picture` sources, `srcset` candidates
-and `sizes`. Static printing resolves visible lazy-auto images using their final
-layout width. It does not simulate browser loading delays or scrolling.
+| Formats | PNG, JPEG and rasterized SVG; [image restrictions](image-processing.md) |
+| SVG text and links | Text becomes pixels; internal links are inactive |
+| Image styling | `object-fit`, `object-position` |
+| Backgrounds | Sizing, positioning and repetition |
 
 ### Assets and local files
 
-| Source | How to supply it | Rules |
-| --- | --- | --- |
-| Local directory | `base_url: "priv/static"` with `src="images/logo.png"` | References are checked for traversal and symlinks beneath the directory. `render_file/3` does not infer this directory. |
-| Explicit asset map | `assets: %{"logo.png" => {:bytes, bytes}}` or a `{:file, path}` value | Mappings take precedence; mapped files do not require `:base_url`. |
-| Resolver callback | `asset_resolver: fn request -> ... end` | Used when a local reference fails path checks or cannot be read. Resource-limit failures do not fall back. |
-| Data URI | Put a supported data URI in the image reference | Image format restrictions still apply. |
-
-The resolver receives `%{reference: reference, kind: kind}`, where `kind` is
-`:image`, `:background_image`, or `:font`.
-
-| Resolver return | Meaning |
+| Setting | Behavior |
 | --- | --- |
-| `{:ok, bytes}` | Use the supplied asset bytes |
-| `:not_found` | The resolver could not find the asset |
-| `{:error, reason}` | Asset resolution failed |
+| Resolution order | `:assets` → authorized local files → `:asset_resolver`; no fallback on resource limits |
+| Local files | Require a directory `:base_url`; `render_file/3` does not infer it |
+| Path checks | Traversal and symlinks checked; use trusted directories or approved bytes |
+| Explicit file paths | Caller-configured asset mappings, fonts and stylesheets are trusted |
+| Other sources | Supported data URIs; remote resources are never fetched |
+| Resolver request | `%{reference: reference, kind: kind}`; kind is `:image`, `:background_image` or `:font` |
+| Resolver return | `{:ok, bytes}`, `:not_found` or `{:error, reason}` |
 
-The renderer never downloads remote assets itself. Caller-configured font
-paths and stylesheet files do not require `:base_url`.
-Local image and font reads through `:base_url` work on Windows, macOS, and Linux. Paths are checked for traversal and existing symlinks before
-bounded file reads. These checks cannot prevent another process from changing
-a path during a read. Use asset directories that untrusted users cannot modify,
-or supply approved bytes with `:assets` or `:asset_resolver`.
-Explicit file mappings, configured font paths, and stylesheet paths also use
-bounded reads and trust the caller's pathname.
-
-See [image and asset examples](html-to-pdf-examples.md#load-local-images).
+[Asset examples](html-to-pdf-examples.md#load-local-images).
 
 ## Fonts and text
 
-Choose a font with CSS `font-family` or the `:default_font` render option.
-
-| Font source | How to use it |
+| Setting | Support |
 | --- | --- |
-| Bundled | DejaVu Sans is included and used by default. |
-| Installed on the rendering machine | System-font discovery is enabled by default. Use an installed family by name, such as `font-family: "Liberation Sans"` or `default_font: "Liberation Sans"`, if that family is installed. No `:fonts` registration is needed. |
-| Supplied by your application | Register a static TrueType font with `:family` and either `:path` or `:data`. Optional `:weight` and `:style` default to `400` and `:normal`. |
-
-Installed fonts must meet the same [font-format and embedding requirements](#known-limits)
-as supplied fonts. For consistent font selection across machines, supply your
-fonts and set `system_font_discovery: false`.
-See [Register a font](html-to-pdf-examples.md#register-a-font).
-
-Bundled DejaVu Sans Mono faces and STIX Two Math Regular load on demand.
-Use `font-family: "STIX Two Math"` or `font-family: math` to select the pinned
-math font for text. Explicitly supplied faces take precedence. TrueType Unicode
-format-4 and format-12 character maps support supplementary characters when the
-selected font contains them. MathML support remains limited to the admitted
-markup and layout profile; selecting a math font does not add unsupported elements.
-
-Missing characters use available fallback fonts, then U+FFFD replacement.
-Set `unsupported_glyphs: :error` to fail instead of replacing them.
-
-The renderer subsets TrueType fonts and compresses eligible PDF streams by default.
-Subsetting keeps glyph IDs unchanged and includes the outlines needed by composite
-glyphs. Fonts whose license forbids subsetting remain fully embedded. Set
-`subset_fonts: false` or `compress_streams: false` when render time matters more
-than output size.
+| Default | DejaVu Sans; installed-font discovery enabled |
+| Consistent output | Supply fonts and set `system_font_discovery: false` |
+| Custom fonts | Embeddable static TrueType; [registration example](html-to-pdf-examples.md#register-a-font) |
+| Missing characters | Fallback fonts, then replacement; use `unsupported_glyphs: :error` to fail |
 
 ## MathML in HTML
 
-Inline and block equations support tokens, operators, fractions, radicals,
-scripts, limits and accents, multiscripts, grouping, errors, padding, phantoms,
-semantics and matrices. Use the bundled `STIX Two Math` family or supply a
-static TrueType face with the required MATH metrics. Missing metrics produce a
-diagnostic instead of borrowing another font's mathematical geometry.
+| Feature | Support |
+| --- | --- |
+| Equations | Tokens, operators, fractions, radicals, scripts, limits, accents and matrices |
+| Fonts | Bundled STIX Two Math; custom fonts need required MATH metrics |
+| Page breaks | Equations stay together; oversized equations return a diagnostic |
 
-Script, padding and spacing elements can use the supported ordinary CSS flow,
-flex and grid displays. Their actual children and selected fonts remain in the
-layout, and CSS dimensions, padding, borders and backgrounds apply once.
-Math owners support relative, absolute and fixed positioning and hidden overflow.
-Absolute descendants use their containing block; fixed descendants use the
-printed viewport unless a supported ancestor establishes their containing block.
-These rules also apply inside local child HTML viewports.
-
-Matrices support anonymous rows and cells, spans, automatic and fixed table
-layout, and separate or collapsed borders. Fixed columns and border conflicts
-use the shared HTML table rules. The matrix aligns with the selected font's
-MATH axis. Positioned cells retain their mathematical content outside column
-allocation. IDs on equation children and matrix rows or cells can be fragment
-link destinations after pagination. Hidden first IDs do not bind to later duplicates.
-
-Equations remain atomic in page flow. An oversized equation that cannot fit
-returns an actionable layout diagnostic. Logical text preserves original Unicode;
-phantoms and unselected annotations contribute no visible text. Complex shaping,
-bidirectional text and vertical writing remain unsupported. Token layout uses
-Linux Chromium's hinted ink metrics for the bundled STIX face at CSS font sizes
-from 1px to 128px for ordinary character forms. Selected OpenType script forms,
-other font contents and other sizes retain design metrics, which can differ
-from hinted browser measurements. PDF glyph paint retains the selected font
-outlines in either case.
-
-The decorated-token and inline-fraction comparison with STIX surrounding text
-has a documented 1.2% changed-pixel allowance, with the 1% mean-delta limit
-retained. Native rendering preserves MathML row italic correction and selected
-script forms that Chromium handles differently. Ordinary STIX prose kerning
-also contributes to the difference. This case is an exception to the usual
-1% changed-pixel target.
-
-See [MathML examples](html-to-pdf-examples.md#mathml-equations).
+[MathML examples](html-to-pdf-examples.md#mathml-equations).
 
 ## Pagination
 
-Pages break automatically or at supported CSS page breaks. Use
-`:page_furniture` for running headers, footers, and page numbers. Reserve enough
-margin for the templates; they do not push body content out of the way.
+| Feature | Support |
+| --- | --- |
+| Breaks | Automatic or supported CSS page breaks |
+| Headers/footers | First/odd/even variants; reserve space in page margins |
+| Page numbers | `{{page}}` and `{{pages}}` in templates |
 
-Paragraph line groups honor inherited positive-integer `orphans` and `widows`,
-each defaulting to two. Root auto-height body bottom padding participates in
-pagination; embedded child bodies retain their isolated viewport extent.
-
-Templates can vary on the first, odd, and even pages. A matching `false` or
-`nil` variant hides that template. See [headers and footers](html-to-pdf-examples.md#add-headers-footers-and-page-numbers).
-For PDF viewer bookmarks, see [outlines from headings](html-to-pdf-examples.md#create-bookmarks-from-headings).
+[Header and footer examples](html-to-pdf-examples.md#add-headers-footers-and-page-numbers).
 
 ## Known limits
 
-| Not supported | What to use instead |
+| Unsupported | Alternative |
 | --- | --- |
-| JavaScript, canvas drawing APIs, video, audio, plugin embeds and general framesets | Static HTML, supported images, authorized local HTML child viewports and bounded framesets |
-| XFA, JavaScript form actions | Use supported AcroForm fields or static artwork |
-| Floats, general fixed positioning, 3D transforms, perspective and animations | Block, flex, grid, relative or absolute layout, and supported static 2D transforms; fixed positioning is limited to MathML owners and static popover artwork |
-| Named pages and CSS page-margin boxes | Page options and header/footer templates |
-| CSS `counter(page)` or `counter(pages)` | `{{page}}` and `{{pages}}` in header/footer templates |
-| Animated PNG playback | The PNG default image is rendered; animation frames are not played. |
-| WOFF/WOFF2, variable fonts, CFF OpenType | Static TrueType fonts that permit embedding |
-| Complex shaping or bidirectional text | A renderer with shaping support for Arabic, Indic scripts, Thai, and complex emoji sequences |
+| JavaScript, media playback, canvas drawing APIs | Static HTML and images |
+| Embedded PDFs, XFA, JavaScript form actions | Supported HTML and PDF forms |
+| Named pages, page-margin boxes, CSS page counters | Page options and header/footer templates |
+| WOFF/WOFF2, variable fonts, CFF OpenType | Embeddable static TrueType fonts |
+| Complex shaping, bidirectional text, vertical writing | A renderer supporting those scripts and layouts |
 
-The renderer supports a document-oriented subset rather than complete browser
-compatibility. Flex/grid sizing, intrinsic sizing, complex inline content and
-MathML have additional limits. Unsupported combinations return diagnostics.
-Accepted SVG artwork and native control themes may differ from browser output.
-Use [examples](html-to-pdf-examples.md) as a starting point and check your output
-with the fonts and assets your application will supply.
+Embedded content and framesets have restricted static support. SVG, control
+styling and some layouts can differ from browsers. Check your generated PDF.
 
-See [Resource limits](resource-limits.md) for configurable size and processing
-limits, and [Diagnostics](diagnostics.md) for handling failures.
+[Resource limits](resource-limits.md) · [Diagnostics](diagnostics.md).
