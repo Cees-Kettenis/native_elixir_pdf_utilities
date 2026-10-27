@@ -8,6 +8,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
 
   @discretionary_characters ["\u00AD", "\u200B"]
 
+  @doc "Identifies layout controls whose original codepoint needs no font glyph."
+  @spec layout_whitespace?(term(), map()) :: boolean()
+  def layout_whitespace?(grapheme, style) do
+    grapheme in ["\t", "\n", "\r", "\r\n"] or
+      (grapheme in ["\u2028", "\u2029"] and not Map.has_key?(style, :_math_native_group))
+  end
+
   @doc "Returns validated Unicode byte offsets, optionally adding CSS preserved-space opportunities."
   @spec opportunities(term()) ::
           {:ok, [{non_neg_integer(), boolean()}]} | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -171,6 +178,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
         if String.valid?(text, :fast_ascii) do
           # U+00AD and U+200B remain in UAX14 input and ActualText, not in unbroken glyph paint.
           visible = strip_discretionary_characters(text)
+
+          # Chromium paints LS/PS as spaces, not LF breaks. Keep their source in ActualText.
+          visible =
+            if :binary.match(visible, <<0xE2>>) == :nomatch,
+              do: visible,
+              else: String.replace(visible, ["\u2028", "\u2029"], " ")
 
           hyphen =
             if selected? and String.ends_with?(text, "\u00AD") do

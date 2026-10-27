@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type styled_tree :: NativeElixirPdfUtilities.HtmlToPdf.Style.styled_tree()
@@ -101,7 +102,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
             text
             |> String.graphemes()
             |> Enum.map(fn grapheme ->
-              %{text: grapheme, layout_whitespace?: grapheme in ["\t", "\n", "\r", "\r\n"]}
+              %{
+                text: grapheme,
+                layout_whitespace?: HtmlLineBreakValidator.layout_whitespace?(grapheme, style)
+              }
             end)
           end
 

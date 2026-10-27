@@ -52,7 +52,7 @@ jobs:
 
       - name: Verify browser comparison tools
         run: |
-          for tool in chromium pdftoppm pdftotext pdffonts qpdf fc-match; do
+          for tool in chromium pdftoppm pdftotext pdffonts fc-match; do
             command -v "$tool"
           done
 

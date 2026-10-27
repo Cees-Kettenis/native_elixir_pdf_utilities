@@ -87,7 +87,7 @@ if [[ "${1:-}" == --runtime ]]; then
     run_stage performance ./scripts/check-performance
   elif [[ "${phase}" == checks ]]; then
     run_stage runtime bash -c \
-      'set -e; for tool in chromium pdftoppm pdftotext pdffonts qpdf fc-match; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir $1."' bash "${version}"
+      'set -e; for tool in chromium pdftoppm pdftotext pdffonts fc-match; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir $1."' bash "${version}"
     run_stage dependencies mix deps.get
     run_stage dependency_compile mix deps.compile
     run_stage compile bash -c 'mix clean && mix compile --warnings-as-errors'

@@ -110,7 +110,7 @@ MOCK_MIX
 #!/usr/bin/env bash
 echo "Elixir ${MOCK_RUNTIME}.0"
 MOCK_ELIXIR
-  for tool in chromium pdftoppm pdftotext pdffonts qpdf fc-match; do
+  for tool in chromium pdftoppm pdftotext pdffonts fc-match; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/$tool"
   done
   chmod +x "$bin"/*

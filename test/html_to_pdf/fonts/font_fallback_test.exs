@@ -136,6 +136,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
     assert run.style.font_face.style == :italic
   end
 
+  test "Unicode separators retain the selected face without requiring separator glyphs" do
+    style = text_style()
+    style = %{style | _font_registry: %{embedded: [], fallback: []}}
+
+    for text <- ["A\u2028B", "A\u2029B", "A\u2028\u2029B"] do
+      tree = %{type: :document, children: [%{type: :text, text: text, style: style}]}
+      assert {:ok, %{children: [run]}} = FontFallback.resolve(tree, :error)
+      assert run.text == text
+      assert run.style.font_face == style.font_face
+    end
+  end
+
   test "uses configured fonts before the bundled fallback" do
     assert {:ok, registry} =
              Font.load_registry(fonts: [%{family: "Provided Sans", path: bundled_font_path()}])

@@ -1,0 +1,63 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size:420pt 720pt; margin:0; }
+html,body { margin:0; padding:0; font-family:"DejaVu Sans"; font-size:12pt; line-height:15pt; }
+body { padding:12pt; display:grid; grid-template-columns:repeat(4,96pt); gap:3pt; }
+div { height:48pt; }
+p { margin:0; height:36pt; }
+b { display:block; height:12pt; line-height:12pt; font-size:6pt; white-space:nowrap; }
+.narrow { width:9pt; }
+</style></head><body>
+<div><b>normal LF</b><p style="white-space:normal"><span>A</span>&#10;<span>B</span></p></div>
+<div><b>normal LS</b><p style="white-space:normal"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>normal PS</b><p style="white-space:normal"><span>A</span>&#x2029;<span>B</span></p></div>
+<div><b>normal NEL</b><p style="white-space:normal"><span>A</span>&#x85;<span>B</span></p></div>
+<div><b>nowrap LF</b><p style="white-space:nowrap"><span>A</span>&#10;<span>B</span></p></div>
+<div><b>nowrap LS</b><p style="white-space:nowrap"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>nowrap PS</b><p style="white-space:nowrap"><span>A</span>&#x2029;<span>B</span></p></div>
+<div><b>nowrap NEL</b><p style="white-space:nowrap"><span>A</span>&#x85;<span>B</span></p></div>
+<div><b>pre LF</b><p style="white-space:pre"><span>A</span>&#10;<span>B</span></p></div>
+<div><b>pre LS</b><p style="white-space:pre"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>pre PS</b><p style="white-space:pre"><span>A</span>&#x2029;<span>B</span></p></div>
+<div><b>pre NEL</b><p style="white-space:pre"><span>A</span>&#x85;<span>B</span></p></div>
+<div><b>pre-line LF</b><p style="white-space:pre-line"><span>A</span>&#10;<span>B</span></p></div>
+<div><b>pre-line LS</b><p style="white-space:pre-line"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>pre-line PS</b><p style="white-space:pre-line"><span>A</span>&#x2029;<span>B</span></p></div>
+<div><b>pre-line NEL</b><p style="white-space:pre-line"><span>A</span>&#x85;<span>B</span></p></div>
+<div><b>pre-wrap LF</b><p style="white-space:pre-wrap"><span>A</span>&#10;<span>B</span></p></div>
+<div><b>pre-wrap LS</b><p style="white-space:pre-wrap"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>pre-wrap PS</b><p style="white-space:pre-wrap"><span>A</span>&#x2029;<span>B</span></p></div>
+<div><b>pre-wrap NEL</b><p style="white-space:pre-wrap"><span>A</span>&#x85;<span>B</span></p></div>
+<div><b>break-spaces LF</b><p style="white-space:break-spaces"><span>A</span>&#10;<span>B</span></p></div>
+<div><b>break-spaces LS</b><p style="white-space:break-spaces"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>break-spaces PS</b><p style="white-space:break-spaces"><span>A</span>&#x2029;<span>B</span></p></div>
+<div><b>break-spaces NEL</b><p style="white-space:break-spaces"><span>A</span>&#x85;<span>B</span></p></div>
+<div><b>normal LSLS</b><p style="white-space:normal"><span>A</span>&#x2028;&#x2028;<span>B</span></p></div>
+<div><b>normal PSPS</b><p style="white-space:normal"><span>A</span>&#x2029;&#x2029;<span>B</span></p></div>
+<div><b>normal SP-LS-SP</b><p style="white-space:normal"><span>A</span> &#x2028; <span>B</span></p></div>
+<div><b>normal LSPS</b><p style="white-space:normal"><span>A</span>&#x2028;&#x2029;<span>B</span></p></div>
+<div><b>nowrap LSLS</b><p style="white-space:nowrap"><span>A</span>&#x2028;&#x2028;<span>B</span></p></div>
+<div><b>nowrap PSPS</b><p style="white-space:nowrap"><span>A</span>&#x2029;&#x2029;<span>B</span></p></div>
+<div><b>nowrap SP-LS-SP</b><p style="white-space:nowrap"><span>A</span> &#x2028; <span>B</span></p></div>
+<div><b>nowrap LSPS</b><p style="white-space:nowrap"><span>A</span>&#x2028;&#x2029;<span>B</span></p></div>
+<div><b>pre LSLS</b><p style="white-space:pre"><span>A</span>&#x2028;&#x2028;<span>B</span></p></div>
+<div><b>pre PSPS</b><p style="white-space:pre"><span>A</span>&#x2029;&#x2029;<span>B</span></p></div>
+<div><b>pre SP-LS-SP</b><p style="white-space:pre"><span>A</span> &#x2028; <span>B</span></p></div>
+<div><b>pre LSPS</b><p style="white-space:pre"><span>A</span>&#x2028;&#x2029;<span>B</span></p></div>
+<div><b>pre-line LSLS</b><p style="white-space:pre-line"><span>A</span>&#x2028;&#x2028;<span>B</span></p></div>
+<div><b>pre-line PSPS</b><p style="white-space:pre-line"><span>A</span>&#x2029;&#x2029;<span>B</span></p></div>
+<div><b>pre-line SP-LS-SP</b><p style="white-space:pre-line"><span>A</span> &#x2028; <span>B</span></p></div>
+<div><b>pre-line LSPS</b><p style="white-space:pre-line"><span>A</span>&#x2028;&#x2029;<span>B</span></p></div>
+<div><b>pre-wrap LSLS</b><p style="white-space:pre-wrap"><span>A</span>&#x2028;&#x2028;<span>B</span></p></div>
+<div><b>pre-wrap PSPS</b><p style="white-space:pre-wrap"><span>A</span>&#x2029;&#x2029;<span>B</span></p></div>
+<div><b>pre-wrap SP-LS-SP</b><p style="white-space:pre-wrap"><span>A</span> &#x2028; <span>B</span></p></div>
+<div><b>pre-wrap LSPS</b><p style="white-space:pre-wrap"><span>A</span>&#x2028;&#x2029;<span>B</span></p></div>
+<div><b>break-spaces LSLS</b><p style="white-space:break-spaces"><span>A</span>&#x2028;&#x2028;<span>B</span></p></div>
+<div><b>break-spaces PSPS</b><p style="white-space:break-spaces"><span>A</span>&#x2029;&#x2029;<span>B</span></p></div>
+<div><b>break-spaces SP-LS-SP</b><p style="white-space:break-spaces"><span>A</span> &#x2028; <span>B</span></p></div>
+<div><b>break-spaces LSPS</b><p style="white-space:break-spaces"><span>A</span>&#x2028;&#x2029;<span>B</span></p></div>
+<div><b>narrow normal LS</b><p class="narrow" style="white-space:normal"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>narrow normal PS</b><p class="narrow" style="white-space:normal"><span>A</span>&#x2029;<span>B</span></p></div>
+<div><b>narrow break-spaces LS</b><p class="narrow" style="white-space:break-spaces"><span>A</span>&#x2028;<span>B</span></p></div>
+<div><b>narrow break-spaces PS</b><p class="narrow" style="white-space:break-spaces"><span>A</span>&#x2029;<span>B</span></p></div>
+</body></html>

@@ -47,7 +47,7 @@ The [runtime matrix](https://github.com/Cees-Kettenis/native_elixir_pdf_utilitie
 
 | Runner behavior | Details |
 | --- | --- |
-| Images | Include Chromium, Poppler, qpdf and fonts; missing images pulled, immutable IDs recorded. Refresh deliberately with `docker pull <image>` |
+| Images | Include Chromium, Poppler and fonts; missing images pulled, immutable IDs recorded. Refresh deliberately with `docker pull <image>` |
 | Source | Tracked and non-ignored untracked bytes, including edits, frozen in `.quality/logs/<run>/source.tar` |
 | Isolation | Separate source copies, outputs and runtime caches; application build cleaned before compile |
 | Concurrency | Two correctness lanes; `QUALITY_MATRIX_JOBS=1` runs serially |

@@ -146,7 +146,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
     on_exit(fn -> File.rm_rf!(root) end)
     path = Path.join(root, "target.pdf")
     File.write!(path, pdf)
-    assert {_, 0} = System.cmd("qpdf", ["--check", path], stderr_to_stdout: true)
+    assert {text, 0} = System.cmd("pdftotext", ["-layout", path, "-"], stderr_to_stdout: true)
+    refute text =~ "Syntax Error"
+    refute text =~ "Syntax Warning"
+    assert length(Regex.scan(~r/\bLine16\b/, text)) == 1
   end
 
   test "direct fragment preparation uses available space and validates coherent state", %{

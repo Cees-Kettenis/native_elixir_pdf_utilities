@@ -21,6 +21,8 @@ HTML must be UTF-8. Close nonvoid elements by default; `html_recovery: true`
 accepts supported omitted closing tags and nonvoid trailing slashes. JavaScript,
 event handlers and linked stylesheets are excluded. Supply CSS through `:stylesheets`.
 
+Rendering checks the supported subset, not complete HTML validity.
+
 ### Visibility and composition
 
 Supports initial disclosure states, hidden/inert content, declarative shadow
@@ -51,6 +53,9 @@ or page furniture. Unsupported widget transforms return diagnostics.
 
 Support is a subset of browser CSS. Common body lengths include `pt`, `px`,
 `mm`, `cm`, `in`, `rem` and supported percentages.
+
+Ordinary HTML text paints Unicode line/paragraph separators as spaces, matching Chromium.
+Ordinary newlines follow `white-space`.
 
 ### Positioning and transforms
 

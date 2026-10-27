@@ -30,6 +30,25 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
     assert {:compressed, 6, 0} = incremental_xref("hybrid-xref.pdf", 1)
   end
 
+  test "xref streams obey the PDF object-zero generation rule" do
+    # ISO 32000-1:2008 7.5.4 and 7.5.8: streams carry the same free-list information.
+    # The authored fixture pair differs only in decoded object zero's generation.
+    invalid = fixture!("xref-zero-generation-zero.pdf")
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(invalid)
+    assert diagnostic.stage == :xref
+    assert diagnostic.reason == :invalid_pdf_input
+    assert diagnostic.module == Reader
+    assert diagnostic.operation == :read
+    assert diagnostic.message == "xref object 0 must be a free entry with generation 65535"
+
+    valid = fixture!("xref-zero-generation-65535.pdf")
+    assert {:ok, document} = Reader.read(valid)
+    assert document.xref[0] == {:free, 0, 65_535}
+    assert length(document.pages) == 1
+    assert {:ok, "Reader milestone fixture"} = Text.extract(valid, layout: false)
+  end
+
   test "rejects committed encrypted and malformed fixtures" do
     assert_error(Reader.read(fixture!("encrypted.pdf")), :encrypted_pdf, :encryption)
     assert_error(Reader.read(fixture!("malformed-xref.pdf")), :invalid_pdf_input, :xref)
