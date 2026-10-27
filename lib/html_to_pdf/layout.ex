@@ -11156,6 +11156,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Enum.all?(current_line, &(Map.get(&1, :type) == :inline_positioning_marker)) ->
         lines
 
+      # Collapsible trailing space cannot create a line of its own, including
+      # after an atomic inline that already overflows the available width.
+      not preserve? and HtmlValidator.trim_ascii_whitespace(run.text) == "" ->
+        List.update_at(lines, length(lines) - 1, &append_inline_line_run(&1, run))
+
       # An indivisible grapheme must overflow; splitting it again cannot make progress.
       current_line == [] and emergency? and token_width > width and
           length(String.graphemes(run.text)) > 1 ->

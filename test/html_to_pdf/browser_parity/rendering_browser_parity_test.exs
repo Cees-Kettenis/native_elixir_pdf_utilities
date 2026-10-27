@@ -2163,6 +2163,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   # These fixtures have dedicated browser cases in this module or sibling test modules.
   # Keep the inventory explicit so an unassigned new fixture still fails this check.
   @dedicated_fixtures ~w(
+    body_inline_spacing_normal.html
+    body_inline_spacing_pre.html
+    body_inline_spacing_pre_line.html
+    inline_text_case_context.html
     css_comment_boundaries.html
     html_recovery_unclosed_elements.html
     html_recovery_trailing_slash.html
@@ -3478,7 +3482,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
       [_head, body] = html.children
       refute body._html_translate
-      nodes = hd(body.children).children ++ body.children
+      body_elements = Enum.filter(body.children, &(&1.type == :element))
+      nodes = hd(body_elements).children ++ body_elements
 
       for {id, expected} <- [
             {"inherited", false},

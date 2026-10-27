@@ -10,6 +10,8 @@ The generation input `/usr/lib/libicudata.so.78` has SHA-256
 The output includes 906 recognized locales in 26 delimiter groups. Unknown
 locales use Chromium's default English curly quotation pairs. Rendering does
 not load ICU, CLDR files, or network resources.
+Lookup inspects at most the longest locale depth in the pinned table, so long
+authored private-use suffixes do not cause repeated prefix reconstruction.
 
 Regenerate with `python3 scripts/data/quotation/generate.py`, then run
 `mise exec -- mix format lib/html_to_pdf/quotation_data.ex`.

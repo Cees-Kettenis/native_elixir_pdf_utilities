@@ -2095,7 +2095,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
     [html] = dom.children
     [_head, body] = html.children
-    [list, table] = body.children
+    [list, table] = Enum.filter(body.children, &(&1.type == :element))
     [item] = list.children
     [text] = item.children
     [row] = table.children

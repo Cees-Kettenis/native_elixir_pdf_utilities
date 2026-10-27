@@ -126,7 +126,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
 
     assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
     assert {:ok, tree} = Style.compute_detailed(dom, system_font_discovery: false)
-    [%{children: [select, skipped]}] = tree.children
+    [body] = tree.children
+    [select, skipped] = Enum.filter(body.children, &(&1.type == :element))
     assert select.style.form_kind == :base_select and select.style.color == {0, 0, 0}
     assert skipped.style._html_content_skipped
     assert {:ok, layout} = Layout.layout(tree, page_size: {220, 140}, margin: 10)

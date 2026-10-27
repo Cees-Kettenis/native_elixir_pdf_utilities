@@ -2957,7 +2957,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            :after_html,
            "html",
            "head",
-           "body",
            "frameset",
            "ul",
            "ol",

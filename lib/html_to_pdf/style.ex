@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   fail the render instead of being ignored.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.TextTransform
+  alias NativeElixirPdfUtilities.HtmlToPdf.CounterState
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
@@ -468,8 +470,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                                  context,
                                  [],
                                  style_opts,
-                                 [],
-                                 []
+                                 CounterState.new(),
+                                 CounterState.new()
                                ) do
                           root_canvas_style =
                             RenderCache.fetch(
@@ -526,7 +528,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       Map.get(composition, :clone_logical_nodes, %{}),
                       cache,
                       fn ->
-                        compute_styles.(cache)
+                        TextTransform.with_document(fn -> compute_styles.(cache) end)
                       end
                     )
                   end
@@ -1017,7 +1019,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, [], nil, latest_counters},
         fn child, {:ok, acc, previous_sibling_counters, latest_counters} ->
           counters =
-            inherit_counters(parent_counters, previous_sibling_counters, latest_counters)
+            CounterState.inherit(parent_counters, previous_sibling_counters, latest_counters)
 
           case style_node(
                  child,
@@ -1185,27 +1187,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         end
 
       %{type: :text, text: text} when is_binary(text) ->
-        {:ok,
-         [
-           Map.merge(node, %{
-             type: :text,
-             text:
-               if(Map.get(inherited_style, :_svg_element, false),
-                 do: text,
-                 else:
-                   transform_text(
-                     text,
-                     if(
-                       Map.get(inherited_style, :_math_text, false) and
-                         Map.get(inherited_style, :text_transform) == :math_auto,
-                       do: :none,
-                       else: Map.get(inherited_style, :text_transform, :none)
-                     )
-                   )
-               ),
-             style: reuse_inherited_text_style(inherited_style, rules)
-           })
-         ], nil, counters}
+        owner = List.first(ancestors)
+        style = reuse_inherited_text_style(inherited_style, rules)
+        {:ok, [transform_text_node(node, text, style, owner, ancestors)], nil, counters}
 
       %{type: :element, tag: tag, attributes: attributes, children: children}
       when is_binary(tag) and is_map(attributes) and is_list(children) ->
@@ -1284,7 +1268,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   end
 
                   element_counters =
-                    apply_counter_operations(
+                    CounterState.apply(
                       element_style,
                       counters,
                       parent_counters,
@@ -1320,7 +1304,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            counters
                          ) do
                     sibling_counters =
-                      include_counters_created_by(
+                      CounterState.include_created(
                         before_counters,
                         counters,
                         {node._selector_id, :after}
@@ -1575,7 +1559,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                 _ ->
                   element_counters =
-                    apply_counter_operations(
+                    CounterState.apply(
                       element_style,
                       counters,
                       parent_counters,
@@ -1724,7 +1708,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            counters
                          ),
                        sibling_counters =
-                         include_counters_created_by(
+                         CounterState.include_created(
                            before_counters,
                            counters,
                            {node._selector_id, :after}
@@ -1773,6 +1757,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       else
                         rendered_children
                       end
+
+                    rendered_children =
+                      if tag == "select" and Map.get(element_style, :appearance) != :base_select,
+                        do: TextTransform.resolve_children(rendered_children),
+                        else: rendered_children
 
                     element_style =
                       if tag == "select" and Map.get(element_style, :appearance) != :base_select do
@@ -2127,7 +2116,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                ) do
             {:ok, style} ->
               counters =
-                apply_counter_operations(
+                CounterState.apply(
                   style,
                   counters,
                   counters,
@@ -2158,11 +2147,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   {:ok, [], counters}
 
                 {_display, text} ->
-                  child = %{
-                    type: :text,
-                    text: transform_text(text, Map.get(style, :text_transform, :none)),
-                    style: text_style(style)
-                  }
+                  child =
+                    transform_text_node(%{type: :text}, text, text_style(style), node, ancestors)
 
                   {:ok,
                    [
@@ -2182,111 +2168,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp inherit_counters(parent_counters, previous_sibling_counters, latest_counters) do
-    counters =
-      case previous_sibling_counters do
-        nil ->
-          parent_counters
-
-        previous_sibling_counters ->
-          Enum.reduce(previous_sibling_counters, parent_counters, fn counter, acc ->
-            {name, _creator, _value} = counter
-
-            case Enum.any?(acc, fn {counter_name, _creator, _value} -> counter_name == name end) do
-              true -> acc
-              false -> acc ++ [counter]
-            end
-          end)
-      end
-
-    # Quote depth belongs to the document, including across containing element
-    # boundaries. Ordinary documents retain the empty-counter fast path.
-    counters =
-      case latest_counters do
-        [] ->
-          counters
-
-        _ ->
-          case List.keyfind(latest_counters, :_quote_depth, 0) do
-            nil ->
-              counters
-
-            quote ->
-              if List.keymember?(counters, :_quote_depth, 0),
-                do: counters,
-                else: counters ++ [quote]
-          end
-      end
-
-    Enum.map(counters, fn {name, creator, _value} ->
-      {^name, ^creator, latest_value} =
-        Enum.find(Enum.reverse(latest_counters), fn
-          {counter_name, counter_creator, _value} ->
-            counter_name == name and counter_creator == creator
-        end)
-
-      {name, creator, latest_value}
-    end)
-  end
-
-  defp apply_counter_operations(style, counters, parent_counters, creator) do
-    counters =
-      Enum.reduce(Map.get(style, :counter_reset, []), counters, fn {name, value}, acc ->
-        reset_counter(acc, parent_counters, name, value, creator)
-      end)
-
-    Enum.reduce(Map.get(style, :counter_increment, []), counters, fn {name, increment}, acc ->
-      case innermost_counter_index(acc, name) do
-        nil ->
-          acc ++ [{name, creator, increment}]
-
-        index ->
-          List.update_at(acc, index, fn {^name, counter_creator, value} ->
-            {name, counter_creator, value + increment}
-          end)
-      end
-    end)
-  end
-
-  defp include_counters_created_by(counters, latest_counters, creator) do
-    Enum.reduce(latest_counters, counters, fn
-      {_name, ^creator, _value} = counter, acc ->
-        acc ++ [counter]
-
-      _counter, acc ->
-        acc
-    end)
-  end
-
-  defp reset_counter(counters, parent_counters, name, value, creator) do
-    case innermost_counter_index(counters, name) do
-      nil ->
-        counters ++ [{name, creator, value}]
-
-      index ->
-        {^name, counter_creator, _old_value} = Enum.at(counters, index)
-
-        inherited_from_parent? =
-          Enum.any?(parent_counters, fn {parent_name, parent_creator, _value} ->
-            parent_name == name and parent_creator == counter_creator
-          end)
-
-        case counter_creator == creator or not inherited_from_parent? do
-          true -> List.replace_at(counters, index, {name, creator, value})
-          false -> counters ++ [{name, creator, value}]
-        end
-    end
-  end
-
-  defp innermost_counter_index(counters, name) do
-    counters
-    |> Enum.with_index()
-    |> Enum.reduce(nil, fn
-      {{^name, _creator, _value}, index}, _current -> index
-      {_counter, _index}, current -> current
-    end)
-  end
-
   defp generated_content_text(content, attributes, counters, quote_pairs) do
     {parts, counters} =
       Enum.reduce(content_parts(content), {[], counters}, fn part, {parts, counters} ->
@@ -2299,17 +2180,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               {Map.get(attributes, name, ""), counters}
 
             {:counter, name} ->
-              text =
-                case innermost_counter_index(counters, name) do
-                  nil -> "0"
-                  index -> counters |> Enum.at(index) |> elem(2) |> Integer.to_string()
-                end
+              text = counters |> CounterState.value(name) |> Integer.to_string()
 
               {text, counters}
 
             {:quote, kind} ->
-              index = innermost_counter_index(counters, :_quote_depth)
-              depth = if index == nil, do: 0, else: counters |> Enum.at(index) |> elem(2)
+              depth = CounterState.value(counters, :_quote_depth)
 
               {text, depth} =
                 NativeElixirPdfUtilities.Validators.HtmlQuoteValidator.token(
@@ -2318,10 +2194,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   depth
                 )
 
-              counters =
-                if index == nil,
-                  do: counters ++ [{:_quote_depth, :document, depth}],
-                  else: List.replace_at(counters, index, {:_quote_depth, :document, depth})
+              counters = CounterState.quote_depth(counters, depth)
 
               {text, counters}
           end
@@ -5621,25 +5494,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp transform_text(text, transform) do
+  defp transform_text_node(node, text, style, owner, ancestors) do
     HtmlValidator.reserve_render_resource(:max_rendered_text_bytes, byte_size(text), :style)
 
-    transformed =
-      case transform do
-        :math_auto -> MathLayoutValidator.math_auto_text(text)
-        :uppercase -> String.upcase(text)
-        :lowercase -> String.downcase(text)
-        :capitalize -> Regex.replace(~r/\b\p{L}/u, text, &String.upcase/1)
-        _ -> text
-      end
+    transform = Map.get(style, :text_transform, :none)
+    math_text = Map.get(style, :_math_text, false)
+    svg_text = Map.get(style, :_svg_element, false)
 
-    HtmlValidator.reserve_render_resource(
-      :max_rendered_text_bytes,
-      max(byte_size(transformed) - byte_size(text), 0),
-      :style
-    )
+    language =
+      if transform in [:uppercase, :lowercase, :capitalize] and not svg_text,
+        do: LanguageValidator.resolved_language(owner, ancestors),
+        else: []
 
-    transformed
+    if transform in [:lowercase, :capitalize] and not Map.has_key?(style, :math_style) and
+         not svg_text do
+      node
+      |> Map.merge(%{text: text, style: style})
+      |> TextTransform.defer(language)
+    else
+      transformed =
+        cond do
+          svg_text or transform == :none or (math_text and transform == :math_auto) -> text
+          transform == :math_auto -> MathLayoutValidator.math_auto_text(text)
+          true -> TextTransform.convert(text, transform, language)
+        end
+
+      HtmlValidator.reserve_render_resource(
+        :max_rendered_text_bytes,
+        max(byte_size(transformed) - byte_size(text), 0),
+        :style
+      )
+
+      Map.merge(node, %{text: transformed, style: style})
+    end
   end
 
   defp css_budget(cache) do

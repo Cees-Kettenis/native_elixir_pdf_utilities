@@ -69,7 +69,10 @@ overrides them. Shadow, child-document and unused-template metadata do not repla
 the enclosing document's metadata. See [metadata options](html-to-pdf-examples.md#set-pdf-metadata).
 
 `lang` and supported Content-Language metadata affect language inheritance and
-`:lang()` matching. Directional layout and complex-script shaping remain outside
+`:lang()` matching. Case transforms preserve word context across inline elements
+and use inherited language for Turkish and Azerbaijani dotted and dotless I.
+Direct body text follows the same whitespace processing as text inside blocks.
+Directional layout and complex-script shaping remain outside
 the supported text profile.
 
 ### Visibility and composition

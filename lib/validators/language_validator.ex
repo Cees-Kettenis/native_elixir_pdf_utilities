@@ -621,26 +621,30 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
   end
 
   @doc false
-  @spec resolved_language(map(), [map()]) :: [binary()]
+  @spec resolved_language(map() | nil, [map()]) :: [binary()]
   def resolved_language(node, ancestors) do
     {cache, children, document_scope, index, hosts} = Process.get({__MODULE__, :document})
 
-    RenderCache.fetch(cache, {:selector_language, node._selector_id}, fn ->
-      if Map.has_key?(index, Map.get(node, :node_id)) do
-        logical_language(node.node_id, index, hosts, cache, children, document_scope, 0)
-      else
-        case language_attribute(node) do
-          {:ok, value} ->
-            canonicalize(value)
+    if node == nil do
+      cached_document_language(children, cache, document_scope)
+    else
+      RenderCache.fetch(cache, {:selector_language, node._selector_id}, fn ->
+        if Map.has_key?(index, Map.get(node, :node_id)) do
+          logical_language(node.node_id, index, hosts, cache, children, document_scope, 0)
+        else
+          case language_attribute(node) do
+            {:ok, value} ->
+              canonicalize(value)
 
-          :inherit ->
-            case ancestors do
-              [parent | rest] -> resolved_language(parent, rest)
-              [] -> cached_document_language(children, cache, document_scope)
-            end
+            :inherit ->
+              case ancestors do
+                [parent | rest] -> resolved_language(parent, rest)
+                [] -> cached_document_language(children, cache, document_scope)
+              end
+          end
         end
-      end
-    end)
+      end)
+    end
   end
 
   # Shadow descendants inherit from their host; slot distribution does not

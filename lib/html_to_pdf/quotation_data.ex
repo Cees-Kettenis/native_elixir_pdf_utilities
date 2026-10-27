@@ -898,13 +898,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.QuotationData do
            end
          )
 
+  @max_locale_subtags @pairs
+                      |> Map.keys()
+                      |> Enum.map(&(String.split(&1, "-") |> length()))
+                      |> Enum.max()
+
   @doc "Returns pinned CLDR quote pairs for the longest recognized locale prefix."
   @spec pairs([String.t()]) :: [{String.t(), String.t()}]
   def pairs(language) do
-    length(language)..1//-1
-    |> Enum.find_value(fn size ->
-      Map.get(@pairs, language |> Enum.take(size) |> Enum.join("-"))
+    # A locale cannot match beyond the longest key in the fixed CLDR data.
+    # Never reconstruct arbitrary authored private-use suffixes.
+    language
+    |> Enum.take(@max_locale_subtags)
+    |> Enum.reduce({"", nil}, fn subtag, {prefix, found} ->
+      locale = if prefix == "", do: subtag, else: prefix <> "-" <> subtag
+      {locale, Map.get(@pairs, locale, found)}
     end)
+    |> elem(1)
     |> then(&(&1 || [{"“", "”"}, {"‘", "’"}]))
   end
 end

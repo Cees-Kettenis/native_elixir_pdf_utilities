@@ -1662,13 +1662,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
             cond do
               identifier? ->
-                {:cont, {:ok, values ++ [{token, default_value}], true}}
+                {:cont, {:ok, [{token, default_value} | values], true}}
 
               integer_allowed? ->
                 case Integer.parse(token) do
                   {integer, ""} ->
-                    {name, _old_value} = List.last(values)
-                    {:cont, {:ok, List.replace_at(values, -1, {name, integer}), false}}
+                    [{name, _old_value} | rest] = values
+                    {:cont, {:ok, [{name, integer} | rest], false}}
 
                   _ ->
                     {:halt, :error}
@@ -1680,8 +1680,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           end)
 
         case result do
-          {:ok, values, _integer_allowed?} -> {:ok, Map.put(style, property, values)}
-          :error -> {:error, :invalid_document}
+          {:ok, values, _integer_allowed?} ->
+            {:ok, Map.put(style, property, Enum.reverse(values))}
+
+          :error ->
+            {:error, :invalid_document}
         end
     end
   end
