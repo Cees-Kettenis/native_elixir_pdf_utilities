@@ -86,6 +86,14 @@ values remain in the document object table. Separate object tables and recovery
 candidates have separate caches but share an active reader's reference allowance.
 Standalone validator calls retain their own bounded resolution scopes.
 
+PDF Form drawing imports share one reader allowance across source preparation
+and decoded content occurrences, including joining newlines. The writer reuses
+the validator's prepared import for identical sources. Encoded single-stream
+Forms retain their original filters and bytes. Overlay resource collection visits
+each unique source page before expanding placements, charges visited values to
+`max_pdf_reader_work`, and charges newly followed indirect references to
+`max_pdf_reference_resolution_work`.
+
 Predictors process packed rows and predecessor pixels without per-sample maps.
 Their buffer allowance counts the input bytes, twice the output bytes, two row
 buffers and two pixel buffers. Empty predictor input requires no reconstruction

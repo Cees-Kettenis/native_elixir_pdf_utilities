@@ -19,7 +19,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.WriterValidator
-  alias NativeElixirPdfUtilities.Validators.PdfFormValidator
 
   # CSS defines one pixel as 1/96 inch, which is a fixed 0.75 PDF points.
   @css_pixel_points 0.75
@@ -157,7 +156,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                   context.outlines,
                   context.compress_streams,
                   font_resources,
-                  next_object_id
+                  next_object_id,
+                  context.pdf_forms
                 )
 
               case controls do
@@ -199,7 +199,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
              {fonts, next} <- font_resources(context.pages, first_object_id),
              {:ok, fonts} <- subset_font_resources(fonts, context.subset_fonts) do
           frames = prepare_images(context.pages)
-          images = image_resources(frames, next)
+          images = image_resources(frames, next, context.pdf_forms)
           states_start = next + image_object_count(images)
           states = graphics_state_resources(frames, states_start)
           first_form_id = states_start + map_size(states)
@@ -260,11 +260,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
          outlines,
          compress_streams?,
          font_resources,
-         next_object_id
+         next_object_id,
+         pdf_forms
        ) do
     pages = prepare_images(pages)
 
-    image_resources = image_resources(pages, next_object_id)
+    image_resources = image_resources(pages, next_object_id, pdf_forms)
     graphics_state_object_id = next_object_id + image_object_count(image_resources)
     graphics_state_resources = graphics_state_resources(pages, graphics_state_object_id)
     first_page_object_id = graphics_state_object_id + map_size(graphics_state_resources)
@@ -3088,7 +3089,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     end
   end
 
-  defp image_resources(pages, first_object_id) do
+  defp image_resources(pages, first_object_id, pdf_forms) do
     pages
     |> Enum.flat_map(& &1.boxes)
     |> Enum.filter(&(&1.type == :image))
@@ -3098,7 +3099,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       resource =
         case image.format do
           :pdf_form ->
-            {:ok, form} = PdfFormValidator.prepare_source(image.data)
+            form = Map.fetch!(pdf_forms, image.data)
 
             %{
               name: "Im#{index}",

@@ -4,6 +4,25 @@ defmodule NativeElixirPdfUtilities.Pdf.ObjectMappingTest do
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Pdf.{ObjectMapping, Reader}
 
+  test "incremental reference traversal preserves occurrences and propagates an early halt" do
+    value = [%{"Nested" => [{:ref, {1, 0}}, {:ref, {1, 0}}]}, {:ref, {2, 0}}, :plain]
+
+    assert {:cont, [{2, 0}, {1, 0}, {1, 0}]} =
+             ObjectMapping.reduce_references_while(value, [], fn ref, refs ->
+               {:cont, [ref | refs]}
+             end)
+
+    assert {:halt, [{2, 0}, {1, 0}, {1, 0}]} =
+             ObjectMapping.reduce_references_while(value, [], fn ref, refs ->
+               if ref == {2, 0}, do: {:halt, [ref | refs]}, else: {:cont, [ref | refs]}
+             end)
+
+    assert {:cont, :empty} =
+             ObjectMapping.reduce_references_while([%{}, [], 1], :empty, fn _, _ ->
+               flunk("no references")
+             end)
+  end
+
   test "resource traversal and remapping retain the references of a interactive page" do
     assert {:ok, pdf} =
              HtmlToPdf.render(

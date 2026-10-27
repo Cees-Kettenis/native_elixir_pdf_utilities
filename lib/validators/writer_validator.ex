@@ -106,6 +106,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   @typedoc "Validated input consumed by the PDF byte writer."
   @type context :: %{
           required(:pages) => [map()],
+          required(:pdf_forms) => %{binary() => map()},
           required(:metadata) => map(),
           required(:outlines) => [OutlineValidator.item()],
           required(:compress_streams) => boolean(),
@@ -171,6 +172,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(pages, opts) do
     HtmlValidator.with_render_budget(fn -> prepare(pages, opts, :pages) end)
+    |> writer_limit_result()
   end
 
   @doc "Validates ordinary PDF appearance placement and clipping before native Form composition."
@@ -442,9 +444,37 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           )
       end
     end)
+    |> writer_limit_result()
+  end
+
+  # Reader and import diagnostics retain their actionable fields while the
+  # writer owns the public drawing operation for both preparation entry points.
+  defp writer_limit_result(result) do
+    case result do
+      {:error, {:resource_limit_exceeded, diagnostic}} ->
+        diagnostic =
+          diagnostic
+          |> Map.drop([:operation, :module])
+          |> Diagnostics.with_context(operation: :write_pdf, module: __MODULE__)
+
+        {:error, {:resource_limit_exceeded, diagnostic}}
+
+      result ->
+        result
+    end
   end
 
   defp prepare(pages, opts, kind) do
+    {result, sources} =
+      PdfFormValidator.with_prepared_sources(fn -> prepare_pages(pages, opts, kind) end)
+
+    case result do
+      {:ok, context} -> {:ok, Map.put(context, :pdf_forms, sources)}
+      error -> error
+    end
+  end
+
+  defp prepare_pages(pages, opts, kind) do
     case {pages, opts} do
       {pages, opts} when is_list(pages) and is_list(opts) ->
         case Keyword.keyword?(opts) do
@@ -1802,7 +1832,16 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{format: :pdf_form, data: source, width_px: width_px, height_px: height_px}
       when is_binary(source) and is_integer(width_px) and width_px > 0 and
              is_integer(height_px) and height_px > 0 ->
-        match?({:ok, _}, PdfFormValidator.prepare_source(source))
+        case PdfFormValidator.prepare_source(source) do
+          {:ok, _form} ->
+            true
+
+          {:error, {:resource_limit_exceeded, _diagnostic}} = error ->
+            throw({:render_resource_limit, writer_limit_result(error)})
+
+          {:error, _diagnostic} ->
+            false
+        end
 
       %{
         format: format,

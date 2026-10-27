@@ -452,6 +452,73 @@ defmodule NativeElixirPdfUtilities.StampTest do
     end
   end
 
+  test "resource collection is shared by repeated placements and bounded across matched pages" do
+    target = three_page_pdf(List.duplicate("Target", 20), {300, 200})
+    kids = Enum.map_join(3..22, " ", &"#{&1} 0 R")
+    references = Enum.map_join(1..200, " ", fn _ -> "23 0 R" end)
+
+    overlay =
+      pdf(
+        [
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2,
+           "<< /Type /Pages /Kids [#{kids}] /Count 20 /MediaBox [0 0 300 200] /Resources << /Properties << /Many [#{references}] >> >> >>"}
+        ] ++
+          Enum.map(3..22, &{&1, "<< /Type /Page /Parent 2 0 R /Contents 24 0 R >>"}) ++
+          [{23, "<< /Type /Example >>"}, {24, stream_object("", "q Q")}]
+      )
+
+    assert {:ok, target_context} = Reader.read_validated(target)
+    assert {:ok, overlay_context} = Reader.read_validated(overlay)
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_reader_work: 500})
+    assert {:ok, plan} = StampValidator.prepare_overlay(target_context, overlay_context, [])
+    assert length(plan.placements) == 20 and length(plan.copied_objects) == 1
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             StampValidator.prepare_overlay(target_context, overlay_context,
+               overlay_pages: :match
+             )
+
+    assert diagnostic.stage == :limits and diagnostic.message =~ "max_pdf_reader_work"
+    Limits.install(limits)
+    assert {:ok, _} = Stamp.overlay(target, overlay, overlay_pages: :match)
+  end
+
+  test "resource graph cycles terminate and stream length references stay outside the imported graph" do
+    target = one_page_pdf("Target", {300, 200})
+
+    overlay =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources << /Properties << /Thing 4 0 R >> >> >>"},
+        {4, "<< /Length 5 0 R /Loop 4 0 R >>\nstream\n\nendstream"},
+        {5, "0"}
+      ])
+
+    assert {:ok, target_context} = Reader.read_validated(target)
+    assert {:ok, overlay_context} = Reader.read_validated(overlay)
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_reference_resolution_work: 1})
+
+    assert {:ok, %{copied_objects: [{{4, 0}, _}]}} =
+             StampValidator.prepare_overlay(target_context, overlay_context, [])
+
+    Limits.install(limits)
+    assert {:ok, _} = Stamp.overlay(target, overlay)
+
+    missing =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 200] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources << /Properties << /Missing 9 0 R >> >> >>"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Stamp.overlay(target, missing)
+    assert diagnostic.message =~ "missing object"
+  end
+
   test "validates malformed prepared writer and incremental contexts" do
     assert {:error, {:invalid_pdf_input, %{stage: :validation}}} =
              StampValidator.prepare_text(%{}, "x", [], :text)

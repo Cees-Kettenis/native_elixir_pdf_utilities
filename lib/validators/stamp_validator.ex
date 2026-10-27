@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Pdf.ObjectMapping
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TransformValidator
   alias NativeElixirPdfUtilities.Validators.IncrementalValidator
@@ -643,19 +644,20 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
          transforms
        ) do
     with {:ok, source_pages} <- source_pages(overlay_context, overlay_page_numbers),
-         :ok <- validate_fit(target_pages, source_pages, fit),
+         :ok <- validate_fit(target_pages, source_pages, overlay_page_numbers, fit),
          {:ok, copied_objects} <- copied_resource_objects(overlay_context, source_pages),
          :ok <-
            validate_object_capacity(
              target_context,
              copied_objects,
-             source_pages,
+             Map.values(source_pages),
              target_pages,
              opacity
            ) do
       placements =
-        Enum.zip([target_pages, source_pages, transforms])
-        |> Enum.map(fn {target, source, transform} ->
+        Enum.zip([target_pages, overlay_page_numbers, transforms])
+        |> Enum.map(fn {target, source_number, transform} ->
+          source = Map.fetch!(source_pages, source_number)
           %{target: target, source: source, transform: transform, fit: fit}
         end)
 
@@ -691,7 +693,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
       end
     end)
     |> case do
-      {:ok, pages, _decoded_bytes} -> {:ok, Enum.map(requested_numbers, &Map.fetch!(pages, &1))}
+      {:ok, pages, _decoded_bytes} -> {:ok, pages}
       {:error, _error} = page_error -> page_error
     end
   end
@@ -749,30 +751,42 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   defp copied_resource_objects(context, source_pages) do
-    page_refs = Map.new(context.pages, &{&1.ref, true})
-    roots = Enum.flat_map(source_pages, &[&1.resources, &1.group])
+    PdfValidator.with_reader_budget(fn ->
+      page_refs = Map.new(context.pages, &{&1.ref, true})
 
-    case collect_references(roots, context.document.objects, page_refs, %{}) do
-      {:ok, references} ->
-        objects =
-          references
-          |> Map.keys()
-          |> Enum.map(fn reference ->
-            {reference, Map.fetch!(context.document.objects, reference)}
-          end)
-          |> Enum.sort_by(fn {{object, generation}, _value} -> {object, generation} end)
+      result =
+        Enum.reduce_while(source_pages, {:ok, %{}}, fn {_number, page}, {:ok, seen} ->
+          case collect_references(
+                 [page.resources, page.group],
+                 context.document.objects,
+                 page_refs,
+                 seen
+               ) do
+            {:ok, seen} -> {:cont, {:ok, seen}}
+            error -> {:halt, error}
+          end
+        end)
 
-        {:ok, objects}
+      case result do
+        {:ok, references} ->
+          objects =
+            references
+            |> Map.keys()
+            |> Enum.map(fn reference ->
+              {reference, Map.fetch!(context.document.objects, reference)}
+            end)
+            |> Enum.sort_by(fn {{object, generation}, _value} -> {object, generation} end)
 
-      {:error, _error} = reference_error ->
-        reference_error
-    end
+          {:ok, objects}
+
+        {:error, _error} = reference_error ->
+          reference_error
+      end
+    end)
   end
 
   defp collect_references(values, objects, page_refs, seen) do
-    references = Enum.flat_map(values, &value_references/1)
-
-    Enum.reduce_while(references, {:ok, seen}, fn reference, {:ok, seen} ->
+    ObjectMapping.reduce_references_while(values, {:ok, seen}, fn reference, {:ok, seen} ->
       cond do
         Map.has_key?(seen, reference) ->
           {:cont, {:ok, seen}}
@@ -782,6 +796,8 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
            error(:overlay, :unsupported_pdf_feature, "overlay resources refer back to a PDF page")}
 
         true ->
+          PdfValidator.charge_reader_budget(:max_pdf_reference_resolution_work, 1)
+
           case Map.fetch(objects, reference) do
             {:ok, object} ->
               value =
@@ -804,29 +820,16 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
           end
       end
     end)
+    |> elem(1)
   end
 
-  defp value_references(value) do
-    case value do
-      {:ref, reference} ->
-        [reference]
-
-      values when is_list(values) ->
-        Enum.flat_map(values, &value_references/1)
-
-      dictionary when is_map(dictionary) ->
-        dictionary |> Map.values() |> Enum.flat_map(&value_references/1)
-
-      _ ->
-        []
-    end
-  end
-
-  defp validate_fit(target_pages, source_pages, fit) do
+  defp validate_fit(target_pages, source_pages, source_numbers, fit) do
     case fit do
       :exact ->
-        case Enum.zip(target_pages, source_pages)
-             |> Enum.all?(fn {target, source} ->
+        case Enum.zip(target_pages, source_numbers)
+             |> Enum.all?(fn {target, source_number} ->
+               source = Map.fetch!(source_pages, source_number)
+
                abs(target.width - source.width) < 0.01 and
                  abs(target.height - source.height) < 0.01
              end) do
