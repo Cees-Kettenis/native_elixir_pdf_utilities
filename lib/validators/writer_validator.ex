@@ -171,8 +171,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   @spec prepare(term(), term()) ::
           {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(pages, opts) do
-    HtmlValidator.with_render_budget(fn -> prepare(pages, opts, :pages) end)
-    |> writer_limit_result()
+    with_writer_preparation(fn -> prepare(pages, opts, :pages) end)
   end
 
   @doc "Validates ordinary PDF appearance placement and clipping before native Form composition."
@@ -428,7 +427,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   @spec prepare_appearances(term(), term()) ::
           {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_appearances(frames, first_object_id) do
-    HtmlValidator.with_render_budget(fn ->
+    with_writer_preparation(fn ->
       case first_object_id do
         id when is_integer(id) and id > 0 ->
           HtmlValidator.check_render_resource(:max_pdf_objects, id, :writer)
@@ -444,20 +443,31 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           )
       end
     end)
-    |> writer_limit_result()
+  end
+
+  defp with_writer_preparation(fun) do
+    result =
+      try do
+        HtmlValidator.with_render_budget(fun)
+      catch
+        {:render_resource_limit, error} -> error
+      end
+
+    writer_preparation_result(result)
   end
 
   # Reader and import diagnostics retain their actionable fields while the
   # writer owns the public drawing operation for both preparation entry points.
-  defp writer_limit_result(result) do
+  defp writer_preparation_result(result) do
     case result do
-      {:error, {:resource_limit_exceeded, diagnostic}} ->
+      {:error, {reason, diagnostic}}
+      when reason == :resource_limit_exceeded or :erlang.map_get(:stage, diagnostic) == :geometry ->
         diagnostic =
           diagnostic
           |> Map.drop([:operation, :module])
           |> Diagnostics.with_context(operation: :write_pdf, module: __MODULE__)
 
-        {:error, {:resource_limit_exceeded, diagnostic}}
+        {:error, {reason, diagnostic}}
 
       result ->
         result
@@ -1837,7 +1847,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             true
 
           {:error, {:resource_limit_exceeded, _diagnostic}} = error ->
-            throw({:render_resource_limit, writer_limit_result(error)})
+            throw({:render_resource_limit, error})
+
+          {:error, {_reason, %{stage: :geometry}}} = error ->
+            throw({:render_resource_limit, error})
 
           {:error, _diagnostic} ->
             false

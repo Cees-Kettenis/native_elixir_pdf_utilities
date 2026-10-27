@@ -392,10 +392,11 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
 
       normalization = normalization_matrix(crop_box, rotation, user_unit)
 
-      inverse = inverse_matrix(normalization)
+      inverse = inverse_normalization_matrix(crop_box, rotation, user_unit)
 
-      if width > 0 and height > 0 and
-           Enum.all?([width, height] ++ normalization ++ inverse, &PdfValidator.valid_number?/1) do
+      with true <- width > 0 and height > 0,
+           :ok <-
+             PdfValidator.validate_geometry_numbers([width, height] ++ normalization ++ inverse) do
         {:ok,
          %{
            page_number: page_number,
@@ -410,7 +411,11 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
            inverse_normalization: inverse
          }}
       else
-        page_error(page_number, "has stamping geometry outside max_pdf_numeric_magnitude")
+        false ->
+          page_error(page_number, "has unrepresentable stamping geometry")
+
+        {:error, {reason, diagnostic}} ->
+          page_error(page_number, "has invalid stamping geometry: #{diagnostic.message}", reason)
       end
     else
       false -> page_error(page_number, "has an invalid effective page box")
@@ -654,21 +659,40 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
              target_pages,
              opacity
            ) do
-      placements =
-        Enum.zip([target_pages, overlay_page_numbers, transforms])
-        |> Enum.map(fn {target, source_number, transform} ->
-          source = Map.fetch!(source_pages, source_number)
-          %{target: target, source: source, transform: transform, fit: fit}
-        end)
+      Enum.zip([target_pages, overlay_page_numbers, transforms])
+      |> Enum.reduce_while({:ok, []}, fn {target, source_number, transform}, {:ok, placements} ->
+        source = Map.fetch!(source_pages, source_number)
 
-      {:ok,
-       %{
-         target_context: target_context,
-         overlay_context: overlay_context,
-         placements: placements,
-         copied_objects: copied_objects,
-         opacity: opacity
-       }}
+        case prepare_placement_matrix(source, target, fit, transform) do
+          {:ok, matrix} ->
+            placement = %{
+              target: target,
+              source: source,
+              transform: transform,
+              fit: fit,
+              matrix: matrix
+            }
+
+            {:cont, {:ok, [placement | placements]}}
+
+          error ->
+            {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, placements} ->
+          {:ok,
+           %{
+             target_context: target_context,
+             overlay_context: overlay_context,
+             placements: Enum.reverse(placements),
+             copied_objects: copied_objects,
+             opacity: opacity
+           }}
+
+        error ->
+          error
+      end
     end
   end
 
@@ -849,6 +873,89 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
     end
   end
 
+  defp prepare_placement_matrix(source, target, mode, transform) do
+    fit = fit_matrix(source, target, mode)
+
+    transformed =
+      case transform do
+        %{rotation: rotation, pivot: pivot} ->
+          PdfValidator.multiply_matrices(rotation_matrix(rotation, pivot), fit)
+
+        nil ->
+          fit
+      end
+
+    matrix = PdfValidator.multiply_matrices(target.inverse_normalization, transformed)
+    [a, b, c, d, _, _] = matrix
+
+    if (a != 0 or b != 0) and (c != 0 or d != 0) do
+      case PdfValidator.validate_geometry_numbers(matrix) do
+        :ok -> {:ok, matrix}
+        failure -> placement_geometry_error(source, target, mode, failure)
+      end
+    else
+      placement_geometry_error(source, target, mode)
+    end
+  rescue
+    ArithmeticError -> placement_geometry_error(source, target, mode)
+  end
+
+  defp placement_geometry_error(source, target, mode, failure \\ nil) do
+    {reason, detail} =
+      case failure do
+        {:error, {reason, diagnostic}} ->
+          {reason, diagnostic.message}
+
+        nil ->
+          {:invalid_pdf_input,
+           "values must remain representable within max_pdf_numeric_magnitude"}
+      end
+
+    context = "source page #{source.page_number} to target page #{target.page_number}"
+
+    Diagnostics.error(:geometry, reason, "#{mode} placement geometry for #{context}: #{detail}",
+      source: context,
+      operation: :stamp,
+      module: __MODULE__
+    )
+  end
+
+  defp fit_matrix(source, target, mode) do
+    case mode do
+      :exact ->
+        [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+      :stretch ->
+        [target.width / source.width, 0.0, 0.0, target.height / source.height, 0.0, 0.0]
+
+      mode when mode in [:contain, :cover] ->
+        scale =
+          case mode do
+            :contain -> min(target.width / source.width, target.height / source.height)
+            :cover -> max(target.width / source.width, target.height / source.height)
+          end
+
+        width = source.width * scale
+        height = source.height * scale
+        [scale, 0.0, 0.0, scale, (target.width - width) / 2, (target.height - height) / 2]
+    end
+  end
+
+  defp rotation_matrix(rotation, {pivot_x, pivot_y}) do
+    radians = -rotation * :math.pi() / 180
+    cosine = :math.cos(radians)
+    sine = :math.sin(radians)
+
+    [
+      cosine,
+      sine,
+      -sine,
+      cosine,
+      pivot_x - cosine * pivot_x + sine * pivot_y,
+      pivot_y - sine * pivot_x - cosine * pivot_y
+    ]
+  end
+
   defp validate_object_capacity(context, copied_objects, source_pages, target_pages, opacity) do
     unique_source_pages = Enum.uniq_by(source_pages, & &1.page_number)
     generated = length(copied_objects) + length(unique_source_pages) + length(target_pages) + 1
@@ -866,17 +973,17 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
     end
   end
 
-  defp inverse_matrix([a, b, c, d, e, f]) do
-    determinant = a * d - b * c
+  # Invert this scaled right-angle transform directly. Squaring UserUnit in a
+  # determinant can overflow or underflow while its reciprocal is representable.
+  defp inverse_normalization_matrix([left, bottom, right, top], rotation, user_unit) do
+    inverse = 1 / user_unit
 
-    [
-      d / determinant,
-      -b / determinant,
-      -c / determinant,
-      a / determinant,
-      (c * f - d * e) / determinant,
-      (b * e - a * f) / determinant
-    ]
+    case rotation do
+      0 -> [inverse, 0.0, 0.0, inverse, left, bottom]
+      90 -> [0.0, inverse, -inverse, 0.0, right, bottom]
+      180 -> [-inverse, 0.0, 0.0, -inverse, right, top]
+      270 -> [0.0, -inverse, inverse, 0.0, left, top]
+    end
   end
 
   defp page_numbers(count) do
@@ -886,8 +993,12 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
     end
   end
 
-  defp page_error(page_number, message) do
-    error(:geometry, :invalid_pdf_input, "page #{page_number} #{message}")
+  defp page_error(page_number, message, reason \\ :invalid_pdf_input) do
+    Diagnostics.error(:geometry, reason, "page #{page_number} #{message}",
+      source: "page #{page_number}",
+      operation: :stamp,
+      module: __MODULE__
+    )
   end
 
   defp error(stage, reason, message) do

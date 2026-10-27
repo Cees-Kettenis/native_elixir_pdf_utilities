@@ -709,6 +709,93 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     end
   end
 
+  test "flatten rejects unrepresentable appearance scaling with widget context" do
+    assert {:ok, context} = Reader.read_validated(external_pdf())
+
+    for bbox <- [[0, 0, 1.0e-320, 20], [0, 0, 100, 1.0e-320], [0, 0, 1.0e-100, 20]] do
+      assert {:ok, pdf} =
+               IncrementalWriter.write(context, [
+                 {8, 0,
+                  {:stream,
+                   %{
+                     "Type" => {:name, "XObject"},
+                     "Subtype" => {:name, "Form"},
+                     "BBox" => bbox,
+                     "Resources" => %{}
+                   }, ""}}
+               ])
+
+      assert {:ok, _} = Forms.fields(pdf)
+      assert {:error, {:invalid_form, diagnostic}} = Forms.flatten(pdf)
+      assert diagnostic.stage == :forms and diagnostic.operation == :flatten
+      assert diagnostic.module == Forms and is_binary(diagnostic.source)
+      assert diagnostic.message =~ "appearance" and diagnostic.message =~ "geometry"
+    end
+
+    assert {:ok, pdf} =
+             IncrementalWriter.write(context, [
+               {8, 0,
+                {:stream,
+                 %{
+                   "Type" => {:name, "XObject"},
+                   "Subtype" => {:name, "Form"},
+                   "BBox" => [0, 0, 1.0e-6, 20],
+                   "Resources" => %{}
+                 }, ""}}
+             ])
+
+    assert {:ok, flattened} = Forms.flatten(pdf)
+    assert {:ok, _} = Reader.read_validated(flattened)
+  end
+
+  test "flatten admits complete composed geometry and preserves numeric-token diagnostics" do
+    assert {:ok, pdf} = Reader.read_validated(external_pdf())
+
+    assert {:ok, token_source} =
+             IncrementalWriter.write(pdf, [
+               {8, 0,
+                {:stream,
+                 %{
+                   "Type" => {:name, "XObject"},
+                   "Subtype" => {:name, "Form"},
+                   "BBox" => [0, 0, 1_000_000, 1_000_000],
+                   "Matrix" => [1_000_000, 0, 0, 1_000_000, 0, 0],
+                   "Resources" => %{}
+                 }, ""}}
+             ])
+
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_numeric_token_bytes: 12})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.flatten(token_source)
+    assert diagnostic.message =~ "max_pdf_numeric_token_bytes" and diagnostic.source =~ "widget"
+    Limits.install(limits)
+    assert {:ok, _} = Forms.flatten(token_source)
+
+    narrow = external_pdf(%{}, %{"Rect" => [0, 0, 1.0e-323, 20]})
+    assert {:error, {:invalid_form, _}} = Forms.flatten(narrow)
+
+    Limits.install(%{limits | max_pdf_numeric_magnitude: 1.0e308})
+
+    assert {:ok, context} =
+             Reader.read_validated(external_pdf(%{}, %{"Rect" => [0, 0, 1.0e-300, 20]}))
+
+    assert {:ok, source} =
+             IncrementalWriter.write(context, [
+               {8, 0,
+                {:stream,
+                 %{
+                   "Type" => {:name, "XObject"},
+                   "Subtype" => {:name, "Form"},
+                   "BBox" => [0, 0, 1.0e300, 20],
+                   "Matrix" => [1.0e-300, 0, 0, 1, 0, 0],
+                   "Resources" => %{}
+                 }, ""}}
+             ])
+
+    assert {:error, {:invalid_form, diagnostic}} = Forms.flatten(source)
+    assert diagnostic.message =~ "appearance geometry"
+  end
+
   test "flatten follows each page's annotation order across nested fields and repeated widgets" do
     pdf = overlapping_widgets_pdf()
     {:ok, context} = Reader.read_validated(pdf)

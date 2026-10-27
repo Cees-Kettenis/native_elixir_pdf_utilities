@@ -86,6 +86,13 @@ values remain in the document object table. Separate object tables and recovery
 candidates have separate caches but share an active reader's reference allowance.
 Standalone validator calls retain their own bounded resolution scopes.
 
+Geometry validators admit derived scales, translations and complete placement
+matrices before writing. Unrepresentable arithmetic returns a contextual
+diagnostic. Serialized coefficients also obey the shared numeric magnitude and
+token-byte limits; representable small nonzero scales retain their precision.
+Intermediate appearance bounds may exceed the output magnitude limit when the
+final validated placement remains within it.
+
 PDF Form drawing imports share one reader allowance across source preparation
 and decoded content occurrences, including joining newlines. The writer reuses
 the validator's prepared import for identical sources. Encoded single-stream

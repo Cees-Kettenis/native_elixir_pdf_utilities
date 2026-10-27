@@ -3240,7 +3240,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           "Type" => {:name, "XObject"},
           "Subtype" => {:name, "Form"},
           "BBox" => [0, 0, form.width, form.height],
-          "Matrix" => [1 / form.width, 0, 0, 1 / form.height, 0, 0],
+          "Matrix" => form.normalization,
           "Resources" => form.resources
         })
         |> then(fn dictionary ->

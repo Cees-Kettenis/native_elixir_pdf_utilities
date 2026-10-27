@@ -251,6 +251,159 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert exact.stage == :geometry
   end
 
+  test "fit preparation diagnoses overflowing ratios and preserves representable small matrices" do
+    target = one_page_pdf("Target", {100, 100})
+    assert {:ok, context} = Reader.read_validated(target)
+    [page] = context.pages
+    {id, generation} = page.ref
+
+    for box <- [[0, 0, 1.0e-320, 100], [0, 0, 100, 1.0e-320]],
+        fit <- [:contain, :cover, :stretch] do
+      assert {:ok, overlay} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(page.dictionary, "MediaBox", box)}}
+               ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Stamp.overlay(target, overlay, fit: fit)
+      assert diagnostic.stage == :geometry and diagnostic.operation == :overlay_pdf
+      assert diagnostic.module == Stamp and is_binary(diagnostic.source)
+      assert diagnostic.message =~ "placement" and diagnostic.message =~ Atom.to_string(fit)
+    end
+
+    assert {:ok, tiny} =
+             IncrementalWriter.write(context, [
+               {id, generation,
+                {:value, Map.put(page.dictionary, "MediaBox", [0, 0, 1.0e-9, 1.0e-9])}}
+             ])
+
+    assert {:ok, result} = Stamp.overlay(tiny, target, fit: :stretch)
+    assert {:ok, parsed} = Reader.read_validated(result)
+
+    assert {:ok, refs} =
+             NativeElixirPdfUtilities.Validators.PdfValidator.content_references(
+               parsed.document,
+               hd(parsed.pages).dictionary
+             )
+
+    assert {:ok, invocation} = Reader.decoded_stream(parsed.document, List.last(refs))
+    refute invocation =~ "0 0 0 0 0 0 cm"
+    assert invocation =~ "0.00000000001"
+    operands = Regex.run(~r/q ([^\n]+) cm /, invocation) |> Enum.at(1) |> String.split()
+
+    [sx, _, _, sy, _, _] =
+      Enum.map(operands, fn value ->
+        {number, ""} = Float.parse(value)
+        number
+      end)
+
+    assert sx > 0 and sy > 0
+    assert_in_delta sx, 1.0e-11, 1.0e-25
+    assert_in_delta sy, 1.0e-11, 1.0e-25
+  end
+
+  test "final placement admission rejects out-of-range, collapsed and oversized numeric operands" do
+    target = one_page_pdf("Target", {100, 100})
+    assert {:ok, context} = Reader.read_validated(target)
+    [page] = context.pages
+    {id, generation} = page.ref
+
+    source_for = fn box ->
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(page.dictionary, "MediaBox", box)}}
+               ])
+
+      source
+    end
+
+    thin = source_for.([0, 0, 1.0e-100, 100])
+
+    for mode <- [:stretch, :cover] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Stamp.overlay(target, thin, fit: mode)
+      assert diagnostic.message =~ "placement geometry" and diagnostic.source =~ "source page 1"
+    end
+
+    assert {:ok, _} = Stamp.overlay(target, thin, fit: :contain)
+
+    tiny_target = source_for.([0, 0, 1.0e-320, 100])
+    wide_source = source_for.([0, 0, 1_000_000_000, 100])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             Stamp.overlay(tiny_target, wide_source, fit: :stretch)
+
+    assert diagnostic.message =~ "placement geometry"
+
+    assert {:ok, source_context} = Reader.read_validated(source_for.([0, 0, 3, 100]))
+    Limits.install(%{Limits.effective() | max_pdf_numeric_token_bytes: 12})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             StampValidator.prepare_overlay(context, source_context, fit: :stretch)
+
+    assert diagnostic.stage == :geometry and diagnostic.message =~ "max_pdf_numeric_token_bytes"
+  end
+
+  test "normalization inverses retain representable extreme units at every right-angle rotation" do
+    source = one_page_pdf("Source", {100, 100})
+    assert {:ok, context} = Reader.read_validated(source)
+    [page] = context.pages
+    {id, generation} = page.ref
+    Limits.install(%{Limits.effective() | max_pdf_numeric_magnitude: 1.0e308})
+
+    for unit <- [1.0e-200, 1.0e200], rotation <- [0, 90, 180, 270] do
+      dictionary = page.dictionary |> Map.put("UserUnit", unit) |> Map.put("Rotate", rotation)
+
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [{id, generation, {:value, dictionary}}])
+
+      assert {:ok, stamped} = Stamp.overlay(source, source)
+      assert {:ok, _} = Reader.read_validated(stamped)
+    end
+  end
+
+  test "page normalization preserves numeric-token limits and diagnoses underflow" do
+    source = one_page_pdf("Source", {100, 100})
+    assert {:ok, context} = Reader.read_validated(source)
+    [page] = context.pages
+    {id, generation} = page.ref
+
+    assert {:ok, normalized} =
+             IncrementalWriter.write(context, [
+               {id, generation, {:value, Map.put(page.dictionary, "UserUnit", 0.001)}}
+             ])
+
+    assert {:ok, normalized_context} = Reader.read_validated(normalized)
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_numeric_token_bytes: 5})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             StampValidator.prepare_overlay(normalized_context, context, [])
+
+    assert diagnostic.stage == :geometry and diagnostic.source == "page 1"
+    assert diagnostic.message =~ "max_pdf_numeric_token_bytes"
+    Limits.install(limits)
+
+    dictionary =
+      page.dictionary
+      |> Map.put("UserUnit", 1.0e-10)
+      |> Map.put("MediaBox", [0, 0, 1.0e-320, 100])
+
+    assert {:ok, underflow} =
+             IncrementalWriter.write(context, [{id, generation, {:value, dictionary}}])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Stamp.overlay(underflow, source)
+    assert diagnostic.source == "page 1" and diagnostic.message =~ "unrepresentable"
+
+    Limits.install(%{limits | max_pdf_numeric_magnitude: 1.0e308})
+
+    assert {:ok, overflow} =
+             IncrementalWriter.write(context, [
+               {id, generation, {:value, Map.put(page.dictionary, "UserUnit", 1.0e307)}}
+             ])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Stamp.overlay(overflow, source)
+    assert diagnostic.source == "page 1" and diagnostic.message =~ "unrepresentable"
+  end
+
   test "uses displayed geometry for rotated pages and UserUnit" do
     source = one_page_pdf("Rotated", {300, 200})
     assert {:ok, rotated} = Transform.rotate_pages(source, 90)

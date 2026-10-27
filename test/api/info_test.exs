@@ -162,6 +162,69 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     end
   end
 
+  test "page sizes reject unrepresentable units and products while retaining small physical sizes" do
+    page = fn unit ->
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 200] /UserUnit #{unit} >>"}
+      ])
+    end
+
+    for unit <- [String.duplicate("9", 400), "1" <> String.duplicate("0", 307) <> ".0"] do
+      source = page.(unit)
+      assert {:ok, _} = Reader.read(source)
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Info.page_sizes(source)
+      assert diagnostic.operation == :page_sizes and diagnostic.module == Info
+      assert diagnostic.source == "page 1"
+      assert diagnostic.message =~ "UserUnit" or diagnostic.message =~ "geometry"
+    end
+
+    Limits.install(Map.put(Limits.effective(), :max_pdf_numeric_magnitude, 1.0e308))
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             Info.page_sizes(page.("1" <> String.duplicate("0", 307) <> ".0"))
+
+    assert diagnostic.source == "page 1"
+    assert diagnostic.message =~ "geometry"
+
+    assert {:ok, [%{width: width, height: height}]} =
+             Info.page_sizes(page.("0." <> String.duplicate("0", 199) <> "1"))
+
+    assert width > 0 and height > 0
+  end
+
+  test "physical size preparation rejects conversion and underflow while preserving exact extents" do
+    huge = Integer.pow(10, 400)
+    Limits.install(Map.put(Limits.effective(), :max_pdf_numeric_magnitude, huge))
+
+    for {box, unit} <- [
+          {"0 0 #{huge} 1", "1"},
+          {"0 0 0.#{String.duplicate("0", 319)}1 1", "0.0000000001"}
+        ] do
+      source =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3, "<< /Type /Page /Parent 2 0 R /MediaBox [#{box}] /UserUnit #{unit} >>"}
+        ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Info.page_sizes(source)
+      assert diagnostic.source == "page 1" and diagnostic.message =~ "geometry"
+    end
+
+    left = 9_007_199_254_740_992
+
+    source =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [#{left} 0 #{left + 1} 1] >>"}
+      ])
+
+    assert {:ok, [%{width: 1.0, height: 1.0}]} = Info.page_sizes(source)
+  end
+
   test "detects encryption without loading encrypted objects" do
     encrypted =
       pdf(

@@ -361,17 +361,51 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         if width > 0 and height > 0 do
           sx = (right - left) / width
           sy = (top - bottom) / height
+          placement_matrix = [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
+          composed = PdfValidator.multiply_matrices(placement_matrix, matrix)
+          [combined_a, combined_b, combined_c, combined_d, _, _] = composed
 
-          {:ok,
-           Map.merge(placement, %{
-             stream: stream.ref,
-             matrix: [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
-           })}
+          if sx > 0 and sy > 0 and (combined_a != 0 or combined_b != 0) and
+               (combined_c != 0 or combined_d != 0) do
+            case PdfValidator.validate_geometry_numbers(placement_matrix ++ composed) do
+              :ok ->
+                {:ok,
+                 Map.merge(placement, %{
+                   stream: stream.ref,
+                   matrix: placement_matrix
+                 })}
+
+              failure ->
+                appearance_geometry_error(widget, failure)
+            end
+          else
+            appearance_geometry_error(widget)
+          end
         else
           error(:unsupported_form, "appearance has a degenerate BBox or Matrix")
         end
       end
     end
+  rescue
+    ArithmeticError -> appearance_geometry_error(widget)
+  end
+
+  defp appearance_geometry_error(widget, failure \\ nil) do
+    {reason, detail} =
+      case failure do
+        {:error, {:resource_limit_exceeded, diagnostic}} ->
+          {:resource_limit_exceeded, diagnostic.message}
+
+        _ ->
+          {:invalid_form, "values must remain representable within max_pdf_numeric_magnitude"}
+      end
+
+    source = "widget #{inspect(widget.ref)} on page #{widget.page}"
+
+    Diagnostics.error(:forms, reason, "appearance geometry for #{source}: #{detail}",
+      source: source,
+      module: __MODULE__
+    )
   end
 
   defp page_widgets(context) do

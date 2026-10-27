@@ -250,7 +250,11 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
                PdfValidator.number_array(document, media_box, 4),
              true <- right > left and top > bottom,
              {:ok, rotation} <- normalized_rotation(document, rotate),
-             {:ok, user_unit} <- normalized_user_unit(document, dictionary) do
+             {:ok, user_unit} <- normalized_user_unit(document, dictionary),
+             {:ok, media_left} <- PdfValidator.float_number(left),
+             {:ok, media_bottom} <- PdfValidator.float_number(bottom),
+             {:ok, media_right} <- PdfValidator.float_number(right),
+             {:ok, media_top} <- PdfValidator.float_number(top) do
           unrotated_width = (right - left) * user_unit
           unrotated_height = (top - bottom) * user_unit
 
@@ -260,23 +264,36 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
               false -> {unrotated_width, unrotated_height}
             end
 
-          {:ok,
-           %{
-             page_number: page_number,
-             width: width,
-             height: height,
-             unit: :point,
-             rotation: rotation,
-             media_box: %{
-               left: left * 1.0,
-               bottom: bottom * 1.0,
-               right: right * 1.0,
-               top: top * 1.0
-             }
-           }}
+          if width > 0 and height > 0 do
+            {:ok,
+             %{
+               page_number: page_number,
+               width: width,
+               height: height,
+               unit: :point,
+               rotation: rotation,
+               media_box: %{
+                 left: media_left,
+                 bottom: media_bottom,
+                 right: media_right,
+                 top: media_top
+               }
+             }}
+          else
+            page_error(page_number, "has unrepresentable physical page geometry")
+          end
         else
           {:error, :user_unit} ->
             page_error(page_number, "has a UserUnit value that is not a positive number")
+
+          {:error, :user_unit_range} ->
+            page_error(
+              page_number,
+              "has a UserUnit outside the representable max_pdf_numeric_magnitude range"
+            )
+
+          :error ->
+            page_error(page_number, "has unrepresentable MediaBox geometry")
 
           _ ->
             page_error(page_number, "has a malformed effective MediaBox or Rotate value")
@@ -285,6 +302,8 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
       _ ->
         page_error(page_number, "context is malformed")
     end
+  rescue
+    ArithmeticError -> page_error(page_number, "has unrepresentable physical page geometry")
   end
 
   defp normalized_rotation(document, value) do
@@ -300,7 +319,10 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   defp normalized_user_unit(document, dictionary) do
     case PdfValidator.resolve(document, Map.get(dictionary, "UserUnit", 1)) do
       {:ok, user_unit} when is_number(user_unit) and user_unit > 0 ->
-        {:ok, user_unit * 1.0}
+        case PdfValidator.float_number(user_unit) do
+          {:ok, value} -> {:ok, value}
+          :error -> {:error, :user_unit_range}
+        end
 
       _ ->
         {:error, :user_unit}

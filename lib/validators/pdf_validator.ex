@@ -939,6 +939,46 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc "Checks derived PDF geometry for representable operands and shared output number bounds."
+  @spec validate_geometry_numbers([number()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_geometry_numbers(values) do
+    Enum.reduce_while(values, :ok, fn value, :ok ->
+      case float_number(value) do
+        {:ok, _} ->
+          case validate_serialized_number(value) do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+
+        :error ->
+          {:halt,
+           Diagnostics.error(
+             :geometry,
+             :invalid_pdf_input,
+             "PDF geometry must be representable within max_pdf_numeric_magnitude",
+             module: __MODULE__
+           )}
+      end
+    end)
+  end
+
+  @doc "Composes validator-admitted six-value PDF matrices without rounding their operands."
+  @spec multiply_matrices([number()], [number()]) :: [number()]
+  def multiply_matrices(left, right) do
+    case {left, right} do
+      {[a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]} ->
+        [
+          a * a2 + c * b2,
+          b * a2 + d * b2,
+          a * c2 + c * d2,
+          b * c2 + d * d2,
+          a * e2 + c * f2 + e,
+          b * e2 + d * f2 + f
+        ]
+    end
+  end
+
   @doc """
   Resolves a fixed-length array whose elements must all be numbers.
 

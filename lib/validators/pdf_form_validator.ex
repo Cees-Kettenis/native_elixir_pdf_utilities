@@ -46,15 +46,15 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormValidator do
                [page] <- document.pages,
                %{value: %{"Contents" => contents} = page_value} <-
                  Map.get(document.objects, page.ref),
-               {:ok, dictionary, stream} <- prepare_content(contents, document),
                [0, 0, width, height] <- page.media_box,
-               true <-
-                 is_map(page.resources) and is_number(width) and is_number(height) and width > 0 and
-                   height > 0 do
+               true <- is_map(page.resources),
+               {:ok, normalization} <- prepare_normalization(width, height),
+               {:ok, dictionary, stream} <- prepare_content(contents, document) do
             {:ok,
              %{
                width: width,
                height: height,
+               normalization: normalization,
                stream: stream,
                content_dictionary: dictionary,
                resources: page.resources,
@@ -78,6 +78,46 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormValidator do
         end)
       end)
     end)
+  end
+
+  defp prepare_normalization(width, height) do
+    case {width, height} do
+      {width, height} when is_number(width) and width > 0 and is_number(height) and height > 0 ->
+        with {:ok, width} <- PdfValidator.float_number(width),
+             {:ok, height} <- PdfValidator.float_number(height) do
+          matrix = [1 / width, 0, 0, 1 / height, 0, 0]
+
+          case PdfValidator.validate_geometry_numbers(matrix) do
+            :ok -> {:ok, matrix}
+            failure -> normalization_error(failure)
+          end
+        else
+          _ -> normalization_error()
+        end
+
+      _ ->
+        :invalid
+    end
+  rescue
+    ArithmeticError -> normalization_error()
+  end
+
+  defp normalization_error(failure \\ nil) do
+    {reason, detail} =
+      case failure do
+        {:error, {:resource_limit_exceeded, diagnostic}} ->
+          {:resource_limit_exceeded, diagnostic.message}
+
+        _ ->
+          {:invalid_pdf_input,
+           "reciprocal dimensions must be representable within max_pdf_numeric_magnitude"}
+      end
+
+    Diagnostics.error(:geometry, reason, "PDF Form normalization geometry is invalid: #{detail}",
+      source: "PDF Form normalization",
+      operation: :prepare_pdf_form,
+      module: __MODULE__
+    )
   end
 
   defp prepare_content(contents, document) do

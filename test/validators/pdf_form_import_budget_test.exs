@@ -32,6 +32,78 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
     assert prepared.stream == "q\n\nQ\n"
   end
 
+  test "imported source normalization is admitted before the writer receives it", %{
+    context: context
+  } do
+    [page] = context.pages
+    {id, generation} = page.ref
+
+    for box <- [
+          [0, 0, 1.0e-320, 60],
+          [0, 0, 100, 1.0e-320],
+          [0, 0, 1.0e-100, 60],
+          [0, 0, Integer.pow(10, 400), 60]
+        ] do
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(page.dictionary, "MediaBox", box)}}
+               ])
+
+      image = %{format: :pdf_form, data: source, width_px: 100, height_px: 60}
+      draw = %{type: :image, x: 0, y: 0, width: 100, height: 60, image: image}
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfWriter.render([%{size: {100, 60}, boxes: [draw]}])
+
+      assert diagnostic.operation == :write_pdf and diagnostic.module == PdfWriter
+      assert diagnostic.message =~ "normalization"
+
+      assert {:error, {:invalid_pdf_input, %{stage: :geometry, source: "PDF Form normalization"}}} =
+               PdfWriter.appearance_objects([%{size: {100, 60}, boxes: [draw]}], 1)
+    end
+
+    assert {:ok, source} =
+             IncrementalWriter.write(context, [
+               {id, generation,
+                {:value, Map.put(page.dictionary, "MediaBox", [0, 0, 1.0e-8, 60])}}
+             ])
+
+    assert {:ok, prepared} = PdfFormValidator.prepare_source(source)
+    assert [sx, 0, 0, sy, 0, 0] = prepared.normalization
+    assert sx == 1.0e8 and sy > 0
+
+    assert {:ok, source} =
+             IncrementalWriter.write(context, [
+               {id, generation, {:value, Map.put(page.dictionary, "MediaBox", [0, 0, 3, 60])}}
+             ])
+
+    Limits.install(Map.put(Limits.effective(), :max_pdf_numeric_token_bytes, 12))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfFormValidator.prepare_source(source)
+
+    assert diagnostic.message =~ "normalization" and
+             diagnostic.message =~ "max_pdf_numeric_token_bytes"
+  end
+
+  test "nonpositive imported dimensions retain the ordinary invalid-source diagnostic", %{
+    context: context
+  } do
+    [page] = context.pages
+    {id, generation} = page.ref
+
+    for box <- [[0, 0, 0, 60], [0, 0, 100, 0], [0, 0, -1, 60]] do
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(page.dictionary, "MediaBox", box)}}
+               ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = PdfFormValidator.prepare_source(source)
+      assert diagnostic.stage == :pdf and diagnostic.source == "PDF Form source"
+      assert diagnostic.message =~ "bounded dimensions"
+    end
+  end
+
   test "standalone imports share parsing and object-stream decoding with later Contents decoding" do
     assert {:ok, context} =
              Reader.read_validated(File.read!(Paths.fixture("pdf_reader/object-stream.pdf")))

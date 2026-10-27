@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.IncrementalWriter
   @doc false
   @spec write(map()) :: {:ok, binary()} | {:error, {atom(), map()}}
@@ -84,7 +85,7 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
             graphics_state_id
           )
 
-        matrix = placement_matrix(placement)
+        matrix = placement.matrix
 
         invocation =
           "\nQ\n" <> invocation_stream(matrix, xobject_name, graphics_state_name)
@@ -197,7 +198,10 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
     [
       "q ",
       graphics_state,
-      Enum.map_join(matrix, " ", &format_number/1),
+      Enum.map_join(matrix, " ", fn value ->
+        {:ok, encoded} = InfoCodec.serialize_value(value)
+        IO.iodata_to_binary(encoded)
+      end),
       " cm /",
       xobject_name,
       " Do Q"
@@ -205,88 +209,10 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
     |> IO.iodata_to_binary()
   end
 
-  defp placement_matrix(placement) do
-    fit = fit_matrix(placement.source, placement.target, placement.fit)
-
-    transformed =
-      case placement.transform do
-        %{rotation: rotation, pivot: pivot} ->
-          multiply(rotation_matrix(rotation, pivot), fit)
-
-        nil ->
-          fit
-      end
-
-    multiply(placement.target.inverse_normalization, transformed)
-  end
-
-  defp fit_matrix(source, target, mode) do
-    case mode do
-      :exact ->
-        identity()
-
-      :stretch ->
-        [target.width / source.width, 0.0, 0.0, target.height / source.height, 0.0, 0.0]
-
-      mode when mode in [:contain, :cover] ->
-        scale =
-          case mode do
-            :contain -> min(target.width / source.width, target.height / source.height)
-            :cover -> max(target.width / source.width, target.height / source.height)
-          end
-
-        width = source.width * scale
-        height = source.height * scale
-        [scale, 0.0, 0.0, scale, (target.width - width) / 2, (target.height - height) / 2]
-    end
-  end
-
-  defp rotation_matrix(rotation, {pivot_x, pivot_y}) do
-    radians = -rotation * :math.pi() / 180
-    cosine = :math.cos(radians)
-    sine = :math.sin(radians)
-
-    [
-      cosine,
-      sine,
-      -sine,
-      cosine,
-      pivot_x - cosine * pivot_x + sine * pivot_y,
-      pivot_y - sine * pivot_x - cosine * pivot_y
-    ]
-  end
-
-  defp identity, do: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-
-  defp multiply([a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]) do
-    [
-      a * a2 + c * b2,
-      b * a2 + d * b2,
-      a * c2 + c * d2,
-      b * c2 + d * d2,
-      a * e2 + c * f2 + e,
-      b * e2 + d * f2 + f
-    ]
-  end
-
   defp put_optional(dictionary, key, value) do
     case value do
       nil -> dictionary
       value -> Map.put(dictionary, key, value)
-    end
-  end
-
-  defp format_number(number) do
-    case number == 0 do
-      true ->
-        "0"
-
-      false ->
-        number
-        |> Kernel.*(1.0)
-        |> :erlang.float_to_binary(decimals: 10)
-        |> String.trim_trailing("0")
-        |> String.trim_trailing(".")
     end
   end
 end
