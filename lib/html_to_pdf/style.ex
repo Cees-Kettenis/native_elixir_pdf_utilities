@@ -1203,7 +1203,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      )
                    )
                ),
-             style: text_style(inherited_style)
+             style: reuse_inherited_text_style(inherited_style, rules)
            })
          ], nil, counters}
 
@@ -3104,7 +3104,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         style =
           inherited_style
-          |> text_style()
+          |> reuse_inherited_text_style(rules)
           |> Map.merge(defaults)
           |> Map.merge(%{
             _inherited_font:
@@ -3630,6 +3630,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       border_colors: CssValueValidator.edges(Map.get(parent, :color, {0, 0, 0})),
       vertical_align: :baseline
     })
+  end
+
+  # Ordinary child traversal already projects its parent's inheritable text
+  # properties. Remove only the table context carried alongside that projection.
+  # Source inspection passes full parent styles, and SVG adds its own state, so
+  # those paths still need the complete projection.
+  defp reuse_inherited_text_style(style, rules) do
+    if Map.has_key?(rules, :source_budget) or Map.get(style, :_svg_prepare, false),
+      do: text_style(style),
+      else: Map.drop(style, [:_table_vertical_align, :_table_border_colors])
   end
 
   defp text_style(style) do

@@ -7,17 +7,29 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   @spec print_pdf!(String.t(), String.t(), String.t(), map() | nil) :: :ok
   def print_pdf!(binary, fixture, output, reference \\ nil) do
     slot = :erlang.phash2(self(), ExUnit.configuration()[:max_cases])
-    name = {:global, {__MODULE__, binary, slot, System.get_env("FONTCONFIG_FILE")}}
+    fontconfig = System.get_env("FONTCONFIG_FILE")
+    name = {:global, {__MODULE__, binary, slot, nil}}
 
     pid =
-      case GenServer.start(__MODULE__, {binary, slot}, name: name) do
-        {:ok, pid} -> pid
-        {:error, {:already_started, pid}} -> pid
+      if fontconfig do
+        # A fontconfig override used to launch a fresh CLI process. Keep that
+        # process isolation while using the same readiness barrier as the pool.
+        {:ok, pid} = GenServer.start(__MODULE__, {binary, slot})
+        pid
+      else
+        case GenServer.start(__MODULE__, {binary, slot}, name: name) do
+          {:ok, pid} -> pid
+          {:error, {:already_started, pid}} -> pid
+        end
       end
 
-    case GenServer.call(pid, {:pdf, fixture, output, reference}, :infinity) do
-      :ok -> :ok
-      {:error, message} -> flunk(message)
+    try do
+      case GenServer.call(pid, {:pdf, fixture, output, reference}, :infinity) do
+        :ok -> :ok
+        {:error, message} -> flunk(message)
+      end
+    after
+      if fontconfig && Process.alive?(pid), do: GenServer.stop(pid)
     end
   end
 
@@ -73,11 +85,38 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         ]
       ])
 
-    {:ok, %{port: port, profile: profile, log: log, next_id: 1, buffer: "", events: []}}
+    {:ok,
+     %{
+       port: port,
+       profile: profile,
+       log: log,
+       next_id: 1,
+       buffer: "",
+       events: [],
+       pending: %{},
+       loading: MapSet.new(),
+       deadline: nil,
+       session: nil,
+       readiness: []
+     }}
   end
 
   @impl true
   def handle_call({:pdf, fixture, output, reference}, _from, state) do
+    state = %{
+      state
+      | deadline: System.monotonic_time(:millisecond) + ExUnit.configuration()[:timeout],
+        pending: %{},
+        session: nil,
+        loading: MapSet.new(),
+        readiness: []
+    }
+
+    url =
+      if URI.parse(fixture).scheme in ["http", "https", "file"],
+        do: fixture,
+        else: "file://" <> URI.encode(Path.expand(fixture))
+
     try do
       {context, state} = command(state, "Target.createBrowserContext")
 
@@ -91,7 +130,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         command(state, "Target.attachToTarget", %{targetId: target["targetId"], flatten: true})
 
       session = attached["sessionId"]
+      state = %{state | session: session}
       {_, state} = command(state, "Page.enable", %{}, session)
+      {_, state} = command(state, "Network.enable", %{}, session)
       {_, state} = command(state, "Page.setLifecycleEventsEnabled", %{enabled: true}, session)
       {_, state} = command(state, "Emulation.setScriptExecutionDisabled", %{value: true}, session)
       {_, state} = command(state, "Emulation.setEmulatedMedia", %{media: "print"}, session)
@@ -126,7 +167,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
           %{state | events: []},
           "Page.navigate",
           %{
-            url: "file://" <> URI.encode(Path.expand(fixture))
+            url: url
           },
           session
         )
@@ -138,18 +179,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
           event["loaderId"] == navigation["loaderId"] and event["name"] == "load"
         end)
 
-      {_, state} =
-        command(
-          state,
-          "Emulation.setVirtualTimePolicy",
-          %{
-            policy: "pauseIfNetworkFetchesPending",
-            budget: 1000
-          },
-          session
-        )
-
-      state = await_event(state, session, "Emulation.virtualTimeBudgetExpired", fn _ -> true end)
+      state = await_documents(state, session)
+      File.write!(output <> ".readiness.json", :json.encode(state.readiness))
 
       {pdf, state} = print_page(state, session)
 
@@ -165,12 +196,14 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
           browserContextId: context["browserContextId"]
         })
 
-      {:reply, :ok, %{state | events: []}}
+      {:reply, :ok, %{state | events: [], deadline: nil}}
     rescue
       exception ->
+        File.write!(output <> ".readiness-error.txt", Exception.message(exception))
+
         {:stop, :normal,
          {:error,
-          "Chromium PDF rendering failed for file://#{Path.expand(fixture)}: #{Exception.message(exception)}; log: #{state.log}"},
+          "Chromium PDF rendering failed for #{url}: #{Exception.message(exception)}; log: #{state.log}"},
          state}
     end
   end
@@ -203,6 +236,111 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
 
     File.rm_rf!(state.profile)
     :ok
+  end
+
+  # The parent load event does not establish that every embedded document has
+  # reached its final layout. Drain actual loads, settle each frame, then check
+  # that no new frame or resource appeared while doing so.
+  defp await_documents(state, session) do
+    if System.monotonic_time(:millisecond) >= state.deadline,
+      do: readiness_timeout!(state)
+
+    if map_size(state.pending) > 0 or MapSet.size(state.loading) > 0 do
+      {message, state} = read_message(state)
+      await_documents(record_event(state, message), session)
+    else
+      {tree, state} = command(state, "Page.getFrameTree", %{}, session)
+
+      if map_size(state.pending) > 0 or MapSet.size(state.loading) > 0 do
+        await_documents(state, session)
+      else
+        flatten = fn flatten, node ->
+          [
+            node["frame"]
+            | Enum.flat_map(Map.get(node, "childFrames", []), &flatten.(flatten, &1))
+          ]
+        end
+
+        frames = flatten.(flatten, tree["frameTree"])
+        expression = File.read!(Path.join(__DIR__, "chromium_document_readiness.js"))
+
+        {readiness, state} =
+          Enum.map_reduce(frames, state, fn frame, state ->
+            {world, state} =
+              command(
+                state,
+                "Page.createIsolatedWorld",
+                %{
+                  frameId: frame["id"],
+                  worldName: "pdf-comparison-readiness"
+                },
+                session
+              )
+
+            {result, state} =
+              command(
+                state,
+                "Runtime.evaluate",
+                %{
+                  expression: expression,
+                  contextId: world["executionContextId"],
+                  returnByValue: true,
+                  awaitPromise: true
+                },
+                session
+              )
+
+            if result["exceptionDetails"],
+              do: raise("Chromium frame readiness failed: #{inspect(result["exceptionDetails"])}")
+
+            {Map.merge(frame, get_in(result, ["result", "value"])), state}
+          end)
+
+        state = %{state | readiness: readiness}
+        {_, state} = command(state, "Page.getLayoutMetrics", %{}, session)
+        {after_tree, state} = command(state, "Page.getFrameTree", %{}, session)
+
+        if tree == after_tree and map_size(state.pending) == 0 and MapSet.size(state.loading) == 0 and
+             Enum.all?(readiness, &(&1["ready"] == "complete" and &1["fonts"] == "loaded")) do
+          state
+        else
+          await_documents(state, session)
+        end
+      end
+    end
+  end
+
+  defp record_event(state, message) do
+    session = message["sessionId"]
+    params = message["params"] || %{}
+
+    state =
+      case if(session == state.session, do: message["method"], else: nil) do
+        "Network.requestWillBeSent" ->
+          %{
+            state
+            | pending:
+                Map.put(
+                  state.pending,
+                  {session, params["requestId"]},
+                  get_in(params, ["request", "url"])
+                )
+          }
+
+        method when method in ["Network.loadingFinished", "Network.loadingFailed"] ->
+          %{state | pending: Map.delete(state.pending, {session, params["requestId"]})}
+
+        "Page.frameStartedLoading" ->
+          %{state | loading: MapSet.put(state.loading, {session, params["frameId"]})}
+
+        method when method in ["Page.frameStoppedLoading", "Page.frameDetached"] ->
+          %{state | loading: MapSet.delete(state.loading, {session, params["frameId"]})}
+
+        _ ->
+          state
+      end
+
+    %{state | events: [message | state.events]}
   end
 
   defp raster_svg_reference(state, session, output, pdf) do
@@ -318,28 +456,37 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
       if message["error"], do: raise("Chrome command failed: #{inspect(message)}")
       {message["result"], state}
     else
-      await_response(%{state | events: state.events ++ [message]}, id)
+      await_response(record_event(state, message), id)
     end
   end
 
   defp await_event(state, session, method, predicate) do
     {before, remaining} =
-      Enum.split_while(state.events, fn event ->
+      Enum.split_while(Enum.reverse(state.events), fn event ->
         not (event["sessionId"] == session and event["method"] == method and
                predicate.(event["params"]))
       end)
 
     case remaining do
       [_event | rest] ->
-        %{state | events: before ++ rest}
+        %{state | events: Enum.reverse(before ++ rest)}
 
       [] ->
         {message, state} = read_message(state)
-        await_event(%{state | events: state.events ++ [message]}, session, method, predicate)
+        await_event(record_event(state, message), session, method, predicate)
     end
   end
 
+  defp readiness_timeout!(state) do
+    raise(
+      "Chromium readiness/command deadline exceeded; pending=#{inspect(state.pending)} loading=#{inspect(state.loading)} frames=#{inspect(state.readiness)}; log=#{state.log}"
+    )
+  end
+
   defp read_message(state) do
+    if state.deadline && System.monotonic_time(:millisecond) >= state.deadline,
+      do: readiness_timeout!(state)
+
     case :binary.match(state.buffer, <<0>>) do
       {offset, 1} ->
         message = binary_part(state.buffer, 0, offset)
@@ -353,7 +500,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
           {^port, {:data, data}} -> read_message(%{state | buffer: state.buffer <> data})
           {^port, {:exit_status, status}} -> raise("Chrome pipe exited with status #{status}")
         after
-          ExUnit.configuration()[:timeout] -> raise("Timed out waiting for Chrome pipe")
+          max(
+            0,
+            (state.deadline ||
+               System.monotonic_time(:millisecond) + ExUnit.configuration()[:timeout]) -
+                System.monotonic_time(:millisecond)
+          ) ->
+            readiness_timeout!(state)
         end
     end
   end

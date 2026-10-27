@@ -645,7 +645,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         }
       )
     else
-      if System.get_env("BROWSER_PARITY_BROWSER") == "cli" or System.get_env("FONTCONFIG_FILE") do
+      if System.get_env("BROWSER_PARITY_BROWSER") == "cli" do
         render_chromium_cli!(chromium_bin, fixture_path, output_path)
       else
         NativeElixirPdfUtilities.TestSupport.ChromiumPool.print_pdf!(

@@ -432,6 +432,8 @@ if report_path do
     erts: :erlang.system_info(:version) |> List.to_string(),
     architecture: :erlang.system_info(:system_architecture) |> List.to_string(),
     schedulers: :erlang.system_info(:schedulers_online),
+    dirty_cpu_schedulers: :erlang.system_info(:dirty_cpu_schedulers_online),
+    dirty_io_schedulers: :erlang.system_info(:dirty_io_schedulers),
     input_hashes: file_hashes.(evidence_files),
     input_sources: input_sources,
     library_hashes: file_hashes.(Path.wildcard(Path.expand("../lib/**/*.ex", __DIR__))),
@@ -445,73 +447,85 @@ if report_path do
     workloads: Enum.reverse(Process.get(:performance_results))
   }
 
+  if baseline_path do
+    try do
+      baseline_file = baseline_path |> File.read!() |> :json.decode()
+
+      baseline =
+        case baseline_file do
+          %{"reports" => reports} ->
+            Map.fetch!(
+              reports,
+              System.get_env("PERFORMANCE_BASELINE_KEY", "elixir-#{runtime_version}.json")
+            )
+
+          single_report ->
+            single_report
+        end
+
+      for key <- [:elixir, :otp, :erts, :architecture, :schedulers] do
+        if Map.fetch!(baseline, Atom.to_string(key)) != Map.fetch!(report, key) do
+          raise "fixed performance baseline has different #{key}; use the same runtime and VM settings"
+        end
+      end
+
+      # The harness itself may gain checks. Workload fixtures, fonts, PNG builder
+      # and dependency lock must retain their bytes across milestone comparisons.
+      baseline_inputs =
+        Map.fetch!(baseline, "input_hashes") |> Map.delete("scripts/performance-regression.exs")
+
+      candidate_inputs = Map.delete(report.input_hashes, "scripts/performance-regression.exs")
+
+      if baseline_inputs != candidate_inputs do
+        raise "fixed performance baseline inputs differ; preserve fixtures, assets and dependencies"
+      end
+
+      baseline_workloads =
+        Map.new(Map.fetch!(baseline, "workloads"), &{Map.fetch!(&1, "name"), &1})
+
+      if Enum.sort(Map.keys(baseline_workloads)) !=
+           Enum.sort(Enum.map(report.workloads, & &1.name)) do
+        raise "fixed performance baseline workloads differ; do not remove or replace measured cases"
+      end
+
+      for workload <- report.workloads do
+        baseline_workload = Map.fetch!(baseline_workloads, workload.name)
+        baseline_ms = Map.fetch!(baseline_workload, "median_ms")
+        maximum_ms = baseline_ms
+        change_percent = (workload.median_ms / baseline_ms - 1) * 100
+
+        IO.inspect(
+          %{
+            name: workload.name,
+            baseline_ms: baseline_ms,
+            candidate_ms: workload.median_ms,
+            time_change_percent: Float.round(change_percent, 3),
+            maximum_ms: maximum_ms
+          },
+          label: "PERFORMANCE_MILESTONE"
+        )
+
+        if workload.median_ms > maximum_ms do
+          record_failure.(
+            "#{workload.name} exceeded the fixed wall-clock baseline: " <>
+              "#{workload.median_ms} ms versus fixed #{baseline_ms} ms, no regression allowance"
+          )
+        end
+      end
+    rescue
+      error ->
+        record_failure.(
+          "fixed performance baseline comparison failed: #{Exception.message(error)}"
+        )
+    end
+  end
+
+  # Milestone comparisons can add failures after workload guards. Persist the
+  # final result once so the saved evidence agrees with the command's outcome.
+  report = %{report | guard_failures: Enum.reverse(Process.get(:performance_failures))}
   File.mkdir_p!(Path.dirname(report_path))
   File.write!(report_path, [:json.encode(report), "\n"])
   IO.puts("PERFORMANCE_REPORT path=#{report_path}")
-
-  if baseline_path do
-    baseline_file = baseline_path |> File.read!() |> :json.decode()
-
-    baseline =
-      case baseline_file do
-        %{"reports" => reports} ->
-          Map.fetch!(
-            reports,
-            System.get_env("PERFORMANCE_BASELINE_KEY", "elixir-#{runtime_version}.json")
-          )
-
-        single_report ->
-          single_report
-      end
-
-    for key <- [:elixir, :otp, :erts, :architecture, :schedulers] do
-      if Map.fetch!(baseline, Atom.to_string(key)) != Map.fetch!(report, key) do
-        raise "fixed performance baseline has different #{key}; use the same runtime and VM settings"
-      end
-    end
-
-    # The harness itself may gain checks. Workload fixtures, fonts, PNG builder
-    # and dependency lock must retain their bytes across milestone comparisons.
-    baseline_inputs =
-      Map.fetch!(baseline, "input_hashes") |> Map.delete("scripts/performance-regression.exs")
-
-    candidate_inputs = Map.delete(report.input_hashes, "scripts/performance-regression.exs")
-
-    if baseline_inputs != candidate_inputs do
-      raise "fixed performance baseline inputs differ; preserve fixtures, assets and dependencies"
-    end
-
-    baseline_workloads = Map.new(Map.fetch!(baseline, "workloads"), &{Map.fetch!(&1, "name"), &1})
-
-    if Enum.sort(Map.keys(baseline_workloads)) != Enum.sort(Enum.map(report.workloads, & &1.name)) do
-      raise "fixed performance baseline workloads differ; do not remove or replace measured cases"
-    end
-
-    for workload <- report.workloads do
-      baseline_workload = Map.fetch!(baseline_workloads, workload.name)
-      baseline_ms = Map.fetch!(baseline_workload, "median_ms")
-      maximum_ms = baseline_ms
-      change_percent = (workload.median_ms / baseline_ms - 1) * 100
-
-      IO.inspect(
-        %{
-          name: workload.name,
-          baseline_ms: baseline_ms,
-          candidate_ms: workload.median_ms,
-          time_change_percent: Float.round(change_percent, 3),
-          maximum_ms: maximum_ms
-        },
-        label: "PERFORMANCE_MILESTONE"
-      )
-
-      if workload.median_ms > maximum_ms do
-        record_failure.(
-          "#{workload.name} exceeded the fixed wall-clock baseline: " <>
-            "#{workload.median_ms} ms versus fixed #{baseline_ms} ms, no regression allowance"
-        )
-      end
-    end
-  end
 end
 
 case Enum.reverse(Process.get(:performance_failures)) do

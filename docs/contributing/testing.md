@@ -83,7 +83,7 @@ mise exec -- mix test test/html_to_pdf/tables/atomic_table_overflow_test.exs
 | --- | --- |
 | Formatting | `mise exec -- mix format --check-formatted` |
 | Coverage | `mise exec -- mix test --cover --warnings-as-errors` |
-| Performance | `mise exec -- mix test.performance` |
+| Performance | `mise exec -- ./scripts/check-performance` |
 | Dialyzer | `MIX_ENV=test mise exec -- mix dialyzer` |
 
 If Elixir and Erlang are already on your PATH, the `mix` commands can run without
@@ -214,7 +214,13 @@ Native-versus-native comparisons do not replace browser acceptance.
 The alias runs up to six modules concurrently. Process-wide environment changes
 and load-sensitive reference cases stay serial. Each comparison uses a fresh
 browser context with author JavaScript disabled and print media selected. The
-suite closes browser processes and removes temporary profiles.
+suite closes browser processes and removes temporary profiles. Before capture,
+the shared helper waits for outstanding frame/resource loads, settles fonts and
+image decoding in each document, and checks that the frame tree stayed stable.
+Readiness state and timeout diagnostics are retained beside the comparison PDF.
+Fontconfig overrides use a fresh browser process with the same readiness checks.
+The helper uses the suite timeout, keeps author scripts disabled and preserves
+broken-resource fallback rather than retrying a failed visual comparison.
 
 For a smaller host, reduce concurrency with `mix test.browser_parity --max-cases 2`.
 Use `BROWSER_PARITY_BROWSER=cli` to diagnose with the command-line printing path.
@@ -238,7 +244,7 @@ workload's baseline.
 Retain a complete measurement report when investigating performance:
 
 ```bash
-PERFORMANCE_REPORT=.quality/performance/candidate.json mise exec -- mix test.performance
+PERFORMANCE_REPORT=.quality/performance/candidate.json mise exec -- ./scripts/check-performance
 ```
 
 For cumulative timing comparisons, supply the fixed baseline from the start of
@@ -246,7 +252,7 @@ the work, captured on the same idle host with the same runtime and VM settings:
 
 ```bash
 PERFORMANCE_BASELINE_REPORT=.quality/performance/baselines/reports.json \
-PERFORMANCE_REPORT=.quality/performance/candidate.json mise exec -- mix test.performance
+PERFORMANCE_REPORT=.quality/performance/candidate.json mise exec -- ./scripts/check-performance
 ```
 
 The baseline can be a single report or a bundle. A bundle selects
@@ -256,6 +262,12 @@ dependency lock must match. Each existing workload must stay at or below its
 fixed elapsed-time baseline, covering the whole work rather than each
 individual change. Preserve that original baseline when recapturing under
 controlled conditions.
+
+The shared `scripts/check-performance` entry point starts the benchmark VM with
+four normal schedulers, four dirty CPU schedulers and ten dirty IO schedulers in
+both local matrix runs and CI. Use that entry point for comparable measurements.
+CI uploads its complete performance report even when a workload or fixed-baseline
+comparison fails. Existing reduction and one-second ceilings are unchanged.
 
 The report retains timed samples, medians, reductions, PDF sizes, runtime details
 and input hashes, including on failure. Separate memory runs sample total BEAM

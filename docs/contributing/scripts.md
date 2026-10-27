@@ -8,6 +8,7 @@ See [Contributing](../../CONTRIBUTING.md) for setup and
 | --- | --- |
 | `quality-matrix` | Validate supported runtimes in parallel, then measure latest-runtime performance |
 | `test-quality-matrix` | Exercise matrix orchestration with simulated containers and Mix commands |
+| `check-performance` | Run the benchmark with the same VM scheduler settings as CI |
 | `performance-regression.exs` | Measure the existing guarded workloads and compare a fixed capture |
 | `benchmarks/` | Focused HTML-rendering and image benchmarks |
 | `fixtures/` | Rebuild browser sheets, reference fonts, PNG/PDF cases and Math reference inputs |
@@ -20,7 +21,7 @@ Common commands:
 ./scripts/quality-matrix
 QUALITY_MATRIX_JOBS=1 ./scripts/quality-matrix
 ./scripts/quality-matrix --matrix-json
-mise exec -- mix test.performance
+mise exec -- ./scripts/check-performance
 MIX_ENV=test mise exec -- mix run scripts/fixtures/build-browser-sheets.exs
 mise exec -- mix run scripts/examples/generate-html-to-pdf.exs
 ```

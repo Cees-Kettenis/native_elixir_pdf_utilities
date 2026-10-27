@@ -84,7 +84,7 @@ if [[ "${1:-}" == --runtime ]]; then
 
   if [[ "${phase}" == performance && "${canonical}" == true ]]; then
     export PERFORMANCE_REPORT="${repository_root}/${log_dir}/performance.json"
-    run_stage performance mix test.performance
+    run_stage performance ./scripts/check-performance
   elif [[ "${phase}" == checks ]]; then
     run_stage runtime bash -c \
       'set -e; for tool in chromium pdftoppm pdftotext pdffonts qpdf fc-match; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir $1."' bash "${version}"
