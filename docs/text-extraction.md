@@ -123,8 +123,9 @@ text may still be hidden by clipping, transparency, or other content.
 Unsupported font encodings, vertical Type0 CMaps, inherited `usecmap` mappings,
 and inline images can prevent extraction. Encrypted PDFs are not supported.
 Failures use the [diagnostic tuple](diagnostics.md).
-Hexadecimal strings in ToUnicode and Type0 Encoding CMaps accept an odd final
-digit by padding it with zero. Invalid or mismatched codespace endpoints return
+Hexadecimal strings in ToUnicode and Type0 Encoding CMaps ignore the specified
+whitespace, including between digits. An odd final digit is padded with zero
+after whitespace removal. Invalid or mismatched codespace endpoints return
 `:invalid_pdf_input` with page and font context.
 
 [Extraction limits](resource-limits.md#text-extraction) cap content, work, spans,

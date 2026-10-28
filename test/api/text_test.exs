@@ -3097,6 +3097,246 @@ defmodule NativeElixirPdfUtilities.TextTest do
     end
   end
 
+  @tag :cmap_whitespace
+  test "ToUnicode hexadecimal strings accept every specified whitespace byte" do
+    for whitespace <- [<<0>>, "\t", "\n", "\f", "\r", " "] do
+      cmap = """
+      1#{whitespace}begincodespacerange
+      <#{whitespace}0#{whitespace}0#{whitespace}>#{whitespace}<F#{whitespace}F>
+      endcodespacerange
+      1#{whitespace}beginbfchar
+      % discarded entry <41> <0042>\f<4#{whitespace}1>#{whitespace}<#{whitespace}0#{whitespace}0#{whitespace}4#{whitespace}1#{whitespace}>
+      % <41> <0042> must remain a comment
+      endbfchar
+      """
+
+      source =
+        page_pdf("BT /F1 10 Tf (A) Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+      assert {:ok, "A"} = Text.extract(source, layout: false)
+      assert {:ok, %{pages: [%{spans: [%{text: "A"}]}]}} = Text.extract_spans(source)
+    end
+  end
+
+  @tag :cmap_whitespace
+  test "spaced Unicode ranges and destination arrays retain their decoded values" do
+    for target <- ["<0 0 4 1>", "[<0 0 4 1> <0\t0\n4\r2>]"] do
+      cmap =
+        "1 begincodespacerange <0 0> <F F> endcodespacerange 1 beginbfrange <0 1> <0 2> #{target} endbfrange"
+
+      source =
+        page_pdf("BT /F1 10 Tf <0102> Tj ET",
+          font: "<< /Type /Font /ToUnicode 7 0 R >>",
+          cmap: cmap
+        )
+
+      assert {:ok, "AB"} = Text.extract(source, layout: false)
+    end
+
+    cmap =
+      "1 begincodespacerange < 0 > < F > endcodespacerange 1 beginbfrange < 4 > < 4 > < 0 0 4 > endbfrange"
+
+    source =
+      page_pdf("BT /F1 10 Tf <40> Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    assert {:ok, "@"} = Text.extract(source, layout: false)
+  end
+
+  @tag :cmap_whitespace
+  test "CID and notdef character and range mappings decode spaced codes with the correct widths" do
+    encoding = """
+    1 begincodespacerange <0 0> <F F> endcodespacerange
+    1 begincidchar <0 1> 10 endcidchar
+    1 begincidrange <0 2> <0 2> 20 endcidrange
+    1 beginnotdefchar <0 3> 30 endnotdefchar
+    1 beginnotdefrange <0 4> <0 4> 40 endnotdefrange
+    """
+
+    cmap =
+      "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfrange <01> <04> <0041> endbfrange"
+
+    source =
+      page_pdf("BT /F1 10 Tf <01> Tj <02> Tj <03> Tj <04> Tj ET",
+        font:
+          "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+        cmap: cmap,
+        descendant:
+          "<< /Type /Font /Subtype /CIDFontType2 /W [10 [1000] 20 [2000] 30 [3000] 40 [4000]] >>",
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:ok, "ABCD"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source)
+    assert Enum.map(spans, &(&1.end_x - &1.x)) == [10.0, 20.0, 30.0, 40.0]
+  end
+
+  @tag :cmap_whitespace
+  test "spaced and odd hexadecimal range endpoints reserve their full expansion work" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    prefix = "1 begincodespacerange < 0 > < F > endcodespacerange "
+    cmap = prefix <> "1 beginbfrange < 0 > < F > <0 0 4 1> endbfrange"
+
+    source =
+      page_pdf("BT /F1 10 Tf <00> Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 241 + 2})
+    assert {:ok, "A"} = Text.extract(source, layout: false)
+    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 240})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+    assert diagnostic.stage == :limits
+    assert diagnostic.message =~ "max_cmap_work"
+
+    Limits.install(original)
+
+    for operator <- ["cidrange", "notdefrange"] do
+      encoding = prefix <> "1 begin#{operator} < 0 > < F > 0 end#{operator}"
+
+      source =
+        page_pdf("BT /F1 10 Tf <00> Tj ET",
+          font:
+            "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+          cmap: cmap,
+          extra_objects: [{9, stream_object("", encoding)}]
+        )
+
+      Limits.install(%{
+        original
+        | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 2 + 482 + 2
+      })
+
+      assert {:ok, "A"} = Text.extract(source, layout: false)
+      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 2 + 481})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+      assert diagnostic.message =~ "max_cmap_work"
+    end
+  end
+
+  @tag :cmap_whitespace
+  test "accepting whitespace does not weaken CMap source, expanded byte or work limits" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    cmap =
+      "1 begincodespacerange <0 0> <F F> endcodespacerange 1 beginbfchar <0 1> <0 0 4 1> endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf <01> Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
+
+    assert {:ok, "A"} = Text.extract(source, layout: false)
+
+    for {key, value} <- [
+          max_cmap_bytes: byte_size(cmap) - 1,
+          max_cmap_expanded_bytes: 1,
+          max_cmap_work: byte_size(cmap) + 1
+        ] do
+      Limits.install(Map.put(original, key, value))
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+      assert diagnostic.stage in [:limits, :cmap]
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.module == Text
+      assert diagnostic.operation == :extract
+      assert diagnostic.message =~ "CMap"
+    end
+  end
+
+  @tag :cmap_whitespace
+  test "invalid whitespace, comments inside hexadecimal strings and malformed arrays remain rejected" do
+    prefix = "1 begincodespacerange <00> <FF> endcodespacerange "
+
+    mappings =
+      for target <- ["0\v041", "00 41", "004G", "00% comment\n41", "", " \t\r\n\f" <> <<0>>],
+          do: "1 beginbfchar <01> <#{target}> endbfchar"
+
+    mappings =
+      mappings ++
+        for array <- ["[<0 0 4 1> garbage]", "[<0 0 4 1> <GG>]", "[<0 0 4 1> < >]"],
+            do: "1 beginbfrange <01> <01> #{array} endbfrange"
+
+    for mapping <- mappings do
+      source =
+        page_pdf("BT /F1 10 Tf <01> Tj ET",
+          font: "<< /Type /Font /ToUnicode 7 0 R >>",
+          cmap: prefix <> mapping
+        )
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Text.extract(source)
+      assert diagnostic.stage == :cmap
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.module == Text
+      assert diagnostic.operation == :extract
+      assert diagnostic.message =~ "page 1"
+    end
+  end
+
+  @tag :cmap_whitespace
+  test "spaced mappings retain Unicode and CID entry ceilings" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    prefix = "1 begincodespacerange <0 0> <F F> endcodespacerange "
+    unicode = prefix <> "2 beginbfchar <0 1> <0 0 4 1> <0 2> <0 0 4 2> endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf <0102> Tj ET",
+        font: "<< /Type /Font /ToUnicode 7 0 R >>",
+        cmap: unicode
+      )
+
+    Limits.install(%{original | max_cmap_entries: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+    assert diagnostic.stage == :cmap and diagnostic.message =~ "entry count"
+
+    unicode = prefix <> "1 beginbfchar <0 1> <0 0 4 1> endbfchar"
+    encoding = prefix <> "2 begincidchar <0 1> 1 <0 2> 2 endcidchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font:
+          "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+        cmap: unicode,
+        extra_objects: [{9, stream_object("", encoding)}]
+      )
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+    assert diagnostic.stage == :cmap and diagnostic.message =~ "entry count"
+  end
+
+  @tag :cmap_whitespace
+  test "NUL-separated metadata cannot bypass unsupported CMap mode and inheritance checks" do
+    cmap = "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <01> <0041> endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font: "<< /Type /Font /ToUnicode 7 0 R >>",
+        cmap: "/Identity-H" <> <<0>> <> "usecmap\n" <> cmap
+      )
+
+    assert {:error, {:unsupported_text_encoding, diagnostic}} = Text.extract(source)
+    assert diagnostic.stage == :cmap and diagnostic.message =~ "usecmap"
+
+    for metadata <- [
+          "/Identity-H" <> <<0>> <> "usecmap",
+          "/WMode" <> <<0>> <> "1" <> <<0>> <> "def"
+        ] do
+      encoding =
+        metadata <>
+          "\n1 begincodespacerange <00> <FF> endcodespacerange 1 begincidchar <01> 1 endcidchar"
+
+      source =
+        page_pdf("BT /F1 10 Tf <01> Tj ET",
+          font:
+            "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>",
+          cmap: cmap,
+          extra_objects: [{9, stream_object("", encoding)}]
+        )
+
+      assert {:error, {:unsupported_text_encoding, diagnostic}} = Text.extract(source)
+      assert diagnostic.stage == :cmap
+      assert diagnostic.module == Text and diagnostic.operation == :extract
+      assert diagnostic.message =~ "Type0 Encoding" and diagnostic.message =~ "page 1"
+    end
+  end
+
   test "odd CMap hexadecimal endpoints use zero padding in both Encoding and ToUnicode" do
     simple_font =
       "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding /ToUnicode 7 0 R >>"

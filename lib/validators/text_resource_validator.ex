@@ -11,9 +11,12 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   import Bitwise
 
   @max_cid 65_535
-  @unicode_mapping_section ~r/(\d+)\s+begin(bfchar|bfrange)\s*.*?\s*end\2/s
-  @codespace_section ~r/(\d+)\s+begincodespacerange\s*(.*?)\s*endcodespacerange/s
-  @cid_mapping_section ~r/(\d+)\s+begin(cidchar|cidrange|notdefchar|notdefrange)\s*.*?\s*end\2/s
+  @cmap_whitespace ~S(\x00\t\n\f\r )
+  @cmap_space "[#{@cmap_whitespace}]"
+  @cmap_hex_body "#{@cmap_space}*[0-9A-Fa-f][0-9A-Fa-f#{@cmap_whitespace}]*"
+  @unicode_mapping_section ~r/(\d+)#{@cmap_space}+begin(bfchar|bfrange)#{@cmap_space}*.*?#{@cmap_space}*end\2/s
+  @codespace_section ~r/(\d+)#{@cmap_space}+begincodespacerange#{@cmap_space}*(.*?)#{@cmap_space}*endcodespacerange/s
+  @cid_mapping_section ~r/(\d+)#{@cmap_space}+begin(cidchar|cidrange|notdefchar|notdefrange)#{@cmap_space}*.*?#{@cmap_space}*end\2/s
 
   @doc """
   Prepares reachable fonts, strings, and Form XObjects for text execution.
@@ -1022,7 +1025,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp parse_cmap(stream, page, font, cmap_bytes) do
     stream = strip_cmap_comments(stream)
 
-    case Regex.match?(~r/\/\S+\s+usecmap\b/, stream) do
+    case Regex.match?(~r/\/[^#{@cmap_whitespace}]+#{@cmap_space}+usecmap\b/, stream) do
       true ->
         error(
           :cmap,
@@ -1074,7 +1077,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     stream = strip_cmap_comments(stream)
 
     cond do
-      Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
+      Regex.match?(~r/\/[^#{@cmap_whitespace}]+#{@cmap_space}+usecmap\b/, stream) ->
         error(
           :cmap,
           :unsupported_text_encoding,
@@ -1083,7 +1086,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           font: font
         )
 
-      Regex.match?(~r/\/WMode\s+1\s+def\b/, stream) ->
+      Regex.match?(~r/\/WMode#{@cmap_space}+1#{@cmap_space}+def\b/, stream) ->
         error(
           :cmap,
           :unsupported_text_encoding,
@@ -1126,7 +1129,10 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp strip_cmap_comments(stream) do
-    Regex.replace(~r/%[^\r\n]*/, stream, "")
+    # A percent byte inside a hexadecimal string is invalid data, not a comment.
+    Regex.replace(~r/<<|<[^>]*>|%[^\r\n\f]*/, stream, fn token ->
+      if String.starts_with?(token, "%"), do: "", else: token
+    end)
   end
 
   # Reserve expansion and lookup work independently of retained map cardinality.
@@ -1161,12 +1167,15 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           case operator do
             range when range in ["bfrange", "cidrange", "notdefrange"] ->
               Regex.scan(
-                ~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:\[[^\]]*\]|<[0-9A-Fa-f]+>|\d+)/,
+                ~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>#{@cmap_space}*(?:\[[^\]]*\]|<#{@cmap_hex_body}>|\d+)/,
                 section
               )
 
             _ ->
-              Regex.scan(~r/<[0-9A-Fa-f]+>\s*(?:<[0-9A-Fa-f]+>|\d+)/, section)
+              Regex.scan(
+                ~r/<#{@cmap_hex_body}>#{@cmap_space}*(?:<#{@cmap_hex_body}>|\d+)/,
+                section
+              )
           end
 
         Enum.reduce_while(entries, {:ok, preparation}, fn entry, {:ok, preparation} ->
@@ -1281,11 +1290,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
     sections
     |> Enum.reduce_while({:ok, []}, fn [_, count, section], {:ok, values} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, section)
+      entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>/, section)
 
       valid? =
         String.to_integer(count) == length(entries) and
-          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>/)
+          cmap_section_consumed?(
+            section,
+            ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>/
+          )
 
       if valid? do
         parsed =
@@ -1317,15 +1329,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_cid_char(stream, operator, existing) do
-    pattern = Regex.compile!("(\\d+)\\s+begin#{operator}\\s*(.*?)\\s*end#{operator}", "s")
+    pattern =
+      Regex.compile!(
+        "(\\d+)#{@cmap_space}+begin#{operator}#{@cmap_space}*(.*?)#{@cmap_space}*end#{operator}",
+        "s"
+      )
 
     Regex.scan(pattern, stream)
     |> Enum.reduce_while({:ok, %{}}, fn [_, count, section], {:ok, mappings} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s+(\d+)/, section)
+      entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}+(\d+)/, section)
 
       valid? =
         String.to_integer(count) == length(entries) and
-          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s+\d+/)
+          cmap_section_consumed?(section, ~r/<#{@cmap_hex_body}>#{@cmap_space}+\d+/)
 
       case valid? do
         true ->
@@ -1356,15 +1372,26 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_cid_range(stream, operator, existing, mapping_type) do
-    pattern = Regex.compile!("(\\d+)\\s+begin#{operator}\\s*(.*?)\\s+end#{operator}", "s")
+    pattern =
+      Regex.compile!(
+        "(\\d+)#{@cmap_space}+begin#{operator}#{@cmap_space}*(.*?)#{@cmap_space}+end#{operator}",
+        "s"
+      )
 
     Regex.scan(pattern, stream)
     |> Enum.reduce_while({:ok, %{}}, fn [_, declared_count, section], {:ok, mappings} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(\d+)/, section)
+      entries =
+        Regex.scan(
+          ~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>#{@cmap_space}*(\d+)/,
+          section
+        )
 
       valid? =
         String.to_integer(declared_count) == length(entries) and
-          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\d+/)
+          cmap_section_consumed?(
+            section,
+            ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>#{@cmap_space}*\d+/
+          )
 
       case valid? do
         true ->
@@ -1417,13 +1444,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_bfchar(stream, remaining) do
-    Regex.scan(~r/(\d+)\s+beginbfchar\s*(.*?)\s*endbfchar/s, stream)
+    Regex.scan(
+      ~r/(\d+)#{@cmap_space}+beginbfchar#{@cmap_space}*(.*?)#{@cmap_space}*endbfchar/s,
+      stream
+    )
     |> Enum.reduce_while({:ok, %{}, remaining}, fn [_, count, section],
                                                    {:ok, mappings, remaining} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, section)
+      entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>/, section)
 
       if String.to_integer(count) == length(entries) and
-           cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>/) do
+           cmap_section_consumed?(
+             section,
+             ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>/
+           ) do
         Enum.reduce_while(entries, {:ok, mappings, remaining}, fn [_, source, target],
                                                                   {:ok, mappings, remaining} ->
           source = hex_bytes(source)
@@ -1451,12 +1484,15 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_bfrange(stream, existing, remaining) do
-    Regex.scan(~r/(\d+)\s+beginbfrange\s*(.*?)\s*endbfrange/s, stream)
+    Regex.scan(
+      ~r/(\d+)#{@cmap_space}+beginbfrange#{@cmap_space}*(.*?)#{@cmap_space}*endbfrange/s,
+      stream
+    )
     |> Enum.reduce_while({:ok, %{}, remaining}, fn [_, declared_count, section],
                                                    {:ok, mappings, remaining} ->
       entries =
         Regex.scan(
-          ~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(\[[^\]]*\]|<[0-9A-Fa-f]+>)/,
+          ~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>#{@cmap_space}*(\[[^\]]*\]|<#{@cmap_hex_body}>)/,
           section
         )
 
@@ -1466,7 +1502,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         declared_count == length(entries) and
           cmap_section_consumed?(
             section,
-            ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*(?:\[[^\]]*\]|<[0-9A-Fa-f]+>)/
+            ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>#{@cmap_space}*(?:\[[^\]]*\]|<#{@cmap_hex_body}>)/
           )
 
       if section_valid? do
@@ -1503,16 +1539,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp cmap_section_consumed?(section, entry_pattern) do
     section
     |> then(&Regex.replace(entry_pattern, &1, ""))
-    |> String.trim()
-    |> then(&(&1 == ""))
+    |> then(&Regex.match?(~r/\A#{@cmap_space}*\z/, &1))
   end
 
   defp bfrange_entries(first, count, target, remaining) do
     case target do
       "[" <> array ->
-        targets = for [_, target] <- Regex.scan(~r/<([0-9A-Fa-f]+)>/, array), do: target
+        targets = for [_, target] <- Regex.scan(~r/<(#{@cmap_hex_body})>/, array), do: target
 
-        if length(targets) == count do
+        if length(targets) == count and
+             cmap_section_consumed?(
+               String.trim_trailing(array, "]"),
+               ~r/<#{@cmap_hex_body}>/
+             ) do
           Enum.with_index(targets)
           |> Enum.reduce_while({:ok, %{}, remaining}, fn {target, offset},
                                                          {:ok, mappings, remaining} ->
@@ -1526,7 +1565,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             end
           end)
         else
-          error(:cmap, :invalid_pdf_input, "ToUnicode bfrange array length is invalid")
+          error(
+            :cmap,
+            :invalid_pdf_input,
+            "ToUnicode bfrange array is malformed or its length is invalid"
+          )
         end
 
       target ->
@@ -1670,8 +1713,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp hex_bytes(hex) do
-    # Callers capture only hex digits. PDF hexadecimal strings pad an odd
-    # final nibble with zero, including strings in embedded CMaps.
+    # Callers admit only hex digits and the specified whitespace bytes.
+    # Padding applies after whitespace removal, including embedded CMaps.
+    hex = Regex.replace(~r/[#{@cmap_whitespace}]/, hex, "")
     hex = if rem(byte_size(hex), 2) == 1, do: hex <> "0", else: hex
     Base.decode16!(hex, case: :mixed)
   end
