@@ -35,6 +35,11 @@ DTD/entity declarations and escaped CSS resource syntax are rejected.
 `foreignObject`, non-scaling strokes and SVG2 inline `textPath` path data return
 a diagnostic. Use a same-document path reference for supported text paths.
 
+Morphology and convolution filters have a configurable
+[work budget](resource-limits.md#html-images-and-layout). Expensive filters and filter
+combinations whose work cannot be bounded return `:resource_limit_exceeded`
+before conversion. Reduce raster dimensions, filter radius, kernel size or reuse.
+
 SVG conversion uses Resvg and can differ from browser rendering, particularly
 for gradients, filters, masks, markers and text paths. Check complex artwork
 against the output you need. See [diagnostics](diagnostics.md) for conversion

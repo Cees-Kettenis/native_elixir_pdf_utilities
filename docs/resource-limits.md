@@ -125,6 +125,7 @@ separately starts a new one. Failures identify the affected limit in a diagnosti
 | `max_svg_path_bytes` | 1,000,000 | Aggregate decoded `d` and `points` attribute bytes |
 | `max_svg_filter_primitives` | 256 | SVG elements whose local name starts with `fe` |
 | `max_svg_turbulence_octaves` | 16 | Maximum authored `numOctaves` per SVG `feTurbulence`, checked before native conversion; omitted values use 1 |
+| `max_svg_filter_work` | 250,000,000,000 | Aggregate conservative pixel-neighborhood visits for SVG morphology and convolution filters, checked before native conversion |
 | `max_svg_references` | 1,000 | SVG `href` attributes, including namespaced references such as `xlink:href` |
 | `max_svg_output_bytes` | 10,000,000 | Returned SVG PNG bytes, checked after native conversion |
 | `max_svg_bytes` | 5,000,000 | Encoded SVG source |
@@ -154,6 +155,15 @@ SVG structure limits apply before conversion; output image limits are checked
 afterward. They do not cap native converter allocations. The turbulence limit
 bounds each primitive's authored octave count, including fractional counts;
 image size and repeated filters still affect total rendering cost.
+
+The filter-work budget includes raster dimensions, transforms, filter reuse and
+embedded SVGs. It estimates pixel count multiplied by neighborhood size, rather
+than elapsed time or every CPU instruction. Some combinations with patterns,
+markers, masks, filter images or indeterminate intermediate regions cannot be
+bounded and return `:resource_limit_exceeded`. Simplify those combinations;
+raising the limit cannot make an indeterminate estimate safe. Accepted SVGs still
+run synchronously in the native converter, which operation deadlines cannot
+interrupt. The budget does not bound every kind of native rendering work.
 
 See [render options and supported formats](html-to-pdf-compatibility.md) and
 [image processing and recovery](image-processing.md).

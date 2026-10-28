@@ -120,7 +120,7 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert defaults == Limits.defaults()
     assert Limits.effective() == Limits.defaults()
     assert defaults.max_svg_bytes == 5_000_000
-    assert map_size(defaults) == 172
+    assert map_size(defaults) == 173
     assert defaults.max_font_name_bytes == 1_000_000
     assert defaults.max_font_subset_bytes == 40_000_000
     assert defaults.max_font_subset_checksum_work == 10_000_000
