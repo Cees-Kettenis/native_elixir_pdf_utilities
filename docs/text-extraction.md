@@ -34,7 +34,10 @@ operands by default. Set `actual_text: true` to request replacement spans:
 
 Replacement text is emitted once per group. Nested groups use the outermost
 replacement; an empty replacement suppresses the covered pieces. Adjacent
-groups join without an added word break in `layout: false` output.
+groups join without an added word break in `layout: false` output, including
+across text-object, graphics and Form painting wrappers. Explicit text
+positioning between groups ends that adjacency. Positioning inside a replacement
+group does not split its text.
 
 Replacement spans use the first text piece's baseline and the last piece's
 endpoint, rather than the group's bounding box. An image drawn with an

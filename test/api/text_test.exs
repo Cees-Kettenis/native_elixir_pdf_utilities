@@ -278,6 +278,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert integral.font_size == 12.0
   end
 
+  @tag :actual_text_continuity
   test "adjacent ActualText groups join Unicode replacements without word breaks" do
     source =
       page_pdf(
@@ -292,6 +293,127 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert first.text == "𝑥"
     refute first.joins_previous?
     assert second.joins_previous?
+  end
+
+  @tag :actual_text_continuity
+  test "positioning between ActualText groups separates source-order replacements" do
+    for boundary <- ["0 -50 Td", "0 -50 TD", "1 0 0 1 10 100 Tm", "T*"] do
+      source =
+        page_pdf(
+          "BT /F1 12 Tf 1 0 0 1 10 150 Tm 50 TL /Span << /ActualText (First) >> BDC (A) Tj EMC #{boundary} /Span << /ActualText (Second) >> BDC (B) Tj EMC ET"
+        )
+
+      assert {:ok, "First Second"} = Text.extract(source, layout: false)
+      assert {:ok, "First\nSecond"} = Text.extract(source)
+
+      assert {:ok, %{pages: [%{spans: [first, second]}]}} =
+               Text.extract_spans(source, actual_text: true)
+
+      assert Enum.map([first, second], & &1.text) == ["First", "Second"]
+      assert Enum.map([first, second], & &1.source_index) == [0, 1]
+      refute first.joins_previous?
+      refute second.joins_previous?
+      assert first.y != second.y
+    end
+  end
+
+  @tag :actual_text_continuity
+  test "text-object wrappers preserve adjacent replacement text" do
+    for content <- [
+          "/Span << /ActualText (First) >> BDC BT /F1 12 Tf (A) Tj EMC ET /Span << /ActualText (Second) >> BDC BT /F1 12 Tf (B) Tj ET EMC",
+          "/Span << /ActualText (First) >> BDC BT /F1 12 Tf (A) Tj ET EMC BT /F1 12 Tf /Span << /ActualText (Second) >> BDC (B) Tj ET EMC"
+        ] do
+      source = page_pdf(content)
+      assert {:ok, "FirstSecond"} = Text.extract(source, layout: false)
+
+      assert {:ok, %{pages: [%{spans: [first, second]}]}} =
+               Text.extract_spans(source, actual_text: true)
+
+      refute first.joins_previous?
+      assert second.joins_previous?
+    end
+  end
+
+  @tag :actual_text_continuity
+  test "graphics wrappers preserve adjacent replacement text" do
+    for boundary <- ["1 0 0 1 20 30 cm", "q Q"] do
+      source =
+        page_pdf(
+          "BT /F1 12 Tf /Span << /ActualText (First) >> BDC (A) Tj EMC #{boundary} /Span << /ActualText (Second) >> BDC (B) Tj EMC ET"
+        )
+
+      assert {:ok, "FirstSecond"} = Text.extract(source, layout: false)
+
+      assert {:ok, %{pages: [%{spans: [_, second]}]}} =
+               Text.extract_spans(source, actual_text: true)
+
+      assert second.joins_previous?
+    end
+  end
+
+  @tag :actual_text_continuity
+  test "Form painting wrappers preserve adjacent replacement text" do
+    page =
+      "/Span << /ActualText (First) >> BDC BT /F1 12 Tf (A) Tj ET EMC /Form Do /Span << /ActualText (Second) >> BDC BT /F1 12 Tf (B) Tj ET EMC"
+
+    for {form, expected, texts} <- [
+          {"", "FirstSecond", ["First", "Second"]},
+          {"/Span << /ActualText (Middle) >> BDC BT /F1 12 Tf (M) Tj ET EMC", "FirstMiddleSecond",
+           ["First", "Middle", "Second"]}
+        ] do
+      source = form_transform_pdf(page, form, "1 0 0 1 0 0")
+      assert {:ok, ^expected} = Text.extract(source, layout: false)
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source, actual_text: true)
+      assert Enum.map(spans, & &1.text) == texts
+      refute hd(spans).joins_previous?
+      assert Enum.all?(tl(spans), & &1.joins_previous?)
+    end
+  end
+
+  @tag :actual_text_continuity
+  test "internal positioning and empty replacements preserve adjacent semantic text" do
+    for interior <- ["0 -50 Td", "1 0 0 1 10 100 Tm", "T*", "1 0 0 1 20 30 cm", "q Q"],
+        empty <- ["", "/Span << /ActualText () >> BDC 0 -10 Td (hidden) Tj EMC"] do
+      source =
+        page_pdf(
+          "BT /F1 12 Tf /Span << /ActualText (First) >> BDC (A) Tj EMC #{empty} /Span << /ActualText (Second) >> BDC #{interior} (B) Tj EMC ET"
+        )
+
+      assert {:ok, "FirstSecond"} = Text.extract(source, layout: false)
+
+      assert {:ok, %{pages: [%{spans: [_, second]}]}} =
+               Text.extract_spans(source, actual_text: true)
+
+      assert second.joins_previous?
+    end
+  end
+
+  @tag :actual_text_continuity
+  test "replacement continuity follows operators across page content streams" do
+    for {boundary, expected, joins?} <- [
+          {"", "FirstSecond", true},
+          {"0 -50 Td", "First Second", false}
+        ] do
+      source =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3,
+           "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources 4 0 R /Contents [6 0 R 7 0 R] >>"},
+          {4, "<< /Font << /F1 5 0 R >> >>"},
+          {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+          {6, stream_object("", "BT /F1 12 Tf /Span << /ActualText (First) >> BDC (A) Tj EMC")},
+          {7, stream_object("", "#{boundary} /Span << /ActualText (Second) >> BDC (B) Tj EMC ET")}
+        ])
+
+      assert {:ok, ^expected} = Text.extract(source, layout: false)
+
+      assert {:ok, %{pages: [%{spans: [first, second]}]}} =
+               Text.extract_spans(source, actual_text: true)
+
+      assert Enum.map([first, second], & &1.source_index) == [0, 1]
+      assert second.joins_previous? == joins?
+    end
   end
 
   test "nested replacement, transparent marked content and graphics state use one outer string" do

@@ -90,6 +90,9 @@ defmodule NativeElixirPdfUtilities.Text do
   an intervening text-positioning, text-object, content-form, or graphics-matrix
   boundary. This follows PDF text-operator execution rather than inferring
   continuity from display coordinates.
+  Replacement spans preserve adjacency across painting wrappers. Explicit text
+  positioning between groups ends it; internal positioning does not split a
+  group's replacement text.
   """
   @type text_span :: %{
           text: String.t(),
@@ -426,16 +429,15 @@ defmodule NativeElixirPdfUtilities.Text do
 
       {"BT", []} ->
         {:ok,
-         %{
+         break_text_join(%{
            state
            | in_text?: true,
              text_matrix: identity(),
-             line_matrix: identity(),
-             join_next_span?: false
-         }, spans}
+             line_matrix: identity()
+         }), spans}
 
       {"ET", []} ->
-        {:ok, %{state | in_text?: false, join_next_span?: false}, spans}
+        {:ok, break_text_join(%{state | in_text?: false}), spans}
 
       {"Tf", [{:name, _font_name}, size]} ->
         {:ok, %{state | font: operation.font, font_size: size}, spans}
@@ -450,7 +452,8 @@ defmodule NativeElixirPdfUtilities.Text do
         end
 
       {"Tm", matrix} ->
-        {:ok, %{state | text_matrix: matrix, line_matrix: matrix, join_next_span?: false}, spans}
+        {:ok, break_text_join(%{state | text_matrix: matrix, line_matrix: matrix}, :position),
+         spans}
 
       {operator, [tx, ty]} when operator in ["Td", "TD"] ->
         with {:ok, line_matrix} <-
@@ -459,19 +462,20 @@ defmodule NativeElixirPdfUtilities.Text do
             state
             | line_matrix: line_matrix,
               text_matrix: line_matrix,
-              leading: if(operator == "TD", do: -ty, else: state.leading),
-              join_next_span?: false
+              leading: if(operator == "TD", do: -ty, else: state.leading)
           }
 
-          {:ok, state, spans}
+          {:ok, break_text_join(state, :position), spans}
         end
 
       {"T*", []} ->
         with {:ok, line_matrix} <-
                TextValidator.translate_matrix(state.line_matrix, 0.0, -state.leading, page, "T*") do
           {:ok,
-           %{state | line_matrix: line_matrix, text_matrix: line_matrix, join_next_span?: false},
-           spans}
+           break_text_join(
+             %{state | line_matrix: line_matrix, text_matrix: line_matrix},
+             :position
+           ), spans}
         end
 
       {"TL", [leading]} ->
@@ -524,8 +528,16 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
-  defp break_text_join(state) do
-    Map.put(state, :join_next_span?, false)
+  defp break_text_join(state, boundary \\ :paint) do
+    # Painting wrappers can split one logical replacement sequence. Explicit
+    # positioning outside an active replacement ends that semantic adjacency.
+    %{
+      state
+      | join_next_span?: false,
+        previous_replacement?:
+          state.previous_replacement? and
+            (boundary != :position or not is_nil(state.replacement))
+    }
   end
 
   defp show(state, spans, decoded, page) do
