@@ -1450,6 +1450,62 @@ defmodule NativeElixirPdfUtilities.TextTest do
     )
   end
 
+  @tag :glyph_name
+  test "reports Unicode-like custom glyphs without a reliable mapping in a Type 3 font" do
+    for glyph <- ["uu0042", "uniuni0042", "u42", "u+0042", "u004a", "uni004a"] do
+      font =
+        "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] " <>
+          "/FontMatrix [0.001 0 0 0.001 0 0] /FirstChar 65 /LastChar 65 /Widths [600] " <>
+          "/CharProcs << /#{glyph} 9 0 R >> /Resources << >> " <>
+          "/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /#{glyph}] >> >>"
+
+      source =
+        page_pdf("BT /F1 12 Tf (A) Tj ET",
+          font: font,
+          extra_objects: [{9, stream_object("", "600 0 d0 0 0 m 600 0 l 300 700 l h f")}]
+        )
+
+      for {operation, result} <- [
+            {:extract, Text.extract(source)},
+            {:extract_spans, Text.extract_spans(source)}
+          ] do
+        assert {:error, {:unsupported_text_encoding, diagnostic}} = result
+        assert diagnostic.reason == :unsupported_text_encoding
+        assert diagnostic.stage == :text_encoding
+        assert diagnostic.operation == operation
+        assert diagnostic.module == Text
+        assert diagnostic.message =~ "cannot be converted to Unicode"
+        assert diagnostic.message =~ "page 1"
+        assert diagnostic.message =~ "font F1"
+      end
+    end
+  end
+
+  @tag :glyph_name
+  test "extracts valid Adobe Unicode glyph names from a simple font" do
+    font =
+      "<< /Type /Font /Subtype /Type1 /Encoding << /BaseEncoding /WinAnsiEncoding " <>
+        "/Differences [65 /u0042 /uni20AC0308 /u1040C /A_u0042.alt] >> >>"
+
+    source = page_pdf("BT /F1 12 Tf (ABCD) Tj ET", font: font)
+    assert Text.extract(source, layout: false) == {:ok, "B€\u0308𐐌AB"}
+  end
+
+  @tag :glyph_name
+  test "uses explicit ToUnicode mappings for custom glyph names" do
+    font =
+      "<< /Type /Font /Subtype /Type1 /ToUnicode 7 0 R " <>
+        "/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /uu0042] >> >>"
+
+    cmap =
+      "1 begincodespacerange <00> <FF> endcodespacerange " <>
+        "1 beginbfchar <41> <2605> endbfchar"
+
+    source = page_pdf("BT /F1 12 Tf (A) Tj ET", font: font, cmap: cmap)
+    assert Text.extract(source, layout: false) == {:ok, "★"}
+    assert {:ok, %{pages: [%{spans: [%{text: "★"}]}]}} = Text.extract_spans(source)
+  end
+
   test "decodes high-byte bfrange sources without treating bytes as UTF-8 strings" do
     cmap =
       "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfrange\n<80> <81> <0041>\nendbfrange\nendcmap"

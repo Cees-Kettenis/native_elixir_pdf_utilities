@@ -123,6 +123,12 @@ text may still be hidden by clipping, transparency, or other content.
 Unsupported font encodings, vertical Type0 CMaps, inherited `usecmap` mappings,
 and inline images can prevent extraction. Encrypted PDFs are not supported.
 Failures use the [diagnostic tuple](diagnostics.md).
+
+Explicit ToUnicode mappings take precedence over glyph names. Without one,
+simple-font extraction uses known glyph mappings and Adobe's `uni`/`u` naming
+rules. Unknown names return `:unsupported_text_encoding` rather than guessed
+text, including Unicode-like names with lowercase hex digits or repeated prefixes.
+
 Hexadecimal strings in ToUnicode and Type0 Encoding CMaps ignore the specified
 whitespace, including between digits. An odd final digit is padded with zero
 after whitespace removal. Invalid or mismatched codespace endpoints return
