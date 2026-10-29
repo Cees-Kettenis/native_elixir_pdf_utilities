@@ -38,14 +38,19 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodecTest do
     assert {:ok, ~N[2026-08-25 14:30:45], %{timezone: {:-, 4, 0}}} =
              InfoCodec.parse_date("D:20260825143045-04'00'")
 
+    assert {:ok, ~N[2026-08-25 14:30:45], %{timezone: {:+, 8, 0}}} =
+             InfoCodec.parse_date("D:20260825143045+08")
+
+    assert {:ok, ~N[2026-08-25 14:30:45], %{timezone: {:-, 4, 0}}} =
+             InfoCodec.parse_date("D:20260825143045-04'")
+
     for invalid <- [
           "20260825",
           "D:202613",
           "D:20260230",
           "D:20260825246000",
           "D:20260825143045+24'00'",
-          "D:20260825143045+08'60'",
-          "D:20260825143045+08"
+          "D:20260825143045+08'60'"
         ] do
       assert InfoCodec.parse_date(invalid) == :error
     end

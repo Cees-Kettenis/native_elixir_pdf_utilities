@@ -308,6 +308,82 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     assert {:ok, %{modification_date: ~N[2026-12-01 00:00:00]}} = Info.get(with_pdf_date)
   end
 
+  test "reads hour-only timezone dates and preserves them through other metadata updates" do
+    for suffix <- ["+08", "+08'", "-04", "-04'", "+08'30'", "-04'45'"] do
+      original =
+        pdf(
+          base_objects() ++
+            [
+              {4,
+               "<< /CreationDate (D:20260101120000#{suffix}) /ModDate (D:20260101120000#{suffix}) >>"}
+            ],
+          "/Info 4 0 R"
+        )
+
+      assert {:ok,
+              %{
+                creation_date: ~N[2026-01-01 12:00:00],
+                modification_date: ~N[2026-01-01 12:00:00]
+              }} = Info.get(original)
+
+      assert {:ok, updated} = Info.put(original, title: "Updated title")
+      assert String.starts_with?(updated, original)
+
+      assert {:ok,
+              %{
+                title: "Updated title",
+                creation_date: ~N[2026-01-01 12:00:00],
+                modification_date: ~N[2026-01-01 12:00:00]
+              }} = Info.get(updated)
+    end
+  end
+
+  test "writes omitted timezone minutes as zero and retains explicit minutes" do
+    original = pdf(base_objects())
+
+    for {suffix, canonical} <- [
+          {"+08", "+08'00'"},
+          {"+08'", "+08'00'"},
+          {"-04", "-04'00'"},
+          {"-04'", "-04'00'"},
+          {"+08'30'", "+08'30'"},
+          {"-04'45'", "-04'45'"}
+        ] do
+      value = "D:20260101120000" <> suffix
+      expected = "D:20260101120000" <> canonical
+
+      assert {:ok, updated} = Info.put(original, creation_date: value, modification_date: value)
+      assert updated =~ "/CreationDate (#{expected})"
+      assert updated =~ "/ModDate (#{expected})"
+
+      assert {:ok,
+              %{
+                creation_date: ~N[2026-01-01 12:00:00],
+                modification_date: ~N[2026-01-01 12:00:00]
+              }} = Info.get(updated)
+    end
+  end
+
+  test "invalid timezone fields retain actionable read and write diagnostics" do
+    for suffix <- ["+24'", "-24'", "+08'60'", "-04'99'", "+08'0", "+08''"],
+        {field, key} <- [creation_date: "CreationDate", modification_date: "ModDate"] do
+      value = "D:20260101120000" <> suffix
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               Info.put(pdf(base_objects()), [{field, value}])
+
+      assert diagnostic.stage == :info and diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.operation == :put_info and diagnostic.module == Info
+      assert diagnostic.message =~ Atom.to_string(field)
+
+      malformed = pdf(base_objects() ++ [{4, "<< /#{key} (#{value}) >>"}], "/Info 4 0 R")
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Info.get(malformed)
+      assert diagnostic.stage == :info and diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.operation == :get_info and diagnostic.module == Info
+      assert diagnostic.message =~ Atom.to_string(field)
+    end
+  end
+
   test "rejects negative-year calendar dates before updating metadata" do
     original = pdf(base_objects())
 

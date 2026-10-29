@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Validators.PdfDateValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @field_keys %{
@@ -224,7 +225,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
 
       {field, {kind, bytes}} when field in @date_fields and kind in [:string, :hex] ->
         with {:ok, date_text} <- InfoCodec.decode_text(bytes),
-             {:ok, date_time, _date} <- InfoCodec.parse_date(date_text) do
+             {:ok, date_time, _date} <- PdfDateValidator.parse_date(date_text) do
           {:ok, date_time}
         else
           _ -> error(:info, "PDF information field #{field} has an invalid PDF date")
@@ -416,8 +417,8 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   end
 
   defp normalized_date_value(value) do
-    with {:ok, value} <- InfoCodec.normalize_date(value),
-         {:ok, _date_time, _components} <- InfoCodec.parse_date(value) do
+    with {:ok, value} <- PdfDateValidator.normalize_date(value),
+         {:ok, _date_time, _components} <- PdfDateValidator.parse_date(value) do
       {:ok, InfoCodec.encode_text(value), byte_size(value)}
     end
   end
