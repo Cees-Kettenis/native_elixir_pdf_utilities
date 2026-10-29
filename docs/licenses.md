@@ -320,6 +320,11 @@ Source references and adaptation notes are retained in `DrawingGeometry`.
 
 ## SVG converter dependency
 
+Mix fetches runtime dependencies separately. Their source and native binaries
+are not included in this library's Hex package. When redistributing a built
+application, retain the notices and provide the source access required by the
+licenses of the dependencies you ship.
+
 SVG conversion uses the published [Resvg Hex package](https://hex.pm/packages/resvg).
 The Elixir binding retains its [MIT license](https://github.com/mrdotb/resvg_nif/blob/v0.6.0/LICENSE.md).
 Its Rust `resvg` and `usvg` 0.47.0 crates declare `Apache-2.0 OR MIT`, and
