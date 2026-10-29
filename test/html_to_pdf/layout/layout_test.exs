@@ -612,6 +612,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     end
   end
 
+  test "heading-group captions retain disclosure state and reserve fieldset caption space" do
+    html =
+      File.read!(Paths.fixture("html_to_pdf/browser_parity/html_heading_group_captions.html"))
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, %{boxes: boxes}} = Layout.layout(styled, page_size: {360, 760}, margin: 12)
+
+    text_boxes = for %{type: :text, text: text} = box <- boxes, into: %{}, do: {text, box}
+
+    refute Map.has_key?(text_boxes, "Hidden closed body")
+
+    for {heading, subtitle, body} <- [
+          {"Open heading", "Open subtitle", "Visible open body"},
+          {"Block heading", "Block subtitle", "Visible block body"},
+          {"Group heading", "Group subtitle", "Group body"},
+          {"Default heading", "Default subtitle", "Default open body"},
+          {"Default group", "Default group subtitle", "Default group body"}
+        ] do
+      assert text_boxes[heading].y > text_boxes[subtitle].y
+      assert text_boxes[subtitle].y > text_boxes[body].y
+    end
+
+    assert text_boxes["Closed heading"].y > text_boxes["Closed subtitle"].y
+
+    markers = Enum.filter(boxes, &(String.trim(Map.get(&1, :text, "")) in ["▶", "▼"]))
+    assert Enum.map(markers, &String.trim(&1.text)) == ["▶", "▼", "▼"]
+    assert hd(markers).y > text_boxes["Closed heading"].y
+    assert Enum.at(markers, 1).y > text_boxes["Open heading"].y
+    assert List.last(markers).y > text_boxes["Default heading"].y
+
+    [regular, narrow, default] = Enum.filter(boxes, &(Map.get(&1, :role) == :fieldset))
+    assert regular.border_cutout.width >= text_boxes["Group heading"].width
+    assert regular.border_cutout.width >= text_boxes["Group subtitle"].width
+    assert text_boxes["Group body"].y > regular.y
+
+    assert text_boxes["Narrow"].y > text_boxes["heading"].y
+    assert text_boxes["heading"].y > text_boxes["Long subtitle"].y
+    assert text_boxes["Long subtitle"].y > text_boxes["wraps inside the"].y
+    assert text_boxes["wraps inside the"].y > text_boxes["caption"].y
+    assert text_boxes["caption"].y > text_boxes["Narrow body"].y
+    assert narrow.border_cutout.width >= text_boxes["Long subtitle"].width
+    assert text_boxes["Narrow body"].y > narrow.y
+    assert narrow.y > text_boxes["After captions"].y
+    assert default.border_cutout.width >= text_boxes["Default group"].width
+    assert default.border_cutout.width >= text_boxes["Default group subtitle"].width
+    assert text_boxes["Default group body"].y > default.y
+  end
+
   test "disclosure marker advances use initial state and preserve author layout overrides" do
     for {css, open, marker, offset} <- [
           {"", "", "▶ ", 10.59375},

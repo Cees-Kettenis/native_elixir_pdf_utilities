@@ -1243,6 +1243,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
      ]},
     {"html_disclosures.html",
      [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
+    {"html_heading_group_captions.html",
+     [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_horizontal_rules.html",
      [
        render_opts: [forms: :static],
@@ -4005,6 +4007,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
       assert native =~ "1\u20622"
     end
 
+    if fixture_name == "html_heading_group_captions.html" do
+      assert page_count == 1
+
+      for name <- ["native.pdf", "chromium.pdf"] do
+        assert {:ok, text} =
+                 NativeElixirPdfUtilities.Text.extract(File.read!(Path.join(artifact_dir, name)))
+
+        text = String.replace(text, ~r/\s+/u, " ")
+
+        for caption <- [
+              "Closed heading",
+              "Closed subtitle",
+              "Open heading",
+              "Open subtitle",
+              "Visible open body",
+              "Block heading",
+              "Block subtitle",
+              "Visible block body",
+              "Group heading",
+              "Group subtitle",
+              "Group body",
+              "Narrow heading",
+              "Long subtitle wraps inside the caption",
+              "Narrow body",
+              "After captions",
+              "Default heading",
+              "Default subtitle",
+              "Default open body",
+              "Default group",
+              "Default group subtitle",
+              "Default group body"
+            ],
+            do: assert(text =~ caption)
+
+        refute text =~ "Hidden closed body"
+      end
+    end
+
     if fixture_name == "html_disclosures.html" do
       assert page_count == 1
 
@@ -4824,6 +4864,7 @@ for group <- 0..7 do
          do: @tag(:form_controls)
 
       if fixture_name == "html_popover_initial.html", do: @tag(:initial_popovers)
+      if fixture_name == "html_heading_group_captions.html", do: @tag(:heading_group_captions)
       if fixture_name == "html_fragment_link_decoration_fonts.html", do: @tag(:shadow_fragments)
       if fixture_name == "html_shadow_document_fragments.html", do: @tag(:shadow_fragments)
       if fixture_name == "html_math_enclosing_links.html", do: @tag(:math_links)

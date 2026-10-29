@@ -1794,7 +1794,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         tag in @inline_tags or tag in ~w(img progress meter script template)
 
       context in ["summary", "legend"] ->
-        tag in @inline_tags or tag in ~w(img h1 h2 h3 h4 h5 h6 script template)
+        tag in @inline_tags or tag in ~w(img h1 h2 h3 h4 h5 h6 hgroup script template)
 
       context in @table_content_tags ->
         tag in @inline_tags or tag in @block_tags
