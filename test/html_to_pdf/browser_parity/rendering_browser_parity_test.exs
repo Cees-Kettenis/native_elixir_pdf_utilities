@@ -3239,6 +3239,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
     if fixture_name == "html_legacy_raw_text.html" do
       source = File.read!(fixture_path)
+      assert source =~ "<meta charset=\"utf-8\">"
       assert source =~ "Café &amp; &#13;\r\n"
       assert source =~ "<script>literal()</script>\r"
       assert source =~ "</XmP \t>"

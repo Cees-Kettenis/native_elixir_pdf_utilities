@@ -76,6 +76,7 @@ defmodule NativeElixirPdfUtilities.OperationTest do
     assert diagnostic.message =~ "native"
     assert_received :unrelated_message
     assert_received {:resolver_worker, worker}
+    assert worker != owner
     monitor = Process.monitor(worker)
     assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}
     assert Process.info(self(), :trap_exit) == flags
@@ -84,6 +85,117 @@ defmodule NativeElixirPdfUtilities.OperationTest do
 
     Limits.install(Map.put(Limits.effective(), :max_operation_timeout_ms, 300_000))
     assert {:ok, _pdf} = HtmlToPdf.render("<p>Next operation</p>")
+  end
+
+  test "asset resolvers render captured caller data while keeping caller state isolated" do
+    png = File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/initial-small.png"))
+    key = make_ref()
+    Process.put(key, png)
+    table = :ets.new(:resolver_assets, [:set, :private])
+    :ets.insert(table, {:logo, png})
+    caller = self()
+
+    try do
+      dictionary_logo = Process.get(key)
+      [{:logo, table_logo}] = :ets.lookup(table, :logo)
+
+      resolver = fn request ->
+        send(caller, {:resolved_asset, request.reference, self(), Process.get(key)})
+        Process.put(key, :worker_value)
+
+        case request do
+          %{reference: "asset:dictionary", kind: :image} -> {:ok, dictionary_logo}
+          %{reference: "asset:private-ets", kind: :image} -> {:ok, table_logo}
+          _ -> :not_found
+        end
+      end
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<img src='asset:dictionary'><img src='asset:private-ets'>",
+                 asset_resolver: resolver,
+                 system_font_discovery: false
+               )
+
+      assert pdf =~ "/Subtype /Image"
+      assert {:ok, 1} = Info.page_count(pdf)
+      assert_received {:resolved_asset, "asset:dictionary", worker, dictionary_state}
+      assert_received {:resolved_asset, "asset:private-ets", ^worker, table_state}
+      assert worker != caller
+      refute png in [dictionary_state, table_state]
+      refute Process.alive?(worker)
+      assert Process.get(key) == png
+      assert :ets.lookup(table, :logo) == [{:logo, png}]
+    after
+      Process.delete(key)
+      :ets.delete(table)
+    end
+  end
+
+  test "unmigrated caller-private resolver lookups return public asset diagnostics" do
+    png = File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/initial-small.png"))
+    key = make_ref()
+    Process.put(key, png)
+    table = :ets.new(:resolver_assets, [:set, :private])
+    :ets.insert(table, {:logo, png})
+
+    try do
+      for resolver <- [
+            fn _request ->
+              case Process.get(key) do
+                nil -> :not_found
+                bytes -> {:ok, bytes}
+              end
+            end,
+            fn _request ->
+              [{:logo, bytes}] = :ets.lookup(table, :logo)
+              {:ok, bytes}
+            end
+          ] do
+        assert {:error, {:invalid_document, diagnostic}} =
+                 HtmlToPdf.render("<img src='asset:logo'>",
+                   asset_resolver: resolver,
+                   system_font_discovery: false
+                 )
+
+        assert diagnostic.stage == :asset and diagnostic.reason == :invalid_document
+        assert diagnostic.operation == :render and diagnostic.module == HtmlToPdf
+        assert diagnostic.source == "asset:logo"
+        assert diagnostic.message =~ "asset"
+      end
+    after
+      Process.delete(key)
+      :ets.delete(table)
+    end
+  end
+
+  test "a resolver retaining excess binary memory is stopped by the worker allowance" do
+    Limits.install(
+      Map.merge(Limits.effective(), %{
+        max_operation_memory_bytes: 16_777_216,
+        max_operation_timeout_ms: 2_000,
+        operation_memory_check_interval_ms: 1
+      })
+    )
+
+    caller = self()
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<img src='asset:oversized'>",
+               system_font_discovery: false,
+               asset_resolver: fn _request ->
+                 send(caller, {:resolver_memory_worker, self()})
+                 Process.put(:resolver_retained, :binary.copy(<<0>>, 33_554_432))
+                 Process.sleep(:infinity)
+               end
+             )
+
+    assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.operation == :render and diagnostic.module == HtmlToPdf
+    assert diagnostic.message =~ "max_operation_memory_bytes"
+    assert_received {:resolver_memory_worker, worker}
+    assert worker != caller
+    monitor = Process.monitor(worker)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}
   end
 
   test "nested calls share the worker and its original deadline" do

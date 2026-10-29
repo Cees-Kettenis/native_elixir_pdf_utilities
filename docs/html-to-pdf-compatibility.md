@@ -138,8 +138,24 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | Other sources | Supported data URIs; remote resources are never fetched |
 | Resolver request | `%{reference: reference, kind: kind}`; kind is `:image`, `:background_image` or `:font` |
 | Resolver return | `{:ok, bytes}`, `:not_found` or `{:error, reason}` |
+| Callback execution | Disposable operation worker; shares [operation limits](resource-limits.md#operation-time-and-memory) |
 
 [Asset examples](html-to-pdf-examples.md#load-local-images).
+
+#### Resolver process context
+
+When upgrading from v1.0.0, update callbacks that depend on the calling process.
+`self()` identifies the worker, caller process dictionary entries are not
+inherited, and private ETS tables remain accessible only to their owner.
+
+Read needed values in the caller before creating the callback, then capture
+those values in its closure. Capturing a private ETS table identifier does not
+grant the worker access. Capture the caller PID before rendering when a callback
+needs to send it messages.
+
+The [logo resolver example](html-to-pdf-examples.md#load-local-images) reads
+`logo_png` before rendering and captures the bytes. For caller-stored images,
+replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 
 ## Fonts and text
 
