@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><style>
+@page { size: 240pt 300pt; margin: 12pt; }
+html, body { margin: 0; padding: 0; }
+body { font-family: 'DejaVu Sans'; font-size: 10pt; line-height: 12pt; }
+p { margin: 0 0 6pt; }
+.before::before { content: ''; display: block; width: 30pt; height: 30pt; background: red; }
+.after::after { content: ''; display: block; width: 40pt; height: 12pt; background: blue; }
+.attribute::before { content: attr(data-missing); display: block; width: 40pt; height: 10pt; background: green; }
+.inline::before { content: ''; display: inline-block; width: 20pt; height: 10pt; padding: 3pt; margin: 0 2pt; border: 1pt solid red; background: blue; }
+.positioned { position: relative; padding-left: 24pt; }
+.positioned::before { content: ''; position: absolute; left: 2pt; top: 2pt; width: 12pt; height: 8pt; background: purple; }
+.none::before { content: none; display: block; width: 30pt; height: 30pt; background: red; }
+.missing::before { display: block; width: 30pt; height: 30pt; background: red; }
+.hidden::before { content: ''; display: none; width: 30pt; height: 30pt; background: red; }
+</style></head><body>
+<p class="before">After an empty block</p>
+<p class="after">Before an empty block</p>
+<p class="attribute">Missing attribute content</p>
+<p>A<span class="inline"></span>B</p>
+<p class="positioned">Positioned decoration</p>
+<p class="none">No generated box</p>
+<p class="missing">Content declaration omitted</p>
+<p class="hidden">Generated box hidden</p>
+</body></html>

@@ -4772,7 +4772,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     end
   end
 
-  test "compute omits none, empty, and display-none generated content" do
+  test "compute retains empty generated content and omits none and display-none content" do
     dom = %{
       type: :document,
       children: [
@@ -4817,7 +4817,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     [paragraph, container] = styled_tree.children
     [span] = container.children
 
-    assert Enum.map(paragraph.children, &Map.get(&1, :text)) == ["Paragraph"]
+    assert [%{text: "Paragraph"}, %{tag: "::after", children: [%{text: ""}]}] =
+             paragraph.children
+
     assert Enum.map(span.children, &Map.get(&1, :text)) == ["Span"]
     assert style_for!("p", "counter-reset: none").counter_reset == []
     assert style_for!("p", "counter-increment: none").counter_increment == []

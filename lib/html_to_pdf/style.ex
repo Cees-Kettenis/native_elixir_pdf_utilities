@@ -2131,9 +2131,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {_display, :none, _text} ->
               {:ok, [], counters}
 
-            {display, _content, ""} when display != :list_item ->
-              {:ok, [], counters}
-
             {_display, _content, text} ->
               style =
                 style

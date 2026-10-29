@@ -263,7 +263,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ListCounterTest do
         "<style>.first::before{content:'';counter-increment:item}.read::before{content:counter(item)}</style><div style='counter-reset:item'><p class=first>A</p><p class=read>B</p></div>"
       )
 
-    assert generated(styled) == ["1"]
+    assert generated(styled) == ["", "1"]
   end
 
   test "boxless HTML lists use the closest ancestor box as their item owner" do
