@@ -1,0 +1,40 @@
+<!doctype html>
+<html><head><style>
+@page { size: 612pt 792pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { padding: 24pt; font-family: 'DejaVu Sans'; font-size: 10pt; line-height: 14pt; }
+p { margin: 4pt 0 2pt; }
+ol, ul { margin: 0 0 6pt; padding-left: 30pt; }
+li { margin: 0; }
+.read > li::before { content: '[' counter(list-item) '] '; }
+.twos > li { counter-increment: list-item 2; }
+.reset { counter-reset: list-item 7; }
+.items { padding-left: 30pt; margin-bottom: 6pt; }
+.items div, .items span { display: list-item; list-style-type: decimal; }
+.suppressed > li:first-child::before { content: none; counter-increment: list-item 10; }
+.boxless { display: contents; counter-increment: list-item 10; }
+.generated > li:first-child::after { display: list-item; content: 'Generated second'; }
+</style></head><body>
+<p>Owned items through a descendant</p>
+<ol><li>First<span style="display:list-item">Second</span></li><li>Third</li></ol>
+<p>Implicit counter and generated content</p>
+<ol class="read"><li>First</li><li>Second</li></ol>
+<p>Explicit increments and generated content</p>
+<ol class="read twos"><li>Two</li><li>Four</li></ol>
+<p>Author reset overrides the starting hint</p>
+<ol class="read reset" start="20"><li>Eight</li><li>Nine</li></ol>
+<p>Reversed ownership and a hidden item</p>
+<ol reversed><li>Three<span style="display:list-item">Two</span></li><li style="display:none">Hidden</li><li>One</li></ol>
+<p>Starting and per-item values</p>
+<ol reversed start="5"><li>Five</li><li value="0">Zero</li><li>Minus one</li></ol>
+<p>Nested list scope</p>
+<ol><li>Outer one<ol><li>Inner one</li><li>Inner two</li></ol></li><li>Outer two</li></ol>
+<p>CSS list owners</p>
+<section class="items"><div>Outer one<span>Inner one</span></div><div>Outer two</div></section>
+<p>Suppressed counter changes</p>
+<ol class="suppressed"><li>First</li><li>Second</li></ol>
+<ol><li>First</li><li class="boxless"></li><li>Second</li></ol>
+<p>Generated list item</p>
+<ol class="generated"><li>First</li><li>Third</li></ol>
+<ol class="generated" reversed><li>Third</li><li>First</li></ol>
+</body></html>

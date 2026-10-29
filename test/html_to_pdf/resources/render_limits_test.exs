@@ -12,6 +12,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
     :ok
   end
 
+  test "reversed list preparation and painting share image admission" do
+    alias NativeElixirPdfUtilities.TestSupport.Paths
+    Limits.install(%{Limits.effective() | max_image_count: 1})
+    base = Paths.fixture("html_to_pdf/browser_parity/assets")
+
+    for source <- [
+          "<img src='initial-small.png' width=10 height=10>",
+          "<object data='initial-small.png' width=10 height=10></object>"
+        ] do
+      assert {:ok, _pdf} =
+               HtmlToPdf.render(
+                 "<ol reversed><li>A#{source}</li><li>B</li></ol>",
+                 base_url: base
+               )
+    end
+  end
+
   test "HTML destination descriptors charge the existing render work budget" do
     alias NativeElixirPdfUtilities.Validators.HtmlLinkValidator
     limits = Limits.effective()

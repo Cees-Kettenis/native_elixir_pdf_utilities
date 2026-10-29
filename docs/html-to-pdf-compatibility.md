@@ -48,7 +48,7 @@ or page furniture. Unsupported widget transforms return diagnostics.
 | Layout | Block, inline, inline-block, flex, grid, sizing, margins, padding and gaps |
 | Text | Fonts, alignment, spacing, wrapping, whitespace, list markers and solid text decorations |
 | Boxes | Colors, borders, rounded corners and background images |
-| Generated content | `::before`, `::after`, strings, `attr()` and counters |
+| Generated content | `::before`, `::after`, strings, `attr()`, `counter()` and counter reset/increment/set controls |
 | Printing | Print media queries, bare `@page` size/margins and page breaks |
 
 Support is a subset of browser CSS. Common body lengths include `pt`, `px`,

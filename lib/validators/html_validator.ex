@@ -1998,43 +1998,93 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec resolve_html_list_ordinals(String.t(), map(), list()) :: list()
-  def resolve_html_list_ordinals(tag, attributes, children) do
-    reversed? = tag == "ol" and Map.has_key?(attributes, "reversed")
-    step = if reversed?, do: -1, else: 1
+  @spec prepare_html_list_counter(String.t(), map(), map()) :: map()
+  def prepare_html_list_counter(tag, attributes, style) do
+    cond do
+      tag in ~w(ol ul menu) ->
+        initial =
+          case {tag, Map.has_key?(attributes, "reversed"),
+                parse_html_integer(Map.get(attributes, "start"))} do
+            {"ol", true, {:ok, start}} -> {:reversed, start + 1}
+            {"ol", true, :error} -> {:reversed, :auto}
+            {"ol", false, {:ok, start}} -> {:list, start - 1}
+            _ -> {:list, 0}
+          end
 
-    start =
-      case parse_html_integer(Map.get(attributes, "start")) do
-        {:ok, integer} when tag == "ol" ->
-          integer
+        Map.put(style, :counter_reset, [{"list-item", initial}])
 
-        _ ->
-          if reversed?,
-            do: Enum.count(children, &match?(%{style: %{display: :list_item}}, &1)),
-            else: 1
+      tag == "li" ->
+        case parse_html_integer(Map.get(attributes, "value")) do
+          {:ok, value} -> Map.put(style, :counter_set, [{"list-item", value}])
+          :error -> style
+        end
+
+      tag == "summary" and style.display == :list_item ->
+        Map.put(style, :counter_increment, [{"list-item", 0}])
+
+      true ->
+        style
+    end
+  end
+
+  @doc false
+  @spec counter_box?(map(), :element | :pseudo) :: boolean()
+  def counter_box?(style, kind) do
+    Map.get(style, :display, :inline) not in [:none, :contents] and
+      (kind == :element or Map.get(style, :content, :none) != :none)
+  end
+
+  @doc false
+  @spec list_paint_style(map()) :: map()
+  def list_paint_style(style) do
+    Map.drop(style, [:_list_owner, :_html_list_owner, :_list_box_owner])
+  end
+
+  @doc false
+  @spec prepare_list_owner(map(), map(), map()) :: map()
+  def prepare_list_owner(node, style, inherited) do
+    box_owner = Map.get(inherited, :_list_box_owner, :document)
+    html_owner = Map.get(inherited, :_html_list_owner)
+    owner = if html_owner == nil, do: {:auto, box_owner}, else: html_owner
+
+    descendant_owner =
+      if node.tag in ~w(ol ul menu) and style.display == :contents do
+        {:auto, box_owner}
+      else
+        if node.tag in ~w(ol ul menu) do
+          case List.keyfind(Map.get(style, :counter_reset, []), "list-item", 0) do
+            {"list-item", {kind, _value}} when kind in [:list, :reversed] ->
+              {:auto, node._selector_id}
+
+            _ ->
+              {:inherit, node._selector_id}
+          end
+        else
+          html_owner
+        end
       end
 
-    {children, _next} =
-      Enum.map_reduce(children, start, fn child, next ->
-        case child do
-          %{style: %{display: :list_item} = style} ->
-            ordinal =
-              case Map.get(style, :_list_value) do
-                {:ok, integer} when tag == "ol" -> integer
-                _ -> next
-              end
+    style
+    |> Map.put(:_list_owner, owner)
+    |> Map.put(:_html_list_owner, descendant_owner)
+    |> Map.put(
+      :_list_box_owner,
+      if(style.display in [:none, :contents], do: box_owner, else: node._selector_id)
+    )
+  end
 
-            marker = CounterStyle.marker(Map.get(style, :list_marker_type, :disc), ordinal)
-            reserve_render_resource(:max_rendered_text_bytes, byte_size(marker), :style)
-            markers = if marker == "", do: [], else: [%{type: :text, text: marker, style: style}]
-            {Map.put(child, :style, Map.put(style, :_list_marker, markers)), ordinal + step}
-
-          _ ->
-            {child, next}
-        end
-      end)
-
-    children
+  @doc false
+  @spec prepare_list_marker(map(), integer()) :: map()
+  def prepare_list_marker(style, ordinal) do
+    if style.display == :list_item do
+      marker = CounterStyle.marker(Map.get(style, :list_marker_type, :disc), ordinal)
+      reserve_render_resource(:max_rendered_text_bytes, byte_size(marker), :style)
+      marker_style = list_paint_style(style)
+      markers = if marker == "", do: [], else: [%{type: :text, text: marker, style: marker_style}]
+      Map.put(style, :_list_marker, markers)
+    else
+      style
+    end
   end
 
   @doc false

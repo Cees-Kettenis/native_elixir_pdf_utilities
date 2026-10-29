@@ -37,8 +37,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                             @source_padding_properties ++ @source_border_width_properties
   @source_position_properties ~w(object-position background-position)
   @source_color_properties ~w(color background-color background)
-  @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment list-style list-style-type list-style-position grid-template-columns grid-template-rows grid-auto-columns grid-auto-rows)
-  @source_scalar_properties ~w(background-repeat font-weight font-style quotes content counter-reset counter-increment list-style list-style-type list-style-position)
+  @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position grid-template-columns grid-template-rows grid-auto-columns grid-auto-rows)
+  @source_scalar_properties ~w(background-repeat font-weight font-style quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position)
   @source_decoration_properties ~w(text-decoration text-decoration-line text-decoration-style text-decoration-thickness text-decoration-color)
   @source_symbolic_properties @source_layout_properties ++
                                 @source_edge_properties ++
@@ -965,6 +965,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           "counter-increment" ->
             put_counter_values(style, :counter_increment, value, 1)
+
+          "counter-set" ->
+            put_counter_values(style, :counter_set, value, 0)
 
           "letter-spacing" ->
             put_letter_spacing(style, value)

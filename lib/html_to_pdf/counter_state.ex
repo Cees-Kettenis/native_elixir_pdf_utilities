@@ -65,11 +65,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
     end
   end
 
-  @doc "Applies validated reset and increment declarations in their authored order."
+  @doc "Applies validated resets, implicit list numbering, increments and sets."
   @spec apply(map(), t(), t(), term()) :: t()
-  def apply(style, counters, parent, creator) do
+  @spec apply(map(), t(), t(), term(), :element | :pseudo) :: t()
+  def apply(style, counters, parent, creator, kind \\ :element) do
+    if HtmlValidator.counter_box?(style, kind),
+      do: apply_box(style, counters, parent, creator),
+      else: counters
+  end
+
+  defp apply_box(style, counters, parent, creator) do
     counters =
       Enum.reduce(Map.get(style, :counter_reset, []), counters, fn {name, value}, state ->
+        {value, creator} =
+          case value do
+            {:reversed, value} -> {value, {:reversed, creator}}
+            {:list, value} -> {value, {:list, creator}}
+            value -> {value, creator}
+          end
+
         old = Map.get(state.scope, name)
 
         state =
@@ -89,10 +103,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
         put(state, name, creator, value)
       end)
 
-    Enum.reduce(Map.get(style, :counter_increment, []), counters, fn {name, amount}, state ->
-      owner = Map.get(state.scope, name, creator)
-      put(state, name, owner, value(state, name) + amount)
+    counters =
+      if Map.get(style, :display) == :list_item and
+           not List.keymember?(Map.get(style, :counter_reset, []), "list-item", 0) do
+        case {Map.get(style, :_list_owner), Map.get(counters.scope, "list-item")} do
+          {{:auto, owner}, {kind, previous}}
+          when kind in [:list, :reversed] and previous != owner ->
+            put(counters, "list-item", {:list, owner}, 0)
+
+          {{_kind, owner}, nil} ->
+            put(counters, "list-item", {:list, owner}, 0)
+
+          _ ->
+            counters
+        end
+      else
+        counters
+      end
+
+    step =
+      case Map.get(counters.scope, "list-item") do
+        {:reversed, _owner} -> -1
+        _ -> 1
+      end
+
+    counters =
+      Enum.reduce(increments(style, step), counters, fn {name, amount}, state ->
+        owner = Map.get(state.scope, name, creator)
+        put(state, name, owner, value(state, name) + amount)
+      end)
+
+    Enum.reduce(Map.get(style, :counter_set, []), counters, fn {name, value}, state ->
+      put(state, name, Map.get(state.scope, name, creator), value)
     end)
+  end
+
+  @doc false
+  @spec reversed_initial_value(map(), t(), map(), :element | :pseudo) :: map()
+  def reversed_initial_value(style, counters, calculation, kind) do
+    if not calculation.done and HtmlValidator.counter_box?(style, kind) and
+         Map.get(counters.scope, "list-item") == calculation.owner do
+      negated =
+        Enum.reduce(increments(style, -1), 0, fn {name, amount}, total ->
+          if name == "list-item", do: total - amount, else: total
+        end)
+
+      last = if negated == 0, do: calculation.last, else: negated
+      set = List.keyfind(Enum.reverse(Map.get(style, :counter_set, [])), "list-item", 0)
+
+      case set do
+        {"list-item", value} ->
+          %{calculation | num: calculation.num + value, last: last, done: true}
+
+        nil ->
+          %{calculation | num: calculation.num + negated, last: last}
+      end
+    else
+      calculation
+    end
+  end
+
+  defp increments(style, step) do
+    increments = Map.get(style, :counter_increment, [])
+
+    if Map.get(style, :display) == :list_item and
+         not List.keymember?(increments, "list-item", 0),
+       do: [{"list-item", step} | increments],
+       else: increments
   end
 
   @doc "Includes instances created by a pseudo-element without exporting child scopes."
