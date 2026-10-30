@@ -518,7 +518,9 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
              )
 
     assert page_diagnostic.stage == :limits
-    assert page_diagnostic.message == "merged page count exceeds the limit"
+
+    assert page_diagnostic.message ==
+             "merged output requires 10001 pages, exceeding min(max_pdf_pages, max_merged_pages) (10000)"
 
     object = %{obj: 1, gen: 0, tokens: [], value: 42}
 

@@ -233,7 +233,7 @@ its content again. See [Stamping](pdf-stamping.md).
 | `max_assembled_pdf_bytes` | 50,000,000 | Each merged, transformed, or split output, also bounded by `max_pdf_input_bytes` |
 | `max_aggregate_merge_input_bytes` | 100,000,000 | PDF bytes in one merge |
 | `max_merged_objects` | 100,000 | Objects in merged output |
-| `max_merged_pages` | 10,000 | Pages in merged output |
+| `max_merged_pages` | 10,000 | Pages in merged output, also bounded by `max_pdf_pages` |
 | `max_split_outputs` | 1,000 | PDFs returned by one split operation |
 | `max_split_object_writes` | 1,000,000 | Aggregate objects serialized by one split operation |
 | `max_aggregate_split_output_bytes` | 100,000,000 | Aggregate bytes returned by one split operation |

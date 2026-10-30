@@ -122,6 +122,37 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert bytes_diagnostic.message == "aggregate merge input bytes exceed the limit"
   end
 
+  test "merged page counts honor the stricter general or merge-specific cap" do
+    source = File.read!(Path.join(@fixture_directory, "classic-xref.pdf"))
+    original = Limits.effective()
+
+    for {pdf_limit, merge_limit} <- [{1, 3}, {3, 1}, {2, 3}, {3, 2}, {2, 2}] do
+      Limits.install(%{original | max_pdf_pages: pdf_limit, max_merged_pages: merge_limit})
+      assert {:ok, %{pages: [_]}} = Reader.read_validated(source)
+      limit = min(pdf_limit, merge_limit)
+
+      for count <- Enum.uniq([max(limit - 1, 1), limit, limit + 1]) do
+        inputs = List.duplicate(source, count)
+
+        case count > limit do
+          true ->
+            assert {:error, {:resource_limit_exceeded, diagnostic}} = Merge.merge(inputs)
+            assert diagnostic.stage == :limits
+            assert diagnostic.reason == :resource_limit_exceeded
+            assert diagnostic.operation == :merge
+            assert diagnostic.module == Merge
+            assert diagnostic.message =~ "#{count} pages"
+            assert diagnostic.message =~ "min(max_pdf_pages, max_merged_pages) (#{limit})"
+
+          false ->
+            assert {:ok, output} = Merge.merge(inputs)
+            assert {:ok, context} = Reader.read_validated(output)
+            assert length(context.pages) == count
+        end
+      end
+    end
+  end
+
   test "rejects a merged xref that would exceed the readable object count" do
     source =
       merge_pdf([

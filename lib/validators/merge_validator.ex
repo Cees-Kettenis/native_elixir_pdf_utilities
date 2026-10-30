@@ -310,6 +310,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     case is_list(inputs) and is_integer(start_id) and start_id > 0 do
       true ->
         with :ok <- validate_generated_entry_count(start_id) do
+          page_limit = min(Limits.get(:max_pdf_pages), Limits.get(:max_merged_pages))
+
           inputs
           |> Enum.reduce_while({:ok, [], start_id, 0}, fn input,
                                                           {:ok, prepared, next_id, page_count} ->
@@ -318,8 +320,11 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
                 page_count = page_count + length(pages)
 
                 cond do
-                  page_count > Limits.get(:max_merged_pages) ->
-                    {:halt, resource_limit_error("merged page count exceeds the limit")}
+                  page_count > page_limit ->
+                    {:halt,
+                     resource_limit_error(
+                       "merged output requires #{page_count} pages, exceeding min(max_pdf_pages, max_merged_pages) (#{page_limit})"
+                     )}
 
                   true ->
                     case allocate_dense_ids(objects, next_id) do
