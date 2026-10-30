@@ -80,6 +80,9 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
 
             :error ->
               {:halt, error("incremental object cannot be serialized")}
+
+            {:error, _} = limit_error ->
+              {:halt, limit_error}
           end
 
         _entry, _output ->
@@ -142,9 +145,8 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
       {:stream, dictionary, data} when is_map(dictionary) and is_binary(data) ->
         dictionary = Map.put(dictionary, "Length", byte_size(data))
 
-        case InfoCodec.serialize_value(dictionary) do
-          {:ok, serialized} -> {:ok, [serialized, "\nstream\n", data, "\nendstream"]}
-          :error -> :error
+        with {:ok, serialized} <- InfoCodec.serialize_value(dictionary) do
+          {:ok, [serialized, "\nstream\n", data, "\nendstream"]}
         end
 
       _ ->
@@ -181,6 +183,7 @@ defmodule NativeElixirPdfUtilities.Pdf.IncrementalWriter do
     case InfoCodec.serialize_value(updated) do
       {:ok, serialized} -> {:ok, serialized}
       :error -> error("incremental trailer cannot be serialized")
+      {:error, _} = limit_error -> limit_error
     end
   end
 

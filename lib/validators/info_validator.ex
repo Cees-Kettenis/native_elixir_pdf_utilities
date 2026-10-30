@@ -156,6 +156,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
       case InfoCodec.serialize_value(updated) do
         {:ok, _iodata} -> {:ok, %{document: document, dictionary: updated}}
         :error -> error(:info, "information dictionary contains an unsupported value")
+        {:error, _} = limit_error -> limit_error
       end
     else
       false -> error(:input, "prepared information patch is malformed")

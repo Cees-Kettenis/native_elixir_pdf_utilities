@@ -69,8 +69,10 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
     {pieces, offsets, position} =
       Enum.reduce(outline_objects.objects, {pieces, offsets, position}, fn
         {id, generation, value}, {pieces, offsets, position} ->
-          {:ok, body} = InfoCodec.serialize_value(value)
-          add_object(pieces, offsets, position, id, generation, body)
+          case InfoCodec.serialize_value(value) do
+            {:ok, body} -> add_object(pieces, offsets, position, id, generation, body)
+            {:error, _} = limit_error -> throw({:assembly_output_limit, limit_error})
+          end
       end)
 
     maximum_object_id = Enum.max([catalog_object_id, pages_object_id | Map.keys(offsets)])

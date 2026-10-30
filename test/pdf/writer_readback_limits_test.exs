@@ -3,7 +3,16 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Outlines, Stamp}
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
-  alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, InfoCodec, OutlineWriter, Reader}
+
+  alias NativeElixirPdfUtilities.Pdf.{
+    AssemblyWriter,
+    IncrementalWriter,
+    InfoCodec,
+    OutlineWriter,
+    Reader
+  }
+
+  alias NativeElixirPdfUtilities.Validators.MergeValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
 
   setup do
@@ -11,6 +20,65 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     on_exit(fn -> Limits.install(limits) end)
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: []}])
     %{limits: limits, pdf: pdf}
+  end
+
+  test "serialization counts scalar and empty-container boundaries like the reader", ctx do
+    for maximum <- [1, 2, 100, 200], leaf <- [0, [], %{}], kind <- [:array, :dictionary] do
+      Limits.install(%{ctx.limits | max_pdf_value_depth: maximum})
+      leaf_depth = if is_list(leaf) or is_map(leaf), do: 1, else: 0
+
+      value =
+        Enum.reduce(List.duplicate(:container, maximum - leaf_depth), leaf, fn _, child ->
+          if kind == :array, do: [child], else: %{"Child" => child}
+        end)
+
+      assert {:ok, encoded} = InfoCodec.serialize_value(value)
+      assert is_binary(IO.iodata_to_binary(encoded))
+
+      for excessive <- [[value], %{"Child" => value}] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 InfoCodec.serialize_value(excessive)
+
+        assert diagnostic.stage == :limits
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.message == "PDF value nesting depth exceeds the #{maximum}-level limit"
+      end
+    end
+  end
+
+  test "incremental values, streams and copied trailers propagate depth diagnostics", ctx do
+    assert {:ok, context} = Reader.read_validated(ctx.pdf)
+    object = context.document.trailer["Size"]
+    Limits.install(%{ctx.limits | max_pdf_value_depth: 2})
+
+    for body <- [
+          {:value, %{"Custom" => [[]]}},
+          {:stream, %{"Custom" => %{"Nested" => %{}}}, ""}
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               IncrementalWriter.write(context, [{object, 0, body}])
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.message == "PDF value nesting depth exceeds the 2-level limit"
+    end
+
+    context = put_in(context.document.trailer["Info"], %{"Custom" => []})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = IncrementalWriter.write(context, [])
+    assert diagnostic.stage == :limits
+    assert diagnostic.message == "PDF value nesting depth exceeds the 2-level limit"
+  end
+
+  test "assembled outline objects propagate the shared depth diagnostic", ctx do
+    assert {:ok, outlined} = Outlines.put(ctx.pdf, [{"Page", 1}])
+    assert {:ok, context} = Reader.read_validated(outlined)
+    assert {:ok, input} = MergeValidator.prepare(context)
+    assert {:ok, inputs} = MergeValidator.prepare_remapping([input], 3)
+    Limits.install(%{ctx.limits | max_pdf_value_depth: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = AssemblyWriter.write(inputs)
+    assert diagnostic.stage == :limits
+    assert diagnostic.message == "PDF value nesting depth exceeds the 1-level limit"
   end
 
   test "generated and incremental writers include object zero at exact readback boundaries",

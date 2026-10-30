@@ -1,8 +1,10 @@
 defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Pdf.TextEncoding
   alias NativeElixirPdfUtilities.Validators.PdfDateValidator
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @type pdf_date :: PdfDateValidator.pdf_date()
 
@@ -48,7 +50,8 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
   def normalize_date(value), do: PdfDateValidator.normalize_date(value)
 
   @doc false
-  @spec serialize_value(term()) :: {:ok, iodata()} | :error
+  @spec serialize_value(term()) ::
+          {:ok, iodata()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def serialize_value(value) do
     serialize_value(value, 0)
   end
@@ -76,13 +79,6 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
   end
 
   defp serialize_value(value, depth) do
-    case depth <= 100 do
-      true -> serialize_supported_value(value, depth)
-      false -> :error
-    end
-  end
-
-  defp serialize_supported_value(value, depth) do
     case value do
       nil ->
         {:ok, "null"}
@@ -138,10 +134,14 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
         {:ok, "#{object} #{generation} R"}
 
       values when is_list(values) ->
-        serialize_array(values, depth + 1)
+        with :ok <- PdfValidator.validate_value_depth(depth + 1, module: __MODULE__) do
+          serialize_array(values, depth + 1)
+        end
 
       dictionary when is_map(dictionary) ->
-        serialize_dictionary(dictionary, depth + 1)
+        with :ok <- PdfValidator.validate_value_depth(depth + 1, module: __MODULE__) do
+          serialize_dictionary(dictionary, depth + 1)
+        end
 
       _ ->
         :error
@@ -153,12 +153,12 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
     |> Enum.reduce_while({:ok, []}, fn value, {:ok, encoded} ->
       case serialize_value(value, depth) do
         {:ok, value} -> {:cont, {:ok, [value | encoded]}}
-        :error -> {:halt, :error}
+        failure -> {:halt, failure}
       end
     end)
     |> case do
       {:ok, encoded} -> {:ok, ["[", encoded |> Enum.reverse() |> Enum.intersperse(" "), "]"]}
-      :error -> :error
+      failure -> failure
     end
   end
 
@@ -168,12 +168,13 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
     |> Enum.reduce_while({:ok, []}, fn {key, value}, {:ok, encoded} ->
       case {is_binary(key), serialize_value(value, depth)} do
         {true, {:ok, value}} -> {:cont, {:ok, [[["/", encode_name(key)], " ", value] | encoded]}}
+        {true, {:error, _} = failure} -> {:halt, failure}
         _ -> {:halt, :error}
       end
     end)
     |> case do
       {:ok, encoded} -> {:ok, ["<< ", encoded |> Enum.reverse() |> Enum.intersperse(" "), " >>"]}
-      :error -> :error
+      failure -> failure
     end
   end
 

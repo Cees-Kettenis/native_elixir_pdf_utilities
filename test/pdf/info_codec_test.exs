@@ -108,7 +108,9 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodecTest do
     assert InfoCodec.serialize_value([self()]) == :error
 
     deeply_nested = Enum.reduce(1..101, 0, fn _index, nested -> [nested] end)
-    assert InfoCodec.serialize_value(deeply_nested) == :error
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             InfoCodec.serialize_value(deeply_nested)
   end
 
   test "serializes extreme floats as round-trippable PDF decimal numbers" do

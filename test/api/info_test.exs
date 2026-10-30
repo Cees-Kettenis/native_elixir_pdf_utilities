@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.InfoTest do
   alias NativeElixirPdfUtilities.Pdf.InfoWriter
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.InfoValidator
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @fixture_directory Paths.fixture("pdf_reader")
 
@@ -472,6 +473,57 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     assert Base.encode16(decoded_first) == first
     refute Base.encode16(decoded_second) == second
     assert byte_size(decoded_second) == 16
+  end
+
+  test "metadata updates preserve nested custom values at the configured PDF depth" do
+    limits = Limits.effective()
+
+    for maximum <- [3, 100, 200], leaf <- ["0", "[]", "<< >>"] do
+      Limits.install(%{limits | max_pdf_value_depth: maximum})
+      leaf_depth = if leaf == "0", do: 0, else: 1
+
+      nested =
+        List.duplicate(:container, maximum - 1 - leaf_depth)
+        |> Enum.with_index()
+        |> Enum.reduce(leaf, fn {_container, index}, child ->
+          if rem(index, 2) == 0, do: "[#{child}]", else: "<< /Child #{child} >>"
+        end)
+
+      source =
+        pdf(base_objects() ++ [{4, "<< /Title (Original) /Custom #{nested} >>"}], "/Info 4 0 R")
+
+      assert {:ok, %{title: "Original"}} = Info.get(source)
+      assert {:ok, original} = Reader.read(source)
+      assert {:ok, original_info} = PdfValidator.dictionary(original, original.trailer["Info"])
+      assert {:ok, updated} = Info.put(source, title: "Updated")
+      assert String.starts_with?(updated, source)
+      assert {:ok, %{title: "Updated"}} = Info.get(updated)
+      assert {:ok, document} = Reader.read(updated)
+      assert {:ok, updated_info} = PdfValidator.dictionary(document, document.trailer["Info"])
+      assert updated_info["Custom"] == original_info["Custom"]
+    end
+  end
+
+  test "metadata preparation and public updates report the configured PDF depth limit" do
+    limits = Limits.effective()
+    Limits.install(%{limits | max_pdf_value_depth: 3})
+
+    source = pdf(base_objects() ++ [{4, "<< /Custom [[]] >>"}], "/Info 4 0 R")
+    assert {:ok, context} = Reader.read_validated(source)
+    Limits.install(%{limits | max_pdf_value_depth: 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             InfoValidator.prepare_write(context, %{})
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message == "PDF value nesting depth exceeds the 2-level limit"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Info.put(source, title: "Updated")
+    assert diagnostic.stage == :limits
+    assert diagnostic.operation == :put_info
+    assert diagnostic.module == Info
+    assert diagnostic.message =~ "2-level limit"
   end
 
   test "enforces information value and aggregate byte limits" do
