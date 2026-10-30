@@ -108,13 +108,19 @@ Every supported runtime runs the full parity suite.
 | Reference | Chromium renders authored source; Poppler rasterizes both PDFs identically. Native-to-native checks cannot replace this |
 | Comparisons | Preserve source bytes, geometry, fonts, viewport, scale, thresholds and page/text/ink/pixel checks across adapters and fixture moves |
 | Execution | Up to six modules; process-wide environment changes and load-sensitive cases stay serial |
-| Browser state | Fresh context, print media, author JavaScript disabled; processes/profiles cleaned afterward |
+| Browser state | Fresh process and context per capture, print media, author JavaScript disabled; processes/profiles cleaned afterward |
+| Input encoding | Generated reference inputs declare UTF-8 with a BOM; authored fixture bytes remain unchanged |
 | Readiness | Wait for frame/resources, fonts and image decoding; verify stable frame tree; retain readiness/timeout diagnostics beside PDFs |
-| Fontconfig | Fresh browser process with the same readiness checks |
 | Failures | Use suite timeout, preserve broken-resource fallback; never retry to hide a failed comparison |
 | Shared sheets | Only independent cases with separate regions and unchanged checks; root-document, pagination and custom-reference cases stay separate |
 
 See [fixture scripts](scripts.md) for regeneration; inspect affected regions afterward.
+
+Tests that install application limits or change process-wide environment must
+run with `async: false`. Synchronize worker lifecycle assertions with messages
+before triggering cancellation; a longer timeout cannot fix a monitor race.
+For deadline behavior, advance an injected clock after the tested operation
+starts so browser startup speed does not determine the assertion.
 
 ## Performance measurements
 

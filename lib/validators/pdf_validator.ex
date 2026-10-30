@@ -230,6 +230,33 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc "Charges one token and its scanned bytes together, preserving both reader budgets."
+  @spec charge_reader_token(non_neg_integer()) :: :ok
+  def charge_reader_token(bytes) do
+    case Process.get(@reader_budget_key) do
+      nil ->
+        :ok
+
+      budget ->
+        work = Map.get(budget, :max_pdf_reader_work, 0) + bytes
+        tokens = Map.get(budget, :max_pdf_reader_tokens, 0) + 1
+
+        with :ok <- validate_reader_size(work, :max_pdf_reader_work),
+             :ok <- validate_reader_size(tokens, :max_pdf_reader_tokens) do
+          Process.put(
+            @reader_budget_key,
+            budget
+            |> Map.put(:max_pdf_reader_work, work)
+            |> Map.put(:max_pdf_reader_tokens, tokens)
+          )
+
+          :ok
+        else
+          error -> abort_reader_budget(error)
+        end
+    end
+  end
+
   @doc false
   @spec remaining_reader_decoded_bytes() :: non_neg_integer()
   def remaining_reader_decoded_bytes do

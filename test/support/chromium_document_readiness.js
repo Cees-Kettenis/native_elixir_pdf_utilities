@@ -11,5 +11,5 @@
     return {source: image.currentSrc || image.src, complete: image.complete, width: image.naturalWidth};
   }));
   document.documentElement?.getBoundingClientRect();
-  return {url: document.URL, ready: document.readyState, fonts: document.fonts.status, images};
+  return {url: document.URL, encoding: document.characterSet, ready: document.readyState, fonts: document.fonts.status, images};
 })()

@@ -794,7 +794,17 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           Keyword.get(opts, :chromium_page_margin, 0)
         )
         |> maybe_inject_chromium_page_margin_css(Keyword.get(opts, :chromium_page_margin_css))
-        |> then(&File.write!(chromium_fixture_path, &1))
+        |> then(fn html ->
+          # Native rendering consumes a UTF-8 string. Declare that same encoding
+          # before injected CSS can push authored metadata beyond the prescan.
+          input =
+            case html do
+              <<239, 187, 191, _rest::binary>> -> html
+              _ -> [<<239, 187, 191>>, html]
+            end
+
+          File.write!(chromium_fixture_path, input)
+        end)
 
         # Font injection must preserve the original document's resource directory.
         # Loading the artifact copy changes relative authored image/child URLs.

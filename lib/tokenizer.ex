@@ -142,8 +142,14 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
         lexical_error(failure, st.bin)
 
       {token, state} = success ->
-        PdfValidator.charge_reader_budget(:max_pdf_reader_work, state.pos - st.pos)
-        if token != {:eof, nil}, do: PdfValidator.charge_reader_budget(:max_pdf_reader_tokens, 1)
+        case token do
+          {:eof, nil} ->
+            PdfValidator.charge_reader_budget(:max_pdf_reader_work, state.pos - st.pos)
+
+          _ ->
+            PdfValidator.charge_reader_token(state.pos - st.pos)
+        end
+
         success
     end
   end
@@ -164,8 +170,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
       start = st.pos + eol_len_at_pos(st)
       mode = if is_integer(st.last_length) and st.last_length >= 0, do: :length, else: :scanned
       {tok, st2} = return_stream_data(st)
-      PdfValidator.charge_reader_budget(:max_pdf_reader_work, st2.pos - st.pos)
-      PdfValidator.charge_reader_budget(:max_pdf_reader_tokens, 1)
+      PdfValidator.charge_reader_token(st2.pos - st.pos)
       {{tok, %{from: start, to: st2.pos, stream_mode?: mode}}, st2}
     else
       st_ws = skip_ws_and_comments(st)

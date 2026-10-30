@@ -5,14 +5,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
   @moduletag :browser_parity
 
   setup do
-    timeout = ExUnit.configuration()[:timeout]
-
-    on_exit(fn ->
-      ExUnit.configure(timeout: timeout)
-      ChromiumPool.stop()
-    end)
+    on_exit(fn -> ChromiumPool.stop() end)
 
     :ok
+  end
+
+  test "successive captures have independent browser profiles and clean them afterward" do
+    url = serve(fn _path -> {200, "text/html", "<p>Independent capture</p>"} end)
+    directory = Paths.project("tmp/browser_parity/chromium_readiness/isolation")
+    File.mkdir_p!(directory)
+    browser = System.get_env("CHROMIUM_BIN") || System.find_executable("chromium")
+
+    profiles =
+      for index <- 1..2 do
+        output = Path.join(directory, "capture-#{index}.pdf")
+        assert :ok = ChromiumPool.print_pdf!(browser, url, output)
+        metadata = output |> Kernel.<>(".browser.json") |> File.read!() |> :json.decode()
+        refute File.exists?(metadata["profile"])
+        assert {text, 0} = System.cmd("pdftotext", [output, "-"])
+        assert text =~ "Independent capture"
+        metadata["profile"]
+      end
+
+    assert length(Enum.uniq(profiles)) == 2
+  end
+
+  test "caller death closes an active browser and removes its profile" do
+    owner = self()
+
+    url =
+      serve(fn _path ->
+        send(owner, {:capture_request, self()})
+
+        receive do
+          :finish -> {200, "text/html", "<p>Unreachable</p>"}
+        end
+      end)
+
+    directory = Paths.project("tmp/browser_parity/chromium_readiness/owner_exit")
+    File.mkdir_p!(directory)
+    output = Path.join(directory, "abandoned.pdf")
+    File.rm(output)
+    browser = System.get_env("CHROMIUM_BIN") || System.find_executable("chromium")
+    caller = spawn(fn -> ChromiumPool.print_pdf!(browser, url, output) end)
+    on_exit(fn -> Process.exit(caller, :kill) end)
+    assert_receive {:capture_request, request}, 10_000
+
+    metadata = output |> Kernel.<>(".browser.json") |> File.read!() |> :json.decode()
+    worker = metadata["worker"] |> String.to_charlist() |> :erlang.list_to_pid()
+    monitor = Process.monitor(worker)
+    assert {:monitored_by, monitors} = Process.info(worker, :monitored_by)
+    assert self() in monitors
+    Process.exit(caller, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 10_000
+    send(request, :finish)
+    refute File.exists?(metadata["profile"])
+    refute File.exists?(output)
+    assert File.read!(output <> ".readiness-error.txt") =~ "capture owner exited"
   end
 
   test "capture waits for nested documents fonts and images while author scripts stay disabled" do
@@ -94,7 +143,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
   end
 
   @tag timeout: 15_000
-  test "unfinished child loads fail with pending resource diagnostics within the suite deadline" do
+  test "unfinished child loads fail with pending resource diagnostics when the deadline expires" do
     url =
       serve(fn path ->
         case path do
@@ -115,16 +164,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
     File.mkdir_p!(directory)
     browser = System.get_env("CHROMIUM_BIN") || System.find_executable("chromium")
 
-    assert :ok =
-             ChromiumPool.print_pdf!(browser, url <> "ready", Path.join(directory, "ready.pdf"))
-
-    ExUnit.configure(timeout: 2_000)
     output = Path.join(directory, "unfinished.pdf")
     File.rm(output)
+    clock = :atomics.new(1, [])
+    observer = self()
 
-    assert_raise ExUnit.AssertionError, ~r/deadline exceeded.*hang/s, fn ->
-      ChromiumPool.print_pdf!(browser, url, output)
-    end
+    capture =
+      Task.async(fn ->
+        assert_raise ExUnit.AssertionError, ~r/deadline exceeded.*hang/s, fn ->
+          ChromiumPool.print_pdf!(browser, url, output, nil,
+            timeout: 2_000,
+            clock: fn -> :atomics.get(clock, 1) end,
+            request_observer: observer
+          )
+        end
+      end)
+
+    hanging_url = url <> "hang"
+    assert_receive {:chromium_request, worker, ^hanging_url}, 10_000
+    :atomics.put(clock, 1, 2_000)
+    send(worker, :clock_advanced)
+    Task.await(capture, 10_000)
 
     assert File.read!(output <> ".readiness-error.txt") =~ "/hang"
     refute File.exists?(output)

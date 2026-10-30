@@ -3,25 +3,16 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   use GenServer
   import ExUnit.Assertions
 
-  @doc "Prints a fixture in a fresh browser context, reusing a bounded pool of Chrome processes."
-  @spec print_pdf!(String.t(), String.t(), String.t(), map() | nil) :: :ok
-  def print_pdf!(binary, fixture, output, reference \\ nil) do
+  @doc """
+  Prints a fixture in a fresh browser process and context, bounded by test concurrency.
+  The `:clock`, `:timeout` and `:request_observer` options let readiness tests
+  advance a deadline after observing the resource being tested.
+  """
+  @spec print_pdf!(String.t(), String.t(), String.t(), map() | nil, keyword()) :: :ok
+  def print_pdf!(binary, fixture, output, reference \\ nil, opts \\ []) do
     slot = :erlang.phash2(self(), ExUnit.configuration()[:max_cases])
-    fontconfig = System.get_env("FONTCONFIG_FILE")
-    name = {:global, {__MODULE__, binary, slot, nil}}
-
-    pid =
-      if fontconfig do
-        # A fontconfig override used to launch a fresh CLI process. Keep that
-        # process isolation while using the same readiness barrier as the pool.
-        {:ok, pid} = GenServer.start(__MODULE__, {binary, slot})
-        pid
-      else
-        case GenServer.start(__MODULE__, {binary, slot}, name: name) do
-          {:ok, pid} -> pid
-          {:error, {:already_started, pid}} -> pid
-        end
-      end
+    name = {:global, {__MODULE__, binary, self(), make_ref()}}
+    {:ok, pid} = GenServer.start(__MODULE__, {binary, slot, self(), opts}, name: name)
 
     try do
       case GenServer.call(pid, {:pdf, fixture, output, reference}, :infinity) do
@@ -29,25 +20,40 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         {:error, message} -> flunk(message)
       end
     after
-      if fontconfig && Process.alive?(pid), do: GenServer.stop(pid)
+      stop_browser(pid)
     end
   end
 
   @doc "Closes the suite's browser processes and removes their temporary profiles."
   @spec stop() :: :ok
   def stop do
-    for {__MODULE__, _binary, _slot, _fontconfig} = name <- :global.registered_names() do
+    for {__MODULE__, _binary, _owner, _capture} = name <- :global.registered_names() do
       case :global.whereis_name(name) do
         :undefined -> :ok
-        pid -> GenServer.stop(pid)
+        pid -> stop_browser(pid)
       end
     end
 
     :ok
   end
 
+  defp stop_browser(pid) do
+    monitor = Process.monitor(pid)
+    GenServer.cast(pid, :stop)
+
+    receive do
+      {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+    after
+      ExUnit.configuration()[:timeout] ->
+        Process.exit(pid, :kill)
+        Process.demonitor(monitor, [:flush])
+        flunk("Chromium capture process did not stop")
+    end
+  end
+
   @impl true
-  def init({binary, slot}) do
+  def init({binary, slot, owner, opts}) do
+    owner_monitor = Process.monitor(owner)
     unique = "#{System.pid()}-#{System.unique_integer([:positive])}"
     profile = Path.join(System.tmp_dir!(), "native-pdf-chrome-#{unique}")
     log = Path.expand("tmp/browser_parity/.chrome/worker-#{slot}-#{unique}.log")
@@ -88,6 +94,10 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
     {:ok,
      %{
        port: port,
+       owner_monitor: owner_monitor,
+       clock: Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end),
+       timeout: Keyword.get(opts, :timeout, ExUnit.configuration()[:timeout]),
+       request_observer: Keyword.get(opts, :request_observer),
        profile: profile,
        log: log,
        next_id: 1,
@@ -103,9 +113,17 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
 
   @impl true
   def handle_call({:pdf, fixture, output, reference}, _from, state) do
+    File.write!(
+      output <> ".browser.json",
+      :json.encode(%{
+        worker: self() |> :erlang.pid_to_list() |> List.to_string(),
+        profile: state.profile
+      })
+    )
+
     state = %{
       state
-      | deadline: System.monotonic_time(:millisecond) + ExUnit.configuration()[:timeout],
+      | deadline: state.clock.() + state.timeout,
         pending: %{},
         session: nil,
         loading: MapSet.new(),
@@ -209,8 +227,14 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   end
 
   @impl true
+  def handle_cast(:stop, state), do: {:stop, :normal, state}
+
+  @impl true
   def handle_info(message, state) do
     case message do
+      {:DOWN, monitor, :process, _owner, _reason} when monitor == state.owner_monitor ->
+        {:stop, :normal, state}
+
       {port, {:data, data}} when port == state.port ->
         {:noreply, %{state | buffer: state.buffer <> data}}
 
@@ -242,7 +266,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   # reached its final layout. Drain actual loads, settle each frame, then check
   # that no new frame or resource appeared while doing so.
   defp await_documents(state, session) do
-    if System.monotonic_time(:millisecond) >= state.deadline,
+    if state.clock.() >= state.deadline,
       do: readiness_timeout!(state)
 
     if map_size(state.pending) > 0 or MapSet.size(state.loading) > 0 do
@@ -317,6 +341,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
     state =
       case if(session == state.session, do: message["method"], else: nil) do
         "Network.requestWillBeSent" ->
+          if state.request_observer do
+            send(
+              state.request_observer,
+              {:chromium_request, self(), get_in(params, ["request", "url"])}
+            )
+          end
+
           %{
             state
             | pending:
@@ -484,7 +515,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   end
 
   defp read_message(state) do
-    if state.deadline && System.monotonic_time(:millisecond) >= state.deadline,
+    if state.deadline && state.clock.() >= state.deadline,
       do: readiness_timeout!(state)
 
     case :binary.match(state.buffer, <<0>>) do
@@ -497,16 +528,23 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         port = state.port
 
         receive do
-          {^port, {:data, data}} -> read_message(%{state | buffer: state.buffer <> data})
-          {^port, {:exit_status, status}} -> raise("Chrome pipe exited with status #{status}")
+          {:DOWN, monitor, :process, _owner, reason} when monitor == state.owner_monitor ->
+            raise("Chromium capture owner exited: #{inspect(reason)}")
+
+          :clock_advanced ->
+            read_message(state)
+
+          {^port, {:data, data}} ->
+            read_message(%{state | buffer: state.buffer <> data})
+
+          {^port, {:exit_status, status}} ->
+            raise("Chrome pipe exited with status #{status}")
         after
           max(
             0,
-            (state.deadline ||
-               System.monotonic_time(:millisecond) + ExUnit.configuration()[:timeout]) -
-                System.monotonic_time(:millisecond)
+            (state.deadline || state.clock.() + state.timeout) - state.clock.()
           ) ->
-            readiness_timeout!(state)
+            read_message(state)
         end
     end
   end

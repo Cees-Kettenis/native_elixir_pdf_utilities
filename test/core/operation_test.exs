@@ -314,14 +314,23 @@ defmodule NativeElixirPdfUtilities.OperationTest do
       spawn(fn ->
         Operation.run(__MODULE__, :abandoned, fn ->
           send(owner, {:abandoned_worker, self()})
-          Process.sleep(:infinity)
+
+          receive do
+            :monitor_ready ->
+              send(owner, {:abandoned_worker_ready, self()})
+              Process.sleep(:infinity)
+          end
         end)
       end)
 
-    assert_receive {:abandoned_worker, worker}
+    on_exit(fn -> Process.exit(caller, :kill) end)
+    assert_receive {:abandoned_worker, worker}, 5_000
     monitor = Process.monitor(worker)
+    # The worker's reply orders monitor installation before caller cancellation.
+    send(worker, :monitor_ready)
+    assert_receive {:abandoned_worker_ready, ^worker}, 5_000
     Process.exit(caller, :kill)
-    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :killed}, 5_000
   end
 
   test "a completed result received after the deadline still fails" do

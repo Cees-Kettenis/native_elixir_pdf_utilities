@@ -14,6 +14,38 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     :ok
   end
 
+  test "token accounting shares byte and token budgets with individual charges" do
+    Limits.install(%{Limits.effective() | max_pdf_reader_work: 5, max_pdf_reader_tokens: 2})
+
+    assert :ok = PdfValidator.charge_reader_token(100)
+
+    assert :ok =
+             PdfValidator.with_reader_budget(fn ->
+               :ok = PdfValidator.charge_reader_token(2)
+               :ok = PdfValidator.charge_reader_budget(:max_pdf_reader_work, 1)
+               PdfValidator.charge_reader_token(2)
+             end)
+
+    for {bytes, key} <- [{3, :max_pdf_reader_work}, {0, :max_pdf_reader_tokens}] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               PdfValidator.with_reader_budget(fn ->
+                 :ok = PdfValidator.charge_reader_token(2)
+                 :ok = PdfValidator.charge_reader_token(1)
+                 PdfValidator.charge_reader_token(bytes)
+               end)
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ Atom.to_string(key)
+    end
+
+    Limits.install(%{Limits.effective() | max_pdf_reader_tokens: 1})
+
+    assert [{:int, 1}] =
+             PdfValidator.with_reader_budget(fn ->
+               Tokenizer.tokenize_all(Tokenizer.new("1    "))
+             end)
+  end
+
   test "resource object bodies retain streams, references and complete syntax" do
     bytes = <<0, 255, "endstream and endobj">>
 
