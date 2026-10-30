@@ -2,12 +2,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueResourceLimitsTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend
-  alias NativeElixirPdfUtilities.Validators.{HtmlFormValueValidator, HtmlValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlFormValueValidator,
+    HtmlValidator,
+    LimitsValidator
+  }
 
   setup do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
     :ok
+  end
+
+  test "the maximum configured form timeout remains usable by the runtime" do
+    assert {:ok, limits} =
+             LimitsValidator.validate(max_html_form_value_timeout_ms: 4_294_967_295)
+
+    Limits.install(limits)
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a", ["a"])
+    assert request.timeout == 4_294_967_295
+    assert {:ok, :matched} = HtmlFormValueValidator.result(FormValueBackend.run(request))
   end
 
   test "memory exhaustion preserves caller flags and unrelated messages" do

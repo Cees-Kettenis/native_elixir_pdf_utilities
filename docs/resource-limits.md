@@ -25,6 +25,8 @@ call. Invalid settings prevent startup and identify the problem.
 
 Values must be positive integers. Aggregate image and metadata limits must
 allow at least one maximum-size item.
+Timeouts and the memory-check interval must not exceed 4,294,967,295 milliseconds,
+the BEAM runtime maximum.
 
 ## Operation time and memory
 

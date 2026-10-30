@@ -367,10 +367,5 @@ defmodule NativeElixirPdfUtilities.OperationTest do
         assert message =~ Atom.to_string(key)
       end
     end
-
-    for key <- [:max_operation_timeout_ms, :operation_memory_check_interval_ms] do
-      assert {:error, message} = LimitsValidator.validate([{key, 4_294_967_296}])
-      assert message =~ "BEAM receive timeout range"
-    end
   end
 end

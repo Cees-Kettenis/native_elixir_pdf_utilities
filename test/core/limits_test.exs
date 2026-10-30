@@ -241,6 +241,47 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert cid_message =~ "PDF CID range"
   end
 
+  test "all receive timeout settings share the runtime's inclusive range" do
+    for key <- [
+          :max_operation_timeout_ms,
+          :operation_memory_check_interval_ms,
+          :max_html_form_value_timeout_ms
+        ] do
+      for value <- [1, 4_294_967_295] do
+        assert {:ok, limits} = LimitsValidator.validate([{key, value}])
+        assert limits[key] == value
+      end
+
+      for value <- [4_294_967_296, 9_223_372_036_854_775_807] do
+        assert {:error, message} = LimitsValidator.validate([{key, value}])
+        assert message == "resource limit #{inspect(key)} exceeds the BEAM receive timeout range"
+      end
+    end
+  end
+
+  test "startup rejects unsupported receive timeouts without installing them" do
+    original_config = Application.get_env(:native_elixir_pdf_utilities, :limits, [])
+    original_limits = Limits.effective()
+
+    on_exit(fn ->
+      Application.put_env(:native_elixir_pdf_utilities, :limits, original_config)
+    end)
+
+    for key <- [
+          :max_operation_timeout_ms,
+          :operation_memory_check_interval_ms,
+          :max_html_form_value_timeout_ms
+        ] do
+      Application.put_env(:native_elixir_pdf_utilities, :limits, [{key, 4_294_967_296}])
+
+      assert {:error, {:invalid_limits_configuration, message}} =
+               LibraryApplication.start(:normal, [])
+
+      assert message == "resource limit #{inspect(key)} exceeds the BEAM receive timeout range"
+      assert Limits.effective() == original_limits
+    end
+  end
+
   test "installed overrides are enforced by each major validation boundary" do
     configured = [
       max_svg_bytes: 10,
