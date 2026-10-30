@@ -357,7 +357,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
   defp serialized_outline_objects(objects) do
     Enum.map(objects, fn {id, 0, value} ->
-      {:ok, serialized} = InfoCodec.serialize_value(value)
+      serialized = serialized_value(value)
       {id, serialized}
     end)
   end
@@ -481,6 +481,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     {entries, next_object_id} =
       Enum.reduce(pages, {[], first_page_object_id}, fn page, {entries, next_object_id} ->
         annotations = link_annotations(page)
+        WriterValidator.reserve_container_entries(length(annotations))
 
         annotation_objects =
           annotations
@@ -551,6 +552,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         ""
 
       gradients ->
+        WriterValidator.reserve_container_entries(length(gradients))
+
         entries =
           Enum.map_join(gradients, " ", fn colors ->
             functions =
@@ -1095,6 +1098,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                   " <" <> trailing <> "> Tj"
 
                 _ ->
+                  WriterValidator.reserve_container_entries(
+                    2 * length(segments) + if(trailing == "", do: 0, else: 1)
+                  )
+
                   " [" <>
                     Enum.join(Enum.reverse(segments), " ") <>
                     if(trailing == "", do: "", else: " <" <> trailing <> ">") <> "] TJ"
@@ -1149,6 +1156,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     if Enum.all?(segments, fn {_, adjustment} -> adjustment == "0" end) do
       " <" <> Enum.map_join(segments, fn {encoded, _} -> encoded end) <> "> Tj"
     else
+      WriterValidator.reserve_container_entries(2 * length(segments))
+
       " [" <>
         Enum.map_join(segments, " ", fn {encoded, adjustment} ->
           "<" <> encoded <> "> " <> adjustment
@@ -3068,6 +3077,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp cid_widths(resource, font) do
+    WriterValidator.reserve_container_entries(2 * map_size(resource.encoding.cid_to_gid))
+
     widths =
       resource.encoding.cid_to_gid
       |> Enum.sort_by(fn {cid, _glyph_id} -> cid end)
@@ -3295,10 +3306,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     if is_binary(stream) do
       value = Map.put(value, "Length", byte_size(stream))
-      {:ok, serialized} = InfoCodec.serialize_value(value)
+      serialized = serialized_value(value)
       IO.iodata_to_binary([serialized, "\nstream\n", stream, "\nendstream"])
     else
-      {:ok, serialized} = InfoCodec.serialize_value(value)
+      serialized = serialized_value(value)
       IO.iodata_to_binary(serialized)
     end
   end
@@ -3453,6 +3464,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp font_resource_dictionary(font_resources) do
+    WriterValidator.reserve_container_entries(map_size(font_resources))
+
     font_resources
     |> Enum.sort_by(fn {_font, resource} -> resource.object_id end)
     |> Enum.map_join(" ", fn {_font, resource} ->
@@ -3461,6 +3474,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp xobject_resource_dictionary(image_resources) do
+    WriterValidator.reserve_container_entries(map_size(image_resources))
+
     case map_size(image_resources) do
       0 ->
         ""
@@ -3478,6 +3493,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp graphics_state_resource_dictionary(graphics_state_resources) do
+    WriterValidator.reserve_container_entries(map_size(graphics_state_resources))
+
     case map_size(graphics_state_resources) do
       0 ->
         ""
@@ -3555,6 +3572,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           :writer
         )
 
+        WriterValidator.reserve_output_containers(content)
+
         object = "#{id} 0 obj\n#{content}\nendobj\n"
 
         {[object | pieces], [position | offsets], position + byte_size(object)}
@@ -3584,6 +3603,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     HtmlValidator.check_render_resource(:max_rendered_pdf_bytes, bytes, :writer)
     HtmlValidator.check_render_resource(:max_pdf_input_bytes, bytes, :writer)
     IO.iodata_to_binary(output)
+  end
+
+  defp serialized_value(value) do
+    case InfoCodec.serialize_value(value) do
+      {:ok, encoded} -> encoded
+      {:error, _} = error -> throw({:render_resource_limit, error})
+    end
   end
 
   defp escape_text(text) do

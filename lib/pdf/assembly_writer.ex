@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
   alias NativeElixirPdfUtilities.Validators.AssemblyValidator
   alias NativeElixirPdfUtilities.Validators.MergeValidator
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @doc false
   @spec write([map()]) :: {:ok, binary()} | {:error, {atom(), map()}}
@@ -107,6 +108,15 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   end
 
   defp add_object(pieces, offsets, position, id, generation, body) do
+    case PdfValidator.validate_output_containers(body,
+           operation: :merge,
+           module: __MODULE__,
+           source: "object #{id} #{generation}"
+         ) do
+      :ok -> :ok
+      {:error, _} = error -> throw({:assembly_output_limit, error})
+    end
+
     piece = [
       Integer.to_string(id),
       " ",

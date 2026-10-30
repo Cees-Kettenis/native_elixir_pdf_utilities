@@ -1,8 +1,10 @@
 defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
   use ExUnit.Case, async: false
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Outlines, Stamp}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Merge, Outlines, Stamp}
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.TestSupport.Paths
 
   alias NativeElixirPdfUtilities.Pdf.{
     AssemblyWriter,
@@ -14,12 +16,222 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
 
   alias NativeElixirPdfUtilities.Validators.MergeValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
+  alias NativeElixirPdfUtilities.Validators.WriterValidator
 
   setup do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: []}])
     %{limits: limits, pdf: pdf}
+  end
+
+  test "arrays and dictionaries share inclusive serialization and readback boundaries", ctx do
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 4})
+
+    for value <- [
+          [],
+          %{},
+          [1, 2, 3, 4],
+          %{"A" => 1, "B" => 2, "C" => 3, "D" => 4},
+          [[1, 2, 3, 4]],
+          %{"A" => [1, 2, 3, 4]}
+        ] do
+      assert {:ok, encoded} = InfoCodec.serialize_value(value)
+      assert :ok = PdfValidator.validate_output_containers(encoded)
+    end
+
+    for value <- [
+          List.duplicate(1, 5),
+          Map.new(1..5, &{to_string(&1), 1}),
+          [List.duplicate(1, 5)],
+          %{"Nested" => List.duplicate(1, 5)}
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = InfoCodec.serialize_value(value)
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ "max_pdf_container_entries (4)"
+    end
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             PdfValidator.validate_container([1 | :tail])
+
+    assert diagnostic.message =~ "proper list"
+  end
+
+  test "generated object checks count references and repeated keys, leaving stream bytes opaque",
+       ctx do
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 2})
+    assert :ok = PdfValidator.validate_output_containers("[1 0 R 2 0 R]")
+    assert :ok = PdfValidator.validate_output_containers("<< /A 1 /A 2 >>")
+
+    assert :ok =
+             PdfValidator.validate_output_containers(
+               "<< /Length 9 >>\nstream\n[[[[[[[[[\nendstream"
+             )
+
+    assert :ok =
+             PdfValidator.validate_output_containers(
+               "<< /Length 7 0 R >>\nstream\nembedded endstream @@@ [[[\nendstream"
+             )
+
+    for body <- ["[1 0 R 2 0 R 3 0 R]", "<< /A 1 /A 2 /A 3 >>"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               PdfValidator.validate_output_containers(body,
+                 operation: :render,
+                 source: "object 7 0"
+               )
+
+      assert diagnostic.operation == :render
+      assert diagnostic.source == "object 7 0"
+    end
+
+    for body <- ["[   ", "@@@"] do
+      assert {:error, {_reason, diagnostic}} = PdfValidator.validate_output_containers(body)
+      assert is_binary(diagnostic.message)
+    end
+
+    assert :ok = WriterValidator.reserve_output_containers("[]")
+
+    assert {:render_resource_limit, {:error, {:resource_limit_exceeded, _}}} =
+             catch_throw(WriterValidator.reserve_output_containers("[1 2 3]"))
+  end
+
+  test "merge and render reject a generated Kids array above the shared cap", ctx do
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 8})
+
+    for count <- [7, 8, 9] do
+      for operation <- [
+            fn -> Merge.merge(List.duplicate(ctx.pdf, count)) end,
+            fn -> PdfWriter.render(List.duplicate(%{size: {100, 100}, boxes: []}, count)) end
+          ] do
+        if count <= 8 do
+          assert {:ok, output} = operation.()
+          assert {:ok, _} = Reader.read(output)
+        else
+          assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+          assert diagnostic.stage == :limits
+          assert diagnostic.message =~ "max_pdf_container_entries"
+        end
+      end
+    end
+  end
+
+  test "inherited page entries and incremental stream Length use the same cap", ctx do
+    assert {:ok, context} = Reader.read_validated(ctx.pdf)
+    assert {:ok, input} = MergeValidator.prepare(context)
+    assert {:ok, [input]} = MergeValidator.prepare_remapping([input], 3)
+
+    # The input dictionary fits, but materializing inherited Rotate adds an entry.
+    [page] = input.pages
+    input = put_in(input.inherited[page].rotate, [{:int, 0}])
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 5})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = AssemblyWriter.write([input])
+    assert diagnostic.message =~ "max_pdf_container_entries"
+    assert is_binary(diagnostic.source)
+
+    object = context.document.trailer["Size"]
+    dictionary = Map.new(1..5, &{to_string(&1), 0})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             IncrementalWriter.write(context, [{object, 0, {:stream, dictionary, ""}}])
+  end
+
+  test "generated annotation arrays use the inclusive container boundary", ctx do
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 12})
+
+    for count <- [12, 13] do
+      boxes =
+        for index <- 1..count do
+          %{
+            type: :text,
+            text: "A",
+            font: "Helvetica",
+            font_size: 8,
+            x: index * 3,
+            y: 20,
+            width: 3,
+            color: {0, 0, 0},
+            link_url: "https://example.com/"
+          }
+        end
+
+      result = PdfWriter.render([%{size: {100, 100}, boxes: boxes}])
+
+      if count == 12 do
+        assert {:ok, output} = result
+        assert {:ok, _} = Reader.read(output)
+      else
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+        assert diagnostic.message =~ "max_pdf_container_entries"
+      end
+    end
+  end
+
+  test "embedded font width and text-adjustment arrays cannot exceed the shared cap", ctx do
+    assert {:ok, registry} =
+             Font.load_registry(
+               fonts: [{"Fixture Sans", Paths.project("priv/fonts/dejavu/DejaVuSans.ttf")}]
+             )
+
+    assert {:ok, _, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
+    glyph = font.cmap[?A]
+    font = Map.put(font, :kerning, %{{glyph, glyph} => -100})
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 12})
+
+    for kind <- [:kerning, :explicit, :widths], count <- [6, 7] do
+      text =
+        if kind == :widths,
+          do: binary_part("ABCDEFG", 0, count),
+          else: String.duplicate("A", count)
+
+      box = %{
+        type: :text,
+        text: text,
+        font: Font.pdf_name(font),
+        font_face: font,
+        font_size: 10.1,
+        x: 0,
+        y: 20,
+        color: {0, 0, 0}
+      }
+
+      box =
+        if kind == :explicit,
+          do:
+            Map.merge(box, %{
+              glyph_ids: List.duplicate(glyph, count),
+              snap_to_css_pixel_grid: true
+            }),
+          else: box
+
+      result = PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
+
+      if count == 6 do
+        assert {:ok, output} = result
+        assert {:ok, _} = Reader.read(output)
+      else
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+        assert diagnostic.message =~ "max_pdf_container_entries"
+      end
+    end
+  end
+
+  test "generated fixed dictionaries and outline serialization propagate container diagnostics",
+       ctx do
+    page = %{size: {100, 100}, boxes: []}
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 4})
+    assert {:error, {:resource_limit_exceeded, _}} = PdfWriter.render([page])
+
+    Limits.install(%{ctx.limits | max_pdf_container_entries: 5})
+    assert {:ok, output} = PdfWriter.render([page])
+    assert {:ok, _} = Reader.read(output)
+
+    outline = {"Parent", 1, [{"Child", 1}]}
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([page], outlines: [outline])
+
+    assert diagnostic.message =~ "max_pdf_container_entries"
   end
 
   test "serialization counts scalar and empty-container boundaries like the reader", ctx do

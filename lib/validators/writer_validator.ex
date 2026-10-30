@@ -18,6 +18,24 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   alias NativeElixirPdfUtilities.Validators.PdfFormValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
+  @doc "Admits a generated PDF collection before allocating its entries."
+  @spec reserve_container_entries(non_neg_integer()) :: :ok
+  def reserve_container_entries(count) do
+    case PdfValidator.validate_container_entries(count, operation: :render, module: __MODULE__) do
+      :ok -> :ok
+      {:error, _} = error -> throw({:render_resource_limit, error})
+    end
+  end
+
+  @doc "Checks generated object containers before they enter the PDF output."
+  @spec reserve_output_containers(iodata()) :: :ok
+  def reserve_output_containers(body) do
+    case PdfValidator.validate_output_containers(body, operation: :render, module: __MODULE__) do
+      :ok -> :ok
+      {:error, _} = error -> throw({:render_resource_limit, error})
+    end
+  end
+
   @doc "Admits contiguous generated objects, including the free object-zero entry."
   @spec reserve_object_capacity(pos_integer()) :: :ok
   def reserve_object_capacity(size) do
@@ -490,6 +508,15 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         case Keyword.keyword?(opts) do
           true ->
             with :ok <- HtmlValidator.validate_pdf_output_options(opts),
+                 :ok <-
+                   if(kind == :pages,
+                     do:
+                       PdfValidator.validate_container(pages,
+                         operation: :render,
+                         module: __MODULE__
+                       ),
+                     else: :ok
+                   ),
                  {:ok, metadata} <-
                    InfoValidator.normalize_new_metadata(Keyword.get(opts, :metadata, [])) do
               case OutlineValidator.normalize(
@@ -621,6 +648,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                   outline_error
               end
             else
+              {:error, {:resource_limit_exceeded, _diagnostic}} = error ->
+                error
+
               {:error, {:invalid_options, _diagnostic}} = error ->
                 error
 

@@ -61,7 +61,7 @@ These limits apply when reading existing PDFs.
 | `max_pdf_reader_values` | 500,000 | Parsed values and expanded xref entries across one reader call |
 | `max_pdf_reader_work` | 250,000,000 | Bytes scanned by tokenizers, xref searches and stream decoding, plus predictor sample/group processing and every LZW code, including resets and end codes |
 | `max_pdf_predictor_working_bytes` | 160,000,000 | Conservative packed-buffer allowance for one TIFF/PNG predictor reconstruction, checked before buffers are allocated |
-| `max_pdf_container_entries` | 100,000 | Entries in one array or dictionary, including repeated dictionary keys |
+| `max_pdf_container_entries` | 100,000 | Entries in one parsed or generated PDF array or dictionary, including text-content containers and repeated dictionary keys |
 | `max_pdf_numeric_token_bytes` | 1,024 | Decimal numeric-token bytes before integer/float conversion, output bookmark numbers, and bytes in one binary xref integer |
 | `max_pdf_objects` | 100,000 | Xref entries including free object zero, and the maximum allocated object ID |
 | `max_pdf_object_stream_entries` | 10,000 | Entries in one PDF object stream |

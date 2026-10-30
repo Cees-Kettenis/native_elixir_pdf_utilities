@@ -134,12 +134,14 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
         {:ok, "#{object} #{generation} R"}
 
       values when is_list(values) ->
-        with :ok <- PdfValidator.validate_value_depth(depth + 1, module: __MODULE__) do
+        with :ok <- PdfValidator.validate_value_depth(depth + 1, module: __MODULE__),
+             :ok <- PdfValidator.validate_container(values, module: __MODULE__) do
           serialize_array(values, depth + 1)
         end
 
       dictionary when is_map(dictionary) ->
-        with :ok <- PdfValidator.validate_value_depth(depth + 1, module: __MODULE__) do
+        with :ok <- PdfValidator.validate_value_depth(depth + 1, module: __MODULE__),
+             :ok <- PdfValidator.validate_container(dictionary, module: __MODULE__) do
           serialize_dictionary(dictionary, depth + 1)
         end
 

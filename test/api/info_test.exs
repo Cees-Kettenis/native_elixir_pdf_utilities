@@ -18,6 +18,31 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     :ok
   end
 
+  test "metadata additions respect the shared dictionary cap, while replacements fit" do
+    original = Limits.effective()
+
+    source =
+      pdf(
+        base_objects() ++ [{4, "<< /Title (old) /A 0 /B 0 /C 0 /D 0 /E 0 /F 0 /G 0 >>"}],
+        "/Info 4 0 R"
+      )
+
+    Limits.install(%{original | max_pdf_container_entries: 8})
+
+    assert {:ok, updated} = Info.put(source, title: "new")
+    assert {:ok, %{title: "new"}} = Info.get(updated)
+    assert {:ok, _} = Reader.read(updated)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Info.put(source, author: "extra")
+    assert diagnostic.stage == :limits
+    assert diagnostic.operation == :put_info
+    assert diagnostic.module == Info
+    assert diagnostic.message =~ "max_pdf_container_entries"
+
+    assert {:ok, replaced} = Info.put(source, title: nil, author: "replacement")
+    assert {:ok, %{author: "replacement", title: nil}} = Info.get(replaced)
+  end
+
   test "preserves control characters through metadata, outlines, and HTML rendering" do
     for byte <- 0..127 do
       title = <<65, byte, 66>>

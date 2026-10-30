@@ -122,6 +122,13 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end)
   end
 
+  @doc false
+  @spec parse_value_tokens([Tokenizer.token()]) ::
+          {:ok, value(), [Tokenizer.token()]}
+          | :error
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_value_tokens(tokens), do: parse_value(tokens)
+
   @doc """
   Parses and semantically validates a PDF into a reusable prepared context.
 
@@ -787,7 +794,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                  operation: :read,
                  module: __MODULE__
                ) do
-          parse_array(rest, [], depth + 1, 0)
+          parse_array(rest, [], depth + 1, 0, Limits.effective())
         end
 
       [:dict_start | rest] ->
@@ -796,7 +803,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                  operation: :read,
                  module: __MODULE__
                ) do
-          parse_dictionary(rest, %{}, depth + 1, 0)
+          parse_dictionary(rest, %{}, depth + 1, 0, Limits.effective())
         end
 
       _ ->
@@ -804,28 +811,38 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp parse_array(tokens, values, depth, count) do
+  defp parse_array(tokens, values, depth, count, limits) do
     case tokens do
       [:rbracket | rest] ->
         {:ok, Enum.reverse(values), rest}
 
       _ ->
-        with :ok <- PdfValidator.validate_reader_size(count + 1, :max_pdf_container_entries),
+        with :ok <-
+               PdfValidator.validate_container_entries(
+                 count + 1,
+                 [operation: :read, module: __MODULE__],
+                 limits
+               ),
              {:ok, value, rest} <- parse_value(tokens, depth) do
-          parse_array(rest, [value | values], depth, count + 1)
+          parse_array(rest, [value | values], depth, count + 1, limits)
         end
     end
   end
 
-  defp parse_dictionary(tokens, dictionary, depth, count) do
+  defp parse_dictionary(tokens, dictionary, depth, count, limits) do
     case tokens do
       [:dict_end | rest] ->
         {:ok, dictionary, rest}
 
       [{:name, key} | rest] ->
-        with :ok <- PdfValidator.validate_reader_size(count + 1, :max_pdf_container_entries),
+        with :ok <-
+               PdfValidator.validate_container_entries(
+                 count + 1,
+                 [operation: :read, module: __MODULE__],
+                 limits
+               ),
              {:ok, value, rest} <- parse_value(rest, depth) do
-          parse_dictionary(rest, Map.put(dictionary, key, value), depth, count + 1)
+          parse_dictionary(rest, Map.put(dictionary, key, value), depth, count + 1, limits)
         end
 
       _ ->

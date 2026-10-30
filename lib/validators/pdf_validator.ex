@@ -2,19 +2,102 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @moduledoc """
   Shared semantic validation for parsed PDF documents.
 
-  The validator consumes the object model produced by the PDF reader. It does
-  not tokenize or load PDF bytes again. Successful validation returns a
+  Document validation consumes the object model produced by the PDF reader.
+  Successful validation returns a
   prepared context containing the resolved catalog, page-tree root, semantic
   page traversal, inherited page values, and the reader-compatible document.
 
   Operation validators should consume this context instead of walking the raw
   page tree or resolving document structure independently.
+
+  Shared output admission also checks newly generated object containers against
+  the same limits, using the reader's value grammar when their size requires it.
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.CollectionValidator
+
+  @doc "Checks the shared entry ceiling for one PDF array or dictionary."
+  @spec validate_container_entries(non_neg_integer(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_container_entries(count, opts) do
+    validate_container_entries(count, opts, Limits.effective())
+  end
+
+  @doc "Checks an entry count using the owning parser's snapshot of the shared limits."
+  @spec validate_container_entries(non_neg_integer(), [diagnostic_option()], Limits.t()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_container_entries(count, opts, limits) do
+    maximum = limits.max_pdf_container_entries
+
+    if count <= maximum do
+      :ok
+    else
+      error(
+        :limits,
+        :resource_limit_exceeded,
+        "PDF container entry count exceeds max_pdf_container_entries (#{maximum})",
+        opts
+      )
+    end
+  end
+
+  @doc "Admits an array or dictionary before its entries are traversed or copied."
+  @spec validate_container(list() | map(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_container(value, opts \\ []) do
+    maximum = Limits.get(:max_pdf_container_entries)
+
+    case value do
+      dictionary when is_map(dictionary) ->
+        validate_container_entries(map_size(dictionary), opts)
+
+      values when is_list(values) ->
+        case CollectionValidator.bounded_length(values, maximum) do
+          {:ok, _count} -> :ok
+          :limit_exceeded -> validate_container_entries(maximum + 1, opts)
+          :invalid -> error(:object, :invalid_pdf_input, "PDF array is not a proper list", opts)
+        end
+    end
+  end
+
+  @doc "Checks generated object containers with the reader's value grammar, leaving stream bytes opaque."
+  @spec validate_output_containers(iodata(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_output_containers(body, opts \\ []) do
+    # Every entry occupies at least one byte. Small generated bodies therefore
+    # cannot exceed the entry ceiling, even when all bytes belong to one array.
+    if IO.iodata_length(body) <= Limits.get(:max_pdf_container_entries) do
+      :ok
+    else
+      with tokens when is_list(tokens) <-
+             body |> IO.iodata_to_binary() |> Tokenizer.new() |> output_value_tokens([]),
+           {:ok, _value, _rest} <- Reader.parse_value_tokens(tokens) do
+        :ok
+      else
+        {:error, {reason, diagnostic}} ->
+          {:error, {reason, Map.merge(diagnostic, Map.new(opts))}}
+
+        :error ->
+          error(:object, :invalid_pdf_input, "generated PDF object is malformed", opts)
+      end
+    end
+  end
+
+  # An indirect /Length cannot be resolved from one generated object body.
+  # Stop at the stream keyword so embedded endstream text and arbitrary binary
+  # payloads can never be interpreted as dictionary or array syntax.
+  defp output_value_tokens(tokenizer, tokens) do
+    case Tokenizer.next(tokenizer) do
+      {token, _tokenizer} when token in [:stream, {:eof, nil}] -> Enum.reverse(tokens)
+      {:error, _} = error -> error
+      {token, tokenizer} -> output_value_tokens(tokenizer, [token | tokens])
+    end
+  end
 
   @doc "Checks cross-reference capacity, including the free object-zero entry and the allocated ID range."
   @spec validate_object_capacity(non_neg_integer(), pos_integer(), [diagnostic_option()]) ::

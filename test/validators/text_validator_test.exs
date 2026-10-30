@@ -10,6 +10,41 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
     %{limits: limits}
   end
 
+  test "content arrays and dictionaries enforce one shared cap before collecting excess values",
+       %{limits: limits} do
+    Limits.install(%{limits | max_pdf_container_entries: 2})
+
+    for content <- [
+          "[1 2] ignored",
+          "/Span << /A 1 /B 2 >> BDC EMC",
+          "/Span << /A [1 2] /B << /C 1 /D 2 >> >> BDC EMC",
+          "/Span << /A 1 /A 2 >> BDC EMC"
+        ] do
+      assert {:ok, _} = TextValidator.instructions(content, 3)
+    end
+
+    for content <- [
+          "[1 2 3 @",
+          "[1 [2 3 4 @",
+          "/Span << /A 1 /B 2 /C @",
+          "/Span << /A 1 /A 2 /A @"
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               TextValidator.instructions(content, 3)
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ "max_pdf_container_entries"
+      assert diagnostic.message =~ "page 3"
+    end
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextValidator.instructions(
+               ["[1 2", "3] ignored"],
+               1,
+               TextValidator.new_preparation_context()
+             )
+  end
+
   test "instruction admission stops before later invalid syntax", %{limits: limits} do
     Limits.install(%{limits | max_text_parsed_instructions: 1})
 

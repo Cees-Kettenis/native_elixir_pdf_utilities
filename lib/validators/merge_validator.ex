@@ -327,11 +327,15 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
                      )}
 
                   true ->
-                    case allocate_dense_ids(objects, next_id) do
-                      {:ok, id_map, next_id} ->
-                        {:cont,
-                         {:ok, [Map.put(input, :map, id_map) | prepared], next_id, page_count}}
-
+                    with :ok <-
+                           PdfValidator.validate_container_entries(page_count,
+                             operation: :merge,
+                             module: __MODULE__
+                           ),
+                         {:ok, id_map, next_id} <- allocate_dense_ids(objects, next_id) do
+                      {:cont,
+                       {:ok, [Map.put(input, :map, id_map) | prepared], next_id, page_count}}
+                    else
                       {:error, _} = limit_error ->
                         {:halt, limit_error}
                     end

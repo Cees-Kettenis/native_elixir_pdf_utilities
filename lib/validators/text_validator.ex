@@ -394,7 +394,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       limits = Limits.effective()
 
       initial =
-        {:ok, [], [], 0, 0, preparation.parsed_tokens, preparation.parsed_values,
+        {:ok, [], [], {0, []}, 0, preparation.parsed_tokens, preparation.parsed_values,
          preparation.parsed_instructions}
 
       Enum.reduce_while(contents, initial, fn content, state ->
@@ -404,7 +404,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         end
       end)
       |> case do
-        {:ok, operations, [], 0, 0, tokens, values, count} ->
+        {:ok, operations, [], {0, []}, 0, tokens, values, count} ->
           {:ok, Enum.reverse(operations),
            %{
              preparation
@@ -413,7 +413,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
                parsed_instructions: count
            }}
 
-        {:ok, _operations, _operands, _depth, _dictionaries, _, _, _} ->
+        {:ok, _operations, _operands, _nesting, _dictionaries, _, _, _} ->
           content_error("content stream has dangling operands", page_number)
 
         error ->
@@ -425,7 +425,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   end
 
   defp content_instructions(tokenizer, state, limits, page) do
-    {:ok, operations, operands, depth, dictionaries, tokens, values, count} = state
+    {:ok, operations, operands, nesting, dictionaries, tokens, values, count} = state
 
     case Tokenizer.next(tokenizer) do
       {{:eof, nil}, _} ->
@@ -476,11 +476,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           end
 
         with :ok <- admission,
-             {:ok, operations, operands, depth, dictionaries} <-
-               instruction_token(token, operations, operands, depth, dictionaries, page) do
+             {:ok, operations, operands, nesting, dictionaries} <-
+               instruction_token(token, operations, operands, nesting, dictionaries, page, limits) do
           content_instructions(
             tokenizer,
-            {:ok, operations, operands, depth, dictionaries, tokens, values, count},
+            {:ok, operations, operands, nesting, dictionaries, tokens, values, count},
             limits,
             page
           )
@@ -488,31 +488,47 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  @compile {:inline, instruction_token: 6}
-  defp instruction_token(token, operations, operands, depth, dictionaries, page) do
+  @compile {:inline, instruction_token: 7}
+  defp instruction_token(
+         token,
+         operations,
+         operands,
+         {depth, containers} = nesting,
+         dictionaries,
+         page,
+         limits
+       ) do
     case token do
       token when token in [:dict_start, :lbracket] ->
         with :ok <-
                PdfValidator.validate_value_depth(depth + 1,
                  operation: :extract,
                  module: __MODULE__
-               ) do
+               ),
+             {:ok, containers} <- admit_content_value(containers, page, limits) do
           marker = if token == :dict_start, do: :dictionary_start, else: :array_start
           dictionaries = dictionaries + if(token == :dict_start, do: 1, else: 0)
-          {:ok, operations, [marker | operands], depth + 1, dictionaries}
+
+          {:ok, operations, [marker | operands], {depth + 1, [{token, 0} | containers]},
+           dictionaries}
         end
 
       :dict_end ->
-        case close_dictionary(operands, page) do
-          {:ok, operands} -> {:ok, operations, operands, depth - 1, dictionaries - 1}
-          :error -> content_error("content dictionary is malformed", page)
-          error -> error
+        case close_dictionary(operands) do
+          {:ok, operands} ->
+            {:ok, operations, operands, {depth - 1, tl(containers)}, dictionaries - 1}
+
+          :error ->
+            content_error("content dictionary is malformed", page)
         end
 
       :rbracket ->
         case close_array(operands) do
-          {:ok, operands} -> {:ok, operations, operands, depth - 1, dictionaries}
-          :error -> content_error("content array is unbalanced", page)
+          {:ok, operands} ->
+            {:ok, operations, operands, {depth - 1, tl(containers)}, dictionaries}
+
+          :error ->
+            content_error("content array is unbalanced", page)
         end
 
       {:op, operator} ->
@@ -520,12 +536,37 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           content_error("content dictionary contains an operator or is unbalanced", page)
         else
           with {:ok, operation} <- prepare_instruction(operator, Enum.reverse(operands), page) do
-            {:ok, [operation | operations], [], depth, dictionaries}
+            {:ok, [operation | operations], [], nesting, dictionaries}
           end
         end
 
       token ->
-        {:ok, operations, [token | operands], depth, dictionaries}
+        case containers do
+          [] ->
+            {:ok, operations, [token | operands], nesting, dictionaries}
+
+          _ ->
+            with {:ok, containers} <- admit_content_value(containers, page, limits) do
+              {:ok, operations, [token | operands], {depth, containers}, dictionaries}
+            end
+        end
+    end
+  end
+
+  # Each nested container occupies one parent value. Dictionary keys and values
+  # share an entry, including duplicate keys that Map.new/1 would collapse.
+  defp admit_content_value(containers, page, limits) do
+    case containers do
+      [] ->
+        {:ok, []}
+
+      [{kind, values} | rest] ->
+        entries = if kind == :dict_start, do: div(values, 2) + 1, else: values + 1
+
+        case PdfValidator.validate_container_entries(entries, [], limits) do
+          :ok -> {:ok, [{kind, values + 1} | rest]}
+          {:error, {_reason, diagnostic}} -> resource_limit_error(diagnostic.message, page)
+        end
     end
   end
 
@@ -1111,28 +1152,23 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  defp close_dictionary(operands, page_number) do
+  defp close_dictionary(operands) do
     {values, rest} = Enum.split_while(operands, &(&1 != :dictionary_start))
 
     case rest do
       [:dictionary_start | rest] ->
         pairs = values |> Enum.reverse() |> Enum.chunk_every(2)
 
-        cond do
-          length(pairs) > Limits.get(:max_pdf_container_entries) ->
-            resource_limit_error("content dictionary entry count exceeds the limit", page_number)
-
-          Enum.all?(pairs, fn pair ->
-            case pair do
-              [{:name, _key}, value] -> content_value?(value)
-              _ -> false
-            end
-          end) ->
-            dictionary = Map.new(pairs, fn [{:name, key}, value] -> {key, value} end)
-            {:ok, [dictionary | rest]}
-
-          true ->
-            :error
+        if Enum.all?(pairs, fn pair ->
+             case pair do
+               [{:name, _key}, value] -> content_value?(value)
+               _ -> false
+             end
+           end) do
+          dictionary = Map.new(pairs, fn [{:name, key}, value] -> {key, value} end)
+          {:ok, [dictionary | rest]}
+        else
+          :error
         end
 
       _ ->
