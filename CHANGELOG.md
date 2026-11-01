@@ -19,9 +19,6 @@
 - Render horizontal rules with native defaults, legacy color/size/alignment hints and author overrides; support automatic horizontal margins for ordinary blocks and separators inside selects.
 - Match structural positional selectors on document and fragment roots, reusing the per-render sibling cache without synthetic element ancestors.
 - Preserve fractional atomic inline baselines and fixed dimensions at 1/64 CSS-pixel precision.
-- Allow cumulative elapsed-time growth of up to 10% against a fixed milestone baseline, with an optional enforced report comparison.
-
-- Support initial closed popovers and static `:popover-open` matching. Diagnose author CSS that exposes popovers pending native fixed/intrinsic geometry.
 - Reject active `javascript:` and `vbscript:` references before skipping closed content, including normalized HTML references and escaped CSS background URLs.
 
 - Support ordinary option groups, inherited disabled option state and omitted group endings in dropdowns.
@@ -62,8 +59,7 @@
   HTML class separators, with exact decoded reference PDFs and diagnostics.
 
 - Format supported blocks inside neutral inline ancestors and default noscript,
-  preserving surrounding text, widths and margin collapse. Diagnose unfinished
-  decorated, positioned, linked and replaced-inline fragment behavior.
+  preserving surrounding text, widths and margin collapse.
 
 - Render initial scripting-disabled noscript fallback with active styles, head
   metadata and editable controls. Keep template fallback inert and delegate
@@ -109,7 +105,7 @@
 - Apply canonical ASCII input-type keywords and missing/invalid Text defaults.
   Preserve authored type strings for CSS and shared sanitation, field naming and
   readonly rules. Validate effective types and empty input contents in caller
-  trees; recognized unfinished states continue to return diagnostics.
+  trees.
 
 - Accept boolean `multiple` on email inputs. Initial lists trim ASCII token edges
   and preserve comma order and empty tokens. Keep one PDF text field and existing
@@ -153,30 +149,26 @@
 - Added selected-font mathematical stretch geometry using ordered variants and
   connector-bounded assemblies. Shared budgets bound repetition before expansion.
   Operator pieces retain one original Unicode string through PDF glyph groups.
-  HTML/MathML integration and raster ink measurement remain unfinished.
 - Added PDF glyph groups with one Unicode replacement string for multiple painted
   text pieces. Extraction handles marked-content replacement strings, named
   properties, nested scopes and transformed Forms, with cumulative byte and
-  physical-operand limits. Full MathML operator composition remains unfinished.
+  physical-operand limits.
 - Added selected mathematical glyph and row measurement, including original
   Unicode, MathML italic mappings, script forms, device adjustments, ink bounds,
   and baseline/italic spacing. Shared font advance caches avoid repeated list
-  scans. Single and alternate GSUB lookups retain distinct kinds. MathML token
-  styling, raster ink metrics, operators, and HTML composition remain unfinished.
+  scans. Single and alternate GSUB lookups retain distinct kinds.
 
 - Added validated explicit glyph runs to the PDF writer, preserving original
   Unicode across script forms and subsets. Selected outlines, width metrics,
   cumulative font work, and the fixed CID ceiling are checked before writing.
-  Empty text paints no operator. MathML placement remains unfinished.
+  Empty text paints no operator.
 
 - Added selected-font math GSUB substitutions for script-style, flattened
   accent, and dotless forms. Default math language selection, lookup order,
-  glyph bounds, and decoded work are validated; application in MathML layout
-  remains unfinished.
+  glyph bounds, and decoded work are validated.
 
 - Added context-dependent SVG and MathML namespace parsing, adjusted foreign
   names and attributes, HTML integration points, CDATA, and foreign fragments.
-  Rendering remains under implementation and returns an explicit diagnostic.
 - Added lazy selected-font glyph ink bounds for equation layout, with source
   validation, cumulative work limits, and reuse tied to exact font bytes.
 - Reduced TrueType checksum overhead while preserving identical font and PDF
@@ -184,14 +176,12 @@
 
 - Added lazy, bounded OpenType MATH parsing for selected-font constants, glyph
   corrections, device adjustments, corner kerning, variants, and assemblies.
-  Missing or malformed metrics return shared diagnostics. MathML rendering
-  remains unfinished.
+  Missing or malformed metrics return shared diagnostics.
 
 - Added full Unicode format-12 TrueType character maps with bounded group
   validation, supplementary glyph encoding, and PDF extraction coverage.
   Bundled unmodified STIX Two Math v2.13b171 loads on demand, with caller
-  overrides and its complete SIL Open Font License. MathML layout remains
-  under implementation.
+  overrides and its complete SIL Open Font License.
 
 - Added `u`, `s`, and solid text decorations with wrapping, originating colors,
   selected-font metrics, font-relative thickness, pagination, and relative
