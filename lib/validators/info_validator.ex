@@ -13,6 +13,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Validators.PdfDateValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+  alias NativeElixirPdfUtilities.Validators.CollectionValidator
 
   @field_keys %{
     title: "Title",
@@ -361,6 +362,9 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
                    {:ok, Map.put(patch, Map.fetch!(@field_keys, field), normalized), total_bytes}}
               end
 
+            {:error, _} = failure ->
+              {:halt, failure}
+
             :error ->
               message =
                 if field in @date_fields,
@@ -397,13 +401,25 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   defp normalized_text_value(field, value) do
     case {field, value} do
       {:keywords, values} when is_list(values) ->
-        case Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
-          true ->
-            joined = Enum.join(values, ", ")
-            {:ok, InfoCodec.encode_text(joined), byte_size(joined)}
+        # Even empty keywords require two separator bytes between entries.
+        maximum_count = div(Limits.get(:max_pdf_info_value_bytes), 2) + 1
 
-          false ->
+        case CollectionValidator.bounded_length(values, maximum_count) do
+          {:ok, _count} ->
+            case Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
+              true ->
+                joined = Enum.join(values, ", ")
+                {:ok, InfoCodec.encode_text(joined), byte_size(joined)}
+
+              false ->
+                :error
+            end
+
+          :invalid ->
             :error
+
+          :limit_exceeded ->
+            limit_error("PDF information field keywords exceeds the byte limit")
         end
 
       {_field, value} when is_binary(value) ->

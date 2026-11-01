@@ -7,6 +7,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   alias NativeElixirPdfUtilities.Validators.IncrementalValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.FormInspectionValidator
+  alias NativeElixirPdfUtilities.Validators.CollectionValidator
 
   @inherited ~w(FT Ff V DV DA Q Opt MaxLen)
   @typep walk_state :: %{fields: [map()], nodes: map(), seen: map(), widgets: map()}
@@ -109,11 +110,19 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       operation == :fill and Keyword.get(opts, :appearance, :fit) not in [:fit, :source] ->
         error(:invalid_options, "appearance must be :fit or :source")
 
-      operation == :flatten and
-          not (Keyword.get(opts, :fields, :all) == :all or
-                   (is_list(opts[:fields]) and Enum.all?(opts[:fields], &is_binary/1) and
-                      length(Enum.uniq(opts[:fields])) == length(opts[:fields]))) ->
-        error(:invalid_options, "fields must be :all or a list of unique field names")
+      operation == :flatten and Keyword.get(opts, :fields, :all) != :all ->
+        with {:ok, count} <-
+               CollectionValidator.bounded_length(opts[:fields], Limits.get(:max_pdf_form_fields)),
+             true <- Enum.all?(opts[:fields], &is_binary/1),
+             true <- length(Enum.uniq(opts[:fields])) == count do
+          {:ok, Map.new(opts)}
+        else
+          :limit_exceeded ->
+            error(:resource_limit_exceeded, "field selection exceeds max_pdf_form_fields")
+
+          _ ->
+            error(:invalid_options, "fields must be :all or a list of unique field names")
+        end
 
       true ->
         {:ok, Map.new(opts)}
@@ -921,7 +930,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           is_list(value) and (field.flags &&& 2_097_152) == 0 ->
             error(:invalid_form_value, "choice permits only one selection")
 
-          length(values) != length(Enum.uniq(values)) or
+          not match?({:ok, _}, CollectionValidator.bounded_length(values, MapSet.size(allowed))) or
+            length(values) != length(Enum.uniq(values)) or
               not Enum.all?(values, &MapSet.member?(allowed, &1)) ->
             error(:invalid_form_value, "choice values must match distinct declared export values")
 

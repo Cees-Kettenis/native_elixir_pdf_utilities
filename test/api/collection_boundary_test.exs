@@ -1,7 +1,18 @@
 defmodule NativeElixirPdfUtilities.CollectionBoundaryTest do
   use ExUnit.Case, async: false
 
-  alias NativeElixirPdfUtilities.{Attachments, Limits, Merge, Outlines, Split, Transform}
+  alias NativeElixirPdfUtilities.{
+    Attachments,
+    Forms,
+    HtmlToPdf,
+    Info,
+    Limits,
+    Merge,
+    Outlines,
+    Split,
+    Transform
+  }
+
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
 
   setup do
@@ -64,5 +75,55 @@ defmodule NativeElixirPdfUtilities.CollectionBoundaryTest do
     Limits.install(%{limits | max_pdf_pages: 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Transform.pick_pages(single, [1, 1])
     assert diagnostic.operation == :pick_pages and diagnostic.message =~ "max_pdf_pages"
+  end
+
+  test "nested field names, keywords and choice values return public diagnostics" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<input name='x'><select name='c' multiple><option value='a'>A</option><option value='b'>B</option></select>",
+               system_font_discovery: false
+             )
+
+    for tail <- [:bad, nil, %{}],
+        {module, operation, reason, run} <- [
+          {Forms, :flatten, :invalid_options, fn -> Forms.flatten(pdf, fields: ["x" | tail]) end},
+          {Info, :put_info, :invalid_pdf_input,
+           fn -> Info.put(pdf, keywords: ["valid" | tail]) end},
+          {Forms, :fill, :invalid_form_value, fn -> Forms.fill(pdf, %{"c" => ["a" | tail]}) end}
+        ] do
+      assert {:error, {^reason, diagnostic}} = run.()
+      assert diagnostic.reason == reason and diagnostic.module == module
+      assert diagnostic.operation == operation
+      assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
+      assert diagnostic.message != ""
+    end
+
+    assert {:ok, ^pdf} = Forms.flatten(pdf, fields: [])
+    assert {:ok, filled} = Forms.fill(pdf, %{"c" => ["a", "b"]})
+    assert {:ok, fields} = Forms.fields(filled)
+    assert Enum.find(fields, &(&1.name == "c")).value == ["a", "b"]
+  end
+
+  test "nested lists respect field counts and the minimum keyword separator bytes", %{pdf: pdf} do
+    original = Limits.effective()
+    Limits.install(%{original | max_pdf_form_fields: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Forms.flatten(pdf, fields: ["a", "b"])
+
+    assert diagnostic.operation == :flatten and diagnostic.module == Forms
+    assert diagnostic.stage == :forms and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_pdf_form_fields"
+
+    Limits.install(%{original | max_pdf_info_value_bytes: 4})
+    assert {:ok, updated} = Info.put(pdf, keywords: ["", "", ""])
+    assert {:ok, %{keywords: ", , "}} = Info.get(updated)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Info.put(pdf, keywords: ["", "", "", ""])
+
+    assert diagnostic.operation == :put_info and diagnostic.module == Info
+    assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "keywords" and diagnostic.message =~ "byte limit"
   end
 end
