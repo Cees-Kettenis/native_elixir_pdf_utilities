@@ -2237,6 +2237,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
+  @doc "Resolves bolder within the renderer's supported inherited weight range."
+  @spec bolder_weight(100..900) :: 400 | 700 | 900
+  def bolder_weight(weight) do
+    cond do
+      weight < 350 -> 400
+      weight < 550 -> 700
+      true -> 900
+    end
+  end
+
   defp put_font_weight(style, value) do
     normalized = value |> String.trim() |> String.downcase()
 

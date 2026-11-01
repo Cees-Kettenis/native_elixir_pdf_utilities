@@ -2827,11 +2827,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         "td" ->
           table_cell_defaults(:data, node._table_spans, inherited_font_size)
 
-        "strong" ->
-          %{display: :inline, font_weight: 700}
-
-        "b" ->
-          %{display: :inline, font_weight: 700}
+        tag when tag in ["strong", "b"] ->
+          %{
+            display: :inline,
+            font_weight: CssValueValidator.bolder_weight(inherited_style.font_weight)
+          }
 
         "em" ->
           %{display: :inline, font_style: :italic}
@@ -3260,7 +3260,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         defaults =
           if Map.get(defaults, :font_weight) == 400 and
-               tag not in ["input", "select", "textarea", "button", "option"] do
+               tag not in ["input", "select", "textarea", "button", "option", "b", "strong"] do
             Map.delete(defaults, :font_weight)
           else
             defaults

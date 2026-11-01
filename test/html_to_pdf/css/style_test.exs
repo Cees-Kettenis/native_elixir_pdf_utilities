@@ -11,6 +11,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   import NativeElixirPdfUtilities.HtmlTreeHelpers
 
+  test "b and strong follow relative browser weights while author CSS retains priority" do
+    alias NativeElixirPdfUtilities.Validators.CssValueValidator
+
+    for {weight, expected} <- [
+          {100, 400},
+          {200, 400},
+          {300, 400},
+          {400, 700},
+          {500, 700},
+          {600, 900},
+          {700, 900},
+          {800, 900},
+          {900, 900}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div style='font-weight:#{weight}'><b>Bold</b><strong>Strong<b>Nested</b></strong><strong style='font-weight:normal'>Override</strong></div>"
+               )
+
+      assert {:ok, %{children: [parent]}} =
+               Style.compute_detailed(dom, system_font_discovery: false)
+
+      assert parent.style.font_weight == weight
+      [bold, strong, override] = parent.children
+      assert bold.style.font_weight == expected
+      assert strong.style.font_weight == expected
+
+      assert List.last(strong.children).style.font_weight ==
+               CssValueValidator.bolder_weight(expected)
+
+      assert override.style.font_weight == 400
+    end
+
+    for {weight, expected} <- [{349, 400}, {350, 700}, {549, 700}, {550, 900}] do
+      assert CssValueValidator.bolder_weight(weight) == expected
+    end
+  end
+
   test "processing instructions neither paint nor affect element sibling selectors and counters" do
     NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
       [html_recovery: true],
@@ -2458,7 +2496,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       [inherited, normal, strong] = parent.children
       assert inherited.style.font_weight == 700
       assert normal.style.font_weight == 400
-      assert strong.style.font_weight == 700
+      assert strong.style.font_weight == 900
     end
   end
 
