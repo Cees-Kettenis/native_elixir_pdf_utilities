@@ -377,8 +377,19 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   defp prepare_page(document, page, page_number) do
     crop_value = page.crop_box || page.media_box
 
-    with {:ok, [left, bottom, right, top] = crop_box} <-
+    with {:ok, [media_left, media_bottom, media_right, media_top]} <-
+           PdfValidator.number_array(document, page.media_box, 4),
+         true <- media_right > media_left and media_top > media_bottom,
+         {:ok, [crop_left, crop_bottom, crop_right, crop_top]} <-
            PdfValidator.number_array(document, crop_value, 4),
+         true <- crop_right > crop_left and crop_top > crop_bottom,
+         [left, bottom, right, top] = crop_box <-
+           [
+             max(media_left, crop_left),
+             max(media_bottom, crop_bottom),
+             min(media_right, crop_right),
+             min(media_top, crop_top)
+           ],
          true <- right > left and top > bottom,
          {:ok, rotation} <- resolved_rotation(document, page.rotate),
          {:ok, user_unit} <- resolved_user_unit(document, page.dictionary),

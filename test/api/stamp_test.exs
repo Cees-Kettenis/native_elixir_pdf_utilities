@@ -431,6 +431,78 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert {:ok, "Units"} = Text.extract(unit_stamped, layout: false)
   end
 
+  test "intersects inherited indirect crop and media boxes before stamp and overlay geometry" do
+    for {crop, effective} <- [
+          {[-100, -100, 1000, 1000], [10, 20, 210, 120]},
+          {[40, -100, 1000, 100], [40, 20, 210, 100]},
+          {[-100, 40, 180, 1000], [10, 40, 180, 120]}
+        ],
+        rotation <- [0, 90, 180, 270],
+        unit <- [1, 2] do
+      [left, bottom, right, top] = effective
+      crop_value = Enum.join(crop, " ")
+      effective_value = Enum.join(effective, " ")
+
+      source =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2,
+           "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox 4 0 R /CropBox 5 0 R /Rotate #{rotation} >>"},
+          {3, "<< /Type /Page /Parent 2 0 R /UserUnit #{unit} >>"},
+          {4, "[10 20 210 120]"},
+          {5, "[#{crop_value}]"}
+        ])
+
+      reference =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3,
+           "<< /Type /Page /Parent 2 0 R /MediaBox [#{effective_value}] /Rotate #{rotation} /UserUnit #{unit} >>"}
+        ])
+
+      assert {:ok, context} = Reader.read_validated(source)
+
+      assert {:ok, %{target_pages: [page]}} =
+               StampValidator.prepare_text(context, "VISIBLE", [], :text)
+
+      assert page.crop_box == effective
+
+      {width, height} =
+        if rotation in [90, 270],
+          do: {(top - bottom) * unit, (right - left) * unit},
+          else: {(right - left) * unit, (top - bottom) * unit}
+
+      assert page.width == width and page.height == height
+      assert {:ok, stamped} = Stamp.text(source, "VISIBLE", position: :center)
+      assert {:ok, "VISIBLE"} = Text.extract(stamped, layout: false)
+      assert {:ok, _} = Stamp.overlay(source, reference)
+      assert {:ok, _} = Stamp.overlay(reference, source)
+    end
+  end
+
+  test "disjoint or empty crop intersections return public geometry diagnostics" do
+    for crop <- ["200 0 300 100", "201 0 300 100", "0 100 200 200", "0 101 200 200"] do
+      source =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 100] >>"},
+          {3, "<< /Type /Page /Parent 2 0 R /CropBox [#{crop}] >>"}
+        ])
+
+      for {operation, result} <- [
+            {:stamp_text, Stamp.text(source, "VISIBLE")},
+            {:overlay_pdf, Stamp.overlay(source, source)}
+          ] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} = result
+        assert diagnostic.stage == :geometry and diagnostic.reason == :invalid_pdf_input
+        assert diagnostic.module == Stamp and diagnostic.operation == operation
+        assert diagnostic.source == "page 1"
+        assert diagnostic.message =~ "effective page box"
+      end
+    end
+  end
+
   test "preserves target resource names by selecting collision-free stamp names" do
     target =
       pdf([
@@ -738,6 +810,9 @@ defmodule NativeElixirPdfUtilities.StampTest do
              StampValidator.prepare_text(%{target_context | pages: []}, "x", [], :text)
 
     invalid_pages = [
+      %{target_page | media_box: [0, 0, 0, 200]},
+      %{target_page | media_box: [0, 0, 300, 0]},
+      %{target_page | media_box: :bad},
       %{target_page | crop_box: [0, 0, 0, 200]},
       %{target_page | rotate: 45},
       %{target_page | dictionary: Map.put(target_page.dictionary, "UserUnit", 0)},

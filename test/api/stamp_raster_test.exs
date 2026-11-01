@@ -144,6 +144,40 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
     assert slope_extent > 0.5 and slope_extent < 1.5
   end
 
+  test "oversized crop boxes keep centered stamps visible through rotation and page scaling", %{
+    artifact_dir: directory
+  } do
+    alias NativeElixirPdfUtilities.Pdf.{Reader, IncrementalWriter}
+    assert {:ok, blank} = PdfWriter.render([%{size: {200.0, 100.0}, boxes: []}])
+    assert {:ok, context} = Reader.read_validated(blank)
+    page = hd(context.pages)
+    {id, generation} = page.ref
+
+    for rotation <- [0, 90, 180, 270], unit <- [1, 2] do
+      dictionary =
+        Map.merge(page.dictionary, %{
+          "CropBox" => [-100, -100, 1000, 1000],
+          "Rotate" => rotation,
+          "UserUnit" => unit
+        })
+
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [{id, generation, {:value, dictionary}}])
+
+      assert {:ok, stamped} = Stamp.text(source, "MARK", position: :center, color: {1, 0, 0})
+
+      assert [stats] =
+               PdfVisualCompare.assert_pdf_visual_change!(source, stamped,
+                 artifact_dir: Path.join(directory, "crop-#{rotation}-#{unit}")
+               )
+
+      {left, top, right, bottom} = stats.bounds
+      assert stats.changed_pixels > 10
+      assert abs((left + right) / 2 - stats.width / 2) < 12
+      assert abs((top + bottom) / 2 - stats.height / 2) < 12
+    end
+  end
+
   test "places an anchored text stamp at the top right", %{artifact_dir: directory} do
     assert {:ok, pdf} = PdfWriter.render([%{size: {300.0, 200.0}, boxes: []}])
 
