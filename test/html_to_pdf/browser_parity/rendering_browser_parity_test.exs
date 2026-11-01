@@ -2151,6 +2151,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     css_inline_auto_width_clamp.html
     css_text_atomic_geometry.html
     css_text_atomic_intrinsics.html
+    css_authored_line_breaks.html
     css_text_preserved_intrinsics.html
     css_text_preserved_opportunities.html
     css_text_styled_hyphen_context.html

@@ -4,6 +4,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextBreakModesBrowserParityTest 
   use ExUnit.Case
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
+
+  test "authored inline displays retain hard breaks and hidden breaks remain suppressed" do
+    fixture = Paths.fixture("html_to_pdf/browser_parity/css_authored_line_breaks.html")
+
+    stats =
+      PdfVisualCompare.assert_browser_match!(fixture,
+        artifact_dir:
+          "tmp/test_artifacts/css_text_break_modes_browser_parity/authored-line-breaks",
+        render_opts: [system_font_discovery: false],
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.page_count == 1
+  end
+
   test "ordinary and emergency wrapping keep atomic min-content widths" do
     fixture =
       Paths.fixture("html_to_pdf/browser_parity/css_text_atomic_intrinsics.html")

@@ -3,6 +3,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextBreakModesTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, Layout, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  test "authored display values retain HTML hard breaks unless the element is hidden" do
+    for display <- ["inline", "inline-block", "block", "flex", "grid", "none"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<p>Before<br style='display:#{display}'>After</p>")
+
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert [%{children: [_, marker, _]}] = styled.children
+      assert marker.style.display == if(display == "none", do: :none, else: :line_break)
+      assert {:ok, layout} = Layout.layout(styled)
+      text = Enum.filter(layout.boxes, &(&1.type == :text))
+      assert Enum.map_join(text, & &1.text) == "BeforeAfter"
+      assert length(Enum.uniq_by(text, & &1.y)) == if(display == "none", do: 1, else: 2)
+    end
+  end
+
   test "mixed text intrinsics preserve atomic widths at following text breaks" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
       for mode <- [

@@ -8,6 +8,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
 
   @discretionary_characters ["\u00AD", "\u200B"]
 
+  @doc "Preserves hard and soft HTML break semantics after the validated CSS cascade."
+  @spec element_style(String.t(), map()) :: map()
+  def element_style(tag, style) do
+    display =
+      case {tag, style.display} do
+        {_, :none} -> :none
+        {"br", _} -> :line_break
+        {"wbr", _} -> :soft_break
+      end
+
+    style |> Map.put(:display, display) |> Map.delete(:background_image_source)
+  end
+
   @doc "Identifies layout controls whose original codepoint needs no font glyph."
   @spec layout_whitespace?(term(), map()) :: boolean()
   def layout_whitespace?(grapheme, style) do

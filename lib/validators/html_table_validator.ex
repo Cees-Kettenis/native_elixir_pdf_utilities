@@ -638,9 +638,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     with :ok <- flow do
       case node do
         %{type: :element, style: %{_table_atomic_context: true} = style} ->
-          # Hidden controls and word-break objects replace their authored CSS
+          # Hidden controls and break objects replace their authored CSS
           # box after the cascade, so they no longer establish table ancestry.
-          if atomic_context or Map.get(style, :display) in [:inline_block, :none, :soft_break] do
+          if atomic_context or
+               Map.get(style, :display) in [:inline_block, :none, :soft_break, :line_break] do
             :ok
           else
             invalid_table(

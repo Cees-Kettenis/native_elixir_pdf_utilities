@@ -29,6 +29,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.Validators.FormValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlLinkValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator
   alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlMetadataValidator
   alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
@@ -3636,10 +3637,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         finalize_background_image_style(style, opts, image_budget)
 
-      {"wbr", {:ok, style}} ->
-        # The element creates a word-break object rather than an authored CSS box.
-        style = if style.display == :none, do: style, else: Map.put(style, :display, :soft_break)
-        {:ok, Map.delete(style, :background_image_source)}
+      {tag, {:ok, style}} when tag in ["br", "wbr"] ->
+        {:ok, HtmlLineBreakValidator.element_style(tag, style)}
 
       {"noembed", {:ok, style}} ->
         {:ok, HtmlValidator.noembed_render_style(style)}
