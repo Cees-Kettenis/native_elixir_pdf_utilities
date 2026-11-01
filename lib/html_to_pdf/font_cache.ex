@@ -52,11 +52,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
                     loader.(data)
 
                   _pid ->
-                    GenServer.call(
-                      __MODULE__,
-                      {:fetch, absolute_path, fingerprint, data, loader},
-                      :infinity
-                    )
+                    FontValidator.with_cache_budget(fn budget ->
+                      GenServer.call(
+                        __MODULE__,
+                        {:fetch, absolute_path, fingerprint, data, loader, budget},
+                        :infinity
+                      )
+                    end)
                 end
             end
 
@@ -134,8 +136,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
       :miss ->
         case Process.whereis(__MODULE__) do
-          nil -> loader.(<<>>)
-          _ -> GenServer.call(__MODULE__, {:fetch, key, nil, <<>>, loader}, :infinity)
+          nil ->
+            loader.(<<>>)
+
+          _ ->
+            {result, _budget} =
+              GenServer.call(__MODULE__, {:fetch, key, nil, <<>>, loader, nil}, :infinity)
+
+            result
         end
     end
   end
@@ -157,13 +165,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   @impl GenServer
   def handle_call(request, _from, state) do
     case request do
-      {:fetch, path, fingerprint, data, loader} ->
+      {:fetch, path, fingerprint, data, loader, budget} ->
         case cached(path, fingerprint) do
           {:hit, result} ->
-            {:reply, result, state}
+            {:reply, {result, budget}, state}
 
           :miss ->
-            result = loader.(data)
+            {result, budget} = FontValidator.with_cache_budget(budget, fn -> loader.(data) end)
 
             case result do
               {:ok, _value} ->
@@ -175,10 +183,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
                 |> FontValidator.cache_evictions(state.maximum_entries, :max_font_cache_bytes)
                 |> Enum.each(&:ets.delete(state.table, &1))
 
-                {:reply, result, %{state | sequence: sequence}}
+                {:reply, {result, budget}, %{state | sequence: sequence}}
 
               failure ->
-                {:reply, failure, state}
+                {:reply, {failure, budget}, state}
             end
         end
     end

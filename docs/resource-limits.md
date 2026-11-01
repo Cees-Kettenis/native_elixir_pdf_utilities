@@ -354,6 +354,10 @@ Configured font files, supplied bytes and resolved assets use the same font
 limits. Repeated sources can be reused within a render. Shared caches also have
 entry-count and memory limits; resource failures are not cached.
 
+Uncached font-file parsing shares the requesting render's font-work allowance,
+just as supplied bytes do. A shared-cache hit reuses the parsed result without
+charging parsing work again. Source-byte and lookup limits still apply to hits.
+
 System discovery reads trusted installed fonts through its native dependency,
 which returns complete bytes rather than a file handle or path. Request count
 and returned bytes are bounded, but this API cannot enforce the source-byte

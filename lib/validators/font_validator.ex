@@ -728,6 +728,40 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     end
   end
 
+  @doc "Carries the active font allowance through one synchronous cache request and retains its charges."
+  @spec with_cache_budget((map() -> {result, map()})) :: result when result: term()
+  def with_cache_budget(request) do
+    key = {__MODULE__, :budget}
+    {result, budget} = request.(Process.get(key))
+    Process.put(key, budget)
+    result
+  end
+
+  @doc "Runs a cache loader with its requesting font allowance, restoring the cache process afterward."
+  @spec with_cache_budget(map() | nil, (-> result)) :: {result, map() | nil}
+        when result: term()
+  def with_cache_budget(budget, loader) do
+    key = {__MODULE__, :budget}
+    previous = Process.get(key)
+    {:garbage_collection, flags} = Process.info(self(), :garbage_collection)
+    previous_binary_floor = Keyword.fetch!(flags, :min_bin_vheap_size)
+    Process.put(key, budget)
+
+    try do
+      result =
+        try do
+          with_budget(loader)
+        catch
+          {:font_resource_limit, error} -> error
+        end
+
+      {result, Process.get(key)}
+    after
+      :erlang.process_flag(:min_bin_vheap_size, previous_binary_floor)
+      if previous == nil, do: Process.delete(key), else: Process.put(key, previous)
+    end
+  end
+
   @doc false
   @spec reserve(Limits.key(), non_neg_integer()) :: :ok
   def reserve(limit, amount) do

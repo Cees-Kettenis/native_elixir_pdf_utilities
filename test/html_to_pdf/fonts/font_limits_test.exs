@@ -239,6 +239,133 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontLimitsTest do
     assert :error = FontValidator.source_result(:error)
   end
 
+  test "cache misses share font work with the caller and failures do not leak into another scope",
+       %{
+         path: path
+       } do
+    second = path <> ".second"
+    File.write!(path, "first")
+    File.write!(second, "second")
+    on_exit(fn -> File.rm(second) end)
+    Limits.install(%{Limits.effective() | max_font_math_work: 5})
+    cache = Process.whereis(FontCache)
+
+    loader = fn bytes ->
+      FontValidator.reserve(:max_font_math_work, 3)
+      {:ok, bytes}
+    end
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FontValidator.with_budget(fn ->
+               FontValidator.reserve(:max_font_math_work, 2)
+               assert {:ok, "first"} = FontCache.fetch(path, loader)
+               assert Process.get({FontValidator, :budget}).max_font_math_work == 5
+               FontCache.fetch(second, loader)
+             end)
+
+    assert diagnostic.stage == :font and diagnostic.message =~ "max_font_math_work"
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert Process.whereis(FontCache) == cache
+    assert Process.get({FontValidator, :budget}) == nil
+    assert {:dictionary, dictionary} = Process.info(cache, :dictionary)
+    refute List.keymember?(dictionary, {FontValidator, :budget}, 0)
+
+    assert :ok =
+             FontValidator.with_budget(fn ->
+               assert {:ok, "first"} =
+                        FontCache.fetch(path, fn _ -> flunk("cache hit must not reparse") end)
+
+               assert Map.get(Process.get({FontValidator, :budget}), :max_font_math_work, 0) == 0
+               assert {:ok, "second"} = FontCache.fetch(second, loader)
+               assert Process.get({FontValidator, :budget}).max_font_math_work == 3
+               :ok
+             end)
+  end
+
+  test "concurrent cache clients retain their own budgets and charge only the one actual parse",
+       %{
+         path: path
+       } do
+    File.write!(path, "concurrent")
+    Limits.install(%{Limits.effective() | max_font_math_work: 5})
+
+    results =
+      1..12
+      |> Task.async_stream(
+        fn _ ->
+          FontValidator.with_budget(fn ->
+            FontValidator.reserve(:max_font_math_work, 1)
+            id = Process.get({FontValidator, :budget}).budget_id
+
+            assert {:ok, "concurrent"} =
+                     FontCache.fetch(path, fn bytes ->
+                       FontValidator.reserve(:max_font_math_work, 3)
+                       Process.sleep(25)
+                       {:ok, bytes}
+                     end)
+
+            budget = Process.get({FontValidator, :budget})
+            assert budget.budget_id == id
+            budget.max_font_math_work
+          end)
+        end,
+        max_concurrency: 12
+      )
+      |> Enum.map(fn {:ok, work} -> work end)
+
+    assert Enum.sort(results) == List.duplicate(1, 11) ++ [4]
+  end
+
+  test "cold file, byte and uncached font parsing obey the same cumulative work limit" do
+    original = Limits.effective()
+
+    paths = [
+      Paths.project("priv/fonts/dejavu/DejaVuSans.ttf"),
+      Paths.project("priv/fonts/dejavu/DejaVuSans-Bold.ttf")
+    ]
+
+    html = "<p style='font-family:SharedWork0'>one</p><p style='font-family:SharedWork1'>two</p>"
+
+    fonts = fn source ->
+      Enum.with_index(paths, fn path, index ->
+        Map.put(
+          %{family: "SharedWork#{index}"},
+          source,
+          if(source == :path, do: path, else: File.read!(path))
+        )
+      end)
+    end
+
+    assert :ok = Supervisor.terminate_child(NativeElixirPdfUtilities.Supervisor, FontCache)
+    assert {:ok, _} = Supervisor.restart_child(NativeElixirPdfUtilities.Supervisor, FontCache)
+    Limits.install(%{original | max_font_math_work: 700})
+
+    for source <- [:path, :data] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render(html, fonts: fonts.(source), system_font_discovery: false)
+
+      assert diagnostic.stage == :font and diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.module == FontValidator and diagnostic.operation == :load_registry
+      assert diagnostic.message =~ "max_font_math_work"
+    end
+
+    Limits.install(original)
+    assert {:ok, _} = HtmlToPdf.render(html, fonts: fonts.(:path), system_font_discovery: false)
+    Limits.install(%{original | max_font_math_work: 700})
+    assert {:ok, _} = HtmlToPdf.render(html, fonts: fonts.(:path), system_font_discovery: false)
+
+    assert :ok = Supervisor.terminate_child(NativeElixirPdfUtilities.Supervisor, FontCache)
+
+    try do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render(html, fonts: fonts.(:path), system_font_discovery: false)
+
+      assert diagnostic.message =~ "max_font_math_work"
+    after
+      assert {:ok, _} = Supervisor.restart_child(NativeElixirPdfUtilities.Supervisor, FontCache)
+    end
+  end
+
   test "ordinary document fonts remain supported and share budgets with page furniture" do
     data = File.read!(Paths.project("priv/fonts/dejavu/DejaVuSans.ttf"))
 
