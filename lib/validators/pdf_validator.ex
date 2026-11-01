@@ -390,6 +390,47 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc "Prepares a decoder's output allowance from byte, ratio and remaining operation limits."
+  @spec reader_decode_limit(non_neg_integer()) :: non_neg_integer()
+  def reader_decode_limit(encoded_size) do
+    min(
+      min(Limits.get(:max_pdf_decoded_stream_bytes), remaining_reader_decoded_bytes()),
+      decompression_allowance(encoded_size)
+    )
+  end
+
+  @doc "Checks an incremental decoder's output before retaining or expanding the next chunk."
+  @spec validate_decoding_progress(non_neg_integer(), non_neg_integer(), ref()) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_decoding_progress(decoded_size, allowance, ref) do
+    if decoded_size <= allowance do
+      :ok
+    else
+      error(
+        :limits,
+        :resource_limit_exceeded,
+        "decoded stream exceeds its safety limit",
+        [operation: :read, module: Reader],
+        object: ref
+      )
+    end
+  end
+
+  @doc "Checks final stream size and ratio after its stages have already charged aggregate bytes."
+  @spec validate_decoded_stream_size(non_neg_integer(), non_neg_integer()) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_decoded_stream_size(encoded_size, decoded_size) do
+    with :ok <- validate_reader_size(decoded_size, :max_pdf_decoded_stream_bytes) do
+      if encoded_size > 0 and decoded_size > decompression_allowance(encoded_size),
+        do: reader_limit_error(:max_pdf_decompression_ratio),
+        else: :ok
+    end
+  end
+
+  defp decompression_allowance(encoded_size) do
+    max(encoded_size * Limits.get(:max_pdf_decompression_ratio), 1)
+  end
+
   @doc false
   @spec reader_integer(binary()) :: integer()
   def reader_integer(text) do

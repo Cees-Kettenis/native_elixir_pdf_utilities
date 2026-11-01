@@ -256,6 +256,58 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     assert_limit(Reader.read(String.replace(pdf, "/W [1 4 2]", "/W [1 11 2]")))
   end
 
+  test "one validator owns byte, ratio and aggregate decoder admission without double charging" do
+    limits = Limits.effective()
+
+    Limits.install(%{
+      limits
+      | max_pdf_decoded_stream_bytes: 10,
+        max_pdf_reader_decoded_bytes: 100,
+        max_pdf_decompression_ratio: 3
+    })
+
+    assert PdfValidator.reader_decode_limit(4) == 10
+    assert PdfValidator.reader_decode_limit(2) == 6
+    assert PdfValidator.reader_decode_limit(0) == 1
+    assert :ok = PdfValidator.validate_decoded_stream_size(2, 6)
+    assert :ok = PdfValidator.validate_decoded_stream_size(0, 0)
+
+    for {encoded, decoded, key} <- [
+          {2, 7, :max_pdf_decompression_ratio},
+          {4, 11, :max_pdf_decoded_stream_bytes}
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               PdfValidator.validate_decoded_stream_size(encoded, decoded)
+
+      assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.module == Reader and diagnostic.operation == :read
+      assert diagnostic.message =~ Atom.to_string(key)
+    end
+
+    assert :ok =
+             PdfValidator.with_reader_budget(fn ->
+               PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, 98)
+               assert PdfValidator.reader_decode_limit(4) == 2
+               assert :ok = PdfValidator.validate_decoding_progress(2, 2, {9, 0})
+
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        PdfValidator.validate_decoding_progress(3, 2, {9, 0})
+
+               assert diagnostic.stage == :limits and
+                        diagnostic.reason == :resource_limit_exceeded
+
+               assert diagnostic.module == Reader and diagnostic.operation == :read
+               assert diagnostic.message =~ "safety limit" and diagnostic.message =~ "object 9 0"
+
+               PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, 2)
+               assert PdfValidator.reader_decode_limit(4) == 0
+
+               # These bytes have already been charged; final admission must not charge them twice.
+               assert :ok = PdfValidator.validate_decoded_stream_size(2, 6)
+               :ok
+             end)
+  end
+
   test "each stream decoder observes the remaining operation budget before flattening" do
     limits = Limits.effective()
 

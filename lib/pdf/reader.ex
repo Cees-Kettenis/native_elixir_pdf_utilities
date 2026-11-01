@@ -1226,7 +1226,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
     with {:ok, decoded} <-
            Enum.reduce_while(filters, {:ok, stream}, &decode_filter(&1, &2, ref)),
-         :ok <- validate_decoded_size(stream, decoded) do
+         :ok <-
+           PdfValidator.validate_decoded_stream_size(byte_size(stream), byte_size(decoded)) do
       {:ok, decoded}
     else
       {:error, _} = error -> error
@@ -1270,14 +1271,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     try do
       :ok = :zlib.inflateInit(zlib)
 
-      limit =
-        min(
-          min(
-            Limits.get(:max_pdf_decoded_stream_bytes),
-            PdfValidator.remaining_reader_decoded_bytes()
-          ),
-          max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
-        )
+      limit = PdfValidator.reader_decode_limit(byte_size(data))
 
       inflate_chunks(zlib, data, limit, 0, [], ref)
     rescue
@@ -1292,23 +1286,14 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     {status, output} = :zlib.safeInflate(zlib, data)
     decoded_size = decoded_size + IO.iodata_length(output)
 
-    cond do
-      decoded_size > limit ->
-        decoded_stream_limit_error(ref)
-
-      status == :finished ->
+    with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
+      if status == :finished do
         :ok = :zlib.inflateEnd(zlib)
         {:ok, IO.iodata_to_binary(Enum.reverse([output | decoded]))}
-
-      true ->
+      else
         inflate_chunks(zlib, <<>>, limit, decoded_size, [output | decoded], ref)
+      end
     end
-  end
-
-  defp decoded_stream_limit_error(ref) do
-    error(:limits, :resource_limit_exceeded, "decoded stream exceeds its safety limit",
-      object: ref
-    )
   end
 
   defp ascii_hex(data, ref) do
@@ -1443,14 +1428,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp run_length(data, ref) do
-    limit =
-      min(
-        min(
-          Limits.get(:max_pdf_decoded_stream_bytes),
-          PdfValidator.remaining_reader_decoded_bytes()
-        ),
-        max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
-      )
+    limit = PdfValidator.reader_decode_limit(byte_size(data))
 
     decode_run_length(data, 0, limit, [], ref)
   end
@@ -1470,9 +1448,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           <<literal::binary-size(^count), rest::binary>> = rest
           decoded_size = decoded_size + count
 
-          if decoded_size > limit do
-            decoded_stream_limit_error(ref)
-          else
+          with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
             decode_run_length(rest, decoded_size, limit, [literal | acc], ref)
           end
         else
@@ -1485,9 +1461,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         count = 257 - length
         decoded_size = decoded_size + count
 
-        if decoded_size > limit do
-          decoded_stream_limit_error(ref)
-        else
+        with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
           decode_run_length(
             rest,
             decoded_size,
@@ -1509,14 +1483,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   defp decode_lzw(data, early_change, ref) do
     dictionary = @lzw_initial_dictionary
 
-    limit =
-      min(
-        min(
-          Limits.get(:max_pdf_decoded_stream_bytes),
-          PdfValidator.remaining_reader_decoded_bytes()
-        ),
-        max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
-      )
+    limit = PdfValidator.reader_decode_limit(byte_size(data))
 
     decode_lzw_bits(data, 0, 9, dictionary, 258, nil, early_change, 0, limit, [], ref)
   end
@@ -1577,11 +1544,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           if is_binary(value) do
             decoded_size = decoded_size + byte_size(value)
 
-            if decoded_size > limit do
-              error(:limits, :resource_limit_exceeded, "decoded stream exceeds its safety limit",
-                object: ref
-              )
-            else
+            with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
               {dictionary, next_code} =
                 if previous && next_code < 4096 do
                   {Map.put(dictionary, next_code, previous <> binary_part(value, 0, 1)),
@@ -1741,20 +1704,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       left_distance <= up_distance and left_distance <= diagonal_distance -> left
       up_distance <= diagonal_distance -> up
       true -> up_left
-    end
-  end
-
-  defp validate_decoded_size(input, decoded) do
-    cond do
-      byte_size(decoded) > Limits.get(:max_pdf_decoded_stream_bytes) ->
-        error(:limits, :resource_limit_exceeded, "decoded stream exceeds the byte limit")
-
-      byte_size(input) > 0 and
-          byte_size(decoded) > byte_size(input) * Limits.get(:max_pdf_decompression_ratio) ->
-        error(:limits, :resource_limit_exceeded, "stream decompression ratio exceeds the limit")
-
-      true ->
-        :ok
     end
   end
 
