@@ -7986,6 +7986,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             source: "body"
           )
 
+        %{style: %{_stacking_order: order} = style} when order != nil ->
+          if NativeElixirPdfUtilities.Validators.CssStackingValidator.valid_source_order?(order) do
+            validate_paragraph_line_limits([style], :layout)
+          else
+            Diagnostics.error(
+              :layout,
+              :invalid_layout,
+              "CSS stacking requires a bounded nonnegative source-order path; recompute styles",
+              operation: :layout,
+              module: __MODULE__,
+              source: "CSS stacking"
+            )
+          end
+
         %{style: style} when is_map(style) ->
           validate_paragraph_line_limits([style], :layout)
 

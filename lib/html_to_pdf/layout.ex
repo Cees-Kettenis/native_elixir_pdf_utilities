@@ -358,7 +358,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
                 root_targets = Map.get(styled_tree, :link_document_targets, [])
 
-                root_content_boxes = root_boxes ++ group_math_glyphs(boxes)
+                root_content_boxes =
+                  Enum.map(root_boxes, &Map.put(&1, :_stacking_root_background, true)) ++
+                    group_math_glyphs(boxes)
 
                 {page_width, page_height} = layout_page_size
                 link_metadata = Map.take(styled_tree, [:link_scope, :link_expected_targets])
@@ -1176,106 +1178,151 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @doc false
   @spec collect_positioned_children([map()]) :: {[map()], [map()]}
   def collect_positioned_children(children) do
-    {normal, positioned} =
-      Enum.reduce(children, {[], []}, fn child, {normal, positioned} ->
-        case child do
-          %{type: :element, style: %{display: :none}} ->
-            {[child | normal], positioned}
+    collect_positioned_children(children, [])
+  end
 
-          %{type: :element, style: %{display: :soft_break}} ->
-            {[child | normal], positioned}
+  defp collect_positioned_children(children, source_order) do
+    case children do
+      [] ->
+        {[], []}
 
-          %{type: :element, children: nested_children, style: style} = element ->
-            {nested_children, nested_positioned} = collect_positioned_children(nested_children)
+      _ ->
+        {normal, positioned, _index} =
+          Enum.reduce(children, {[], [], 0}, fn child, {normal, positioned, index} ->
+            {normal, positioned} =
+              case child do
+                %{type: :element, style: %{display: :none}} ->
+                  {[child | normal], positioned}
 
-            # Flex, grid and table children use their container's static position,
-            # rather than participating in an ordinary block or inline flow.
-            nested_children =
-              if style.display in [
-                   :flex,
-                   :inline_flex,
-                   :grid,
-                   :inline_grid,
-                   :table,
-                   :table_row,
-                   :table_row_group,
-                   :table_header_group,
-                   :table_footer_group
-                 ] do
-                Enum.reject(nested_children, &(Map.get(&1, :tag) == "::static-position-anchor"))
-              else
-                nested_children
+                %{type: :element, style: %{display: :soft_break}} ->
+                  {[child | normal], positioned}
+
+                %{type: :element, children: nested_children, style: style} = element ->
+                  child_order = [index | source_order]
+
+                  positioned? =
+                    case style do
+                      %{position: position} when position in [:relative, :absolute, :fixed] ->
+                        true
+
+                      %{css_transform: transform} when transform != :none ->
+                        true
+
+                      _ ->
+                        false
+                    end
+
+                  style =
+                    if positioned?,
+                      do:
+                        Map.put(
+                          style,
+                          :_stacking_order,
+                          Map.get(style, :_stacking_order) || Enum.reverse(child_order)
+                        ),
+                      else: style
+
+                  element = %{element | style: style}
+
+                  {nested_children, nested_positioned} =
+                    collect_positioned_children(nested_children, child_order)
+
+                  # Flex, grid and table children use their container's static position,
+                  # rather than participating in an ordinary block or inline flow.
+                  nested_children =
+                    if style.display in [
+                         :flex,
+                         :inline_flex,
+                         :grid,
+                         :inline_grid,
+                         :table,
+                         :table_row,
+                         :table_row_group,
+                         :table_header_group,
+                         :table_footer_group
+                       ] do
+                      Enum.reject(
+                        nested_children,
+                        &(Map.get(&1, :tag) == "::static-position-anchor")
+                      )
+                    else
+                      nested_children
+                    end
+
+                  # A relative/absolute ancestor captures absolute descendants only.
+                  # A transform establishes the fixed containing block as in CSS.
+                  {fixed_children, nested_positioned} =
+                    if Map.get(style, :css_transform, :none) == :none,
+                      do:
+                        Enum.split_with(
+                          nested_positioned,
+                          &(Map.get(&1.style, :position) == :fixed)
+                        ),
+                      else: {[], nested_positioned}
+
+                  inherited_positioned = Enum.reverse(fixed_children, positioned)
+
+                  element =
+                    element
+                    |> Map.put(:children, nested_children)
+                    |> maybe_attach_positioned_children(nested_positioned)
+
+                  case Map.get(style, :position, :static) do
+                    position when position in [:absolute, :fixed] ->
+                      offsets = Map.get(style, :offsets, edges(:auto))
+
+                      needs_static_position =
+                        (offsets.left == :auto and offsets.right == :auto) or
+                          (offsets.top == :auto and offsets.bottom == :auto)
+
+                      if position == :absolute and
+                           (Map.get(style, :_dialog, false) or needs_static_position) do
+                        anchor = make_ref()
+
+                        marker = %{
+                          type: :element,
+                          tag:
+                            if(Map.get(style, :_dialog, false),
+                              do: "::dialog-anchor",
+                              else: "::static-position-anchor"
+                            ),
+                          children: [],
+                          style: %{
+                            display:
+                              if(Map.get(style, :_dialog, false), do: :block, else: :inline),
+                            _static_position_block: not inline_flow_child?(element),
+                            _static_position_anchor: anchor
+                          }
+                        }
+
+                        {[marker | normal],
+                         Enum.reverse(fixed_children, [
+                           Map.put(element, :_static_position_anchor, anchor) | positioned
+                         ])}
+                      else
+                        {normal, Enum.reverse(fixed_children, [element | positioned])}
+                      end
+
+                    :relative ->
+                      {[element | normal], inherited_positioned}
+
+                    _ ->
+                      if Map.get(style, :css_transform, :none) != :none,
+                        do: {[element | normal], inherited_positioned},
+                        else:
+                          {[element | normal],
+                           Enum.reverse(nested_positioned, inherited_positioned)}
+                  end
+
+                child ->
+                  {[child | normal], positioned}
               end
 
-            # A relative/absolute ancestor captures absolute descendants only.
-            # A transform establishes the fixed containing block as in CSS.
-            {fixed_children, nested_positioned} =
-              if Map.get(style, :css_transform, :none) == :none,
-                do:
-                  Enum.split_with(
-                    nested_positioned,
-                    &(Map.get(&1.style, :position) == :fixed)
-                  ),
-                else: {[], nested_positioned}
+            {normal, positioned, index + 1}
+          end)
 
-            inherited_positioned = Enum.reverse(fixed_children, positioned)
-
-            element =
-              element
-              |> Map.put(:children, nested_children)
-              |> maybe_attach_positioned_children(nested_positioned)
-
-            case Map.get(style, :position, :static) do
-              position when position in [:absolute, :fixed] ->
-                offsets = Map.get(style, :offsets, edges(:auto))
-
-                needs_static_position =
-                  (offsets.left == :auto and offsets.right == :auto) or
-                    (offsets.top == :auto and offsets.bottom == :auto)
-
-                if position == :absolute and
-                     (Map.get(style, :_dialog, false) or needs_static_position) do
-                  anchor = make_ref()
-
-                  marker = %{
-                    type: :element,
-                    tag:
-                      if(Map.get(style, :_dialog, false),
-                        do: "::dialog-anchor",
-                        else: "::static-position-anchor"
-                      ),
-                    children: [],
-                    style: %{
-                      display: if(Map.get(style, :_dialog, false), do: :block, else: :inline),
-                      _static_position_block: not inline_flow_child?(element),
-                      _static_position_anchor: anchor
-                    }
-                  }
-
-                  {[marker | normal],
-                   Enum.reverse(fixed_children, [
-                     Map.put(element, :_static_position_anchor, anchor) | positioned
-                   ])}
-                else
-                  {normal, Enum.reverse(fixed_children, [element | positioned])}
-                end
-
-              :relative ->
-                {[element | normal], inherited_positioned}
-
-              _ ->
-                if Map.get(style, :css_transform, :none) != :none,
-                  do: {[element | normal], inherited_positioned},
-                  else:
-                    {[element | normal], Enum.reverse(nested_positioned, inherited_positioned)}
-            end
-
-          child ->
-            {[child | normal], positioned}
-        end
-      end)
-
-    {Enum.reverse(normal), Enum.reverse(positioned)}
+        {Enum.reverse(normal), Enum.reverse(positioned)}
+    end
   end
 
   defp maybe_attach_positioned_children(element, positioned_children) do
@@ -1371,7 +1418,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {:ok, positioned_boxes, next_y} ->
             with {:ok, positioned_boxes} <-
                    CssTransformValidator.attach_scope(style, positioned_boxes),
-                 do: {:ok, attach_outline_anchor(block, positioned_boxes), next_y}
+                 do:
+                   {:ok,
+                    NativeElixirPdfUtilities.HtmlToPdf.Stacking.attach(
+                      attach_outline_anchor(block, positioned_boxes),
+                      style
+                    ), next_y}
 
           {:error, reason} ->
             {:error, reason}
@@ -10267,6 +10319,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                         stroke_color: nil,
                         stroke_width: 0.0,
                         border_radius: 0.0,
+                        _stacking_background_order: Map.get(background.style, :_stacking_order),
                         inline_background_image: source
                       }
                     ]
@@ -10566,6 +10619,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             available_width,
             Map.get(context.style, :_containing_height)
           )
+          |> NativeElixirPdfUtilities.HtmlToPdf.Stacking.attach(context.style)
 
         Enum.take(boxes, first_index) ++
           positioned_segment ++ Enum.drop(boxes, last_index + 1)
@@ -12817,32 +12871,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           end
         )
 
-    case Map.get(style, :_gauge) do
-      nil ->
-        background
+    background =
+      case Map.get(style, :_gauge) do
+        nil ->
+          background
 
-      gauge ->
-        padding = Map.get(style, :padding, edges(0.0))
-        border = Map.get(style, :border_widths, edges(0.0))
+        gauge ->
+          padding = Map.get(style, :padding, edges(0.0))
+          border = Map.get(style, :border_widths, edges(0.0))
 
-        content_width =
-          max(width - padding.left - padding.right - border.left - border.right, 0.0)
+          content_width =
+            max(width - padding.left - padding.right - border.left - border.right, 0.0)
 
-        content_height =
-          max(height - padding.top - padding.bottom - border.top - border.bottom, 0.0)
+          content_height =
+            max(height - padding.top - padding.bottom - border.top - border.bottom, 0.0)
 
-        content_x = x + border.left + padding.left
-        content_y = y + border.bottom + padding.bottom
+          content_x = x + border.left + padding.left
+          content_y = y + border.bottom + padding.bottom
 
-        background ++
-          NativeElixirPdfUtilities.HtmlToPdf.GaugeArtwork.boxes(
-            gauge,
-            style,
-            content_x,
-            content_y,
-            content_width,
-            content_height
-          )
+          background ++
+            NativeElixirPdfUtilities.HtmlToPdf.GaugeArtwork.boxes(
+              gauge,
+              style,
+              content_x,
+              content_y,
+              content_width,
+              content_height
+            )
+      end
+
+    case Map.get(style, :_stacking_order) do
+      nil -> background
+      order -> Enum.map(background, &Map.put(&1, :_stacking_background_order, order))
     end
   end
 

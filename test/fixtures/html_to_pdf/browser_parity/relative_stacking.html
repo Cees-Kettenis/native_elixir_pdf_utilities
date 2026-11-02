@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size:300pt 800pt; margin:0 }
+body { margin:12pt; font-family:'DejaVu Sans'; font-size:12pt; line-height:20pt }
+.panel { position:relative; height:80pt; width:240pt; margin-bottom:12pt; background:#eee }
+.box { width:60pt; height:40pt; position:relative }
+</style></head><body>
+<div class="panel"><div class="box" style="z-index:2;background:red"></div><div class="box" style="z-index:1;top:-40pt;left:20pt;background:blue"></div></div>
+<div class="panel"><div class="box" style="position:absolute;z-index:2;top:0;left:0;background:red"></div><div class="box" style="z-index:1;left:20pt;background:blue"></div></div>
+<div class="panel"><div class="box" style="z-index:0;background:lime"><div class="box" style="z-index:100;left:10pt;background:red"></div></div><div class="box" style="z-index:1;top:-40pt;left:30pt;background:blue"></div></div>
+<div class="panel"><div class="box" style="background:lime"><div class="box" style="z-index:100;left:10pt;background:red"></div></div><div class="box" style="z-index:1;top:-40pt;left:30pt;background:blue"></div></div>
+<div class="panel" style="z-index:0"><div class="box" style="z-index:-1;left:10pt;background:red"></div><div class="box" style="position:static;margin-top:-20pt;background:blue"></div></div>
+<div class="panel"><span style="position:relative;z-index:2;background:red">AAAA</span><span style="position:relative;z-index:1;left:-20pt;background:blue">BBBB</span></div>
+<div class="panel"><span style="position:relative;z-index:0;background:lime">A<span style="position:relative;z-index:-1;background:red">B</span>C</span></div>
+<div class="panel"><div class="box" style="transform:translateX(0);background:lime"><div class="box" style="position:relative;z-index:100;left:10pt;background:red"></div></div><div class="box" style="z-index:1;top:-40pt;left:30pt;background:blue"></div></div>
+</body></html>

@@ -57,7 +57,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   @spec finalize([page()], map(), [render_option()]) ::
           {:ok, [page()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def finalize(pages, layout_tree, opts) do
-    with {:ok, pages} <-
+    with :ok <-
+           Enum.reduce_while(pages, :ok, fn page, :ok ->
+             case NativeElixirPdfUtilities.Validators.CssStackingValidator.validate_boxes(
+                    page.boxes
+                  ) do
+               :ok -> {:cont, :ok}
+               error -> {:halt, error}
+             end
+           end),
+         pages =
+           Enum.map(pages, fn page ->
+             %{page | boxes: NativeElixirPdfUtilities.HtmlToPdf.Stacking.order(page.boxes)}
+           end),
+         {:ok, pages} <-
            NativeElixirPdfUtilities.Validators.CssTransformValidator.materialize(pages, opts) do
       NativeElixirPdfUtilities.Validators.HtmlLinkValidator.resolve_pages(
         pages,

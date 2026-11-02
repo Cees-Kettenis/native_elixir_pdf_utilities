@@ -2082,6 +2082,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   @dedicated_fixtures ~w(
     absolute_static_position.html
     relative_percentage_offsets.html
+    relative_stacking.html
     empty_generated_content.html
     list_counter_ownership.html
     css_unicode_separators.html
