@@ -1188,6 +1188,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           %{type: :element, children: nested_children, style: style} = element ->
             {nested_children, nested_positioned} = collect_positioned_children(nested_children)
 
+            # Flex, grid and table children use their container's static position,
+            # rather than participating in an ordinary block or inline flow.
+            nested_children =
+              if style.display in [
+                   :flex,
+                   :inline_flex,
+                   :grid,
+                   :inline_grid,
+                   :table,
+                   :table_row,
+                   :table_row_group,
+                   :table_header_group,
+                   :table_footer_group
+                 ] do
+                Enum.reject(nested_children, &(Map.get(&1, :tag) == "::static-position-anchor"))
+              else
+                nested_children
+              end
+
             # A relative/absolute ancestor captures absolute descendants only.
             # A transform establishes the fixed containing block as in CSS.
             {fixed_children, nested_positioned} =
@@ -1208,19 +1227,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
             case Map.get(style, :position, :static) do
               position when position in [:absolute, :fixed] ->
-                if position == :absolute and Map.get(style, :_dialog, false) do
+                offsets = Map.get(style, :offsets, edges(:auto))
+
+                needs_static_position =
+                  (offsets.left == :auto and offsets.right == :auto) or
+                    (offsets.top == :auto and offsets.bottom == :auto)
+
+                if position == :absolute and
+                     (Map.get(style, :_dialog, false) or needs_static_position) do
                   anchor = make_ref()
 
                   marker = %{
                     type: :element,
-                    tag: "::dialog-anchor",
+                    tag:
+                      if(Map.get(style, :_dialog, false),
+                        do: "::dialog-anchor",
+                        else: "::static-position-anchor"
+                      ),
                     children: [],
-                    style: %{display: :block, _dialog_anchor: anchor}
+                    style: %{
+                      display: if(Map.get(style, :_dialog, false), do: :block, else: :inline),
+                      _static_position_block: not inline_flow_child?(element),
+                      _static_position_anchor: anchor
+                    }
                   }
 
                   {[marker | normal],
                    Enum.reverse(fixed_children, [
-                     Map.put(element, :_dialog_anchor, anchor) | positioned
+                     Map.put(element, :_static_position_anchor, anchor) | positioned
                    ])}
                 else
                   {normal, Enum.reverse(fixed_children, [element | positioned])}
@@ -1451,7 +1485,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp do_layout_block(block, x, y, width) do
     case block do
-      %{type: :element, style: %{_dialog_anchor: anchor}} ->
+      %{type: :element, style: %{_static_position_anchor: anchor}} ->
         {:ok,
          [
            %{
@@ -1460,7 +1494,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
              y: y,
              width: 0.0,
              height: 0.0,
-             _dialog_anchor: anchor
+             _static_position_anchor: anchor,
+             out_of_flow: true
            }
          ], y}
 
@@ -2422,7 +2457,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp positioned_child_boxes(positioned_children, containing_block, normal_boxes) do
-    static_positions = Map.new(normal_boxes, fn box -> {Map.get(box, :_dialog_anchor), box.y} end)
+    static_positions =
+      Enum.reduce(normal_boxes, %{}, fn box, positions ->
+        case Map.get(box, :_static_position_anchor) do
+          nil ->
+            positions
+
+          anchor ->
+            top = if box.type == :inline_positioning_marker, do: box.y + box.height, else: box.y
+            {dx, dy} = Map.get(box, :_static_position_offset, {0.0, 0.0})
+            Map.put(positions, anchor, {box.x + dx, top + dy})
+        end
+      end)
+
     containing_block = Map.put(containing_block, :static_positions, static_positions)
 
     positioned_children
@@ -2488,6 +2535,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             top = resolved_offset(offsets.top, containing_block.height)
             bottom = resolved_offset(offsets.bottom, containing_block.height)
 
+            {static_x, static_top} =
+              Map.get(
+                containing_block.static_positions,
+                Map.get(child, :_static_position_anchor),
+                {containing_block.x, containing_block.top}
+              )
+
             target_x =
               cond do
                 is_number(left) ->
@@ -2498,7 +2552,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     border_width
 
                 true ->
-                  containing_block.x + margin.left
+                  static_x + margin.left
               end
 
             target_top =
@@ -2511,11 +2565,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     border_height
 
                 true ->
-                  Map.get(
-                    containing_block.static_positions,
-                    Map.get(child, :_dialog_anchor),
-                    containing_block.top
-                  ) - margin.top
+                  static_top - margin.top
               end
 
             auto_margin_offset =
@@ -2569,7 +2619,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                z_index: z_index,
                index: index,
                boxes: boxes,
-               dialog_anchor: Map.get(child, :_dialog_anchor),
+               dialog_anchor:
+                 if(Map.get(style, :_dialog, false), do: Map.get(child, :_static_position_anchor)),
                position: Map.get(style, :position, :static)
              }}
 
@@ -2702,7 +2753,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {before_anchor, after_anchor} =
             Enum.split_while(
               content,
-              &(Map.get(&1, :_dialog_anchor) != entry.dialog_anchor)
+              &(Map.get(&1, :_static_position_anchor) != entry.dialog_anchor)
             )
 
           {before_positioned, later_positioned} =
@@ -2721,6 +2772,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       true -> background_boxes ++ negative_boxes ++ content_boxes ++ nonnegative_boxes
       false -> negative_boxes ++ background_boxes ++ content_boxes ++ nonnegative_boxes
     end
+    |> Enum.reject(&Map.has_key?(&1, :_static_position_anchor))
   end
 
   defp mark_container_background(boxes, style, x, y, available_width, next_y) do
@@ -2938,7 +2990,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {margin_top, margin_bottom} = flow_child_vertical_margins(child, style)
 
         collapsed_margin =
-          if not is_nil(get_in(child, [:style, :_dialog_anchor])),
+          if not is_nil(get_in(child, [:style, :_static_position_anchor])),
             do: 0.0,
             else: collapsed_sibling_margin(previous_margin_bottom, margin_top)
 
@@ -2963,15 +3015,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         case layout_flow_child(child, flow_style, x, current_y + collapsed_margin, width) do
           {:ok, child_boxes, next_y} ->
             next_margin_bottom =
-              if not is_nil(get_in(child, [:style, :_dialog_anchor])),
-                do: previous_margin_bottom,
-                else:
-                  following_sibling_margin(
-                    child_boxes,
-                    previous_margin_bottom,
-                    margin_top,
-                    margin_bottom
-                  )
+              if child_boxes != [] and
+                   Enum.all?(child_boxes, &Map.has_key?(&1, :_static_position_anchor)),
+                 do: previous_margin_bottom,
+                 else:
+                   following_sibling_margin(
+                     child_boxes,
+                     previous_margin_bottom,
+                     margin_top,
+                     margin_bottom
+                   )
 
             boxes = keep_interrupted_inline_start(boxes, child_boxes, next_y)
             line_clearance = following_ruby_clearance(child_boxes, next_y + margin_bottom)
@@ -9120,8 +9173,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         {line_boxes, _next_x} =
           Enum.reduce(line_runs, {[], start_x}, fn run, {acc, current_x} ->
+            run_metadata =
+              if Map.get(run, :_static_position_block, false) do
+                Map.put(
+                  line_metadata,
+                  :_static_position_offset,
+                  {x - current_x, if(current_x > start_x, do: -current_line_height, else: 0.0)}
+                )
+              else
+                line_metadata
+              end
+
             run_boxes =
-              inline_run_boxes(run, current_x, line_top, baseline_y, width, line_metadata)
+              inline_run_boxes(run, current_x, line_top, baseline_y, width, run_metadata)
 
             {Enum.reverse(run_boxes, acc), current_x + inline_fragment_advance(run, width)}
           end)
@@ -10080,6 +10144,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               height: line_height,
               inline_positioning_contexts: Map.fetch!(run, :inline_positioning_contexts)
             }
+            |> Map.merge(Map.take(run, [:_static_position_anchor]))
             |> Map.merge(metadata)
           ]
 
@@ -10366,6 +10431,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     boxes
     |> Enum.flat_map(fn box ->
       case box do
+        %{type: :inline_positioning_marker, _static_position_anchor: _anchor} ->
+          {dx, dy} = Map.get(box, :_static_position_offset, {0.0, 0.0})
+
+          [
+            box
+            |> Map.put(:type, HtmlValidator.reserve_layout_box(:flow_marker))
+            |> Map.put(:x, box.x + dx)
+            |> Map.put(:y, box.y + box.height + dy)
+            |> Map.delete(:_static_position_offset)
+            |> Map.put(:out_of_flow, true)
+            |> Map.put(:height, 0.0)
+            |> Map.put(:width, 0.0)
+          ]
+
         %{type: :inline_positioning_marker, html_targets: _targets} ->
           [
             box
@@ -10603,7 +10682,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          Enum.all?(
            line_runs,
            &(match?(%{type: :inline_positioning_marker, html_target_ids: _}, &1) or
-               Map.get(&1, :_empty_inline_strut, false))
+               Map.get(&1, :_empty_inline_strut, false) or
+               Map.has_key?(&1, :_static_position_anchor))
          ) do
       0.0
     else
@@ -11539,6 +11619,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
 
     case child do
+      %{type: :element, style: %{display: :inline, _static_position_anchor: anchor} = style} ->
+        {:ok,
+         runs ++
+           [
+             %{
+               type: :inline_positioning_marker,
+               text: "",
+               style: text_style(parent_style),
+               _static_position_anchor: anchor,
+               _static_position_block: Map.get(style, :_static_position_block, false),
+               inline_positioning_contexts: []
+             }
+           ]}
+
       %{type: :element, tag: "ruby", style: %{display: display} = style} = ruby
       when display != :none ->
         ruby = %{ruby | style: Map.delete(style, :_ruby_clearance)}

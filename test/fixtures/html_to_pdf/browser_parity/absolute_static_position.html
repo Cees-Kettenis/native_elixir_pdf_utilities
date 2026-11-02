@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size:300pt 600pt; margin:0 }
+body { margin:12pt; font-family:'DejaVu Sans'; font-size:12pt; line-height:20pt }
+.panel { position:relative; height:100pt; width:240pt; background:#eee; margin-bottom:12pt }
+.abs { position:absolute; width:20pt; height:20pt; background:red }
+</style></head><body>
+<div class="panel"><div style="height:20pt;background:blue"></div><div class="abs"></div><div style="height:30pt;background:#00ff00"></div></div>
+<div class="panel"><div style="padding:10pt"><div style="height:20pt;background:blue"></div><div class="abs"></div></div></div>
+<div class="panel"><span style="color:blue">Before</span><span class="abs"></span><span style="color:green">After</span></div>
+<div class="panel"><span style="color:blue">Before</span><span class="abs" style="display:block"></span><span style="color:green">After</span></div>
+<div class="panel"><div style="height:20pt;margin-bottom:12pt"></div><div class="abs"></div><div style="height:20pt;margin-top:18pt;background:blue"></div></div>
+</body></html>
