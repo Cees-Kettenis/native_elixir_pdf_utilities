@@ -123,6 +123,22 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc "Admits a cross-reference revision, rejecting cycles before checking the revision limit."
+  @spec validate_xref_revision(integer(), map(), non_neg_integer(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_xref_revision(offset, seen, depth, opts) do
+    cond do
+      Map.has_key?(seen, offset) ->
+        error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle", opts)
+
+      depth >= Limits.get(:max_pdf_xref_revisions) ->
+        error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit", opts)
+
+      true ->
+        :ok
+    end
+  end
+
   @doc "Checks a numeric output value against the shared magnitude and serialized-token limits."
   @spec validate_serialized_number(number()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}

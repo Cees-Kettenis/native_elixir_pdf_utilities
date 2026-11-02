@@ -286,25 +286,20 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_xref_chain(pdf, offset, seen, depth) do
-    cond do
-      Map.has_key?(seen, offset) ->
-        error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle")
-
-      depth >= Limits.get(:max_pdf_xref_revisions) ->
-        error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit")
-
-      true ->
-        with {:ok, entries, trailer} <- parse_xref_revision(pdf, offset),
-             {:ok, previous_entries, previous_trailer, revisions} <-
-               previous_xref_revision(
-                 pdf,
-                 Map.get(trailer, "Prev"),
-                 Map.put(seen, offset, true),
-                 depth
-               ) do
-          {:ok, Map.merge(previous_entries, entries), Map.merge(previous_trailer, trailer),
-           revisions}
-        end
+    with :ok <-
+           PdfValidator.validate_xref_revision(offset, seen, depth,
+             operation: :read,
+             module: __MODULE__
+           ),
+         {:ok, entries, trailer} <- parse_xref_revision(pdf, offset),
+         {:ok, previous_entries, previous_trailer, revisions} <-
+           previous_xref_revision(
+             pdf,
+             Map.get(trailer, "Prev"),
+             Map.put(seen, offset, true),
+             depth
+           ) do
+      {:ok, Map.merge(previous_entries, entries), Map.merge(previous_trailer, trailer), revisions}
     end
   end
 

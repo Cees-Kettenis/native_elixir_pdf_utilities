@@ -577,68 +577,64 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp add_span(state, spans, decoded, page, join_previous?) do
-    cond do
-      decoded.text == "" ->
-        {:ok, state, spans}
+    if decoded.text == "" do
+      {:ok, state, spans}
+    else
+      with :ok <- TextValidator.validate_next_span(state.shown_span_count, page),
+           {:ok, geometry} <- TextValidator.span_geometry(state, decoded, page) do
+        span = %{
+          text: decoded.text,
+          source_index: state.next_source_index,
+          x: geometry.x,
+          y: geometry.y,
+          end_x: geometry.end_x,
+          end_y: geometry.end_y,
+          font_resource: state.font.name,
+          font_size: state.font_size,
+          text_matrix: state.text_matrix,
+          ctm: state.ctm,
+          render_mode: state.render_mode,
+          paints_text?: state.render_mode not in [3, 7],
+          adds_to_clip_path?: state.render_mode in 4..7,
+          joins_previous?: join_previous?
+        }
 
-      state.shown_span_count >= Limits.get(:max_text_spans) ->
-        error(:limits, :resource_limit_exceeded, "text span count exceeds the limit", page: page)
+        case state.replacement do
+          nil ->
+            {:ok,
+             %{
+               state
+               | next_source_index: state.next_source_index + 1,
+                 text_matrix: geometry.next_text_matrix,
+                 shown_span_count: state.shown_span_count + 1,
+                 join_next_span?: true,
+                 previous_replacement?: false
+             }, [span | spans]}
 
-      true ->
-        with {:ok, geometry} <- TextValidator.span_geometry(state, decoded, page) do
-          span = %{
-            text: decoded.text,
-            source_index: state.next_source_index,
-            x: geometry.x,
-            y: geometry.y,
-            end_x: geometry.end_x,
-            end_y: geometry.end_y,
-            font_resource: state.font.name,
-            font_size: state.font_size,
-            text_matrix: state.text_matrix,
-            ctm: state.ctm,
-            render_mode: state.render_mode,
-            paints_text?: state.render_mode not in [3, 7],
-            adds_to_clip_path?: state.render_mode in 4..7,
-            joins_previous?: join_previous?
-          }
+          replacement ->
+            first =
+              case replacement.first do
+                nil ->
+                  span
 
-          case state.replacement do
-            nil ->
-              {:ok,
-               %{
-                 state
-                 | next_source_index: state.next_source_index + 1,
-                   text_matrix: geometry.next_text_matrix,
-                   shown_span_count: state.shown_span_count + 1,
-                   join_next_span?: true,
-                   previous_replacement?: false
-               }, [span | spans]}
+                first ->
+                  %{
+                    first
+                    | paints_text?: first.paints_text? or span.paints_text?,
+                      adds_to_clip_path?: first.adds_to_clip_path? or span.adds_to_clip_path?
+                  }
+              end
 
-            replacement ->
-              first =
-                case replacement.first do
-                  nil ->
-                    span
-
-                  first ->
-                    %{
-                      first
-                      | paints_text?: first.paints_text? or span.paints_text?,
-                        adds_to_clip_path?: first.adds_to_clip_path? or span.adds_to_clip_path?
-                    }
-                end
-
-              {:ok,
-               %{
-                 state
-                 | replacement: %{replacement | first: first, last: span},
-                   text_matrix: geometry.next_text_matrix,
-                   shown_span_count: state.shown_span_count + 1,
-                   join_next_span?: true
-               }, spans}
-          end
+            {:ok,
+             %{
+               state
+               | replacement: %{replacement | first: first, last: span},
+                 text_matrix: geometry.next_text_matrix,
+                 shown_span_count: state.shown_span_count + 1,
+                 join_next_span?: true
+             }, spans}
         end
+      end
     end
   end
 
@@ -656,42 +652,37 @@ defmodule NativeElixirPdfUtilities.Text do
             {:ok, state, spans}
 
           replacement ->
-            if state.shown_span_count >= Limits.get(:max_text_spans) do
-              error(:limits, :resource_limit_exceeded, "text span count exceeds the limit",
-                page: page
-              )
-            else
-              with {:ok, geometry} <- TextValidator.image_span_geometry(state, image, page) do
-                if geometry.paints? do
-                  span = %{
-                    text: replacement.text,
-                    source_index: state.next_source_index,
-                    x: geometry.x,
-                    y: geometry.y,
-                    end_x: geometry.end_x,
-                    end_y: geometry.end_y,
-                    font_resource: nil,
-                    font_size: geometry.height,
-                    text_matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-                    ctm: state.ctm,
-                    render_mode: 0,
-                    paints_text?: true,
-                    adds_to_clip_path?: false,
-                    joins_previous?: false,
-                    image_resource: image_name
-                  }
+            with :ok <- TextValidator.validate_next_span(state.shown_span_count, page),
+                 {:ok, geometry} <- TextValidator.image_span_geometry(state, image, page) do
+              if geometry.paints? do
+                span = %{
+                  text: replacement.text,
+                  source_index: state.next_source_index,
+                  x: geometry.x,
+                  y: geometry.y,
+                  end_x: geometry.end_x,
+                  end_y: geometry.end_y,
+                  font_resource: nil,
+                  font_size: geometry.height,
+                  text_matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+                  ctm: state.ctm,
+                  render_mode: 0,
+                  paints_text?: true,
+                  adds_to_clip_path?: false,
+                  joins_previous?: false,
+                  image_resource: image_name
+                }
 
-                  first = Map.put(replacement.first || span, :paints_text?, true)
+                first = Map.put(replacement.first || span, :paints_text?, true)
 
-                  {:ok,
-                   %{
-                     state
-                     | replacement: %{replacement | first: first, last: span},
-                       shown_span_count: state.shown_span_count + 1
-                   }, spans}
-                else
-                  {:ok, state, spans}
-                end
+                {:ok,
+                 %{
+                   state
+                   | replacement: %{replacement | first: first, last: span},
+                     shown_span_count: state.shown_span_count + 1
+                 }, spans}
+              else
+                {:ok, state, spans}
               end
             end
         end

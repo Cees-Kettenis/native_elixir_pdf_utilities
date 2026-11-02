@@ -3,9 +3,44 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
   use ExUnit.Case, async: false
 
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   @fixture_directory Paths.fixture("pdf_reader")
+
+  test "revision admission preserves exact limits and diagnoses cycles before exhaustion" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    base =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    updated = append_free_revision(base.pdf, base.xref, 3, 1, "/Root 1 0 R")
+
+    cycle =
+      String.replace(base.pdf, "/Root 1 0 R", "/Root 1 0 R /Prev #{base.xref}", global: false)
+
+    Limits.install(%{limits | max_pdf_xref_revisions: 1})
+    assert {:ok, %{xref_revisions: 1}} = Reader.read(base.pdf)
+
+    for {source, reason, stage, message} <- [
+          {updated, :resource_limit_exceeded, :limits, "xref revision count exceeds the limit"},
+          {cycle, :invalid_pdf_input, :xref, "xref revision chain contains a cycle"}
+        ] do
+      assert {:error, {^reason, diagnostic}} = Reader.read(source)
+      assert diagnostic.reason == reason
+      assert diagnostic.stage == stage
+      assert diagnostic.operation == :read
+      assert diagnostic.module == Reader
+      assert diagnostic.message == message
+    end
+
+    Limits.install(%{limits | max_pdf_xref_revisions: 2})
+    assert {:ok, %{xref_revisions: 2}} = Reader.read(updated)
+  end
 
   test "selects active generations and removes objects freed by later revisions" do
     generated =

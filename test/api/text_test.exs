@@ -156,39 +156,52 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert Enum.map(spans, & &1.source_index) == [0, 1]
   end
 
-  test "image ActualText shares the same emitted-span limit as preceding text" do
-    source =
-      pdf([
-        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
-        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
-        {3,
-         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> /XObject << /Ink 6 0 R >> >> /Contents 4 0 R >>"},
-        {4,
-         stream_object(
-           "",
-           "BT /F1 12 Tf (A) Tj ET /Span << /ActualText (image) >> BDC /Ink Do EMC"
-         )},
-        {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
-        {6,
-         stream_object(
-           "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
-           <<255, 0, 0>>
-         )}
-      ])
-
-    assert {:ok, "A image"} = Text.extract(source, layout: false)
+  test "text and image ActualText share exact emitted-span limits in either order" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_text_spans, 1))
+    text = "BT /F1 12 Tf (A) Tj ET"
+    image = "/Span << /ActualText (image) >> BDC /Ink Do EMC"
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             Text.extract_spans(source, actual_text: true)
+    for {content, expected} <- [
+          {text <> " " <> image, ["A", "image"]},
+          {image <> " " <> text, ["image", "A"]}
+        ] do
+      source =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3,
+           "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> /XObject << /Ink 6 0 R >> >> /Contents 4 0 R >>"},
+          {4, stream_object("", content)},
+          {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+          {6,
+           stream_object(
+             "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+             <<255, 0, 0>>
+           )}
+        ])
 
-    assert diagnostic.stage == :limits
-    assert diagnostic.operation == :extract_spans
-    assert diagnostic.module == Text
-    assert diagnostic.message =~ "text span count"
-    assert diagnostic.message =~ "page 1"
+      Limits.install(Map.put(previous, :max_text_spans, 2))
+      assert {:ok, extracted} = Text.extract(source, layout: false)
+      assert extracted == Enum.join(expected, " ")
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source, actual_text: true)
+      assert Enum.map(spans, & &1.text) == expected
+
+      Limits.install(Map.put(previous, :max_text_spans, 1))
+
+      for {operation, extract} <- [
+            extract: fn -> Text.extract(source, layout: false) end,
+            extract_spans: fn -> Text.extract_spans(source, actual_text: true) end
+          ] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = extract.()
+        assert diagnostic.stage == :limits
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.operation == operation
+        assert diagnostic.module == Text
+        assert String.starts_with?(diagnostic.message, "text span count exceeds the limit")
+        assert diagnostic.message =~ "; page 1"
+      end
+    end
   end
 
   test "ordinary extraction tokenizes escaped operands once and retains canonical malformed-stream diagnostics" do

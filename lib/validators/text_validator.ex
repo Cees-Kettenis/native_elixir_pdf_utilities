@@ -676,6 +676,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     )
   end
 
+  @doc "Checks whether another shown text or image replacement span fits the shared limit."
+  @spec validate_next_span(non_neg_integer(), pos_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_next_span(count, page) do
+    if count >= Limits.get(:max_text_spans) do
+      resource_limit_error("text span count exceeds the limit", page)
+    else
+      :ok
+    end
+  end
+
   @doc false
   @spec span_geometry(map(), map(), pos_integer()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
