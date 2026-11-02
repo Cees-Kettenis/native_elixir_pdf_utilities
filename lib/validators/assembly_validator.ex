@@ -118,11 +118,12 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
       inherited = Map.fetch!(inheritances, page.ref)
       dictionary = Map.fetch!(object_values, page.ref)
 
-      with {:ok, annotations} <-
+      with {:ok, annotations} <- PdfValidator.optional_entry(document, dictionary, "Annots", nil),
+           {:ok, annotations} <-
              sanitized_annotations(
                document,
                object_values,
-               Map.get(dictionary, "Annots"),
+               annotations,
                selected_refs,
                all_page_refs
              ) do
@@ -167,32 +168,29 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
       nil ->
         {:ok, nil}
 
-      annotations ->
-        case PdfValidator.resolve(document, annotations) do
-          {:ok, annotations} when is_list(annotations) ->
-            annotations
-            |> Enum.reduce_while({:ok, []}, fn annotation, {:ok, kept} ->
-              case keep_annotation?(
-                     document,
-                     object_values,
-                     annotation,
-                     selected_refs,
-                     all_page_refs
-                   ) do
-                {:ok, true} -> {:cont, {:ok, [annotation | kept]}}
-                {:ok, false} -> {:cont, {:ok, kept}}
-                {:error, _error} = annotation_error -> {:halt, annotation_error}
-              end
-            end)
-            |> case do
-              {:ok, []} -> {:ok, nil}
-              {:ok, kept} -> {:ok, Enum.reverse(kept)}
-              {:error, _error} = annotation_error -> annotation_error
-            end
-
-          _ ->
-            error(:annotations, :invalid_pdf_input, "page Annots entry must resolve to an array")
+      annotations when is_list(annotations) ->
+        annotations
+        |> Enum.reduce_while({:ok, []}, fn annotation, {:ok, kept} ->
+          case keep_annotation?(
+                 document,
+                 object_values,
+                 annotation,
+                 selected_refs,
+                 all_page_refs
+               ) do
+            {:ok, true} -> {:cont, {:ok, [annotation | kept]}}
+            {:ok, false} -> {:cont, {:ok, kept}}
+            {:error, _error} = annotation_error -> {:halt, annotation_error}
+          end
+        end)
+        |> case do
+          {:ok, []} -> {:ok, nil}
+          {:ok, kept} -> {:ok, Enum.reverse(kept)}
+          {:error, _error} = annotation_error -> annotation_error
         end
+
+      _ ->
+        error(:annotations, :invalid_pdf_input, "page Annots entry must resolve to an array")
     end
   end
 
