@@ -257,6 +257,63 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert message =~ "positive integer Width and Height"
   end
 
+  test "painted image replacements retain labels and clipping flags with preceding or following invisible text" do
+    for render_mode <- [3, 7], image_first? <- [false, true], preceding_text? <- [false, true] do
+      hidden = "BT /F1 12 Tf #{render_mode} Tr 1 0 0 1 10 20 Tm (hidden) Tj ET"
+      image = "q 40 0 0 20 50 60 cm /Ink Do Q"
+      pieces = if image_first?, do: image <> " " <> hidden, else: hidden <> " " <> image
+
+      prefix =
+        if preceding_text?, do: "BT /F1 12 Tf 1 0 0 1 10 180 Tm (Before) Tj ET ", else: ""
+
+      source =
+        pdf([
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3,
+           "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> /XObject << /Ink 6 0 R >> >> /Contents 4 0 R >>"},
+          {4,
+           stream_object("", prefix <> "/Span << /ActualText (LABEL) >> BDC " <> pieces <> " EMC")},
+          {5, "<< /Type /Font /Subtype /TrueType /Encoding /WinAnsiEncoding >>"},
+          {6,
+           stream_object(
+             "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+             <<255, 0, 0>>
+           )}
+        ])
+
+      expected = if preceding_text?, do: "Before LABEL", else: "LABEL"
+      assert {:ok, ^expected} = Text.extract(source, layout: false)
+      assert {:ok, visual} = Text.extract(source)
+      assert String.split(visual) == String.split(expected)
+
+      assert {:ok, %{pages: [%{spans: physical}]}} = Text.extract_spans(source)
+      hidden_span = List.last(physical)
+      assert hidden_span.text == "hidden"
+      refute hidden_span.paints_text?
+      assert hidden_span.adds_to_clip_path? == (render_mode == 7)
+
+      assert {:ok, %{pages: [%{spans: semantic}]}} =
+               Text.extract_spans(source, actual_text: true)
+
+      assert Enum.map(semantic, & &1.text) == String.split(expected)
+      label = List.last(semantic)
+      assert label.paints_text?
+      assert label.adds_to_clip_path? == (render_mode == 7)
+      assert label.source_index == if(preceding_text?, do: 1, else: 0)
+
+      if image_first? do
+        assert label.x == 50.0 and label.y == 140.0
+        assert label.font_resource == nil
+        assert label.end_x == hidden_span.end_x and label.end_y == hidden_span.end_y
+      else
+        assert label.x == hidden_span.x and label.y == hidden_span.y
+        assert label.font_resource == "F1"
+        assert label.end_x == 90.0 and label.end_y == 140.0
+      end
+    end
+  end
+
   test "ActualText replaces glyph pieces once and preserves their advance" do
     source =
       page_pdf(

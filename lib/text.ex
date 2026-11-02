@@ -681,10 +681,12 @@ defmodule NativeElixirPdfUtilities.Text do
                     image_resource: image_name
                   }
 
+                  first = Map.put(replacement.first || span, :paints_text?, true)
+
                   {:ok,
                    %{
                      state
-                     | replacement: %{replacement | first: replacement.first || span, last: span},
+                     | replacement: %{replacement | first: first, last: span},
                        shown_span_count: state.shown_span_count + 1
                    }, spans}
                 else
