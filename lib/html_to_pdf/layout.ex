@@ -2628,16 +2628,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp relatively_shifted_boxes(boxes, style, _x, y, available_width, next_y) do
+  defp relatively_shifted_boxes(boxes, style, _x, _y, available_width, _next_y) do
     case Map.get(style, :position, :static) do
       :relative ->
         offsets = Map.get(style, :offsets, edges(:auto))
-        margin = Map.get(style, :margin, edges(0.0))
-        element_height = max(y - margin.top - next_y - margin.bottom, 0.0)
+        containing_height = Map.get(style, :_containing_height)
         left = resolved_offset(offsets.left, available_width)
         right = resolved_offset(offsets.right, available_width)
-        top = resolved_offset(offsets.top, element_height)
-        bottom = resolved_offset(offsets.bottom, element_height)
+        top = resolved_offset(offsets.top, containing_height)
+        bottom = resolved_offset(offsets.bottom, containing_height)
         delta_x = if(is_number(left), do: left, else: if(is_number(right), do: -right, else: 0.0))
         delta_y = if(is_number(top), do: -top, else: if(is_number(bottom), do: bottom, else: 0.0))
 
@@ -2666,7 +2665,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp resolved_offset(offset, available) do
     case offset do
       :auto -> nil
-      {:percent, ratio} -> ratio * available
+      {:percent, ratio} when is_number(available) -> ratio * available
       offset when is_number(offset) -> offset
       _ -> nil
     end
@@ -2931,7 +2930,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_block_flow(children, style, x, y, width) do
     result =
       children
-      |> group_inline_flow_children()
+      |> group_inline_flow_children(Map.get(style, :_inline_available_height))
       |> Enum.reduce_while({:ok, [], y, nil, 0.0}, fn child,
                                                       {:ok, boxes, current_y,
                                                        previous_margin_bottom,
@@ -3156,12 +3155,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp group_inline_flow_children(children) do
+  defp group_inline_flow_children(children, containing_height) do
     {groups, pending} =
       Enum.reduce(children, {[], []}, fn child, acc ->
         case child do
           %{type: :element, style: %{display: :inline} = inline_style, children: nested} ->
-            case group_inline_flow_children(nested) do
+            case group_inline_flow_children(nested, containing_height) do
               [] ->
                 append_inline_flow_group(child, acc)
 
@@ -3187,7 +3186,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   context = %{
                     id: make_ref(),
                     split_inline: true,
-                    style: inline_style,
+                    style: Map.put(inline_style, :_containing_height, containing_height),
                     positioned_children: Map.get(child, :positioned_children, [])
                   }
 
@@ -8623,7 +8622,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_table_cell_blocks(children, style, x, y, width, available_height) do
     result =
       children
-      |> group_inline_flow_children()
+      |> group_inline_flow_children(available_height)
       |> Enum.reduce_while({:ok, [], y, nil}, fn child,
                                                  {:ok, boxes, current_y, previous_margin_bottom} ->
         {margin_top, margin_bottom} = flow_child_vertical_margins(child, style)
@@ -10483,7 +10482,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             positioned_boxes,
             is_integer(Map.get(context.style, :z_index))
           )
-          |> shift_positioned_inline(context.style, available_width, containing_block.height)
+          |> shift_positioned_inline(
+            context.style,
+            available_width,
+            Map.get(context.style, :_containing_height)
+          )
 
         Enum.take(boxes, first_index) ++
           positioned_segment ++ Enum.drop(boxes, last_index + 1)
@@ -10550,12 +10553,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp shift_positioned_inline(boxes, style, available_width, inline_height) do
+  defp shift_positioned_inline(boxes, style, available_width, containing_height) do
     offsets = Map.get(style, :offsets, edges(:auto))
     left = resolved_offset(offsets.left, available_width)
     right = resolved_offset(offsets.right, available_width)
-    top = resolved_offset(offsets.top, inline_height)
-    bottom = resolved_offset(offsets.bottom, inline_height)
+    top = resolved_offset(offsets.top, containing_height)
+    bottom = resolved_offset(offsets.bottom, containing_height)
     delta_x = if(is_number(left), do: left, else: if(is_number(right), do: -right, else: 0.0))
     delta_y = if(is_number(top), do: -top, else: if(is_number(bottom), do: bottom, else: 0.0))
 
@@ -11518,6 +11521,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp append_inline_run(child, runs, parent_style) do
+    child =
+      case child do
+        %{type: :element, style: style} ->
+          %{
+            child
+            | style:
+                Map.put(
+                  style,
+                  :_containing_height,
+                  Map.get(parent_style, :_inline_available_height)
+                )
+          }
+
+        child ->
+          child
+      end
+
     case child do
       %{type: :element, tag: "ruby", style: %{display: display} = style} = ruby
       when display != :none ->
@@ -11852,9 +11872,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       %{type: :element, style: %{display: display} = style, children: children} = element
       when display in [:inline_block, :inline_flex, :inline_grid] and is_list(children) ->
         style = inline_script_alignment(style, parent_style)
-
-        style =
-          Map.put(style, :_containing_height, Map.get(parent_style, :_inline_available_height))
 
         style =
           if Map.get(style, :vertical_align) == :text_bottom do

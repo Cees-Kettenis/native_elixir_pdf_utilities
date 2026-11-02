@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size:300pt 600pt; margin:0 }
+body { margin:12pt; font-family:'DejaVu Sans'; font-size:12pt; line-height:15pt }
+.panel { height:120pt; width:240pt; background:#eee; margin-bottom:12pt }
+.shift { position:relative; top:50%; color:red }
+.square { width:24pt; height:18pt; background:red }
+</style></head><body>
+<div class="panel"><div class="shift square"></div><div style="width:24pt;height:18pt;background:blue"></div></div>
+<div class="panel"><span class="shift">Inline</span><span>Following</span><span class="shift" style="display:inline-block">Atomic</span></div>
+<div class="panel"><span class="shift">Start<span style="display:block">Block</span>End</span><span>Following</span></div>
+<div class="panel"><div><div class="shift square" style="bottom:-6pt"></div><div style="width:24pt;height:18pt;background:blue"></div></div><ruby class="shift">Base<rt>Reading</rt></ruby></div>
+</body></html>
