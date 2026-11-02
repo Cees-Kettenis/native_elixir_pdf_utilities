@@ -47,7 +47,7 @@ defmodule NativeElixirPdfUtilities.OperationTest do
       assert diagnostic.message =~ "max_operation_memory_bytes"
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_operation_memory_bytes, 16_777_216))
+    Limits.install(Map.put(Limits.effective(), :max_operation_memory_bytes, 67_108_864))
     assert {:ok, 1} = Info.page_count(pdf)
     assert {:ok, _pdf} = HtmlToPdf.render("<p>Public input</p>")
   end
@@ -169,13 +169,10 @@ defmodule NativeElixirPdfUtilities.OperationTest do
   end
 
   test "a resolver retaining excess binary memory is stopped by the worker allowance" do
-    # Cold font preparation is separate from the resolver memory being measured.
-    assert {:ok, _pdf} =
-             HtmlToPdf.render("<p>Prepare bundled fonts</p>", system_font_discovery: false)
-
+    # Leave headroom for cold bundled fonts before exercising sampled resolver memory.
     Limits.install(
       Map.merge(Limits.effective(), %{
-        max_operation_memory_bytes: 16_777_216,
+        max_operation_memory_bytes: 67_108_864,
         max_operation_timeout_ms: 2_000,
         operation_memory_check_interval_ms: 1
       })
@@ -190,7 +187,7 @@ defmodule NativeElixirPdfUtilities.OperationTest do
                  # Exercise sampled binary memory; GC heap termination has its own test.
                  Process.flag(:max_heap_size, 0)
                  send(caller, {:resolver_memory_worker, self()})
-                 Process.put(:resolver_retained, :binary.copy(<<0>>, 33_554_432))
+                 Process.put(:resolver_retained, :binary.copy(<<0>>, 134_217_728))
                  Process.sleep(:infinity)
                end
              )
