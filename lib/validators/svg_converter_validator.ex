@@ -65,6 +65,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                options,
                context
              ),
+           :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(source),
            :ok <- SvgFilterWorkValidator.reserve(work_root, dimensions, summary.filter_work),
            :ok <-
              HtmlValidator.reserve_render_resource(
@@ -480,6 +481,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
       "image/svg+xml" ->
         with {:ok, source, summary, fonts} <-
                prepare_source(data, context, budget, depth, image_font_options),
+             :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(source),
              {:ok, _} <- SvgValidator.validate_dimensions(summary.root, [], budget),
              {:ok, _} <- prepare_fonts(fonts, summary),
              do: {:ok, source, fonts, summary.filter_work}

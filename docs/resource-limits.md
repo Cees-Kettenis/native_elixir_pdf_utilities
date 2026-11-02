@@ -98,6 +98,7 @@ hard memory caps. The operation deadline and worker-memory allowance also apply.
 | `max_css_source_bytes` | 1,000,000 | One stylesheet or inline declaration source |
 | `max_aggregate_css_source_bytes` | 20,000,000 | CSS source bytes prepared or parsed; shared prepared stylesheets are charged once, separate entries still count |
 | `max_html_nodes` | 25,000 | HTML token processing steps across a render, and nodes in an advanced input tree |
+| `max_html_tree_work` | 20,000,000 | HTML tree processing and numeric references; SVG scanned bytes and estimated attribute/namespace comparisons before XML and native conversion |
 | `max_html_depth` | 128 | Nested HTML elements or advanced input tree depth |
 | `max_css_rules` | 10,000 | Stylesheet rules prepared across a render, including separate repeated entries |
 | `max_css_work` | 5,000,000 | CSS scanned bytes, selector parsing work, and selector comparisons |

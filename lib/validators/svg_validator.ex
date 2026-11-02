@@ -141,7 +141,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           {:ok, document_summary()} | {:error, {atom(), map()}}
   def validate_processing(svg, context) do
     with {:ok, context} <- validate_context(context),
-         :ok <- validate_source(svg) do
+         :ok <- validate_source(svg),
+         :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(svg) do
       validate_structure(svg, context)
     end
   catch
@@ -159,7 +160,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   @spec validate_extraction(term()) :: {:ok, document_summary()} | {:error, {atom(), map()}}
   def validate_extraction(svg) do
     with {:ok, context} <- validate_context(%{mode: :inline}),
-         :ok <- validate_source(svg) do
+         :ok <- validate_source(svg),
+         :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(svg) do
       validate_structure(svg, Map.put(context, :pending_resources?, true))
     end
   catch
