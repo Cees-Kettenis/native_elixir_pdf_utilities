@@ -169,6 +169,10 @@ defmodule NativeElixirPdfUtilities.OperationTest do
   end
 
   test "a resolver retaining excess binary memory is stopped by the worker allowance" do
+    # Cold font preparation is separate from the resolver memory being measured.
+    assert {:ok, _pdf} =
+             HtmlToPdf.render("<p>Prepare bundled fonts</p>", system_font_discovery: false)
+
     Limits.install(
       Map.merge(Limits.effective(), %{
         max_operation_memory_bytes: 16_777_216,
