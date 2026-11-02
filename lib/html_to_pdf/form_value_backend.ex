@@ -13,8 +13,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueBackend do
     if request.timeout == 0 do
       :timeout
     else
+      owner = self()
+
       {worker, monitor} =
         spawn_monitor(fn ->
+          worker = self()
+
+          # Establish ownership before evaluation starts. The linked watcher
+          # also exits when the evaluator returns, crashes or reaches a limit.
+          spawn_link(fn ->
+            owner_monitor = Process.monitor(owner)
+
+            receive do
+              {:DOWN, ^owner_monitor, :process, ^owner, _reason} ->
+                Process.exit(worker, :kill)
+            end
+          end)
+
           exit({:form_value_result, HtmlFormValueValidator.evaluate(request)})
         end)
 
