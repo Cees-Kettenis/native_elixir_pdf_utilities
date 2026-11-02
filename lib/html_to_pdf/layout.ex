@@ -1865,7 +1865,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
               trailing_space =
                 if content_box_height > reserved_content_height and
-                     Map.get(style, :overflow, :visible) == :visible and
+                     Map.get(style, :overflow, :visible) in [:visible, :hidden] and
                      not Map.has_key?(style, :form_kind) and
                      not Map.has_key?(style, :embedded_document) and
                      Map.get(style, :position, :static) not in [:absolute, :fixed] and
@@ -1874,6 +1874,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     %{
                       type: HtmlValidator.reserve_layout_box(:flow_marker),
                       role: :explicit_block_space,
+                      clip: %{
+                        x: box_x,
+                        y: box_top - box_height,
+                        width: box_width,
+                        height: box_height
+                      },
                       x: content_x,
                       y: box_top - box_height,
                       width: 0.0,
@@ -1934,10 +1940,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     []
                 end
 
+              # Register the authored block extent before any descendant line
+              # fragmentation. Its remaining empty space uses that same origin,
+              # including when only the descendants are overflow-clipped.
+              space_start =
+                case {trailing_space, content_boxes} do
+                  {[space], [_ | _]} ->
+                    [
+                      %{
+                        type: HtmlValidator.reserve_layout_box(:flow_marker),
+                        role: :explicit_block_start,
+                        x: box_x,
+                        y: box_top,
+                        width: 0.0,
+                        height: 0.0,
+                        clip: space.clip,
+                        flow_id: {:explicit_block_start, make_ref()}
+                      }
+                    ]
+
+                  _ ->
+                    []
+                end
+
               boxes =
                 fragment_block_paints(
                   background_box,
-                  flow_marker ++ content_boxes ++ trailing_space ++ extents,
+                  space_start ++ flow_marker ++ content_boxes ++ trailing_space ++ extents,
                   style,
                   box_x,
                   box_top,
@@ -2396,7 +2425,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             if Enum.any?(boxes, &(Map.get(&1, :role) == :explicit_block_space)) and
                  not Enum.any?(boxes, fn box ->
                    not Map.has_key?(box, :fieldset_paint_id) and
-                     Map.get(box, :role) != :explicit_block_space and
+                     Map.get(box, :role) not in [:explicit_block_space, :explicit_block_start] and
                      box.type != :page_break and not Map.get(box, :out_of_flow, false)
                  end) do
               {trailing_space, source_boxes} =

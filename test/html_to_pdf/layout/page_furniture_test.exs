@@ -110,8 +110,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
              &(&1.font_face.type == :embedded and &1.font_face.family == "DejaVu Sans")
            )
 
-    assert [%{type: :flow_marker, role: :explicit_block_space, height: 2.0}] =
+    assert [
+             %{type: :flow_marker, role: :explicit_block_start} = start,
+             %{type: :flow_marker, role: :explicit_block_space, height: 2.0} = space
+           ] =
              Enum.reject(header_boxes, &(&1.type == :text))
+
+    assert start.clip == space.clip
+    assert start.height == 0.0
+    assert start.y == space.clip.y + space.clip.height
 
     assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render([page])
     assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
