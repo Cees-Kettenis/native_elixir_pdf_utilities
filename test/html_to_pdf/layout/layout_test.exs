@@ -5788,7 +5788,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       |> Enum.filter(&(&1.type == :text))
       |> Enum.map(& &1.text)
 
-    assert "Grid" in rendered_text and "Table" in rendered_text
+    assert Enum.join(rendered_text, " ") =~ "Grid Table"
     assert "Flex" in rendered_text and "Table" in rendered_text
     assert Enum.join(rendered_text, " ") =~ "Direct Flex A"
     assert Enum.join(rendered_text, " ") =~ "Direct Flex B"

@@ -3762,7 +3762,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           column_tracks,
           column_intrinsics,
           content_width,
-          grid_column_gap(style)
+          grid_column_gap(style),
+          Map.get(style, :justify_content, :stretch)
         )
 
       placed_items =
@@ -3792,7 +3793,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Map.get(style, :align_content, :stretch)
         )
 
-      content_height = available_height || grid_tracks_size(row_sizes, grid_row_gap(style))
+      content_height =
+        available_height ||
+          max(
+            resolved_content_size(
+              style,
+              :height,
+              Map.get(style, :_containing_height),
+              grid_tracks_size(row_sizes, grid_row_gap(style)) + horizontal_gutter
+            ) - horizontal_gutter,
+            0.0
+          )
+
+      row_sizes =
+        if is_nil(available_height),
+          do:
+            stretch_grid_tracks(
+              row_sizes,
+              row_tracks,
+              grid_row_gap(style),
+              content_height,
+              Map.get(style, :align_content, :stretch)
+            ),
+          else: row_sizes
 
       flow_metadata =
         style
@@ -4359,8 +4382,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end)
   end
 
-  defp resolve_grid_columns(tracks, column_intrinsics, available_size, gap) do
-    resolve_grid_track_sizes(tracks, column_intrinsics, available_size, gap, :column)
+  defp resolve_grid_columns(tracks, column_intrinsics, available_size, gap, justify_content) do
+    sizes = resolve_grid_track_sizes(tracks, column_intrinsics, available_size, gap, :column)
+    stretch_grid_tracks(sizes, tracks, gap, available_size, justify_content)
   end
 
   defp grid_items_with_resolved_heights(items, container_style, column_sizes, column_gap) do
@@ -4406,7 +4430,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     row_sizes =
       resolve_grid_track_sizes(tracks, row_intrinsics, available_height, gap, :row)
 
-    stretch_grid_rows(row_sizes, tracks, gap, available_height, align_content)
+    stretch_grid_tracks(row_sizes, tracks, gap, available_height, align_content)
   end
 
   defp resolve_grid_track_sizes(tracks, intrinsics, available_size, gap, axis) do
@@ -4579,31 +4603,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp stretch_grid_rows(row_sizes, tracks, gap, available_height, align_content) do
-    case {align_content, available_height} do
-      {:stretch, available_height} when is_number(available_height) ->
+  defp stretch_grid_tracks(sizes, tracks, gap, available_size, alignment) do
+    case {alignment, available_size} do
+      {:stretch, available_size} when is_number(available_size) ->
         stretchable_indexes =
           tracks
           |> Enum.with_index()
           |> Enum.flat_map(fn
             {:auto, index} -> [index]
+            {{:minmax, _minimum, :auto}, index} -> [index]
             {_track, _index} -> []
           end)
 
-        free_space = max(available_height - grid_tracks_size(row_sizes, gap), 0.0)
+        free_space = max(available_size - grid_tracks_size(sizes, gap), 0.0)
 
         cond do
           stretchable_indexes == [] ->
-            row_sizes
+            sizes
 
           free_space == 0.0 ->
-            row_sizes
+            sizes
 
           true ->
             extra = free_space / length(stretchable_indexes)
             stretchable_indexes = MapSet.new(stretchable_indexes)
 
-            Enum.with_index(row_sizes, fn size, index ->
+            Enum.with_index(sizes, fn size, index ->
               case MapSet.member?(stretchable_indexes, index) do
                 true -> size + extra
                 false -> size
@@ -4612,7 +4637,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         end
 
       _ ->
-        row_sizes
+        sizes
     end
   end
 
@@ -12408,7 +12433,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                         tracks,
                         intrinsics,
                         Enum.sum(intrinsics),
-                        grid_column_gap(style)
+                        grid_column_gap(style),
+                        :flex_start
                       )
 
                     grid_tracks_size(sizes, grid_column_gap(style))

@@ -1750,7 +1750,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     |> Map.put_new(:column_gap, 0.0)
     |> Map.put_new(:justify_items, :stretch)
     |> Map.put_new(:align_items, :stretch)
-    |> Map.put_new(:justify_content, :flex_start)
+    |> Map.put_new(:justify_content, :stretch)
     |> Map.put_new(:align_content, :stretch)
   end
 
@@ -1781,7 +1781,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
       value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
       "center" -> {:ok, Map.put(style, property, :center)}
-      "stretch" -> {:ok, Map.put(style, property, :stretch)}
+      value when value in ["normal", "stretch"] -> {:ok, Map.put(style, property, :stretch)}
       "space-between" -> {:ok, Map.put(style, property, :space_between)}
       "space-around" -> {:ok, Map.put(style, property, :space_around)}
       "space-evenly" -> {:ok, Map.put(style, property, :space_evenly)}
