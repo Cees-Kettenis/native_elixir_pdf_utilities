@@ -55,14 +55,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
       with {:ok, context} <- SvgValidator.validate_context(context),
            {:ok, source, summary, fonts} <-
              prepare_source(source, context, budget, 0, image_font_options),
-           {:ok, dimensions} <- SvgValidator.validate_dimensions(summary.root, options, budget),
+           {:ok, dimensions, scale} <-
+             SvgValidator.prepare_dimensions(summary.root, options, budget),
            {:ok, source, work_root} <-
              stretch_raster_source(
                source,
                summary.filter_work.root,
                summary.root,
                dimensions,
-               options,
+               Keyword.put(options, :scale, scale),
                context
              ),
            :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(source),
@@ -96,6 +97,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
          %{
            source: source,
            options: options,
+           scale: scale,
            fonts: fonts,
            view_box?: Map.has_key?(summary.source_root, "viewBox")
          }}

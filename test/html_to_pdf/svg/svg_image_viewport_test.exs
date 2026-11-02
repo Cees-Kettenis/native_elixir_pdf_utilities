@@ -90,7 +90,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageViewportTest do
   end
 
   test "a failed viewport conversion remains a recoverable scoped result on a repeated request" do
-    Limits.install(%{Limits.effective() | max_svg_raster_pixels: 600})
+    Limits.install(%{Limits.effective() | max_svg_raster_pixels: 200})
     budget = HtmlValidator.new_image_budget()
 
     ResourceContext.run([], budget, fn _ ->

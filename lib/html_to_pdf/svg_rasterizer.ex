@@ -39,10 +39,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
   @spec rasterize_image(term(), term(), term(), term(), term()) ::
           {:ok, binary(), map() | nil} | {:error, {atom(), map()}}
   def rasterize_image(svg, options, budget, fonts, font_options) do
+    with {:ok, png, descriptor, _scale} <-
+           rasterize_image_with_scale(svg, options, budget, fonts, font_options),
+         do: {:ok, png, descriptor}
+  end
+
+  @doc "Renders an image and returns its actual sampling scale for natural CSS dimensions."
+  @spec rasterize_image_with_scale(term(), term(), term(), term(), term()) ::
+          {:ok, binary(), map() | nil, pos_integer()} | {:error, {atom(), map()}}
+  def rasterize_image_with_scale(svg, options, budget, fonts, font_options) do
     with {:ok, request, descriptor} <-
            SvgImageValidator.prepare_viewport_source(svg, options, budget, fonts, font_options),
          {:ok, png} <- convert_prepared(request) do
-      {:ok, png, descriptor}
+      {:ok, png, descriptor, request.scale}
     end
   end
 
@@ -58,7 +67,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
                SvgImageValidator.viewport_request(descriptor, width, height) do
           ResourceContext.with_document(context, fn ->
             scale = NativeElixirPdfUtilities.Limits.get(:svg_raster_scale)
-            options = [width: ceil(width / 0.75), height: ceil(height / 0.75), scale: scale]
+
+            options = [
+              width: ceil(width / 0.75),
+              height: ceil(height / 0.75),
+              scale: {:up_to, scale}
+            ]
 
             # Without a viewBox, CSS stretches the converted intrinsic canvas as
             # an ordinary image. Only a viewBox establishes a new SVG fitting

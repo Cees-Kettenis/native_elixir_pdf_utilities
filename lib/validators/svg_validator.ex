@@ -40,22 +40,46 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   @spec validate_dimensions(map(), term(), HtmlValidator.image_budget() | nil) ::
           {:ok, keyword()} | {:error, {atom(), map()}}
   def validate_dimensions(attributes, options, budget) do
+    with {:ok, dimensions, _scale} <- prepare_dimensions(attributes, options, budget),
+         do: {:ok, dimensions}
+  end
+
+  @doc "Prepares a bounded SVG raster and returns its actual integer sampling scale."
+  @spec prepare_dimensions(map(), term(), HtmlValidator.image_budget() | nil) ::
+          {:ok, keyword(), pos_integer()} | {:error, {atom(), map()}}
+  def prepare_dimensions(attributes, options, budget) do
+    scale_option =
+      if is_list(options) and Keyword.keyword?(options), do: Keyword.get(options, :scale, 1)
+
+    scale =
+      case scale_option do
+        {:up_to, maximum} -> maximum
+        value -> value
+      end
+
     if is_list(options) and Keyword.keyword?(options) and
          Enum.all?(Keyword.keys(options), &(&1 in [:width, :height, :scale])) and
-         is_integer(Keyword.get(options, :scale, 1)) and Keyword.get(options, :scale, 1) > 0 do
-      scale = Keyword.get(options, :scale, 1)
-
+         is_integer(scale) and scale > 0 do
       with {:ok, {intrinsic_width, intrinsic_height}} <- svg_intrinsic_dimensions(attributes),
            {:ok, {width, height}} <-
-             svg_raster_dimensions(options, intrinsic_width, intrinsic_height),
-           :ok <- validate_raster_dimensions(width * scale, height * scale, budget) do
-        {:ok, [width: width * scale, height: height * scale]}
+             svg_raster_dimensions(options, intrinsic_width, intrinsic_height) do
+        # Optional extra density must not exclude a canvas admitted at scale one.
+        # Do not adapt explicit scales or relax any raster or aggregate budget.
+        scale =
+          if match?({:up_to, _}, scale_option) do
+            bounded_sampling_scale(width, height, scale)
+          else
+            scale
+          end
+
+        with :ok <- validate_raster_dimensions(width * scale, height * scale, budget),
+             do: {:ok, [width: width * scale, height: height * scale], scale}
       end
     else
       Diagnostics.error(
         :style,
         :invalid_document,
-        "SVG options accept only width, height and a positive integer scale",
+        "SVG options accept only width, height and a positive integer scale or {:up_to, scale}",
         source: "SVG"
       )
     end
@@ -67,6 +91,50 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         "SVG dimensions exceed the supported numeric range; reduce dimensions or aspect ratio",
         source: "SVG"
       )
+  end
+
+  @doc "Chooses default SVG viewport sampling without charging its later raster allocation."
+  @spec default_viewport_dimensions(number(), number()) :: keyword()
+  def default_viewport_dimensions(width, height) do
+    requested = Limits.get(:svg_raster_scale)
+    requested_width = max(ceil(width * requested), 1)
+    requested_height = max(ceil(height * requested), 1)
+
+    if requested_width <= Limits.get(:max_svg_raster_dimension) and
+         requested_height <= Limits.get(:max_svg_raster_dimension) and
+         requested_width * requested_height <= Limits.get(:max_svg_raster_pixels) and
+         requested_width * requested_height * 4 <= Limits.get(:max_decoded_image_bytes) and
+         png_raster_budget(requested_width, requested_height) == :ok do
+      [width: requested_width, height: requested_height]
+    else
+      scale = bounded_sampling_scale(max(ceil(width), 1), max(ceil(height), 1), requested)
+      [width: max(ceil(width * scale), 1), height: max(ceil(height * scale), 1)]
+    end
+  end
+
+  defp bounded_sampling_scale(width, height, scale) do
+    maximum_axis_scale = div(Limits.get(:max_svg_raster_dimension), max(width, height))
+
+    maximum_pixels =
+      min(Limits.get(:max_svg_raster_pixels), div(Limits.get(:max_decoded_image_bytes), 4))
+
+    maximum_pixel_scale = trunc(:math.sqrt(div(maximum_pixels, width * height)))
+    scale = max(1, min(scale, min(maximum_axis_scale, maximum_pixel_scale)))
+
+    if png_raster_budget(width * scale, height * scale) == :ok, do: scale, else: 1
+  end
+
+  # Resvg emits a noninterlaced, eight-bit RGBA canvas. Share PNG's work formula
+  # so optional extra density cannot make an otherwise bounded decode fail.
+  defp png_raster_budget(width, height) do
+    row_bytes = width * 4
+
+    NativeElixirPdfUtilities.Validators.PngValidator.validate_working_buffers(
+      (row_bytes + 1) * height,
+      row_bytes * height,
+      row_bytes,
+      height
+    )
   end
 
   @doc "Validates and charges the actual SVG raster canvas before native allocation."

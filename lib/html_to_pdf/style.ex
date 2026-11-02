@@ -5904,13 +5904,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp rasterize_svg_image(svg, raster_options, image_budget, opts, scale \\ 1) do
-    raster_options = Keyword.put(raster_options, :scale, scale)
+    raster_options = Keyword.put(raster_options, :scale, {:up_to, scale})
     fonts = Keyword.get(opts, :fonts, [])
     font_options = Keyword.take(opts, [:system_font_discovery])
 
     loader = fn ->
-      with {:ok, png, viewport} <-
-             SvgRasterizer.rasterize_image(
+      with {:ok, png, viewport, actual_scale} <-
+             SvgRasterizer.rasterize_image_with_scale(
                svg,
                raster_options,
                image_budget,
@@ -5922,7 +5922,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         # natural CSS dimensions or the background tile's physical size.
         {:ok,
          image
-         |> Map.merge(%{width: image.width / scale, height: image.height / scale})
+         |> Map.merge(%{width: image.width / actual_scale, height: image.height / actual_scale})
          |> Map.put(:svg_viewport, viewport)}
       end
     end

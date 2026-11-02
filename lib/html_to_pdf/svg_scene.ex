@@ -16,8 +16,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     SvgConverterValidator
   }
 
-  alias NativeElixirPdfUtilities.Limits
-
   @doc "Extracts a complete selected SVG document in its current authorized resource scope."
   @spec extract(binary(), HtmlValidator.image_budget(), keyword()) ::
           {:ok, map()} | {:error, {atom(), map()}}
@@ -162,12 +160,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
     with :ok <- SvgSceneValidator.validate_paint_scope(scene, ResourceContext.current()),
          {:ok, viewport} <- measure(scene, width, height) do
       if viewport.paint? and Map.get(scene.style, :display) != :none do
-        scale = Limits.get(:svg_raster_scale)
-
-        dimensions = [
-          width: max(ceil(viewport.width / 0.75 * scale), 1),
-          height: max(ceil(viewport.height / 0.75 * scale), 1)
-        ]
+        dimensions =
+          NativeElixirPdfUtilities.Validators.SvgValidator.default_viewport_dimensions(
+            viewport.width / 0.75,
+            viewport.height / 0.75
+          )
 
         with {:ok, source} <-
                SvgConverterValidator.with_root_viewport(

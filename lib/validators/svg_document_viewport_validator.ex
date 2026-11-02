@@ -239,8 +239,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgDocumentViewportValidator do
           {:ok, :skipped}
 
         viewport ->
-          raster_width = max(ceil(viewport.width / 0.75 * Limits.get(:svg_raster_scale)), 1)
-          raster_height = max(ceil(viewport.height / 0.75 * Limits.get(:svg_raster_scale)), 1)
+          [width: raster_width, height: raster_height] =
+            SvgValidator.default_viewport_dimensions(
+              viewport.width / 0.75,
+              viewport.height / 0.75
+            )
 
           with :ok <- SvgValidator.validate_raster_dimensions(raster_width, raster_height, nil),
                :ok <-

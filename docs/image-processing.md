@@ -27,6 +27,10 @@ PDF viewers decode the embedded image.
 
 SVGs appear as PNG artwork in the PDF. SVG text is rasterized and links inside
 an SVG are inactive. Wrap the image in an HTML anchor to make it clickable.
+The renderer uses up to `svg_raster_scale` samples per CSS pixel, reducing that
+extra density when needed to fit the per-image raster and decoding limits.
+Density changes preserve natural image dimensions. Source, conversion and
+aggregate resource limits still apply.
 
 Provide images and fonts through the supported [asset sources](html-to-pdf-compatibility.md#assets-and-local-files).
 The converter cannot read arbitrary files or fetch network resources.
