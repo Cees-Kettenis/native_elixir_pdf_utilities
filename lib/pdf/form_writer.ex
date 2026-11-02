@@ -407,7 +407,8 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           Enum.flat_map(fields, fn field -> Enum.map(field.widgets, & &1.ref) end)
       )
 
-    {roots, tree_patches} = prune(form.roots, form.nodes, removed)
+    {roots, reversed_tree_patches} = prune(form.roots, form.nodes, removed)
+    tree_patches = Enum.reverse(reversed_tree_patches)
 
     {page_objects, next} =
       placements
@@ -546,8 +547,8 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
     end
   end
 
-  defp prune(refs, nodes, removed) do
-    Enum.reduce(refs, {[], []}, fn ref, {kept, patches} ->
+  defp prune(refs, nodes, removed, patches \\ []) do
+    Enum.reduce(refs, {[], patches}, fn ref, {kept, patches} ->
       if MapSet.member?(removed, ref) do
         {kept, patches}
       else
@@ -555,23 +556,24 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
 
         case Map.get(dictionary, "Kids") do
           kids when is_list(kids) and kids != [] ->
-            {children, more} = prune(kids, nodes, removed)
+            {children, patches} = prune(kids, nodes, removed, patches)
 
             case children do
               [] ->
-                {kept, patches ++ more}
+                {kept, patches}
 
               _ ->
                 {:ref, {id, gen}} = ref
 
-                {kept ++ [ref],
-                 patches ++ more ++ [{id, gen, {:value, Map.put(dictionary, "Kids", children)}}]}
+                {[ref | kept],
+                 [{id, gen, {:value, Map.put(dictionary, "Kids", children)}} | patches]}
             end
 
           _ ->
-            {kept ++ [ref], patches}
+            {[ref | kept], patches}
         end
       end
     end)
+    |> then(fn {kept, patches} -> {Enum.reverse(kept), patches} end)
   end
 end
