@@ -957,6 +957,18 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   @doc """
+  Resolves an optional dictionary entry, applying its default after resolving PDF null.
+  Null operands inside arrays and required values retain their original semantics.
+  """
+  @spec optional_entry(document(), map(), binary(), value(), [diagnostic_option()]) ::
+          {:ok, value()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def optional_entry(document, dictionary, key, default, opts \\ []) do
+    with {:ok, value} <- resolve(document, Map.get(dictionary, key), opts) do
+      {:ok, if(is_nil(value), do: default, else: value)}
+    end
+  end
+
+  @doc """
   Resolves a value and requires the resulting semantic value to be a dictionary.
   """
   @spec dictionary(document(), value(), [diagnostic_option()]) ::

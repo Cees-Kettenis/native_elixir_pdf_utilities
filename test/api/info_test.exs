@@ -162,7 +162,6 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     for {entry, extra_objects} <- [
           {"0", []},
           {"-1", []},
-          {"null", []},
           {"/invalid", []},
           {"4 0 R", [{4, "(invalid)"}]},
           {"4 0 R", []}

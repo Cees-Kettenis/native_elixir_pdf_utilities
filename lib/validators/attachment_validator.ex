@@ -49,7 +49,9 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   def inspect_document(context) do
     document = context.document
 
-    with {:ok, names} <- PdfValidator.dictionary(document, Map.get(context.catalog, "Names", %{})),
+    with {:ok, names_value} <-
+           PdfValidator.optional_entry(document, context.catalog, "Names", %{}),
+         {:ok, names} <- PdfValidator.dictionary(document, names_value),
          {:ok, entries, _seen} <-
            name_tree(document, Map.get(names, "EmbeddedFiles"), MapSet.new(), 0),
          true <- length(entries) <= Limits.get(:max_pdf_attachments),

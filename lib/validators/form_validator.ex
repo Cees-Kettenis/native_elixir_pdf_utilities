@@ -59,8 +59,9 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   @spec inspect_document(PdfValidator.context()) :: {:ok, map()} | {:error, {atom(), map()}}
   def inspect_document(context) do
     FormInspectionValidator.with_scope(context.document, fn ->
-      with {:ok, form} <-
-             PdfValidator.dictionary(context.document, Map.get(context.catalog, "AcroForm", %{})),
+      with {:ok, form_value} <-
+             PdfValidator.optional_entry(context.document, context.catalog, "AcroForm", %{}),
+           {:ok, form} <- PdfValidator.dictionary(context.document, form_value),
            false <- Map.has_key?(form, "XFA"),
            {:ok, roots} <- PdfValidator.resolve(context.document, Map.get(form, "Fields", [])),
            true <- is_list(roots),
@@ -273,7 +274,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
              PdfValidator.dictionary(context.document, Map.get(resources, "XObject", %{})),
            {:ok, contents} <- PdfValidator.content_references(context.document, page.dictionary),
            {:ok, annots} <-
-             PdfValidator.resolve(context.document, Map.get(page.dictionary, "Annots", [])),
+             PdfValidator.optional_entry(context.document, page.dictionary, "Annots", []),
            {:ok, placement} <-
              flatten_placement(context.document, widget, %{
                widget: widget,
@@ -427,7 +428,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, %{}}, fn {page, number}, {:ok, acc} ->
       with {:ok, annots} <-
-             PdfValidator.resolve(context.document, Map.get(page.dictionary, "Annots", [])),
+             PdfValidator.optional_entry(context.document, page.dictionary, "Annots", []),
            true <- is_list(annots) do
         with :ok <-
                FormInspectionValidator.reserve(

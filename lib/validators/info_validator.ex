@@ -312,7 +312,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   end
 
   defp normalized_user_unit(document, dictionary) do
-    case PdfValidator.resolve(document, Map.get(dictionary, "UserUnit", 1)) do
+    case PdfValidator.optional_entry(document, dictionary, "UserUnit", 1) do
       {:ok, user_unit} when is_number(user_unit) and user_unit > 0 ->
         case PdfValidator.float_number(user_unit) do
           {:ok, value} -> {:ok, value}
