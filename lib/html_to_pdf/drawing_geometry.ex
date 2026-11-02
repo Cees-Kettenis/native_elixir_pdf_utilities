@@ -404,8 +404,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
         {e, f}
       end
 
-    [a, b, c, d, e, f] = Enum.map([a, b, c, d, e, f], &Float.round(&1 * 1.0, 4))
-    {a, b, c, d, e, f}
+    # Linear coefficients multiply local coordinates. Decimal-place rounding
+    # can erase a nonzero scale or amplify its error across a large box.
+    {a, b, c, d, Float.round(e * 1.0, 4), Float.round(f * 1.0, 4)}
   end
 
   defp rounded_viewport_origin(x, y, height, parent_height) do

@@ -1334,11 +1334,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           baseline < 0 or baseline > height ->
             drawing_group_error("drawing_group baseline must lie within its local height")
 
-          Float.round(a * 1.0, 4) * Float.round(d * 1.0, 4) -
-            Float.round(b * 1.0, 4) * Float.round(c * 1.0, 4) == 0 ->
-            drawing_group_error(
-              "drawing_group affine matrix must remain nondegenerate at the writer's four-decimal PDF precision"
-            )
+          a * d - b * c == 0 ->
+            drawing_group_error("drawing_group affine matrix must remain nondegenerate")
 
           not valid_clip_rectangle?(clip, true) ->
             drawing_group_error(

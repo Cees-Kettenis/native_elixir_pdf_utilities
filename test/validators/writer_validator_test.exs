@@ -263,7 +263,6 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
           },
           %{group | transform: {1, 0, 0, 1, :bad, 0}},
           %{group | transform: {0, 0, 0, 1, 0, 0}},
-          %{group | transform: {0.00001, 0, 0, 1, 0, 0}},
           %{group | transform: {1, 0, 0, 1, 0, 0, 0}},
           %{group | width: 1_000_000_001},
           %{group | baseline: -1},

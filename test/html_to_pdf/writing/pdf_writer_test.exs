@@ -499,17 +499,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:ok, pdf} =
              PdfWriter.render([%{size: {100, 100}, boxes: [group]}], compress_streams: false)
 
-    assert pdf =~ "q 1 0 0 1 5 6 cm"
+    assert pdf =~ "q 1.00004 0 0 1 5 6 cm"
     assert pdf =~ "0 7.2501 Td"
-    assert pdf =~ "/Rect [5 13.2501 15 25.2501]"
+    assert pdf =~ "/Rect [5 13.2501 15.0004 25.2501]"
 
     rounded_up = %{group | transform: {1.00006, 0, 0, 1, 5.00006, 6.00006}}
 
     assert {:ok, up} =
              PdfWriter.render([%{size: {100, 100}, boxes: [rounded_up]}], compress_streams: false)
 
-    assert up =~ "q 1.0001 0 0 1 5.0001 6.0001 cm"
-    assert up =~ "/Rect [5.0001 13.2502 15.0011 25.2502]"
+    assert up =~ "q 1.00006 0 0 1 5.0001 6.0001 cm"
+    assert up =~ "/Rect [5.0001 13.2502 15.0007 25.2502]"
 
     for clip <- [nil, %{x: 0, y: 0, width: 0, height: 0}] do
       assert {:ok, clipped} =

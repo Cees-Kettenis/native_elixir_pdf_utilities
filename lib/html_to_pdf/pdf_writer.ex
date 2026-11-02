@@ -733,7 +733,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             box.transform
           end
 
-        matrix = transform |> Tuple.to_list() |> Enum.map_join(" ", &format_number/1)
+        matrix =
+          transform
+          |> Tuple.to_list()
+          |> Enum.map_join(" ", fn number ->
+            if number == trunc(number),
+              do: Integer.to_string(trunc(number)),
+              else: serialized_value(number)
+          end)
 
         clip =
           case box.clip do

@@ -166,10 +166,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AffineDrawingGeometryTest do
     assert Enum.any?(quads, &DrawingGeometry.clip_contains?({:polygon, &1}, 30, 30))
   end
 
-  test "singular and serialized-singular affine matrices return canonical diagnostics", %{
+  test "singular affine matrices return canonical diagnostics", %{
     group: group
   } do
-    for matrix <- [{1, 1, 1, 1, 20, 20}, {0.00001, 0, 0, 1, 20, 20}] do
+    for matrix <- [{1, 1, 1, 1, 20, 20}, {0, 0, 0, 1, 20, 20}] do
       assert {:error, {:invalid_pdf_input, diagnostic}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [%{group | transform: matrix}]}])
 

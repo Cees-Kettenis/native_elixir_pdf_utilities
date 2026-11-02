@@ -44,7 +44,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChildLinkDestinationsTest do
     assert length(Regex.scan(~r/Child target/, text)) == 2
   end
 
-  test "nested positive nonuniform group scales use rounded paint CTMs for destinations and regions" do
+  test "nested positive nonuniform group scales preserve linear precision for destinations and regions" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, surface} = EmbeddedViewport.prepare_html({:srcdoc, @child}, parent)
 
@@ -75,16 +75,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChildLinkDestinationsTest do
       [child] = outer.boxes
       links = Enum.filter(child.boxes, &Map.has_key?(&1, :link_destination))
 
-      assert Enum.find(links, &(&1.text == "Jump")).link_destination ==
-               {:xyz, 1, 44.0, 111.5}
-
-      assert Enum.find(links, &(&1.text == "Top")).link_destination ==
-               {:xyz, 1, 44.0, 125.0}
+      # Child target and top are at y=48 and y=60. Only translations round;
+      # the 0.750049 inner and 1.5 outer scales retain their full precision.
+      for {text, local_y} <- [{"Jump", 48}, {"Top", 60}] do
+        assert {:xyz, 1, 44.0, y} = Enum.find(links, &(&1.text == text)).link_destination
+        assert_in_delta y, (local_y * 0.750049 + 25) * 1.5 + 20, 1.0e-9
+      end
 
       assert {:ok, pdf} = PdfWriter.render([page])
       assert {:ok, context} = Reader.read_validated(pdf)
 
-      assert [{:ref, hd(context.pages).ref}, {:name, "XYZ"}, 44, 111.5, nil] in destinations(
+      assert [{:ref, hd(context.pages).ref}, {:name, "XYZ"}, 44, 111.5035, nil] in destinations(
                context
              )
 
@@ -94,7 +95,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChildLinkDestinationsTest do
 
       assert Enum.all?(annotations, fn annotation ->
                [left, bottom, right, top] = annotation["Rect"]
-               left >= 44 and bottom >= 57.5 and right <= 269 and top <= 125
+               left >= 44 and bottom >= 57.5 and right <= 269.00882 and top <= 125.00441
              end)
     end)
   end
