@@ -436,6 +436,109 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     assert message =~ "same export state"
   end
 
+  test "radio fills preserve exclusive selections and flatten only the selected appearances" do
+    for {flags, initial, same_selection} <- [
+          {32_768, ["Same", "Off", "Off"], [0]},
+          {32_768, ["Off", "Off", "Same"], [2]},
+          {32_768, ["Off", "Other", "Off"], [0]},
+          {33_587_200, ["Same", "Off", "Same"], [0, 2]}
+        ] do
+      source =
+        external_pdf(
+          %{
+            "FT" => {:name, "Btn"},
+            "Ff" => flags,
+            "V" => {:name, Enum.find(initial, &(&1 != "Off"))},
+            "Kids" => [{:ref, {7, 0}}, {:ref, {9, 0}}, {:ref, {10, 0}}]
+          },
+          %{
+            "Rect" => [10, 10, 50, 30],
+            "AS" => {:name, Enum.at(initial, 0)},
+            "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Same" => {:ref, {11, 0}}}}
+          }
+        )
+
+      assert {:ok, context} = Reader.read_validated(source)
+      assert {:ok, widget} = Reader.dictionary(context.document, {:ref, {7, 0}})
+
+      appearance = %{
+        "Type" => {:name, "XObject"},
+        "Subtype" => {:name, "Form"},
+        "BBox" => [0, 0, 100, 20],
+        "Resources" => %{"Font" => %{"F1" => {:ref, {14, 0}}}}
+      }
+
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [
+                 {9, 0,
+                  {:value,
+                   Map.merge(widget, %{
+                     "Rect" => [60, 10, 100, 30],
+                     "AS" => {:name, Enum.at(initial, 1)},
+                     "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Other" => {:ref, {12, 0}}}}
+                   })}},
+                 {10, 0,
+                  {:value,
+                   Map.merge(widget, %{
+                     "Rect" => [110, 10, 150, 30],
+                     "AS" => {:name, Enum.at(initial, 2)},
+                     "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Same" => {:ref, {13, 0}}}}
+                   })}},
+                 {11, 0, {:stream, appearance, "BT /F1 10 Tf (First) Tj ET"}},
+                 {12, 0, {:stream, appearance, "BT /F1 10 Tf (Other) Tj ET"}},
+                 {13, 0, {:stream, appearance, "BT /F1 10 Tf (Last) Tj ET"}},
+                 {14, 0,
+                  {:value,
+                   %{
+                     "Type" => {:name, "Font"},
+                     "Subtype" => {:name, "Type1"},
+                     "BaseFont" => {:name, "Helvetica"},
+                     "Encoding" => {:name, "WinAnsiEncoding"}
+                   }}}
+               ])
+
+      source =
+        patch_page(source, %{"Annots" => [{:ref, {7, 0}}, {:ref, {9, 0}}, {:ref, {10, 0}}]})
+
+      for value <- ["Same", "Other"] do
+        selected = if value == "Same", do: same_selection, else: [1]
+        expected_states = for index <- 0..2, do: if(index in selected, do: value, else: "Off")
+        expected_labels = Enum.map(selected, &Enum.at(["First", "Other", "Last"], &1))
+
+        assert {:ok, filled} = Forms.fill(source, %{"field" => value})
+        assert {:ok, [%{value: ^value}]} = Forms.fields(filled)
+        assert {:ok, context} = Reader.read_validated(filled)
+        assert {:ok, %{fields: [field]}} = FormValidator.inspect_document(context)
+
+        assert Enum.map(field.widgets, & &1.dictionary["AS"]) ==
+                 Enum.map(expected_states, &{:name, &1})
+
+        assert {:ok, original_context} = Reader.read_validated(source)
+        assert {:ok, form} = FormValidator.inspect_document(original_context)
+
+        assert {:ok, [prepared]} =
+                 FormValidator.prepare_write(
+                   original_context,
+                   form,
+                   %{"field" => value},
+                   %{},
+                   :fill
+                 )
+
+        assert Enum.map(prepared.widgets, & &1.new_state) == expected_states
+
+        assert {:ok, flattened} = Forms.flatten(filled)
+        assert {:ok, direct} = Forms.fill(source, %{"field" => value}, flatten: true)
+
+        for flat <- [flattened, direct] do
+          assert {:ok, []} = Forms.fields(flat)
+          assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(flat, layout: false)
+          assert String.split(text) == expected_labels
+        end
+      end
+    end
+  end
+
   test "resolves indirect Kids when pruning and bounds tree depth" do
     pdf = external_pdf()
     {:ok, context} = Reader.read_validated(pdf)

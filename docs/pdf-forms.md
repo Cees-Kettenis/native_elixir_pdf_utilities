@@ -123,6 +123,10 @@ Use exact names from `Forms.fields/1`, including any parent names and periods.
 Filling a field updates all its widgets. Other fields, annotations, metadata and
 page content stay in place.
 
+For exclusive radio groups with repeated export values, filling preserves the
+currently selected matching widget, or selects the first match in field order.
+Groups with the PDF RadiosInUnison flag select all matching widgets.
+
 | Field type | Fill value |
 | --- | --- |
 | Single-line text | UTF-8 string without line breaks, or `nil` to clear |

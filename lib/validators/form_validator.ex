@@ -214,6 +214,11 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                     [
                       Map.merge(field, %{
                         new_value: value,
+                        widgets:
+                          if(operation == :fill,
+                            do: prepare_fill_widgets(field, value),
+                            else: field.widgets
+                          ),
                         appearances: appearances
                       })
                       | acc
@@ -938,6 +943,34 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           true ->
             {:ok, value}
         end
+    end
+  end
+
+  defp prepare_fill_widgets(field, value) do
+    case field.type do
+      :checkbox ->
+        Enum.map(field.widgets, fn widget ->
+          state = if value, do: Enum.find(widget.states, &(&1 != "Off")), else: "Off"
+          Map.put(widget, :new_state, state)
+        end)
+
+      :radio ->
+        in_unison? = (field.flags &&& 33_554_432) != 0
+
+        # Preserve an existing matching selection; otherwise choose the first
+        # matching widget in field order. RadiosInUnison permits all matches.
+        selected =
+          Enum.find(field.widgets, fn widget ->
+            value in widget.states and widget.dictionary["AS"] == {:name, value}
+          end) || Enum.find(field.widgets, &(value in &1.states))
+
+        Enum.map(field.widgets, fn widget ->
+          on? = value in widget.states and (in_unison? or widget.ref == selected.ref)
+          Map.put(widget, :new_state, if(on?, do: value, else: "Off"))
+        end)
+
+      _ ->
+        field.widgets
     end
   end
 

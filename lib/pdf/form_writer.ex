@@ -333,11 +333,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                 {:name, field.new_value}
 
               :checkbox ->
-                {:name,
-                 if(field.new_value,
-                   do: Enum.find(hd(field.widgets).states, &(&1 != "Off")),
-                   else: "Off"
-                 )}
+                {:name, hd(field.widgets).new_state}
             end
 
           dictionary = field.dictionary |> Map.put("V", value) |> Map.delete("I")
@@ -372,18 +368,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
 
               dictionary =
                 if field.type in [:checkbox, :radio] do
-                  state =
-                    case field.type do
-                      :checkbox ->
-                        if field.new_value,
-                          do: Enum.find(widget.states, &(&1 != "Off")),
-                          else: "Off"
-
-                      :radio ->
-                        if field.new_value in widget.states, do: field.new_value, else: "Off"
-                    end
-
-                  Map.put(dictionary, "AS", {:name, state})
+                  Map.put(dictionary, "AS", {:name, widget.new_state})
                 else
                   Map.put(dictionary, "AP", Map.put(widget.ap, "N", appearance))
                 end
