@@ -6176,6 +6176,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                    Map.get(layout_tree, :link_scope)
                  ),
                :ok <-
+                 NativeElixirPdfUtilities.Validators.CssTransformValidator.validate_box_scopes(
+                   boxes
+                 ),
+               :ok <-
                  NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_expected_targets(
                    Map.get(layout_tree, :link_expected_targets, []),
                    Map.get(layout_tree, :link_scope)

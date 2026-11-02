@@ -324,42 +324,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   """
   @spec box_vertical_bounds(term()) :: {number(), number()}
   def box_vertical_bounds(box) do
+    bounds =
+      case box do
+        %{type: type, y: y, height: height}
+        when type in [
+               :rect,
+               :image,
+               :responsive_image,
+               :link_region,
+               :flow_marker,
+               :glyph_group,
+               :drawing_group
+             ] and
+               is_number(y) and
+               is_number(height) ->
+          {y + height, y}
+
+        %{type: :text, y: y, line_baseline_depth: depth, line_box_height: height}
+        when is_number(y) and is_number(depth) and is_number(height) ->
+          {y + depth, y + depth - height}
+
+        %{type: :text, y: y, font_size: font_size, line_height: line_height}
+        when is_number(y) and is_number(font_size) and is_number(line_height) ->
+          {y + font_size, y + font_size - line_height}
+
+        %{type: :text, y: y, font_size: font_size}
+        when is_number(y) and is_number(font_size) ->
+          {y + font_size, y}
+
+        %{type: :text, y: y, line_height: line_height}
+        when is_number(y) and is_number(line_height) ->
+          {y + line_height, y}
+
+        %{type: :page_break, y: y} when is_number(y) ->
+          {y, y}
+
+        _ ->
+          {0.0, 0.0}
+      end
+
     case box do
-      %{type: type, y: y, height: height}
-      when type in [
-             :rect,
-             :image,
-             :responsive_image,
-             :link_region,
-             :flow_marker,
-             :glyph_group,
-             :drawing_group
-           ] and
-             is_number(y) and
-             is_number(height) ->
-        {y + height, y}
-
-      %{type: :text, y: y, line_baseline_depth: depth, line_box_height: height}
-      when is_number(y) and is_number(depth) and is_number(height) ->
-        {y + depth, y + depth - height}
-
-      %{type: :text, y: y, font_size: font_size, line_height: line_height}
-      when is_number(y) and is_number(font_size) and is_number(line_height) ->
-        {y + font_size, y + font_size - line_height}
-
-      %{type: :text, y: y, font_size: font_size}
-      when is_number(y) and is_number(font_size) ->
-        {y + font_size, y}
-
-      %{type: :text, y: y, line_height: line_height}
-      when is_number(y) and is_number(line_height) ->
-        {y + line_height, y}
-
-      %{type: :page_break, y: y} when is_number(y) ->
-        {y, y}
+      %{css_parent_clips: clips} ->
+        Enum.reduce(clips, bounds, fn {_id, clip}, {top, bottom} ->
+          top = min(top, clip.y + clip.height)
+          {top, min(top, max(bottom, clip.y))}
+        end)
 
       _ ->
-        {0.0, 0.0}
+        bounds
     end
   end
 end

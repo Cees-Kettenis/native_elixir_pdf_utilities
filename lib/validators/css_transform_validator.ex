@@ -820,13 +820,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
               []
 
             bounds ->
+              # Fragment allocation excludes its own paint slice, but still
+              # obeys enclosing clips and non-rendering singular transforms.
+              fragment_clip =
+                case DrawingGeometry.local_clip(box) do
+                  %{width: width, height: height} when width == 0 or height == 0 -> visible
+                  _ -> clip
+                end
+
               [
-                %{
-                  x: bounds.x,
-                  y: bounds.top - bounds.height,
-                  width: bounds.width,
-                  height: bounds.height
-                }
+                {%{
+                   x: bounds.x,
+                   y: bounds.top - bounds.height,
+                   width: bounds.width,
+                   height: bounds.height
+                 }, fragment_clip}
               ]
           end
 
@@ -840,16 +848,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
               rectangles ++
                 Enum.map(fields, fn %{rect: [left, bottom, right, top]} ->
-                  %{x: left, y: bottom, width: right - left, height: top - bottom}
+                  {%{x: left, y: bottom, width: right - left, height: top - bottom}, visible}
                 end)
           end
 
         bounds =
           Enum.map(children, &print_paint_bounds(&1, own)) ++
-            Enum.map(
-              rectangles,
-              &print_paint_bounds(&1, %{transform: matrix, clip: visible, height: height})
-            )
+            Enum.map(rectangles, fn {rectangle, rectangle_clip} ->
+              print_paint_bounds(rectangle, %{
+                transform: matrix,
+                clip: rectangle_clip,
+                height: height
+              })
+            end)
 
         join_print_bounds(bounds)
 
@@ -1059,14 +1070,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   defp scoped_boxes?(boxes) do
     Enum.any?(boxes, fn box ->
       Map.get(box, :css_transform_scopes, []) != [] or
+        Map.get(box, :css_parent_clips, []) != [] or
         (Map.get(box, :type) == :drawing_group and scoped_boxes?(Map.get(box, :boxes, [])))
     end)
   end
 
-  defp validate_box_scopes(boxes) do
+  @doc "Validates retained transform scopes and their containing clips before pagination consumes them."
+  @spec validate_box_scopes([map()]) :: :ok | {:error, {atom(), map()}}
+  def validate_box_scopes(boxes) do
     Enum.reduce_while(boxes, :ok, fn box, :ok ->
       result =
-        with :ok <- validate_scopes(Map.get(box, :css_transform_scopes, [])) do
+        with :ok <- validate_scopes(Map.get(box, :css_transform_scopes, [])),
+             :ok <- validate_containing_clips(box) do
           if Map.get(box, :type) == :drawing_group,
             do: validate_box_scopes(Map.get(box, :boxes, [])),
             else: :ok
@@ -1074,6 +1089,38 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
       if result == :ok, do: {:cont, :ok}, else: {:halt, result}
     end)
+  end
+
+  defp validate_containing_clips(box) do
+    clips = Map.get(box, :css_parent_clips, [])
+    scopes = Map.get(box, :css_transform_scopes, [])
+
+    valid =
+      if is_list(clips) do
+        HtmlValidator.check_render_resource(:max_drawing_group_depth, length(clips), :layout)
+
+        Enum.all?(clips, fn entry ->
+          case entry do
+            {id, clip} when is_reference(id) and is_map(clip) ->
+              Enum.any?(scopes, &(&1.id == id)) and
+                NativeElixirPdfUtilities.Validators.WriterValidator.validate_clip_rectangle(clip) ==
+                  :ok
+
+            _ ->
+              false
+          end
+        end)
+      else
+        false
+      end
+
+    if valid,
+      do: :ok,
+      else:
+        error(
+          "Containing CSS clips require a bounded clip rectangle and the identity of a retained transform scope; recompute layout",
+          "css_parent_clips"
+        )
   end
 
   defp scope_boxes(boxes, size, fields, context, claimed) do
@@ -1107,18 +1154,33 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                  do: {:ok, [box | tail], claimed}
 
           [scope | _] ->
+            clips = Enum.filter(Map.get(box, :css_parent_clips, []), &(elem(&1, 0) == scope.id))
+
             {members, remaining} =
               Enum.split_while(boxes, fn box ->
                 case Map.get(box, :css_transform_scopes, []) do
-                  [%{id: id} | _] -> id == scope.id
-                  _ -> false
+                  [%{id: id} | _] ->
+                    id == scope.id and
+                      Enum.filter(Map.get(box, :css_parent_clips, []), &(elem(&1, 0) == id)) ==
+                        clips
+
+                  _ ->
+                    false
                 end
               end)
 
             members =
               Enum.map(
                 members,
-                &Map.update!(&1, :css_transform_scopes, fn [_ | tail] -> tail end)
+                fn member ->
+                  member
+                  |> Map.update!(:css_transform_scopes, fn [_ | tail] -> tail end)
+                  |> Map.update(
+                    :css_parent_clips,
+                    [],
+                    &Enum.reject(&1, fn {id, _} -> id == scope.id end)
+                  )
+                end
               )
 
             own =
@@ -1176,6 +1238,29 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                 if descriptor == nil,
                   do: group,
                   else: Map.put(group, :embedded_widgets, descriptor)
+
+              # Absolutely positioned source overflow can allocate a blank print
+              # sheet even when its paint is clipped. Normal-flow descendants
+              # contribute only the extent inside their containing viewport.
+              allocation =
+                if Enum.all?(members, &Map.get(&1, :out_of_flow, false)), do: scope.border_box
+
+              group =
+                Enum.reduce(Enum.reverse(clips), group, fn {_id, clip}, child ->
+                  %{
+                    type: HtmlValidator.reserve_layout_box(:drawing_group),
+                    role: :css_transform_plane,
+                    x: 0.0,
+                    y: 0.0,
+                    width: elem(size, 0),
+                    height: elem(size, 1),
+                    transform: @identity,
+                    clip: clip,
+                    boxes: [child]
+                  }
+                  |> Map.merge(Map.take(child, [:position_anchor]))
+                  |> Map.put(:css_fragment_bounds, allocation)
+                end)
 
               {:ok, [group | tail], claimed}
             end

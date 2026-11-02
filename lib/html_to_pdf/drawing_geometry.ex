@@ -55,22 +55,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
 
     box =
       case Map.get(box, :clip) do
-        %{x: x, y: y} = clip when box.type != :drawing_group or box.role == :overflow_clip ->
-          clip = %{clip | x: x + delta_x, y: y + delta_y}
-
-          clip =
-            case Map.get(clip, :inner_clip) do
-              nil ->
-                clip
-
-              inner ->
-                Map.put(clip, :inner_clip, %{inner | x: inner.x + delta_x, y: inner.y + delta_y})
-            end
-
-          Map.put(box, :clip, clip)
+        %{} = clip when box.type != :drawing_group or box.role == :overflow_clip ->
+          Map.put(box, :clip, translate_clip(clip, delta_x, delta_y))
 
         _ ->
           box
+      end
+
+    box =
+      case Map.get(box, :css_parent_clips) do
+        nil ->
+          box
+
+        clips ->
+          Map.put(
+            box,
+            :css_parent_clips,
+            Enum.map(clips, fn {id, clip} ->
+              {id, translate_clip(clip, delta_x, delta_y)}
+            end)
+          )
       end
 
     box =
@@ -164,11 +168,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     end
   end
 
-  @doc "Clips validated native content to an actual containing viewport, retaining local group transforms."
+  defp translate_clip(clip, delta_x, delta_y) do
+    translated = %{clip | x: clip.x + delta_x, y: clip.y + delta_y}
+
+    case Map.get(clip, :inner_clip) do
+      nil -> translated
+      inner -> Map.put(translated, :inner_clip, translate_clip(inner, delta_x, delta_y))
+    end
+  end
+
+  @doc """
+  Clips validated native content in its containing viewport, retaining local transforms.
+
+  Pagination uses `:source` for fragment boundaries that transform with the source
+  fragment. Containing clips remain outside pending descendant transform scopes.
+  """
   @spec clip_boxes([map()], map()) :: [map()]
-  def clip_boxes(boxes, clip) do
+  @spec clip_boxes([map()], map(), :containing | :source) :: [map()]
+  def clip_boxes(boxes, clip, coordinates \\ :containing) do
     Enum.flat_map(boxes, fn box ->
       case box do
+        %{css_transform_scopes: [scope | _]} when coordinates == :containing ->
+          # Keep scopes visible to flow fragmentation. Materialization inserts
+          # this containing viewport outside the recorded descendant scope.
+          [Map.update(box, :css_parent_clips, [{scope.id, clip}], &[{scope.id, clip} | &1])]
+
         %{type: type} when type in [:drawing_group, :glyph_group] ->
           [overflow_group(box, clip)]
 
@@ -239,7 +263,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
       height: clip.height,
       transform: {1, 0, 0, 1, 0, 0},
       clip: clip,
-      boxes: [box]
+      boxes: [Map.drop(box, [:css_transform_scopes, :css_parent_clips])]
     }
     |> Map.merge(
       Map.take(box, [
@@ -247,7 +271,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
         :out_of_flow,
         :position_anchor,
         :break_inside,
-        :css_transform_scopes
+        :css_transform_scopes,
+        :css_parent_clips
       ])
     )
   end

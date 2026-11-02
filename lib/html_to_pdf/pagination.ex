@@ -433,12 +433,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                         first_delta
                       )
 
-                    NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes([paint], %{
-                      x: paint.clip.x,
-                      y: bottom,
-                      width: paint.clip.width,
-                      height: max(top - bottom, 0.0)
-                    })
+                    NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(
+                      [paint],
+                      %{
+                        x: paint.clip.x,
+                        y: bottom,
+                        width: paint.clip.width,
+                        height: max(top - bottom, 0.0)
+                      },
+                      :source
+                    )
                     |> hd()
                     |> Map.put(:background_fragment, %{
                       x: paint.clip.x,
@@ -484,12 +488,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
                 HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :pagination)
 
-                NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes([source], %{
-                  x: margins.left,
-                  y: margins.bottom,
-                  width: elem(page.size, 0) - margins.left - margins.right,
-                  height: elem(page.size, 1) - margins.top - margins.bottom
-                })
+                NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(
+                  [source],
+                  %{
+                    x: margins.left,
+                    y: margins.bottom,
+                    width: elem(page.size, 0) - margins.left - margins.right,
+                    height: elem(page.size, 1) - margins.top - margins.bottom
+                  },
+                  :source
+                )
                 |> Enum.map(&Map.put(&1, pagination_order, Map.fetch!(source, pagination_order)))
               end)
             end)
@@ -1502,7 +1510,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         clip = %{x: 0.0, y: bottom, width: page_width, height: top - bottom}
 
         [box]
-        |> NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(clip)
+        |> NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(clip, :source)
         |> Enum.map(fn sliced ->
           # A pagination slice is an exact paint boundary, not a CSS viewport.
           # Snapping its top can clip the source target on that same boundary.
