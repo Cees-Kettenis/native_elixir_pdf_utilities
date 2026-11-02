@@ -183,6 +183,8 @@ defmodule NativeElixirPdfUtilities.OperationTest do
              HtmlToPdf.render("<img src='asset:oversized'>",
                system_font_discovery: false,
                asset_resolver: fn _request ->
+                 # Exercise sampled binary memory; GC heap termination has its own test.
+                 Process.flag(:max_heap_size, 0)
                  send(caller, {:resolver_memory_worker, self()})
                  Process.put(:resolver_retained, :binary.copy(<<0>>, 33_554_432))
                  Process.sleep(:infinity)
