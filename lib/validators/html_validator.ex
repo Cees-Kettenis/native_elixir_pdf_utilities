@@ -6175,6 +6175,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                    boxes,
                    Map.get(layout_tree, :link_scope)
                  ),
+               :ok <- validate_pagination_clips(boxes),
                :ok <-
                  NativeElixirPdfUtilities.Validators.CssTransformValidator.validate_box_scopes(
                    boxes
@@ -6205,6 +6206,43 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         _ ->
           invalid_pagination()
       end
+    end)
+  end
+
+  defp validate_pagination_clips(boxes) do
+    Enum.reduce_while(boxes, :ok, fn box, :ok ->
+      clip_result =
+        case Map.fetch(box, :clip) do
+          :error ->
+            :ok
+
+          {:ok, clip} ->
+            NativeElixirPdfUtilities.Validators.WriterValidator.validate_clip_rectangle(clip)
+        end
+
+      result =
+        case clip_result do
+          :ok ->
+            case box do
+              %{type: type, boxes: children} when type in [:drawing_group, :glyph_group] ->
+                validate_pagination_clips(children)
+
+              _ ->
+                :ok
+            end
+
+          {:error, _} ->
+            Diagnostics.error(
+              :pagination,
+              :invalid_layout,
+              "Pagination clips require bounded rectangle geometry and valid rounded inner clips; recompute layout",
+              operation: :paginate,
+              module: __MODULE__,
+              source: "clip"
+            )
+        end
+
+      if result == :ok, do: {:cont, :ok}, else: {:halt, result}
     end)
   end
 

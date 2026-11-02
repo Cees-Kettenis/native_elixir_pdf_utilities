@@ -1079,9 +1079,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   @spec validate_box_scopes([map()]) :: :ok | {:error, {atom(), map()}}
   def validate_box_scopes(boxes) do
     Enum.reduce_while(boxes, :ok, fn box, :ok ->
+      scopes_result =
+        case box do
+          %{css_transform_scopes: scopes} -> validate_scopes(scopes)
+          _ -> :ok
+        end
+
       result =
-        with :ok <- validate_scopes(Map.get(box, :css_transform_scopes, [])),
-             :ok <- validate_containing_clips(box) do
+        with :ok <- scopes_result,
+             :ok <-
+               if(Map.has_key?(box, :css_parent_clips),
+                 do: validate_containing_clips(box),
+                 else: :ok
+               ) do
           if Map.get(box, :type) == :drawing_group,
             do: validate_box_scopes(Map.get(box, :boxes, [])),
             else: :ok

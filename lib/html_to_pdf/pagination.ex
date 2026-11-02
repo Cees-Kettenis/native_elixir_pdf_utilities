@@ -151,7 +151,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           %{y: bottom, height: height} = marker ->
             paint_bottom =
               Enum.reduce(group.boxes, bottom, fn box, lowest ->
-                {paint_top, paint_bottom} = atomic_box_bounds(box)
+                {paint_top, paint_bottom} = clipped_box_bounds(box)
                 if paint_top > paint_bottom, do: min(lowest, paint_bottom), else: lowest
               end)
 
@@ -882,7 +882,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       page_count: 0,
       current_boxes: [],
       current_y: content_top,
-      position_delta: 0.0
+      position_delta: 0.0,
+      clip_origins: %{}
     }
 
     final_state =
@@ -932,9 +933,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
            state.current_boxes != [], do: page_break(state, page_size, margins), else: state
 
     top = target_group_top(state, group)
+    [source] = group.boxes
+
+    # A fixed containing viewport includes the unused tails left by line
+    # breaks. Its remaining empty space ends at that viewport's physical end,
+    # rather than adding those tails to the authored source height again.
+    {group, top} =
+      case Map.get(source, :clip) do
+        nil ->
+          {group, top}
+
+        clip ->
+          {_left, bottom, _right, _top} =
+            NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.box_clip_bounds(clip)
+
+          origin =
+            Map.get(state.clip_origins, clip, top - group.top - state.page_count * full_height)
+
+          end_y = bottom + origin + state.page_count * full_height
+          top = max(top, end_y)
+          remaining = top - end_y
+          {%{group | height: min(group.height, remaining)}, top}
+      end
+
     available = max(top - margins.bottom, 0.0)
     taken = min(group.height, available)
-    [source] = group.boxes
     [marker] = shift_boxes([source], top - group.top)
 
     marker = %{
@@ -956,7 +979,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       state
       | current_boxes: state.current_boxes ++ [marker],
         current_y: top - taken,
-        position_delta: top - group.top
+        position_delta:
+          if(taken < group.height, do: top - group.top, else: top - taken - group.bottom)
     }
 
     if taken < group.height do
@@ -1156,10 +1180,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         {:error, _} = error -> throw({:render_resource_limit, error})
       end
 
-    shifted_boxes =
-      group.boxes
-      |> Enum.reject(&page_break_box?/1)
-      |> shift_boxes(target_top - group.top)
+    source_boxes = Enum.reject(group.boxes, &page_break_box?/1)
+    shifted_boxes = shift_boxes(source_boxes, target_top - group.top)
+
+    {shifted_boxes, state} =
+      if Enum.any?(group.boxes, &(Map.get(&1, :clip) != nil)) do
+        page_offset = state.page_count * (elem(page_size, 1) - margins.top - margins.bottom)
+        origin = target_top - group.top - page_offset
+
+        clip_origins =
+          Enum.reduce(group.boxes, state.clip_origins, fn box, origins ->
+            case Map.get(box, :clip) do
+              nil -> origins
+              clip -> Map.put_new(origins, clip, origin)
+            end
+          end)
+
+        shifted_boxes =
+          Enum.zip_with(source_boxes, shifted_boxes, fn source, shifted ->
+            case source do
+              %{clip: %{} = clip, type: type} when type != :drawing_group ->
+                delta = page_offset + Map.fetch!(clip_origins, clip)
+
+                %{clip: placed_clip} =
+                  NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_box(
+                    %{type: :rect, clip: clip},
+                    0.0,
+                    delta
+                  )
+
+                Map.put(shifted, :clip, placed_clip)
+
+              _ ->
+                shifted
+            end
+          end)
+
+        {shifted_boxes, %{state | clip_origins: clip_origins}}
+      else
+        {shifted_boxes, state}
+      end
 
     state =
       case shifted_boxes do
@@ -1289,10 +1349,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   defp flow_group(boxes) do
     in_flow_boxes = Enum.reject(boxes, &(Map.get(&1, :out_of_flow, false) == true))
 
+    # Ordinary clipped paint contributes the same visible source extent here
+    # as it does when an oversized group is sliced across sheets.
     bounds =
       case in_flow_boxes do
-        [] -> Enum.map(boxes, &PageGeometry.box_vertical_bounds/1)
-        in_flow_boxes -> Enum.map(in_flow_boxes, &PageGeometry.box_vertical_bounds/1)
+        [] -> Enum.map(boxes, &clipped_box_bounds/1)
+        in_flow_boxes -> Enum.map(in_flow_boxes, &clipped_box_bounds/1)
       end
 
     top = bounds |> Enum.map(&elem(&1, 0)) |> Enum.max()
@@ -1503,7 +1565,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp atomic_slice_boxes(boxes, top, bottom, page_width, pagination_order) do
     Enum.flat_map(boxes, fn box ->
-      {box_top, box_bottom} = atomic_box_bounds(box)
+      {box_top, box_bottom} = clipped_box_bounds(box)
 
       if Map.get(box, :role) != :atomic_table_line and box_top > box_bottom and
            box_top > bottom and box_bottom < top do
@@ -1527,22 +1589,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
-  defp atomic_box_bounds(box) do
-    {top, bottom} = PageGeometry.box_vertical_bounds(box)
+  defp clipped_box_bounds(box) do
+    {top, bottom} = bounds = PageGeometry.box_vertical_bounds(box)
 
-    clip =
-      if box.type != :drawing_group or Map.get(box, :role) == :overflow_clip,
-        do:
-          NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.box_clip_bounds(Map.get(box, :clip))
+    case box do
+      %{type: type, clip: %{} = clip} when type != :drawing_group ->
+        {_left, clip_bottom, _right, clip_top} =
+          NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.box_clip_bounds(clip)
 
-    case clip do
-      {_left, clip_bottom, _right, clip_top} -> {min(top, clip_top), max(bottom, clip_bottom)}
-      nil -> {top, bottom}
+        top = min(top, clip_top)
+        {top, min(top, max(bottom, clip_bottom))}
+
+      _ ->
+        bounds
     end
   end
 
-  # Reserve a fitting semantic row group before placing its first row. Oversized
-  # groups remain individual rows, leaving repeated headings room on each page.
   defp keep_table_groups(groups, headers, content_height) do
     groups =
       groups
