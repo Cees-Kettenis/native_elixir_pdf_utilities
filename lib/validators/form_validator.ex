@@ -473,7 +473,9 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
             true ->
               with {:ok, dictionary} <- PdfValidator.dictionary(document, ref),
-                   {:ok, partial} <- text(Map.get(dictionary, "T", {:string, ""})),
+                   {:ok, partial_value} <-
+                     PdfValidator.optional_entry(document, dictionary, "T", {:string, ""}),
+                   {:ok, partial} <- text(partial_value),
                    {:ok, kids} <- PdfValidator.resolve(document, Map.get(dictionary, "Kids", [])),
                    true <-
                      is_list(kids) and
@@ -575,9 +577,19 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   end
 
   defp prepare_field(document, ref, dictionary, effective, name, widget_dicts, page_widgets) do
-    flags = Map.get(effective, "Ff", 0)
+    resolved_metadata =
+      effective
+      |> Map.take(~w(FT Ff Q MaxLen))
+      |> Enum.reduce_while({:ok, effective}, fn {key, value}, {:ok, metadata} ->
+        case PdfValidator.resolve(document, value) do
+          {:ok, resolved} -> {:cont, {:ok, Map.put(metadata, key, resolved)}}
+          {:error, _} = failure -> {:halt, failure}
+        end
+      end)
 
-    with true <- name != "" and is_integer(flags) and flags >= 0,
+    with {:ok, effective} <- resolved_metadata,
+         flags = Map.get(effective, "Ff", 0),
+         true <- name != "" and is_integer(flags) and flags >= 0,
          :ok <- field_metadata(effective),
          {:ok, choices} <- choices(document, Map.get(effective, "Opt", [])),
          {:ok, widgets} <- widgets(document, widget_dicts, page_widgets),
