@@ -346,13 +346,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       normal =
         if widget.states == [],
           do: normal,
-          else:
-            widget.normal[
-              case widget.dictionary["AS"] do
-                {:name, name} -> name
-                _ -> "Off"
-              end
-            ]
+          else: widget.normal[widget.appearance_state]
 
       with {:ok, stream} <- PdfValidator.validate_stream(document, normal),
            {:ok, bbox} <- PdfValidator.number_array(document, stream.dictionary["BBox"], 4),
@@ -690,6 +684,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
            {:ok, rect} <- PdfValidator.number_array(document, dictionary["Rect"], 4),
            [left, bottom, right, top] <- rect,
            true <- right > left and top > bottom,
+           {:ok, {:name, appearance_state}} <-
+             PdfValidator.optional_entry(document, dictionary, "AS", {:name, "Off"}),
            {:ok, ap} <- PdfValidator.dictionary(document, Map.get(dictionary, "AP", %{})),
            {:ok, normal} <- PdfValidator.resolve(document, Map.get(ap, "N")),
            :ok <- reserve_state_metadata(normal),
@@ -715,6 +711,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           page: page,
           rect: rect,
           ap: ap,
+          appearance_state: appearance_state,
           states: states,
           normal: normal,
           mk: mk,
@@ -725,6 +722,9 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       else
         {:error, _} = failure ->
           {:halt, failure}
+
+        {:ok, _} ->
+          {:halt, error(:invalid_form, "widget AS appearance state must be a PDF name")}
 
         _ ->
           {:halt,
@@ -974,7 +974,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         # matching widget in field order. RadiosInUnison permits all matches.
         selected =
           Enum.find(field.widgets, fn widget ->
-            value in widget.states and widget.dictionary["AS"] == {:name, value}
+            value in widget.states and widget.appearance_state == value
           end) || Enum.find(field.widgets, &(value in &1.states))
 
         Enum.map(field.widgets, fn widget ->

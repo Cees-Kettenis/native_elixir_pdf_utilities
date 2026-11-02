@@ -442,7 +442,21 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
           {32_768, ["Off", "Off", "Same"], [2]},
           {32_768, ["Off", "Other", "Off"], [0]},
           {33_587_200, ["Same", "Off", "Same"], [0, 2]}
-        ] do
+        ],
+        indirect? <- [false, true] do
+      states =
+        Enum.with_index(initial, fn state, index ->
+          if indirect?, do: {:ref, {15 + index, 0}}, else: {:name, state}
+        end)
+
+      state_objects =
+        if indirect?,
+          do:
+            Enum.with_index(initial, fn state, index ->
+              {15 + index, 0, {:value, {:name, state}}}
+            end),
+          else: []
+
       source =
         external_pdf(
           %{
@@ -453,7 +467,7 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
           },
           %{
             "Rect" => [10, 10, 50, 30],
-            "AS" => {:name, Enum.at(initial, 0)},
+            "AS" => Enum.at(states, 0),
             "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Same" => {:ref, {11, 0}}}}
           }
         )
@@ -469,36 +483,50 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
       }
 
       assert {:ok, source} =
-               IncrementalWriter.write(context, [
-                 {9, 0,
-                  {:value,
-                   Map.merge(widget, %{
-                     "Rect" => [60, 10, 100, 30],
-                     "AS" => {:name, Enum.at(initial, 1)},
-                     "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Other" => {:ref, {12, 0}}}}
-                   })}},
-                 {10, 0,
-                  {:value,
-                   Map.merge(widget, %{
-                     "Rect" => [110, 10, 150, 30],
-                     "AS" => {:name, Enum.at(initial, 2)},
-                     "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Same" => {:ref, {13, 0}}}}
-                   })}},
-                 {11, 0, {:stream, appearance, "BT /F1 10 Tf (First) Tj ET"}},
-                 {12, 0, {:stream, appearance, "BT /F1 10 Tf (Other) Tj ET"}},
-                 {13, 0, {:stream, appearance, "BT /F1 10 Tf (Last) Tj ET"}},
-                 {14, 0,
-                  {:value,
-                   %{
-                     "Type" => {:name, "Font"},
-                     "Subtype" => {:name, "Type1"},
-                     "BaseFont" => {:name, "Helvetica"},
-                     "Encoding" => {:name, "WinAnsiEncoding"}
-                   }}}
-               ])
+               IncrementalWriter.write(
+                 context,
+                 state_objects ++
+                   [
+                     {9, 0,
+                      {:value,
+                       Map.merge(widget, %{
+                         "Rect" => [60, 10, 100, 30],
+                         "AS" => Enum.at(states, 1),
+                         "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Other" => {:ref, {12, 0}}}}
+                       })}},
+                     {10, 0,
+                      {:value,
+                       Map.merge(widget, %{
+                         "Rect" => [110, 10, 150, 30],
+                         "AS" => Enum.at(states, 2),
+                         "AP" => %{"N" => %{"Off" => {:ref, {8, 0}}, "Same" => {:ref, {13, 0}}}}
+                       })}},
+                     {11, 0, {:stream, appearance, "BT /F1 10 Tf (First) Tj ET"}},
+                     {12, 0, {:stream, appearance, "BT /F1 10 Tf (Other) Tj ET"}},
+                     {13, 0, {:stream, appearance, "BT /F1 10 Tf (Last) Tj ET"}},
+                     {14, 0,
+                      {:value,
+                       %{
+                         "Type" => {:name, "Font"},
+                         "Subtype" => {:name, "Type1"},
+                         "BaseFont" => {:name, "Helvetica"},
+                         "Encoding" => {:name, "WinAnsiEncoding"}
+                       }}}
+                   ]
+               )
 
       source =
         patch_page(source, %{"Annots" => [{:ref, {7, 0}}, {:ref, {9, 0}}, {:ref, {10, 0}}]})
+
+      assert {:ok, flattened} = Forms.flatten(source)
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(flattened, layout: false)
+
+      expected_labels =
+        Enum.zip(initial, ["First", "Other", "Last"])
+        |> Enum.reject(fn {state, _label} -> state == "Off" end)
+        |> Enum.map(&elem(&1, 1))
+
+      assert String.split(text) == expected_labels
 
       for value <- ["Same", "Other"] do
         selected = if value == "Same", do: same_selection, else: [1]
