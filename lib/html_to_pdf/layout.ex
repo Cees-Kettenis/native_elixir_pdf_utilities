@@ -3753,7 +3753,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       HtmlValidator.reserve_render_resource(:max_grid_tracks, column_count + row_count, :layout)
       column_tracks = grid_tracks(style, :column, column_count)
       row_tracks = grid_tracks(style, :row, row_count)
-      column_intrinsics = grid_column_intrinsics(placed_items, column_count)
+
+      column_intrinsics =
+        grid_axis_intrinsics(placed_items, column_tracks, grid_column_gap(style), :column)
 
       column_sizes =
         resolve_grid_columns(
@@ -3771,7 +3773,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           grid_column_gap(style)
         )
 
-      row_intrinsics = grid_row_intrinsics(placed_items, row_count)
+      row_intrinsics = grid_axis_intrinsics(placed_items, row_tracks, grid_row_gap(style), :row)
 
       available_height =
         resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
@@ -4217,40 +4219,148 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     template ++ List.duplicate(auto_track, missing)
   end
 
-  defp grid_column_intrinsics(items, column_count) do
+  defp grid_axis_intrinsics(items, tracks, gap, axis) do
+    count = length(tracks)
+
     HtmlValidator.reserve_render_resource(
       :max_grid_placement_work,
-      column_count * length(items),
+      count * length(items),
       :layout
     )
 
-    1..column_count
-    |> Enum.map(fn column ->
-      items
-      |> Enum.filter(&(&1.column_start == column and &1.column_end == column + 1))
-      |> Enum.map(&(&1.intrinsic_width + &1.margin.left + &1.margin.right))
-      |> Enum.max(fn -> 0.0 end)
+    contributions =
+      Enum.map(items, fn item ->
+        case axis do
+          :column ->
+            {item.column_start - 1, item.column_end - item.column_start,
+             item.intrinsic_width + item.margin.left + item.margin.right}
+
+          :row ->
+            {item.row_start - 1, item.row_end - item.row_start,
+             item.intrinsic_height + item.margin.top + item.margin.bottom}
+        end
+      end)
+
+    intrinsics =
+      Enum.map(0..(count - 1), fn index ->
+        contributions
+        |> Enum.filter(fn {start, span, _size} -> start == index and span == 1 end)
+        |> Enum.map(&elem(&1, 2))
+        |> Enum.max(fn -> 0.0 end)
+      end)
+
+    track_definitions = List.to_tuple(tracks)
+
+    # Plan equal-span contributions against the same sizes so source order
+    # cannot change their distribution. Fixed tracks and gutters already occupy
+    # part of the span; only intrinsically sized tracks receive its shortfall.
+    contributions
+    |> Enum.reject(fn {_start, span, _size} -> span == 1 end)
+    |> Enum.group_by(fn {start, span, _size} ->
+      crosses_flexible_track? =
+        Enum.any?(start..(start + span - 1), fn index ->
+          grid_track_fraction(elem(track_definitions, index)) != nil
+        end)
+
+      # All flexible-crossing spans share one planning round, regardless of
+      # their lengths. Intrinsic-only spans are processed shortest first.
+      if crosses_flexible_track?, do: {1, 0}, else: {0, span}
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.reduce(intrinsics, fn {_span, items}, intrinsics ->
+      data =
+        tracks
+        |> Enum.zip(intrinsics)
+        |> Enum.map(fn {track, intrinsic} ->
+          size =
+            case grid_track_fraction(track) do
+              nil -> grid_fixed_track_size(track, intrinsic)
+              _fraction -> intrinsic
+            end
+
+          {track, size}
+        end)
+        |> List.to_tuple()
+
+      increases =
+        Enum.reduce(items, %{}, fn {start, span, contribution}, increases ->
+          HtmlValidator.reserve_render_resource(:max_grid_placement_work, span, :layout)
+          spanned = Enum.map(start..(start + span - 1), &{&1, elem(data, &1)})
+
+          occupied =
+            Enum.reduce(spanned, gap * (span - 1), fn {_index, {_track, size}}, sum ->
+              size + sum
+            end)
+
+          extra = max(contribution - occupied, 0.0)
+
+          flexible =
+            Enum.filter(spanned, fn {_index, {track, _size}} ->
+              grid_track_fraction(track) != nil
+            end)
+
+          affected =
+            case flexible do
+              [] ->
+                intrinsic_tracks =
+                  Enum.filter(spanned, fn {_index, {track, _size}} ->
+                    case track do
+                      :auto -> true
+                      {:minmax, :auto, _maximum} -> true
+                      {:minmax, _minimum, :auto} -> true
+                      _ -> false
+                    end
+                  end)
+
+                growing_tracks =
+                  Enum.filter(intrinsic_tracks, fn {_index, {track, _size}} ->
+                    track == :auto or match?({:minmax, _, :auto}, track)
+                  end)
+
+                # A fixed maximum is already included in occupied space. Grow
+                # past it only when no intrinsic maximum can absorb the deficit.
+                if growing_tracks == [], do: intrinsic_tracks, else: growing_tracks
+
+              _ ->
+                flexible
+            end
+
+          case affected do
+            [] ->
+              increases
+
+            _ ->
+              factor_sum =
+                Enum.reduce(affected, 0.0, fn {_index, {track, _size}}, sum ->
+                  (grid_track_fraction(track) || 0.0) + sum
+                end)
+
+              count = length(affected)
+
+              Enum.reduce(affected, increases, fn {index, {track, size}}, planned ->
+                share =
+                  case flexible do
+                    [] ->
+                      1.0 / count
+
+                    _ ->
+                      (grid_track_fraction(track) || 0.0) / max(factor_sum, 1.0) +
+                        max(1.0 - factor_sum, 0.0) / count
+                  end
+
+                Map.update(planned, index, size + extra * share, &max(&1, size + extra * share))
+              end)
+          end
+        end)
+
+      Enum.with_index(intrinsics, fn intrinsic, index ->
+        max(intrinsic, Map.get(increases, index, intrinsic))
+      end)
     end)
   end
 
   defp resolve_grid_columns(tracks, column_intrinsics, available_size, gap) do
     resolve_grid_track_sizes(tracks, column_intrinsics, available_size, gap, :column)
-  end
-
-  defp grid_row_intrinsics(items, row_count) do
-    HtmlValidator.reserve_render_resource(
-      :max_grid_placement_work,
-      row_count * length(items),
-      :layout
-    )
-
-    1..row_count
-    |> Enum.map(fn row ->
-      items
-      |> Enum.filter(&(&1.row_start == row and &1.row_end == row + 1))
-      |> Enum.map(&(&1.intrinsic_height + &1.margin.top + &1.margin.bottom))
-      |> Enum.max(fn -> 0.0 end)
-    end)
   end
 
   defp grid_items_with_resolved_heights(items, container_style, column_sizes, column_gap) do
@@ -4338,7 +4448,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
 
     flexible_sizes =
-      distribute_flexible_grid_tracks(flexible_tracks, max(track_space - fixed_total, 0.0))
+      if is_number(available_size) do
+        distribute_flexible_grid_tracks(flexible_tracks, max(track_space - fixed_total, 0.0))
+      else
+        # An indefinite axis has no finite pool to divide. Its shared fr size
+        # must accommodate every flexible track's intrinsic minimum.
+        fraction_unit =
+          flexible_tracks
+          |> Enum.map(&(&1.minimum / max(&1.fraction, 1.0)))
+          |> Enum.max(fn -> 0.0 end)
+
+        Map.new(flexible_tracks, fn track ->
+          {track.index, max(track.minimum, fraction_unit * track.fraction)}
+        end)
+      end
 
     Enum.map(track_data, fn data ->
       case data.fraction do
@@ -12276,7 +12399,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     placed = place_grid_items(items, style)
                     count = grid_axis_count(placed, style, :column)
                     tracks = grid_tracks(style, :column, count)
-                    intrinsics = grid_column_intrinsics(placed, count)
+
+                    intrinsics =
+                      grid_axis_intrinsics(placed, tracks, grid_column_gap(style), :column)
 
                     sizes =
                       resolve_grid_columns(
