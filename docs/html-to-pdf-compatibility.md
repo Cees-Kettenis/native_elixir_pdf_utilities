@@ -107,6 +107,13 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | Layout | Automatic/fixed sizing, nested tables, separate/collapsed borders |
 | Spans | `colspan` and `rowspan`; rowspans stop at row-group boundaries |
 
+Automatic tables can exceed their CSS `width` when cell contents need more space.
+The renderer preserves text size and does not shrink the page to fit; content
+beyond the page edge is clipped. Use a wider page or reduce content widths.
+Compared with v1.0.0, columns now preserve their minimum content widths instead
+of squeezing them and overlapping text. Existing narrow-page templates may
+therefore wrap differently or extend farther beyond the page.
+
 ### Table page breaks
 
 | Content | Behavior |
