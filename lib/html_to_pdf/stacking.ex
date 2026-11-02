@@ -4,33 +4,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Stacking do
   @doc "Attaches paint ancestry without changing the order used by pagination."
   @spec attach([map()], map()) :: [map()]
   def attach(boxes, style) do
-    case Map.get(style, :_stacking_order) do
-      nil ->
-        boxes
+    boxes =
+      case Map.get(style, :_stacking_order) do
+        nil ->
+          boxes
 
-      order ->
-        z = Map.get(style, :z_index, :auto)
-        isolated? = is_integer(z) or Map.get(style, :css_transform, :none) != :none
-        level = if is_integer(z), do: z, else: 0
-        entry = {order, level}
+        order ->
+          z = Map.get(style, :z_index, :auto)
+          isolated? = is_integer(z) or Map.get(style, :css_transform, :none) != :none
+          level = if is_integer(z), do: z, else: 0
+          entry = {order, level}
 
-        Enum.map(boxes, fn box ->
-          path = Map.get(box, :_stacking_path, [])
+          Enum.map(boxes, fn box ->
+            path = Map.get(box, :_stacking_path, [])
 
-          background_owner = Map.get(box, :_stacking_background_order)
+            background_owner = Map.get(box, :_stacking_background_order)
 
-          ancestor_background? =
-            is_list(background_owner) and background_owner != order and
-              Enum.take(order, length(background_owner)) == background_owner
+            ancestor_background? =
+              is_list(background_owner) and background_owner != order and
+                Enum.take(order, length(background_owner)) == background_owner
 
-          cond do
-            ancestor_background? -> box
-            List.first(path) == entry -> box
-            isolated? or path == [] -> Map.put(box, :_stacking_path, [entry | path])
-            true -> box
-          end
-        end)
-    end
+            cond do
+              ancestor_background? -> box
+              List.first(path) == entry -> box
+              isolated? or path == [] -> Map.put(box, :_stacking_path, [entry | path])
+              true -> box
+            end
+          end)
+      end
+
+    style
+    |> Map.get(:_stacking_contexts, [])
+    |> Enum.reverse()
+    |> Enum.reduce(boxes, fn {order, level}, boxes ->
+      attach(boxes, %{_stacking_order: order, z_index: level})
+    end)
   end
 
   @doc "Orders placed paint within each stacking context, preserving source order for ties."

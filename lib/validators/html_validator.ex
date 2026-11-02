@@ -7986,6 +7986,25 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             source: "body"
           )
 
+        %{style: %{_stacking_contexts: contexts} = style} ->
+          if NativeElixirPdfUtilities.Validators.CssStackingValidator.valid_context_path?(
+               contexts
+             ) and
+               NativeElixirPdfUtilities.Validators.CssStackingValidator.valid_source_order?(
+                 Map.get(style, :_stacking_order, [])
+               ) do
+            validate_paragraph_line_limits([style], :layout)
+          else
+            Diagnostics.error(
+              :layout,
+              :invalid_layout,
+              "CSS stacking requires bounded source-order ancestry and integer stack levels; recompute styles",
+              operation: :layout,
+              module: __MODULE__,
+              source: "CSS stacking"
+            )
+          end
+
         %{style: %{_stacking_order: order} = style} when order != nil ->
           if NativeElixirPdfUtilities.Validators.CssStackingValidator.valid_source_order?(order) do
             validate_paragraph_line_limits([style], :layout)

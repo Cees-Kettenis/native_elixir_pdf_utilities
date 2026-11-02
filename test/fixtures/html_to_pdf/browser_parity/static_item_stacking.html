@@ -1,0 +1,26 @@
+<!doctype html><html><head><meta charset="UTF-8"><style>
+@page { size: 240pt 340pt; margin: 0; }
+html, body { margin: 0; }
+section { position:relative; height:70pt; margin-bottom:10pt; }
+</style></head><body>
+<section style="display:grid;grid-template-columns:100pt;grid-template-rows:50pt">
+<div style="grid-column:1;grid-row:1;z-index:2;background:red"></div>
+<div style="grid-column:1;grid-row:1;z-index:1;background:blue"></div>
+</section>
+<section style="display:flex">
+<div style="width:100pt;height:50pt;flex-shrink:0;z-index:2;background:red"></div>
+<div style="width:100pt;height:50pt;flex-shrink:0;margin-left:-100pt;z-index:1;background:blue"></div>
+</section>
+<section>
+<div style="display:grid;width:100pt;grid-template-columns:100pt;margin-left:30pt;padding-top:20pt">
+<div style="z-index:0;height:50pt;background:lime"><div style="position:absolute;left:0;top:0;z-index:100;width:50pt;height:50pt;background:red"></div></div>
+</div>
+<div style="position:absolute;left:0;top:0;z-index:1;width:50pt;height:50pt;background:blue"></div>
+</section>
+<section>
+<div style="display:grid;grid-template-columns:100pt">
+<div style="display:flex;z-index:0;height:50pt;background:lime"><div style="z-index:10;width:100pt;height:50pt"><div style="position:absolute;left:0;top:0;z-index:100;width:50pt;height:50pt;background:red"></div></div></div>
+</div>
+<div style="position:absolute;left:0;top:0;z-index:1;width:50pt;height:50pt;background:blue"></div>
+</section>
+</body></html>

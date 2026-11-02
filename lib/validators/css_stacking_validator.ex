@@ -2,11 +2,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
 
-  @doc "Checks the retained source order of a positioned element."
+  @doc "Checks the retained source order of an element participating in CSS stacking."
   @spec valid_source_order?(term()) :: boolean()
   def valid_source_order?(order) do
     is_list(order) and length(order) <= Limits.get(:max_html_depth) and
       Enum.all?(order, &(is_integer(&1) and &1 >= 0))
+  end
+
+  @doc "Checks bounded stacking-context ancestry retained when positioned descendants are hoisted."
+  @spec valid_context_path?(term()) :: boolean()
+  def valid_context_path?(path) do
+    is_list(path) and length(path) <= Limits.get(:max_html_depth) and
+      Enum.all?(path, fn entry ->
+        case entry do
+          {order, z} -> valid_source_order?(order) and is_integer(z)
+          _ -> false
+        end
+      end)
   end
 
   @doc "Checks paint ancestry on already validated drawing boxes before ordering them."
@@ -34,13 +46,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
           background = Map.get(box, :_stacking_background_order)
 
           valid =
-            is_list(path) and length(path) <= Limits.get(:max_html_depth) and
-              Enum.all?(path, fn entry ->
-                case entry do
-                  {order, z} -> valid_source_order?(order) and is_integer(z)
-                  _ -> false
-                end
-              end) and
+            valid_context_path?(path) and
               (background == nil or valid_source_order?(background)) and
               is_boolean(Map.get(box, :_stacking_root_background, false))
 

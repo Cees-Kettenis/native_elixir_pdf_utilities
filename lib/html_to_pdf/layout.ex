@@ -673,7 +673,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     element
                 end
 
-              {children, positioned} = collect_positioned_children(Map.get(node, :children, []))
+              {children, positioned} =
+                collect_positioned_children(
+                  Map.get(node, :children, []),
+                  [],
+                  Map.get(node.style, :display) in [:flex, :inline_flex, :grid, :inline_grid]
+                )
 
               node =
                 node
@@ -1178,10 +1183,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @doc false
   @spec collect_positioned_children([map()]) :: {[map()], [map()]}
   def collect_positioned_children(children) do
-    collect_positioned_children(children, [])
+    collect_positioned_children(children, [], false)
   end
 
-  defp collect_positioned_children(children, source_order) do
+  defp collect_positioned_children(children, source_order, flex_grid_items?) do
     case children do
       [] ->
         {[], []}
@@ -1200,6 +1205,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 %{type: :element, children: nested_children, style: style} = element ->
                   child_order = [index | source_order]
 
+                  item_context? = flex_grid_items? and is_integer(Map.get(style, :z_index))
+
                   positioned? =
                     case style do
                       %{position: position} when position in [:relative, :absolute, :fixed] ->
@@ -1213,7 +1220,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     end
 
                   style =
-                    if positioned?,
+                    if positioned? or item_context?,
                       do:
                         Map.put(
                           style,
@@ -1225,7 +1232,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   element = %{element | style: style}
 
                   {nested_children, nested_positioned} =
-                    collect_positioned_children(nested_children, child_order)
+                    collect_positioned_children(
+                      nested_children,
+                      child_order,
+                      style.display in [:flex, :inline_flex, :grid, :inline_grid]
+                    )
 
                   # Flex, grid and table children use their container's static position,
                   # rather than participating in an ordinary block or inline flow.
@@ -1259,6 +1270,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                           &(Map.get(&1.style, :position) == :fixed)
                         ),
                       else: {[], nested_positioned}
+
+                  # Static flex/grid items create paint contexts without becoming
+                  # containing blocks. Hoisted descendants retain that ancestry.
+                  fixed_children =
+                    if item_context?,
+                      do: inherit_stacking_context(fixed_children, style),
+                      else: fixed_children
+
+                  nested_positioned =
+                    if item_context? and Map.get(style, :position, :static) == :static and
+                         Map.get(style, :css_transform, :none) == :none,
+                       do: inherit_stacking_context(nested_positioned, style),
+                       else: nested_positioned
 
                   inherited_positioned = Enum.reverse(fixed_children, positioned)
 
@@ -1323,6 +1347,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         {Enum.reverse(normal), Enum.reverse(positioned)}
     end
+  end
+
+  defp inherit_stacking_context(elements, style) do
+    entry = {style._stacking_order, style.z_index}
+
+    Enum.map(elements, fn element ->
+      contexts = Map.get(element.style, :_stacking_contexts, [])
+      contexts = if List.first(contexts) == entry, do: contexts, else: [entry | contexts]
+      %{element | style: Map.put(element.style, :_stacking_contexts, contexts)}
+    end)
   end
 
   defp maybe_attach_positioned_children(element, positioned_children) do
@@ -5778,7 +5812,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           })
         )
 
-      CssTransformValidator.attach_scope(style, boxes)
+      with {:ok, boxes} <- CssTransformValidator.attach_scope(style, boxes),
+           do: {:ok, NativeElixirPdfUtilities.HtmlToPdf.Stacking.attach(boxes, style)}
     end
   end
 
