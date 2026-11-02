@@ -1584,8 +1584,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def reserve_render_resource(limit, amount, stage) do
     key = {__MODULE__, :render_budget}
 
-    case Process.get(key) do
-      nil ->
+    # This per-node path avoids wrapper calls while retaining Process.get/1 defaults.
+    case :erlang.get(key) do
+      value when value in [:undefined, nil] ->
         check_render_resource(limit, amount, stage)
 
       budget ->
@@ -1596,7 +1597,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           end
 
         check_render_resource(limit, used, stage)
-        if amount != 0, do: Process.put(key, Map.put(budget, limit, used))
+        if amount != 0, do: :erlang.put(key, Map.put(budget, limit, used))
     end
 
     :ok
