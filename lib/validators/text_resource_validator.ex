@@ -285,8 +285,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         with {:ok, resources} <- Reader.dictionary(document, resources),
              {:ok, xobjects} <- Reader.dictionary(document, Map.get(resources, "XObject")),
              {:ok, xobject_ref} <- required_value(xobjects, name, "XObject", page),
-             {:ok, xobject} <- Reader.dictionary(document, xobject_ref) do
-          case name?(Map.get(xobject, "Subtype"), "Form") do
+             {:ok, xobject} <- Reader.dictionary(document, xobject_ref),
+             {:ok, subtype} <- Reader.resolve(document, Map.get(xobject, "Subtype")) do
+          case name?(subtype, "Form") do
             true ->
               with {:ok, preparation_context} <-
                      TextValidator.charge_form_expansion(preparation_context, page),
@@ -313,7 +314,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
               end
 
             false ->
-              if name?(Map.get(xobject, "Subtype"), "Image") do
+              if name?(subtype, "Image") do
                 with {:ok, width} <- Reader.resolve(document, Map.get(xobject, "Width")),
                      {:ok, height} <- Reader.resolve(document, Map.get(xobject, "Height")) do
                   {:ok, %{image: name, width: width, height: height}, preparation_context}
