@@ -221,6 +221,77 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
              )
   end
 
+  test "leading-dot intrinsic SVG dimensions match equivalent leading-zero lengths" do
+    for {width, height, view_box, options, expected} <- [
+          {".5in", ".25in", "", [], [width: 48, height: 24]},
+          {"+.5in", "+.25in", "", [], [width: 48, height: 24]},
+          {".5", ".25", "", [width: 40], [width: 40, height: 20]},
+          {".48e2", ".24E2", "", [], [width: 48, height: 24]},
+          {".5%", ".25%", " viewBox='0 0 400 400'", [], [width: 2, height: 1]}
+        ] do
+      source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='#{width}' height='#{height}'#{view_box}/>"
+
+      canonical = String.replace(source, ~r/(?<=['+])\./, "0.")
+      assert {:ok, ^expected} = SvgValidator.validate(canonical, options, nil)
+      assert SvgValidator.validate(source, options, nil) == {:ok, expected}
+    end
+  end
+
+  test "leading-dot SVG images rasterize and render through the public API" do
+    for {width, height} <- [{".5in", ".25in"}, {"0.5in", "0.25in"}] do
+      source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='#{width}' height='#{height}'><rect width='100%' height='100%' fill='red'/></svg>"
+
+      assert {:ok, png} = SvgRasterizer.rasterize(source, [], nil)
+      assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
+      assert image.width_px == 48 and image.height_px == 24
+      assert image.data == :binary.copy(<<255, 0, 0>>, 48 * 24)
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<img src='icon.svg'>",
+                 assets: %{"icon.svg" => {:bytes, source}},
+                 system_font_discovery: false
+               )
+
+      assert pdf =~ "/Subtype /Image"
+    end
+  end
+
+  test "intrinsic SVG number parsing retains invalid-input diagnostics and raster limits", %{
+    limits: old
+  } do
+    for width <- [".in", ".5.0in", ".5inextra", "-.5in", "0", ".5e999in"] do
+      source = "<svg width='#{width}' height='1'/>"
+
+      assert {:error, {:invalid_document, diagnostic}} = SvgValidator.validate(source, [], nil)
+      assert diagnostic.stage == :style
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.source == "SVG"
+      assert diagnostic.message =~ "intrinsic dimensions"
+    end
+
+    for width <- ["4294967295", ".4294967295e10"] do
+      source = "<svg width='#{width}' height='1'/>"
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+               SvgValidator.validate(source, [], nil)
+
+      assert {:ok, [width: 48, height: 1]} = SvgValidator.validate(source, [width: 48], nil)
+    end
+
+    Limits.install(%{old | max_svg_raster_dimension: 47})
+
+    for width <- [".5in", "0.5in"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               SvgValidator.validate("<svg width='#{width}' height='.25in'/>", [], nil)
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.message =~ "per-axis limit"
+    end
+  end
+
   test "overflowing SVG dimensions return diagnostics instead of raising" do
     for {source, options} <- [
           {"<svg width=\"1e308in\" height=\"1\"/>", []},

@@ -1073,7 +1073,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   defp parse_svg_number(value) do
-    case Float.parse(value) do
+    case HtmlValidator.parse_number(value) do
       {number, ""} -> {:ok, number}
       _ -> :error
     end

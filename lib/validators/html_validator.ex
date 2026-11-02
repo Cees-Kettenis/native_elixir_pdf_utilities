@@ -6475,7 +6475,25 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def parse_css_number(value, scale \\ 1.0) do
     limit = Limits.get(:max_css_numeric_magnitude)
 
-    case is_binary(value) and is_number(scale) do
+    case is_number(scale) && parse_number(value) do
+      {number, rest} ->
+        with true <- abs(number) <= limit and abs(scale) <= limit,
+             scaled = number * scale,
+             true <- abs(scaled) <= limit do
+          {scaled, rest}
+        else
+          false -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc false
+  @spec parse_number(term()) :: {float(), binary()} | :error
+  def parse_number(value) do
+    case is_binary(value) do
       true ->
         case Regex.run(~r/\A([+-]?(?:\d+|(?=\.\d)))(\.\d+)?([eE][+-]?\d+)?(.*)\z/s, value) do
           [_, integer, fraction, exponent, rest] ->
@@ -6483,15 +6501,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             fraction = if fraction == "", do: ".0", else: fraction
 
             try do
-              number = :erlang.binary_to_float(integer <> fraction <> exponent)
-
-              with true <- abs(number) <= limit and abs(scale) <= limit,
-                   scaled = number * scale,
-                   true <- abs(scaled) <= limit do
-                {scaled, rest}
-              else
-                false -> :error
-              end
+              {:erlang.binary_to_float(integer <> fraction <> exponent), rest}
             rescue
               ArgumentError -> :error
             end

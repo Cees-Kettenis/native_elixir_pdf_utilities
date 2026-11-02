@@ -1326,6 +1326,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     {"html_comments_attributes.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"flex_explicit_cross_sizes.html", [max_changed_ratio: 0.01, max_average_delta: 0.03]},
     {"flex_shorthand_overrides.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
+    {"svg_leading_decimal_dimensions.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"body_padding_background.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"css_fractional_block_background.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"body_grid.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
@@ -4886,6 +4887,7 @@ for group <- 0..7 do
       @fixture_name fixture_name
       @thresholds thresholds
       if fixture_name == "flex_shorthand_overrides.html", do: @tag(:flex_shorthand_overrides)
+      if fixture_name == "svg_leading_decimal_dimensions.html", do: @tag(:svg_leading_decimals)
 
       if fixture_name in [
            "html_native_date_time_controls.html",
