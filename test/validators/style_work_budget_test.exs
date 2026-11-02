@@ -74,4 +74,21 @@ defmodule NativeElixirPdfUtilities.Validators.StyleWorkBudgetTest do
     assert diagnostic.message =~ "max_css_work"
     assert Process.get({TextTransform, :pending}) == nil
   end
+
+  test "Lithuanian dot insertion shares the rendered-text allowance" do
+    Limits.install(Map.put(Limits.effective(), :max_rendered_text_bytes, 4))
+
+    for source <- ["I\u0301", "Í"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render("<p lang=lt style='text-transform:lowercase'>#{source}</p>",
+                 system_font_discovery: false
+               )
+
+      assert diagnostic.stage == :style
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.module == HtmlValidator
+      assert diagnostic.operation == :render
+      assert diagnostic.message =~ "max_rendered_text_bytes"
+    end
+  end
 end

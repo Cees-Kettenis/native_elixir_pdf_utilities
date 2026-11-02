@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
   @word_ignorable ~r/^[\p{M}\p{Cf}'’]$/u
   @cased Regex.compile!(UnicodeCharacterProperty.expression("Cased", false), "u")
   @ignorable Regex.compile!(UnicodeCharacterProperty.expression("Case_Ignorable", false), "u")
+  @soft_dotted Regex.compile!(UnicodeCharacterProperty.expression("Soft_Dotted", false), "u")
 
   @doc "Scopes deferred case conversion to one styled document, including nested renders."
   @spec with_document((-> result)) :: result when result: term()
@@ -51,71 +52,120 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
   @doc "Converts one independent string using the known language's case mapping."
   @spec convert(String.t(), atom(), [String.t()]) :: String.t()
   def convert(text, transform, language) do
-    mode = if List.first(language) in ["tr", "az"], do: :turkic, else: :default
+    language = List.first(language)
 
-    case transform do
-      :uppercase ->
-        String.upcase(text, mode)
+    if language == "lt" and transform in [:uppercase, :lowercase, :capitalize] do
+      [{0, text, transform, language}]
+      |> map_events(false)
+      |> Map.get(0, [])
+      |> Enum.reverse()
+      |> IO.iodata_to_binary()
+    else
+      mode = if language in ["tr", "az"], do: :turkic, else: :default
 
-      :lowercase ->
-        String.downcase(text, if(mode == :turkic, do: mode, else: :greek))
+      case transform do
+        :uppercase ->
+          String.upcase(text, mode)
 
-      :capitalize ->
-        Regex.replace(~r/\b\p{L}/u, text, fn char ->
-          if mode == :turkic, do: String.upcase(char, mode), else: String.capitalize(char)
-        end)
+        :lowercase ->
+          String.downcase(text, if(mode == :turkic, do: mode, else: :greek))
 
-      _ ->
-        text
+        :capitalize ->
+          Regex.replace(~r/\b\p{L}/u, text, fn char ->
+            if mode == :turkic, do: String.upcase(char, mode), else: String.capitalize(char)
+          end)
+
+        _ ->
+          text
+      end
     end
   end
 
   defp apply_tree(tree) do
     {tree, {_id, events}} = collect(tree, {0, []}, true)
+    replace(tree, map_events(events, true))
+  end
 
-    # Right-to-left context makes final sigma and decomposed Turkic dotted I
-    # independent of authored inline boundaries. The forward pass also carries
-    # word context through nodes whose own transform is none.
+  defp map_events(events, account?) do
+    lithuanian? = Enum.any?(events, &match?({_id, _text, _transform, "lt"}, &1))
+
+    # Casing context uses the original characters across inline boundaries.
+    # Canonical combining classes distinguish accents above from lower accents
+    # and class-zero marks that terminate a combining sequence.
     {tokens, _following} =
-      Enum.reduce(events, {[], {false, false}}, fn event, acc ->
+      Enum.reduce(events, {[], {false, false, false}}, fn event, acc ->
         case event do
           :boundary ->
             {tokens, _following} = acc
-            {[:boundary | tokens], {false, false}}
+            {[:boundary | tokens], {false, false, false}}
 
           {id, text, transform, language} ->
-            HtmlValidator.reserve_render_resource(:max_css_work, byte_size(text), :style)
+            if account?,
+              do: HtmlValidator.reserve_render_resource(:max_css_work, byte_size(text), :style)
 
             text
             |> String.codepoints()
             |> Enum.reverse()
-            |> Enum.reduce(acc, fn char, {tokens, {next_cased, next_dot}} ->
-              token = {id, char, transform, language, next_cased, next_dot}
+            |> Enum.reduce(acc, fn char, {tokens, {next_cased, next_dot, next_above}} ->
+              combining_class =
+                if lithuanian? do
+                  <<codepoint::utf8>> = char
+                  :unicode_util.lookup(codepoint).ccc
+                else
+                  0
+                end
+
+              token =
+                {id, char, transform, language, next_cased, next_dot, next_above, combining_class}
 
               cased =
                 Regex.match?(@cased, char) or
                   (Regex.match?(@ignorable, char) and next_cased)
 
               dot = if Regex.match?(@mark, char), do: char == "̇" or next_dot, else: false
-              {[token | tokens], {cased, dot}}
+
+              above =
+                case combining_class do
+                  230 -> true
+                  0 -> false
+                  _ -> next_above
+                end
+
+              {[token | tokens], {cased, dot, above}}
             end)
         end
       end)
 
     {replacements, _context} =
-      Enum.reduce(tokens, {%{}, {false, false, nil}}, fn token, {texts, context} ->
+      Enum.reduce(tokens, {%{}, {false, false, nil, false, false}}, fn token, {texts, context} ->
         case token do
           :boundary ->
-            {texts, {false, false, nil}}
+            {texts, {false, false, nil, false, false}}
 
-          {id, char, transform, language, next_cased, next_dot} ->
-            {word, before_cased, base} = context
+          {id, char, transform, language, next_cased, next_dot, next_above, combining_class} ->
+            {word, before_cased, base, after_soft_dotted, capitalized_soft_dotted} = context
             turkic = language in ["tr", "az"]
 
             mapped =
               cond do
                 transform == :capitalize and not word and Regex.match?(@word, char) ->
                   if(turkic, do: String.upcase(char, :turkic), else: String.capitalize(char))
+
+                language == "lt" and char == "̇" and after_soft_dotted and
+                    (transform == :uppercase or
+                       (transform == :capitalize and capitalized_soft_dotted)) ->
+                  ""
+
+                language == "lt" and transform == :lowercase and next_above and
+                    char in ["I", "J", "Į"] ->
+                  String.downcase(char) <> "̇"
+
+                language == "lt" and transform == :lowercase and char in ["Ì", "Í", "Ĩ"] ->
+                  case char do
+                    "Ì" -> "i\u0307\u0300"
+                    "Í" -> "i\u0307\u0301"
+                    "Ĩ" -> "i\u0307\u0303"
+                  end
 
                 transform == :lowercase and turkic and char == "I" ->
                   if next_dot, do: "i", else: "ı"
@@ -129,15 +179,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
                 transform == :lowercase ->
                   String.downcase(char, if(turkic, do: :turkic, else: :default))
 
+                transform == :uppercase ->
+                  String.upcase(char, if(turkic, do: :turkic, else: :default))
+
                 true ->
                   char
               end
 
-            HtmlValidator.reserve_render_resource(
-              :max_rendered_text_bytes,
-              max(byte_size(mapped) - byte_size(char), 0),
-              :style
-            )
+            if account? do
+              HtmlValidator.reserve_render_resource(
+                :max_rendered_text_bytes,
+                max(byte_size(mapped) - byte_size(char), 0),
+                :style
+              )
+            end
+
+            {after_soft_dotted, capitalized_soft_dotted} =
+              cond do
+                lithuanian? and Regex.match?(@soft_dotted, char) ->
+                  {true, transform == :capitalize and not word}
+
+                combining_class in [0, 230] ->
+                  {false, false}
+
+                true ->
+                  {after_soft_dotted, capitalized_soft_dotted}
+              end
 
             mark = Regex.match?(@mark, char)
             word = Regex.match?(@word, char) or (Regex.match?(@word_ignorable, char) and word)
@@ -147,11 +214,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
                 (Regex.match?(@ignorable, char) and before_cased)
 
             base = if mark, do: base, else: char
-            {Map.update(texts, id, [mapped], &[mapped | &1]), {word, cased, base}}
+
+            {Map.update(texts, id, [mapped], &[mapped | &1]),
+             {word, cased, base, after_soft_dotted, capitalized_soft_dotted}}
         end
       end)
 
-    replace(tree, replacements)
+    replacements
   end
 
   defp collect(node, {id, events}, root) do

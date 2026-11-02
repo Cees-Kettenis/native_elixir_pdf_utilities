@@ -5802,7 +5802,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         do: LanguageValidator.resolved_language(owner, ancestors),
         else: []
 
-    if transform in [:lowercase, :capitalize] and not Map.has_key?(style, :math_style) and
+    if (transform in [:lowercase, :capitalize] or
+          (transform == :uppercase and List.first(language) == "lt")) and
+         not Map.has_key?(style, :math_style) and
          not svg_text do
       node
       |> Map.merge(%{text: text, style: style})

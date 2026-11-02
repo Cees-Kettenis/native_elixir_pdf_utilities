@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineTextContextTest do
   use ExUnit.Case, async: true
 
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, Layout, Style, TextTransform}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
@@ -99,6 +100,79 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineTextContextTest do
       assert {:ok, layout} = Layout.layout_viewport(tree, 131.25, 37.5)
       assert layout.content_height <= 37.5
     end
+  end
+
+  test "Lithuanian lowercase inserts dots only before accents above the same base" do
+    source = "I\u0301 J\u0300 Į\u0303 Ì Í Ĩ I\u0323\u0301 I\u034F\u0301 I\u0323 I\u0307"
+
+    expected =
+      "i\u0307\u0301 j\u0307\u0300 į\u0307\u0303 i\u0307\u0300 i\u0307\u0301 i\u0307\u0303 i\u0307\u0323\u0301 i\u034F\u0301 i\u0323 i\u0307\u0307"
+
+    for {language, transformed} <- [
+          {"lt", expected},
+          {"lt-LT", expected},
+          {"en", String.downcase(source)},
+          {"", String.downcase(source)}
+        ] do
+      html = "<p lang='#{language}' style='text-transform:lowercase'>#{source}</p>"
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert text(tree) == transformed
+    end
+  end
+
+  test "Lithuanian accent context crosses inline nodes and stops at combining-class zero" do
+    html =
+      "<p lang=lt style='text-transform:lowercase'>I<span style='color:red'>\u0301</span> J<b>\u0323</b><span style='text-transform:none'>\u0300</span> I<span>\u034F</span>\u0301</p>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, %{children: [paragraph]}} = Style.compute_detailed(dom)
+    assert text(paragraph) == "i\u0307\u0301 j\u0307\u0323\u0300 i\u034F\u0301"
+    [i, accent | _] = paragraph.children
+    assert i.text == "i\u0307"
+    assert hd(accent.children).text == "\u0301"
+    assert accent.style.color == {1, 0, 0}
+  end
+
+  test "Lithuanian uppercase and capitalization remove only dots after a converted soft-dotted base" do
+    for {transform, source, expected} <- [
+          {"uppercase", "i<span>\u0307</span> j\u0323<span>\u0307</span> į\u0307", "I J\u0323 Į"},
+          {"uppercase", "i\u0301\u0307 i\u034F\u0307 i\u0307\u0307",
+           "I\u0301\u0307 I\u034F\u0307 I\u0307"},
+          {"capitalize", "i<span>\u0307</span> ai\u0307 j\u0307 aj\u0307 į\u0307",
+           "I Ai\u0307 J Aj\u0307 Į"}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<p lang=lt style='text-transform:#{transform}'>#{source}</p>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert text(tree) == expected
+    end
+  end
+
+  test "independent Lithuanian strings share the contextual case mappings" do
+    for {transform, source, expected} <- [
+          {:lowercase, "I\u0301 J\u0300 Į\u0303 Ì Í Ĩ",
+           "i\u0307\u0301 j\u0307\u0300 į\u0307\u0303 i\u0307\u0300 i\u0307\u0301 i\u0307\u0303"},
+          {:uppercase, "i\u0307 j\u0323\u0307 į\u0307", "I J\u0323 Į"},
+          {:capitalize, "i\u0307 ai\u0307", "I Ai\u0307"},
+          {:lowercase, "", ""}
+        ] do
+      assert TextTransform.convert(source, transform, ["lt"]) == expected
+    end
+  end
+
+  test "public PDF rendering and extraction retain Lithuanian lowercase dots" do
+    html =
+      "<p lang=lt style='text-transform:lowercase'>I&#x301; J&#x300; &#xCC;&#xCD;&#x128;</p>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+    assert {:ok, extracted} = Text.extract(pdf, layout: false)
+
+    assert extracted ==
+             "i\u0307\u0301 j\u0307\u0300 i\u0307\u0300i\u0307\u0301i\u0307\u0303"
   end
 
   test "listbox intrinsic dimensions use the same transformed labels that are painted" do

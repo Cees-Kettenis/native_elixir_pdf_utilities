@@ -48,6 +48,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineTextContextBrowserParityTest 
     end
   end
 
+  @tag :lithuanian_case
+  test "Lithuanian casing retains browser dots and accents across inline nodes" do
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Paths.fixture("html_to_pdf/browser_parity/lithuanian_text_case_context.html"),
+        render_opts: [system_font_discovery: false],
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    expected =
+      "i\u0307\u0301 j\u0307\u0300 į\u0307\u0303 i\u0307\u0300 i\u0307\u0301 i\u0307\u0303 i\u0307\u0301 j\u0307\u0300 I J Į I i\u0301 j\u0300 į\u0303"
+      |> String.normalize(:nfd)
+      |> String.replace(~r/\s/u, "")
+
+    for name <- ["chromium", "native"] do
+      {text, 0} = System.cmd("pdftotext", [Path.join(stats.artifact_dir, name <> ".pdf"), "-"])
+      normalized = text |> String.normalize(:nfd) |> String.replace(~r/\s/u, "")
+      assert normalized == expected
+    end
+  end
+
   defp word_position(bbox, word) do
     [_, x, y] = Regex.run(~r/<word xMin="([\d.]+)" yMin="([\d.]+)"[^>]*>#{word}<\/word>/u, bbox)
     {String.to_float(x), String.to_float(y)}
