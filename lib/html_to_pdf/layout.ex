@@ -4569,7 +4569,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       flexible_tracks ->
         fraction_total = Enum.reduce(flexible_tracks, 0.0, &(&1.fraction + &2))
-        fraction_unit = remaining / fraction_total
+        fraction_unit = remaining / max(fraction_total, 1.0)
 
         {constrained_tracks, unconstrained_tracks} =
           Enum.split_with(
@@ -5402,115 +5402,114 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolve_flex_item_sizes(items, free_space, available_main) do
-    {items, free_space} =
+    {items, hypothetical_free_space} =
       Enum.map_reduce(items, free_space, fn item, remaining_space ->
         {minimum, maximum} = flex_main_constraints(item, available_main)
-        constrained_main = constrain_flex_main(item.main_box, minimum, maximum)
+        hypothetical = constrain_flex_main(item.main_box, minimum, maximum)
 
-        item =
-          item
-          |> resize_flex_item(constrained_main)
-          |> Map.merge(%{
-            flex_base_main: item.main_box,
-            flex_minimum_main: minimum,
-            flex_maximum_main: maximum,
-            flex_frozen: false
-          })
-
-        {item, remaining_space - (constrained_main - item.flex_base_main)}
+        {Map.merge(item, %{
+           flex_base_main: item.main_box,
+           flex_minimum_main: minimum,
+           flex_maximum_main: maximum,
+           flex_hypothetical_main: hypothetical
+         }), remaining_space - (hypothetical - item.main_box)}
       end)
 
-    mode =
-      cond do
-        free_space > 0 -> :grow
-        free_space < 0 -> :shrink
-        true -> :none
-      end
+    mode = if hypothetical_free_space > 0, do: :grow, else: :shrink
+
+    {items, initial_free_space} =
+      Enum.map_reduce(items, free_space, fn item, remaining_space ->
+        factor = if mode == :grow, do: item.flex_grow, else: item.flex_shrink
+
+        frozen =
+          factor == 0 or
+            (mode == :grow and item.flex_base_main > item.flex_hypothetical_main) or
+            (mode == :shrink and item.flex_base_main < item.flex_hypothetical_main)
+
+        target = if frozen, do: item.flex_hypothetical_main, else: item.flex_base_main
+        item = item |> resize_flex_item(target) |> Map.put(:flex_frozen, frozen)
+        {item, remaining_space - (target - item.flex_base_main)}
+      end)
 
     items
-    |> redistribute_flex_space(free_space, mode)
+    |> redistribute_flex_space(free_space, initial_free_space, mode)
     |> Enum.map(
-      &Map.drop(&1, [:flex_base_main, :flex_minimum_main, :flex_maximum_main, :flex_frozen])
+      &Map.drop(&1, [
+        :flex_base_main,
+        :flex_minimum_main,
+        :flex_maximum_main,
+        :flex_hypothetical_main,
+        :flex_frozen
+      ])
     )
   end
 
-  defp redistribute_flex_space(items, free_space, mode) do
-    total_weight =
-      Enum.reduce(items, 0.0, fn item, total ->
-        case item.flex_frozen do
-          true -> total
-          false -> total + flex_distribution_weight(item, mode)
+  defp redistribute_flex_space(items, free_space, initial_free_space, mode) do
+    {remaining_space, factor_sum, total_weight, unfrozen?} =
+      Enum.reduce(items, {free_space, 0.0, 0.0, false}, fn item,
+                                                           {remaining, factors, weight, unfrozen?} ->
+        if item.flex_frozen do
+          {remaining - (item.main_box - item.flex_base_main), factors, weight, unfrozen?}
+        else
+          factor = if mode == :grow, do: item.flex_grow, else: item.flex_shrink
+          {remaining, factors + factor, weight + flex_distribution_weight(item, mode), true}
         end
       end)
 
-    case abs(free_space) <= 1.0e-9 or total_weight <= 0 do
-      true ->
-        items
+    if unfrozen? do
+      # Partial factors apply to the original free space even after another item
+      # freezes. Shrink factors are unscaled for this cap, unlike their weights.
+      partial_space = initial_free_space * factor_sum
 
-      false ->
-        {items, consumed_space, frozen_any?} =
-          Enum.reduce(items, {[], 0.0, false}, fn item, {resolved, consumed, frozen_any?} ->
-            weight = flex_distribution_weight(item, mode)
+      remaining_space =
+        if factor_sum < 1 and abs(partial_space) < abs(remaining_space),
+          do: partial_space,
+          else: remaining_space
 
-            case item.flex_frozen or weight <= 0 do
-              true ->
-                {resolved ++ [item], consumed, frozen_any?}
+      {adjusted, total_violation} =
+        Enum.map_reduce(items, 0.0, fn item, total ->
+          if item.flex_frozen do
+            {{item, 0.0}, total}
+          else
+            share =
+              if total_weight > 0,
+                do: remaining_space * flex_distribution_weight(item, mode) / total_weight,
+                else: 0.0
 
-              false ->
-                previous_main = item.main_box
-                proposed_main = item.main_box + free_space * weight / total_weight
+            proposed = item.flex_base_main + share
 
-                constrained_main =
-                  constrain_flex_main(
-                    proposed_main,
-                    item.flex_minimum_main,
-                    item.flex_maximum_main
-                  )
+            constrained =
+              constrain_flex_main(proposed, item.flex_minimum_main, item.flex_maximum_main)
 
-                case abs(constrained_main - proposed_main) > 1.0e-9 do
-                  true ->
-                    item =
-                      item
-                      |> resize_flex_item(constrained_main)
-                      |> Map.put(:flex_frozen, true)
+            violation = constrained - proposed
+            {{resize_flex_item(item, constrained), violation}, total + violation}
+          end
+        end)
 
-                    {
-                      resolved ++ [item],
-                      consumed + constrained_main - previous_main,
-                      true
-                    }
+      items =
+        Enum.map(adjusted, fn {item, violation} ->
+          freeze =
+            abs(total_violation) <= 1.0e-9 or
+              (total_violation > 0 and violation > 0) or
+              (total_violation < 0 and violation < 0)
 
-                  false ->
-                    {resolved ++ [item], consumed, frozen_any?}
-                end
-            end
-          end)
+          Map.put(item, :flex_frozen, item.flex_frozen or freeze)
+        end)
 
-        case frozen_any? do
-          true ->
-            redistribute_flex_space(items, free_space - consumed_space, mode)
-
-          false ->
-            Enum.map(items, fn item ->
-              weight = flex_distribution_weight(item, mode)
-
-              case item.flex_frozen or weight <= 0 do
-                true ->
-                  item
-
-                false ->
-                  resize_flex_item(item, item.main_box + free_space * weight / total_weight)
-              end
-            end)
-        end
+      redistribute_flex_space(items, free_space, initial_free_space, mode)
+    else
+      items
     end
   end
 
   defp flex_distribution_weight(item, mode) do
     case mode do
-      :grow -> item.flex_grow
-      :shrink -> item.flex_shrink * item.flex_base_main
-      :none -> 0.0
+      :grow ->
+        item.flex_grow
+
+      :shrink ->
+        item.flex_shrink *
+          max(item.flex_base_main - flex_main_box_size(item.style, item.main_axis), 0.0)
     end
   end
 

@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="UTF-8"><style>
+@page { size: 300pt 350pt; margin: 0; }
+html, body { margin: 0; }
+section { display:flex; width:200pt; height:30pt; margin-bottom:10pt; }
+section > div:first-child { background:red; }
+section > div:last-child { background:blue; }
+</style></head><body>
+<section style="display:grid;grid-template-columns:0.25fr 0.25fr"><div></div><div></div></section>
+<section style="display:grid;grid-template-columns:minmax(80pt,0.25fr) 0.25fr"><div></div><div></div></section>
+<section><div style="flex:0.25 1 0"></div><div style="flex:0.25 1 0"></div></section>
+<section><div style="flex:0.25 1 0;max-width:20pt"></div><div style="flex:0.25 1 0"></div></section>
+<section><div style="flex:0.25 1 0;min-width:80pt"></div><div style="flex:0.25 1 0"></div></section>
+<section><div style="flex:0.25 1 100pt;max-width:50pt"></div><div style="flex:0.25 1 0"></div></section>
+<section style="width:100pt"><div style="flex:0 0.25 100pt;min-width:90pt"></div><div style="flex:0 0.25 100pt"></div></section>
+<section style="width:100pt"><div style="flex:0 0.25 40pt;padding:0 10pt"></div><div style="flex:0 0.25 80pt"></div></section>
+</body></html>
