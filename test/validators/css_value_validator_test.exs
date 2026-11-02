@@ -33,6 +33,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     end
   end
 
+  test "numeric flex shorthand resets omitted components in an existing style" do
+    context = %{flex_grow: 9.0, flex_shrink: 0.0, flex_basis: 80.0}
+
+    for {value, expected} <- [{"1", {1.0, 1.0, 0.0}}, {"2 3", {2.0, 3.0, 0.0}}] do
+      assert {:ok, style} = CssValueValidator.validate_resolved(context, "flex", value)
+      assert {style.flex_grow, style.flex_shrink, style.flex_basis} == expected
+    end
+  end
+
   test "vertical alignment retains keyword and font-relative length authority" do
     context = %{font_size: 12.0, color: {0, 0, 0}, _custom_properties: %{}}
 

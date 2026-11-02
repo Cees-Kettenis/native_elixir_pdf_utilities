@@ -5295,6 +5295,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert second.style.flex_basis == 10.0
   end
 
+  test "flex shorthand resets respect declaration order specificity and importance" do
+    for {rules, inline, expected} <- [
+          {".item{flex-basis:80pt;flex-shrink:0;flex:1}", "", {1.0, 1.0, 0.0}},
+          {".item{flex:0 0 80pt;flex:1}", "", {1.0, 1.0, 0.0}},
+          {".item{flex-basis:80pt;flex:1 1}", "", {1.0, 1.0, 0.0}},
+          {".item{flex:0 0 80pt}.item{flex:1}", "", {1.0, 1.0, 0.0}},
+          {"#target{flex:1}.item{flex-basis:80pt;flex-shrink:0}", "", {1.0, 1.0, 0.0}},
+          {".item{flex-basis:80pt;flex-shrink:0}", "flex:1", {1.0, 1.0, 0.0}},
+          {".item{flex:1!important}", "flex-basis:80pt;flex-shrink:0", {1.0, 1.0, 0.0}},
+          {".item{flex-basis:80pt!important;flex-shrink:0!important;flex:1}", "",
+           {1.0, 0.0, 80.0}},
+          {"#target{flex-basis:80pt;flex-shrink:0}.item{flex:1}", "", {1.0, 0.0, 80.0}},
+          {".item{flex:1;flex-basis:80pt;flex-shrink:0}", "", {1.0, 0.0, 80.0}}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<style>#{rules}</style><div id='target' class='item' style='#{inline}'>A</div>"
+               )
+
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      target = Enum.find(styled.children, &(Map.get(&1, :tag) == "div"))
+
+      assert {target.style.flex_grow, target.style.flex_shrink, target.style.flex_basis} ==
+               expected
+    end
+  end
+
   test "compute applies grid container and item declarations" do
     dom = %{
       type: :document,

@@ -3657,6 +3657,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert_in_delta d.x, b.x, 0.0001
   end
 
+  test "flex shorthand overrides divide space equally after basis and shrink resets" do
+    for {left, right} <- [
+          {"flex-basis:80pt;flex-shrink:0;flex:1", "flex:1"},
+          {"flex:0 0 80pt;flex:1", "flex:1"},
+          {"flex-basis:80pt;flex:1 1", "flex:1"},
+          {"flex-shrink:0;flex:1;flex-basis:200pt", "flex:1 1 200pt"}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<div style='display:flex;width:300pt'><div style='#{left};min-width:0'>A</div><div style='#{right};min-width:0'>B</div></div>"
+               )
+
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {400, 200}, margin: 0)
+      text = layout.boxes |> Enum.filter(&(&1.type == :text)) |> Map.new(&{&1.text, &1})
+      assert_in_delta text["A"].x, 0.0, 0.0001
+      assert_in_delta text["B"].x, 150.0, 0.0001
+    end
+  end
+
   test "layout positions row flex items with order gap justify-content and align-items" do
     dom = %{
       type: :document,

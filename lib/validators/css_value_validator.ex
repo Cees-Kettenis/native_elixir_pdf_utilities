@@ -1910,8 +1910,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           {:ok,
            style
            |> Map.put(:flex_grow, grow)
-           |> Map.put_new(:flex_shrink, 1.0)
-           |> Map.put_new(:flex_basis, 0.0)}
+           |> Map.put(:flex_shrink, 1.0)
+           |> Map.put(:flex_basis, 0.0)}
         end
 
       [grow, shrink] ->
@@ -1921,7 +1921,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
            style
            |> Map.put(:flex_grow, grow)
            |> Map.put(:flex_shrink, shrink)
-           |> Map.put_new(:flex_basis, 0.0)}
+           |> Map.put(:flex_basis, 0.0)}
         end
 
       [grow, shrink, basis] ->
