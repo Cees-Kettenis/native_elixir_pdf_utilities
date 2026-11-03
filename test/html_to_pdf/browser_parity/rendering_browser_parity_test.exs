@@ -2082,6 +2082,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   @dedicated_fixtures ~w(
     flex_column_wrap.html
     flex_row_alignment.html
+    flex_logical_alignment.html
     explicit_hidden_block_space.html
     explicit_visible_text_space.html
     explicit_hidden_padded_space.html

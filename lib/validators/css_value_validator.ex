@@ -1778,8 +1778,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
   defp put_justify_content(style, value, property) do
     case value |> String.trim() |> String.downcase() do
-      value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
-      value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
+      "start" -> {:ok, Map.put(style, property, :start)}
+      "end" -> {:ok, Map.put(style, property, :end)}
+      "flex-start" -> {:ok, Map.put(style, property, :flex_start)}
+      "flex-end" -> {:ok, Map.put(style, property, :flex_end)}
       "center" -> {:ok, Map.put(style, property, :center)}
       value when value in ["normal", "stretch"] -> {:ok, Map.put(style, property, :stretch)}
       "space-between" -> {:ok, Map.put(style, property, :space_between)}

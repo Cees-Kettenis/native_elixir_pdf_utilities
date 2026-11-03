@@ -4841,7 +4841,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp content_distribution(style, property, free_space, gap, count) do
     case Map.get(style, property, :flex_start) do
-      :flex_end ->
+      alignment when alignment in [:end, :flex_end] ->
         {free_space, gap}
 
       :center ->
@@ -6142,6 +6142,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     start_offset = if reversed, do: free_space, else: 0.0
 
     case Map.get(style, :justify_content, :flex_start) do
+      :start ->
+        {0.0, gap}
+
+      :end ->
+        {free_space, gap}
+
       :flex_end ->
         {if(reversed, do: 0.0, else: free_space), gap}
 
