@@ -80,6 +80,11 @@ A successful exit can include warnings. Report commands, runtimes, results and
 unresolved issues in the PR. Fix failures, rerun affected checks and require the
 complete matrix to pass before review readiness.
 
+Counts include plain `warning:` messages and `file:line[:column]: Warning:`
+diagnostics, with terminal colours ignored. Project and third-party warnings both
+count. Use source paths and the dependency or PLT-build context in the stage log
+to identify their origin; a bare filename alone does not establish ownership.
+
 ## Publishing documentation
 
 Use the latest supported runtime when preparing a package:

@@ -21,7 +21,7 @@ prepare_fixture() {
   project="$directory/$1/project"
   bin="$directory/$1/bin"
   export MOCK_TRACE="$directory/$1/trace" MOCK_COUNT=3 QUALITY_MATRIX_JOBS=3
-  unset MOCK_FAIL_PARITY
+  unset MOCK_FAIL_PARITY MOCK_WARNINGS MOCK_FAIL_DIALYZER
   export PATH="$bin:$original_path"
   mkdir -p "$project/scripts" "$project/ci" "$bin" "$MOCK_TRACE"
   cp "$repository_root/scripts/quality-matrix" "$project/scripts/quality-matrix"
@@ -106,6 +106,26 @@ case "$1" in
     [[ "$(find "$MOCK_TRACE" -name 'done-*' | wc -l)" -eq "$MOCK_COUNT" ]]
     [[ "$ERL_FLAGS" == '+S 4:4 +SDcpu 4 +SDio 10' ]]
     echo '{}' > "$PERFORMANCE_REPORT" ;;
+  dialyzer)
+    if [[ "${MOCK_WARNINGS:-}" == true ]]; then
+      cat <<'WARNINGS'
+warning: unused variable
+  lib/example.ex:12: Example.run/0
+  WARNING: another Elixir diagnostic
+src/example.erl:12: Warning: unused function
+src/example.erl:13:4: Warning: unused variable
+.quality/elixir-1.21/deps/example/src/helper.erl:14:2: Warning: dependency diagnostic
+xmerl_ucs.erl:58:1: Warning: missing specification for function is_iso10646/1
+C:\project files\example.erl:15:3: Warning: Windows source path
+Ordinary output mentions warning: without a diagnostic header
+info: lib/example.ex:12: warning: quoted diagnostic
+lib/example.ex:12: info: warning: ordinary message
+No :ignore_warnings opt specified
+WARNINGS
+      printf '\033[33mwarning:\033[0m coloured Elixir diagnostic\n'
+      printf '\033[1msrc/colour.erl:16:2: \033[33mWarning:\033[0m coloured Erlang diagnostic\n'
+    fi
+    if [[ "${MOCK_FAIL_DIALYZER:-}" == true ]]; then exit 3; fi ;;
 esac
 MOCK_MIX
   cat > "$bin/elixir" <<'MOCK_ELIXIR'
@@ -165,6 +185,35 @@ artifacts=("$project"/.quality/logs/*/elixir-1.19/browser-parity-artifacts/outpu
 check test "$(cat "${artifacts[0]}")" = 1.19
 check test ! -e "$project/.quality/matrix.lock"
 echo 'QUALITY_MATRIX_TEST_PASS failure_propagation_other_lanes_and_artifact_retention'
+
+for outcome in warnings warnings-and-failure; do
+  prepare_fixture "$outcome"
+  export MOCK_WARNINGS=true
+  if [[ "$outcome" == warnings-and-failure ]]; then export MOCK_FAIL_DIALYZER=true; fi
+  run_matrix
+  results=("$project"/.quality/logs/*/elixir-1.21/results.tsv)
+  log=("$project"/.quality/logs/*/elixir-1.21/dialyzer.log)
+  check grep -Fq 'xmerl_ucs.erl:58:1: Warning:' "${log[0]}"
+  check grep -Fq $'\033[33mwarning:' "${log[0]}"
+
+  if [[ "$outcome" == warnings ]]; then
+    check test "$status" -eq 0
+    check grep -Fq $'1.21\tdialyzer\tWARN\t9\t' "${results[0]}"
+    check grep -Fq 'runtime=1.21 stage=dialyzer status=WARN warnings=9' "$project/output"
+    check grep -Fq 'runtime=1.21 stage=parity status=PASS warnings=0' "$project/output"
+    check grep -Fq 'runtime=1.21 stage=performance status=PASS warnings=0' "$project/output"
+    check grep -Fq 'QUALITY_MATRIX_SUMMARY status=PASS' "$project/output"
+  else
+    check test "$status" -eq 1
+    check grep -Fq $'1.21\tdialyzer\tFAIL\t9\t' "${results[0]}"
+    check grep -Fq 'runtime=1.21 stage=parity status=SKIP' "$project/output"
+    check grep -Fq 'runtime=1.21 stage=performance status=SKIP' "$project/output"
+    check grep -Fq 'runtime=1.19 stage=parity status=PASS' "$project/output"
+    check grep -Fq 'QUALITY_MATRIX_SUMMARY status=FAIL' "$project/output"
+  fi
+  check test ! -e "$project/.quality/matrix.lock"
+done
+echo 'QUALITY_MATRIX_TEST_PASS warning_formats_counts_and_failure_precedence'
 
 prepare_fixture invalid-config
 jq '.include |= map(.canonical = (.elixir == "1.19"))' "$project/ci/runtime-matrix.json" > "$directory/invalid.json"

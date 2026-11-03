@@ -57,7 +57,10 @@ run_stage() {
     "$@" 2>&1 | tee "${log}"
     pipeline_status=("${PIPESTATUS[@]}")
     elapsed=$((SECONDS - started))
-    warnings="$(grep -Eic '^[[:space:]]*warning:' "${log}" || true)"
+    # Count diagnostic headers, including Erlang's file:line[:column] form.
+    # Ignore terminal colour codes without changing the retained stage log.
+    warnings="$(sed -E $'s/\033\\[[0-9;]*m//g' "${log}" |
+      grep -Eic '^[[:space:]]*(warning:|([[:alpha:]]:)?[^:]+:[[:digit:]]+(:[[:digit:]]+)?:[[:space:]]*warning:)' || true)"
     warnings="${warnings:-0}"
 
     if ((pipeline_status[0] != 0 || pipeline_status[1] != 0)); then

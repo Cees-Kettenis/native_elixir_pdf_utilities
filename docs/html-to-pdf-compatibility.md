@@ -149,7 +149,7 @@ therefore wrap differently or extend farther beyond the page.
 
 [Asset examples](html-to-pdf-examples.md#load-local-images).
 
-#### Resolver process context
+### Resolver process context
 
 When upgrading from v1.0.0, update callbacks that depend on the calling process.
 `self()` identifies the worker, caller process dictionary entries are not
