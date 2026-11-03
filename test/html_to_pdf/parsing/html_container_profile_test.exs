@@ -3,6 +3,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlContainerProfileTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
 
+  test "buttons and captions admit pictures while retaining descendant restrictions" do
+    picture = "<picture><source media=print srcset=chosen><img src=fallback></picture>"
+
+    for html <- [
+          "<button>#{picture}</button>",
+          "<details><summary>#{picture}</summary></details>",
+          "<fieldset><legend>#{picture}</legend></fieldset>"
+        ] do
+      assert {:ok, _} = HtmlParser.parse_detailed(html)
+    end
+
+    for child <- [
+          "<img src=x usemap='#map'>",
+          "<img src=x tabindex=0>",
+          "<button>Nested</button>",
+          "<div>Block</div>"
+        ] do
+      assert {:error, {:unsupported_html, diagnostic}} =
+               HtmlParser.parse_detailed("<button><picture>#{child}</picture></button>")
+
+      assert diagnostic.stage == :html
+      assert diagnostic.reason == :unsupported_html
+      assert diagnostic.message != ""
+    end
+  end
+
   test "summaries and fieldset legends retain heading groups and their subtitles" do
     for {parent, caption, attributes} <- [
           {"details", "summary", ""},

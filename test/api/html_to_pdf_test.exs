@@ -834,6 +834,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
+  test "pictures in buttons and captions select and paint the same image as a direct img" do
+    bytes =
+      NativeElixirPdfUtilities.TestSupport.PngFixture.build(80, 40, 2, 8, 0, fn _, _ ->
+        [10, 80, 200]
+      end)
+
+    owner = self()
+
+    picture =
+      "<picture><source media=screen srcset=unused><source media=print srcset=chosen><img src=fallback width=80 height=40></picture>"
+
+    image = "<img src=chosen width=80 height=40>"
+
+    for {before, after_html} <- [
+          {"<button>Before ", " After</button>"},
+          {"<details><summary>Before ", " After</summary><p>Hidden body</p></details>"},
+          {"<details open><summary>Before ", " After</summary><p>Visible body</p></details>"},
+          {"<fieldset><legend>Before ", " After</legend><p>Body</p></fieldset>"}
+        ],
+        forms <- [:static, :interactive] do
+      assert {:ok, actual} =
+               HtmlToPdf.render(before <> picture <> after_html,
+                 forms: forms,
+                 system_font_discovery: false,
+                 asset_resolver: fn %{reference: reference} ->
+                   send(owner, {:caption_image, reference})
+                   assert reference == "chosen"
+                   {:ok, bytes}
+                 end
+               )
+
+      assert_received {:caption_image, "chosen"}
+      refute_received {:caption_image, _}
+
+      assert {:ok, expected} =
+               HtmlToPdf.render(before <> image <> after_html,
+                 forms: forms,
+                 system_font_discovery: false,
+                 assets: %{"chosen" => {:bytes, bytes}}
+               )
+
+      assert actual == expected
+      assert actual =~ "/Subtype /Image"
+    end
+  end
+
   test "block pictures and responsive images load only chosen resources and preserve content and fields" do
     bytes =
       NativeElixirPdfUtilities.TestSupport.PngFixture.build(80, 40, 2, 8, 0, fn _, _ ->

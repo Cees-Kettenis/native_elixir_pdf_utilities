@@ -1243,6 +1243,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
      ]},
     {"html_disclosures.html",
      [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
+    {"html_picture_captions.html",
+     [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_heading_group_captions.html",
      [render_opts: [forms: :static], max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_horizontal_rules.html",
@@ -4893,6 +4895,7 @@ for group <- 0..7 do
 
       if fixture_name == "html_popover_initial.html", do: @tag(:initial_popovers)
       if fixture_name == "html_heading_group_captions.html", do: @tag(:heading_group_captions)
+      if fixture_name == "html_picture_captions.html", do: @tag(:picture_captions)
       if fixture_name == "html_fragment_link_decoration_fonts.html", do: @tag(:shadow_fragments)
       if fixture_name == "html_shadow_document_fragments.html", do: @tag(:shadow_fragments)
       if fixture_name == "html_math_enclosing_links.html", do: @tag(:math_links)
