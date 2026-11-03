@@ -183,20 +183,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_document(styled_tree, opts, viewport) do
     HtmlValidator.with_render_budget(fn ->
-      page_size =
-        case Keyword.keyword?(opts) do
-          true -> PageGeometry.normalize_page_size(Keyword.get(opts, :page_size, :a4))
-          false -> {:error, :invalid_page_size}
-        end
-
-      margins =
-        case Keyword.keyword?(opts) do
-          true -> PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0))
-          false -> {:error, :invalid_margin}
-        end
-
-      case HtmlValidator.validate_layout_input(styled_tree, opts, page_size, margins) do
-        :ok ->
+      case HtmlValidator.prepare_layout_input(styled_tree, opts) do
+        {:ok, %{page_size: page_size, margins: margins}} ->
           NativeElixirPdfUtilities.Validators.HtmlFormValidator.with_layout_mode(
             Keyword.get(
               opts,
@@ -207,8 +195,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               styled_tree =
                 styled_tree |> collapse_child_margins() |> attach_positioned_descendants()
 
-              {:ok, page_size} = page_size
-              {:ok, margins} = margins
               page_size = if viewport == nil, do: page_size, else: viewport
 
               {layout_page_size, margins} =

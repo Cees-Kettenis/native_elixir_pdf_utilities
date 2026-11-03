@@ -5881,6 +5881,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end)
   end
 
+  @doc "Prepares validated page geometry and margins for a styled document and layout options."
+  @spec prepare_layout_input(term(), term()) ::
+          {:ok, %{page_size: {number(), number()}, margins: PageGeometryValidator.margins()}}
+          | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
+  def prepare_layout_input(styled_tree, opts) do
+    prepare_layout_input(styled_tree, opts, fn ->
+      {
+        PageGeometryValidator.normalize_page_size(Keyword.get(opts, :page_size, :a4)),
+        PageGeometryValidator.normalize_margins(Keyword.get(opts, :margin, 0))
+      }
+    end)
+  end
+
   @doc false
   @spec validate_layout_input(term(), term(), term(), term()) ::
           :ok
@@ -5889,6 +5902,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              {:invalid_layout | :unsupported_html | :resource_limit_exceeded,
               Diagnostics.diagnostic()}}
   def validate_layout_input(styled_tree, opts, page_size_result, margins_result) do
+    case prepare_layout_input(styled_tree, opts, fn -> {page_size_result, margins_result} end) do
+      {:ok, _geometry} -> :ok
+      {:error, _} = failure -> failure
+    end
+  end
+
+  # Both entry points share admission and geometry validation. Preparation runs
+  # only after options are known to be a keyword list.
+  defp prepare_layout_input(styled_tree, opts, geometry) do
     with_render_budget(fn ->
       case {styled_tree, opts} do
         {%{type: :document, children: children}, opts}
@@ -5896,6 +5918,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           case Keyword.keyword?(opts) and
                  is_boolean(Map.get(styled_tree, :_css_pixel_viewport, false)) do
             true ->
+              {page_size_result, margins_result} = geometry.()
               validate_render_tree(children)
 
               with :ok <-
@@ -5920,7 +5943,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        elem(page_size, 0) - margins.left - margins.right,
                        elem(page_size, 1) - margins.top - margins.bottom
                      ) do
-                :ok
+                {:ok, %{page_size: page_size, margins: margins}}
               else
                 :invalid_layout -> {:error, :invalid_layout}
                 {:error, reason} -> {:error, reason}

@@ -3129,6 +3129,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
                PageGeometry.normalize_margins("5pt 10pt")
              )
 
+    assert {:ok, %{page_size: {100.0, 80.0}, margins: ^margins}} =
+             HtmlValidator.prepare_layout_input(styled_tree,
+               page_size: {100, 80},
+               margin: "5pt 10pt"
+             )
+
+    assert {:error, :invalid_layout} = HtmlValidator.prepare_layout_input(styled_tree, [:bad])
+
+    assert {:error, :invalid_page_size} =
+             HtmlValidator.prepare_layout_input(styled_tree, page_size: :unknown)
+
+    assert {:error, :invalid_margin} = HtmlValidator.prepare_layout_input(styled_tree, margin: -1)
+
     assert margins == %{top: 5.0, right: 10.0, bottom: 5.0, left: 10.0}
 
     assert HtmlValidator.validate_layout_input(
