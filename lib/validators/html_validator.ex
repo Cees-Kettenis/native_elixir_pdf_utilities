@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.CounterStyle
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
+  alias NativeElixirPdfUtilities.Validators.PageGeometryValidator
   alias NativeElixirPdfUtilities.Validators.MimeValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.LanguageValidator
@@ -116,6 +117,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :compress_streams,
     :subset_fonts
   ]
+  @furniture_keys [:header, :footer]
   @variant_keys [:default, :first, :odd, :even]
   @type image_budget :: :atomics.atomics_ref()
 
@@ -6284,6 +6286,56 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec prepare_furniture_input(term(), term(), term()) ::
+          {:ok, %{margins: map(), furniture: map() | nil}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_furniture_input(pages, layout_tree, opts) do
+    margins =
+      case layout_tree do
+        layout_tree when is_map(layout_tree) ->
+          layout_tree
+          |> Map.get(:margins, Map.get(layout_tree, :margin, :missing))
+          |> PageGeometryValidator.normalize_margins()
+
+        _ ->
+          {:error, :invalid_margin}
+      end
+
+    furniture =
+      case Keyword.keyword?(opts) do
+        true -> opts |> Keyword.get(:page_furniture) |> normalize_furniture_option()
+        false -> {:error, :invalid_furniture_container}
+      end
+
+    with :ok <- validate_furniture_input(pages, layout_tree, opts, margins, furniture) do
+      {:ok, margins} = margins
+      {:ok, furniture} = furniture
+      {:ok, %{margins: margins, furniture: furniture}}
+    end
+  end
+
+  @doc false
+  @spec normalize_furniture_option(term()) :: {:ok, map() | nil} | {:error, term()}
+  def normalize_furniture_option(furniture) do
+    case furniture do
+      value when value in [nil, false] ->
+        {:ok, nil}
+
+      furniture when is_list(furniture) ->
+        case Keyword.keyword?(furniture) do
+          true -> normalize_furniture(Map.new(furniture))
+          false -> {:error, :invalid_furniture_container}
+        end
+
+      furniture when is_map(furniture) ->
+        normalize_furniture(furniture)
+
+      _ ->
+        {:error, :invalid_furniture_container}
+    end
+  end
+
+  @doc false
   @spec validate_furniture_input(term(), term(), term(), term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_furniture_input(pages, layout_tree, opts, margins_result, furniture_result) do
@@ -8406,6 +8458,60 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         _ -> false
       end
     end)
+  end
+
+  defp normalize_furniture(furniture) do
+    case Enum.reject(Map.keys(furniture), &(&1 in @furniture_keys)) do
+      [] ->
+        Enum.reduce_while(@furniture_keys, {:ok, %{}}, fn position, {:ok, normalized} ->
+          case normalize_furniture_variants(Map.get(furniture, position), position) do
+            {:ok, variants} -> {:cont, {:ok, Map.put(normalized, position, variants)}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+        end)
+
+      unknown ->
+        {:error, {:unknown_furniture_keys, Enum.sort(unknown)}}
+    end
+  end
+
+  defp normalize_furniture_variants(value, position) do
+    case value do
+      value when value in [nil, false] ->
+        {:ok, %{}}
+
+      template when is_binary(template) ->
+        {:ok, %{default: template}}
+
+      variants when is_list(variants) ->
+        case Keyword.keyword?(variants) do
+          true -> normalize_furniture_variant_map(Map.new(variants), position)
+          false -> {:error, {:invalid_variants, position}}
+        end
+
+      variants when is_map(variants) ->
+        normalize_furniture_variant_map(variants, position)
+
+      _ ->
+        {:error, {:invalid_variants, position}}
+    end
+  end
+
+  defp normalize_furniture_variant_map(variants, position) do
+    unknown = Enum.reject(Map.keys(variants), &(&1 in @variant_keys))
+
+    cond do
+      unknown != [] ->
+        {:error, {:unknown_variant_keys, position, Enum.sort(unknown)}}
+
+      Enum.all?(variants, fn {_variant, template} ->
+        is_binary(template) or template in [nil, false]
+      end) ->
+        {:ok, variants}
+
+      true ->
+        {:error, {:invalid_variants, position}}
+    end
   end
 
   defp validate_furniture_result(furniture_result) do

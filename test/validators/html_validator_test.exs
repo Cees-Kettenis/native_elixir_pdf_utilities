@@ -3195,6 +3195,53 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              )
   end
 
+  test "furniture preparation owns caller containers and returns renderable variants" do
+    layout = %{page_size: {200.0, 100.0}, margin: 20}
+    pages = [%{size: layout.page_size, boxes: []}]
+    margins = %{top: 20.0, right: 20.0, bottom: 20.0, left: 20.0}
+
+    for {option, expected} <- [
+          {nil, nil},
+          {false, nil},
+          {[], %{header: %{}, footer: %{}}},
+          {%{}, %{header: %{}, footer: %{}}},
+          {[header: "Header"], %{header: %{default: "Header"}, footer: %{}}},
+          {[header: "First", header: [default: "Old", default: "Last"]],
+           %{header: %{default: "Last"}, footer: %{}}},
+          {%{header: %{default: "Header", first: false}, footer: [odd: nil, even: "Footer"]},
+           %{header: %{default: "Header", first: false}, footer: %{odd: nil, even: "Footer"}}}
+        ] do
+      assert {:ok, %{margins: ^margins, furniture: ^expected}} =
+               HtmlValidator.prepare_furniture_input(pages, layout, page_furniture: option)
+
+      assert PageFurniture.normalize_option(option) == {:ok, expected}
+    end
+  end
+
+  test "furniture preparation preserves option diagnostics and invalid-layout precedence" do
+    layout = %{page_size: {200.0, 100.0}, margin: 20}
+    pages = [%{size: layout.page_size, boxes: []}]
+
+    for {option, message} <- [
+          {:bad, "page_furniture must be a keyword list or map"},
+          {[:bad], "page_furniture must be a keyword list or map"},
+          {%{sidebar: "HTML"}, "page_furniture contains unsupported keys: [:sidebar]"},
+          {[header: %{last: "HTML"}], "header page furniture contains unsupported keys: [:last]"},
+          {[footer: [default: 42]],
+           "footer page furniture must be HTML or default/first/odd/even HTML variants"}
+        ] do
+      assert {:error, {:invalid_options, diagnostic}} =
+               HtmlValidator.prepare_furniture_input(pages, layout, page_furniture: option)
+
+      assert diagnostic.stage == :options
+      assert diagnostic.reason == :invalid_options
+      assert diagnostic.message == message
+
+      assert {:error, {:invalid_layout, %{stage: :layout}}} =
+               HtmlValidator.prepare_furniture_input(pages, :invalid, page_furniture: option)
+    end
+  end
+
   test "font configuration is normalized before the loader consumes it" do
     assert {:ok,
             [
