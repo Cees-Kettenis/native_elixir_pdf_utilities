@@ -46,6 +46,10 @@ Memory sampling can miss peaks and excludes native allocations, caches and
 helper processes. Native work may continue after a timeout. Use OS process or
 container isolation for hard memory and cancellation guarantees.
 
+Font cache misses run in the requesting worker and share its allowance. Cancelling
+the worker stops its loader; unrelated cache misses can proceed independently.
+Completed entries remain subject to the cache retention limits.
+
 Asset resolvers run in the worker and share its allowance. See
 [resolver process context](html-to-pdf-compatibility.md#resolver-process-context)
 for migration guidance on caller-local data and messages.

@@ -22,8 +22,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache do
 
       :miss ->
         case Process.whereis(__MODULE__) do
-          nil -> loader.()
-          _pid -> GenServer.call(__MODULE__, {:fetch, key, loader}, :infinity)
+          nil ->
+            loader.()
+
+          cache ->
+            :global.trans(
+              {{__MODULE__, key}, self()},
+              fn ->
+                case cached(key) do
+                  {:hit, result} ->
+                    result
+
+                  :miss ->
+                    result = loader.()
+
+                    case FontValidator.cacheable_result?(result) do
+                      true -> GenServer.call(cache, {:store, key, result}, :infinity)
+                      false -> result
+                    end
+                end
+              end,
+              [node()]
+            )
         end
     end
   end
@@ -37,30 +57,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache do
   end
 
   @impl GenServer
-  def handle_call({:fetch, key, loader}, _from, state) do
-    case cached(key) do
-      {:hit, result} ->
-        {:reply, result, state}
+  def handle_call({:store, key, result}, _from, state) do
+    sequence = state.sequence + 1
+    :ets.insert(state.table, {key, result, sequence})
 
-      :miss ->
-        result = loader.()
+    state.table
+    |> :ets.tab2list()
+    |> FontValidator.cache_evictions(state.maximum_entries, :max_system_font_cache_bytes)
+    |> Enum.each(&:ets.delete(state.table, &1))
 
-        case FontValidator.cacheable_result?(result) do
-          true ->
-            sequence = state.sequence + 1
-            :ets.insert(state.table, {key, result, sequence})
-
-            state.table
-            |> :ets.tab2list()
-            |> FontValidator.cache_evictions(state.maximum_entries, :max_system_font_cache_bytes)
-            |> Enum.each(&:ets.delete(state.table, &1))
-
-            {:reply, result, %{state | sequence: sequence}}
-
-          false ->
-            {:reply, result, state}
-        end
-    end
+    {:reply, result, %{state | sequence: sequence}}
   end
 
   defp cached(key) do

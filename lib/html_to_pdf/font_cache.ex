@@ -47,19 +47,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
                 result
 
               :miss ->
-                case Process.whereis(__MODULE__) do
-                  nil ->
-                    loader.(data)
-
-                  _pid ->
-                    FontValidator.with_cache_budget(fn budget ->
-                      GenServer.call(
-                        __MODULE__,
-                        {:fetch, absolute_path, fingerprint, data, loader, budget},
-                        :infinity
-                      )
-                    end)
-                end
+                load(absolute_path, fingerprint, data, loader)
             end
 
           {:error, {_reason, _diagnostic}} = error ->
@@ -135,16 +123,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
         result
 
       :miss ->
-        case Process.whereis(__MODULE__) do
-          nil ->
-            loader.(<<>>)
-
-          _ ->
-            {result, _budget} =
-              GenServer.call(__MODULE__, {:fetch, key, nil, <<>>, loader, nil}, :infinity)
-
-            result
-        end
+        load(key, nil, <<>>, loader)
     end
   end
 
@@ -163,32 +142,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   end
 
   @impl GenServer
-  def handle_call(request, _from, state) do
-    case request do
-      {:fetch, path, fingerprint, data, loader, budget} ->
-        case cached(path, fingerprint) do
-          {:hit, result} ->
-            {:reply, {result, budget}, state}
+  def handle_call({:store, path, fingerprint, data, result}, _from, state) do
+    sequence = state.sequence + 1
+    :ets.insert(state.table, {path, fingerprint, data, result, sequence})
 
-          :miss ->
-            {result, budget} = FontValidator.with_cache_budget(budget, fn -> loader.(data) end)
+    state.table
+    |> :ets.tab2list()
+    |> FontValidator.cache_evictions(state.maximum_entries, :max_font_cache_bytes)
+    |> Enum.each(&:ets.delete(state.table, &1))
 
-            case result do
-              {:ok, _value} ->
-                sequence = state.sequence + 1
-                :ets.insert(state.table, {path, fingerprint, data, result, sequence})
+    {:reply, result, %{state | sequence: sequence}}
+  end
 
-                state.table
-                |> :ets.tab2list()
-                |> FontValidator.cache_evictions(state.maximum_entries, :max_font_cache_bytes)
-                |> Enum.each(&:ets.delete(state.table, &1))
+  defp load(path, fingerprint, data, loader) do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        loader.(data)
 
-                {:reply, {result, budget}, %{state | sequence: sequence}}
+      cache ->
+        # Only this node owns the ETS cache. The requesting process owns the
+        # lock and the work, so termination releases both without orphaning a loader.
+        :global.trans(
+          {{__MODULE__, path}, self()},
+          fn ->
+            case cached(path, fingerprint) do
+              {:hit, result} ->
+                result
 
-              failure ->
-                {:reply, {failure, budget}, state}
+              :miss ->
+                result =
+                  FontValidator.with_cache_budget(fn budget ->
+                    FontValidator.with_cache_budget(budget, fn -> loader.(data) end)
+                  end)
+
+                case result do
+                  {:ok, _value} ->
+                    GenServer.call(cache, {:store, path, fingerprint, data, result}, :infinity)
+
+                  failure ->
+                    failure
+                end
             end
-        end
+          end,
+          [node()]
+        )
     end
   end
 
