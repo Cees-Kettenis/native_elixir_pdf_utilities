@@ -129,6 +129,112 @@ defmodule NativeElixirPdfUtilities.IndirectFormMetadataTest do
     end
   end
 
+  test "indirect choice entries and pair members survive inspection, filling and flattening" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<select name='choice'><option value='a'>Alpha</option></select>",
+               system_font_discovery: false
+             )
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, %{fields: [field]}} = FormValidator.inspect_document(context)
+    next = context.document.trailer["Size"]
+
+    for {direct, indirect, objects} <- [
+          {[{:string, "a"}], [{:ref, {next, 0}}], [{next, 0, {:value, {:string, "a"}}}]},
+          {[[{:string, "a"}, {:string, "Alpha"}]], [{:ref, {next, 0}}],
+           [{next, 0, {:value, [{:string, "a"}, {:string, "Alpha"}]}}]},
+          {[[{:string, "a"}, {:string, "Alpha"}]], [[{:ref, {next, 0}}, {:ref, {next + 1, 0}}]],
+           [{next, 0, {:value, {:string, "a"}}}, {next + 1, 0, {:value, {:string, "Alpha"}}}]}
+        ] do
+      baseline = field_pdf(context, field, %{"Opt" => direct})
+      pdf = field_pdf(context, field, %{"Opt" => indirect}, objects)
+      assert Forms.fields(pdf) == Forms.fields(baseline)
+      assert {:ok, filled} = Forms.fill(pdf, %{"choice" => "a"})
+      assert {:ok, [%{value: "a"}]} = Forms.fields(filled)
+      assert {:ok, flattened} = Forms.flatten(filled)
+      assert {:ok, []} = Forms.fields(flattened)
+    end
+  end
+
+  test "indirect widget subtypes preserve merged and child widget behavior", %{
+    context: context,
+    field: field
+  } do
+    next = context.document.trailer["Size"]
+    [widget] = field.widgets
+    {:ref, {widget_id, widget_generation}} = widget.ref
+
+    for child? <- [false, true] do
+      {context, widget_ref} =
+        if child? do
+          {:ref, {field_id, field_generation}} = field.ref
+          [page] = context.pages
+          {page_id, page_generation} = page.ref
+          child_ref = {:ref, {next, 0}}
+          parent = field.dictionary |> Map.delete("Subtype") |> Map.put("Kids", [child_ref])
+
+          child =
+            widget.dictionary
+            |> Map.drop(~w(T FT Ff V DV DA Q Opt MaxLen Kids))
+            |> Map.put("Parent", field.ref)
+
+          assert {:ok, pdf} =
+                   IncrementalWriter.write(context, [
+                     {field_id, field_generation, {:value, parent}},
+                     {next, 0, {:value, child}},
+                     {page_id, page_generation,
+                      {:value, Map.put(page.dictionary, "Annots", [child_ref])}}
+                   ])
+
+          assert {:ok, context} = Reader.read_validated(pdf)
+          {context, child_ref}
+        else
+          {context, {:ref, {widget_id, widget_generation}}}
+        end
+
+      {:ref, {id, generation}} = widget_ref
+      assert {:ok, dictionary} = Reader.dictionary(context.document, widget_ref)
+      assert {:ok, expected} = Forms.fields(context.document.binary)
+      name_id = context.document.trailer["Size"]
+
+      assert {:ok, pdf} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(dictionary, "Subtype", {:ref, {name_id, 0}})}},
+                 {name_id, 0, {:value, {:name, "Widget"}}}
+               ])
+
+      assert Forms.fields(pdf) == {:ok, expected}
+      assert {:ok, filled} = Forms.fill(pdf, %{"field" => "Updated"})
+      assert {:ok, [%{value: "Updated", widgets: [_]}]} = Forms.fields(filled)
+      assert {:ok, flattened} = Forms.flatten(filled)
+      assert {:ok, []} = Forms.fields(flattened)
+      assert {:ok, text} = Text.extract(flattened)
+      assert text =~ "Updated"
+    end
+  end
+
+  test "missing and cyclic option and widget references retain resolution diagnostics", %{
+    context: context,
+    field: field
+  } do
+    next = context.document.trailer["Size"]
+
+    for patch <- [
+          %{"Opt" => [{:ref, {next, 0}}]},
+          %{"Opt" => [[{:ref, {next, 0}}, {:string, "label"}]]},
+          %{"Opt" => [[{:string, "value"}, {:ref, {next, 0}}]]},
+          %{"Subtype" => {:ref, {next, 0}}}
+        ],
+        objects <- [[], [{next, 0, {:value, {:ref, {next, 0}}}}]] do
+      pdf = field_pdf(context, field, patch, objects)
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Forms.fields(pdf)
+      assert diagnostic.stage == :resolution
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.operation == :fields
+      assert diagnostic.message != ""
+    end
+  end
+
   defp field_pdf(context, field, patch, objects \\ []) do
     {:ref, {id, generation}} = field.ref
 

@@ -475,7 +475,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                      is_list(kids) and
                        length(kids) + 1 + map_size(state.seen) <=
                          Limits.get(:max_pdf_form_fields),
-                   {:ok, child_dicts} <- resolve_children(document, kids),
+                   {:ok, child_dicts, terminals} <- resolve_children(document, kids),
+                   {:ok, subtype} <- PdfValidator.resolve(document, dictionary["Subtype"]),
                    {:ok, name} <- prepare_field_name(prefix, partial) do
                 effective = Map.merge(inherited, Map.take(dictionary, @inherited))
 
@@ -485,17 +486,12 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                     nodes: Map.put(state.nodes, ref, Map.put(dictionary, "Kids", kids))
                 }
 
-                terminals =
-                  Enum.all?(child_dicts, fn {_ref, child} ->
-                    child["Subtype"] == {:name, "Widget"} and not Map.has_key?(child, "T")
-                  end)
-
                 result =
                   if kids != [] and not terminals do
                     walk(document, kids, effective, name, depth + 1, state)
                   else
                     widgets =
-                      if dictionary["Subtype"] == {:name, "Widget"},
+                      if subtype == {:name, "Widget"},
                         do: [{ref, dictionary}],
                         else: child_dicts
 
@@ -558,14 +554,17 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   end
 
   defp resolve_children(document, refs) do
-    Enum.reduce_while(refs, {:ok, []}, fn ref, {:ok, children} ->
-      case PdfValidator.dictionary(document, ref) do
-        {:ok, dictionary} -> {:cont, {:ok, [{ref, dictionary} | children]}}
+    Enum.reduce_while(refs, {:ok, [], true}, fn ref, {:ok, children, terminals} ->
+      with {:ok, dictionary} <- PdfValidator.dictionary(document, ref),
+           {:ok, subtype} <- PdfValidator.resolve(document, dictionary["Subtype"]) do
+        terminal = subtype == {:name, "Widget"} and not Map.has_key?(dictionary, "T")
+        {:cont, {:ok, [{ref, dictionary} | children], terminals and terminal}}
+      else
         failure -> {:halt, failure}
       end
     end)
     |> case do
-      {:ok, children} -> {:ok, Enum.reverse(children)}
+      {:ok, children, terminals} -> {:ok, Enum.reverse(children), terminals}
       failure -> failure
     end
   end
@@ -743,15 +742,17 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   defp choices(document, value) do
     with {:ok, values} <- PdfValidator.resolve(document, value), true <- is_list(values) do
       Enum.reduce_while(values, {:ok, []}, fn value, {:ok, choices} ->
-        pair =
-          case value do
-            [export, display] -> {export, display}
-            text -> {text, text}
-          end
-
         with :ok <- FormInspectionValidator.reserve(:max_pdf_form_preparation_entries, 1, "Opt"),
-             {:ok, export} <- text(elem(pair, 0)),
-             {:ok, display} <- text(elem(pair, 1)),
+             {:ok, value} <- PdfValidator.resolve(document, value),
+             {export, display} =
+               (case value do
+                  [export, display] -> {export, display}
+                  text -> {text, text}
+                end),
+             {:ok, export} <- PdfValidator.resolve(document, export),
+             {:ok, export} <- text(export),
+             {:ok, display} <- PdfValidator.resolve(document, display),
+             {:ok, display} <- text(display),
              :ok <-
                FormInspectionValidator.reserve(
                  :max_pdf_form_metadata_bytes,
