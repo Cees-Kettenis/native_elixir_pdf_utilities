@@ -4725,21 +4725,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     grid_height = grid_tracks_size(row_sizes, row_gap)
 
     {content_x, content_gap} =
-      grid_content_distribution(
+      content_distribution(
         style,
         :justify_content,
-        content_width,
-        grid_width,
+        max(content_width - grid_width, 0.0),
         column_gap,
         length(column_sizes)
       )
 
     {content_y, row_gap} =
-      grid_content_distribution(
+      content_distribution(
         style,
         :align_content,
-        content_height,
-        grid_height,
+        max(content_height - grid_height, 0.0),
         row_gap,
         length(row_sizes)
       )
@@ -4841,9 +4839,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     })
   end
 
-  defp grid_content_distribution(style, property, container_size, grid_size, gap, count) do
-    free_space = max(container_size - grid_size, 0.0)
-
+  defp content_distribution(style, property, free_space, gap, count) do
     case Map.get(style, property, :flex_start) do
       :flex_end ->
         {free_space, gap}
@@ -4851,16 +4847,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       :center ->
         {free_space / 2, gap}
 
-      :space_between when count > 1 ->
+      :space_between when count > 1 and free_space > 0 ->
         {0.0, gap + free_space / (count - 1)}
 
-      :space_around when count > 0 ->
+      :space_around when count > 0 and free_space > 0 ->
         distributed_gap = gap + free_space / count
         {free_space / count / 2, distributed_gap}
 
-      :space_evenly when count > 0 ->
+      :space_evenly when count > 0 and free_space > 0 ->
         distributed_gap = gap + free_space / (count + 1)
         {free_space / (count + 1), distributed_gap}
+
+      distribution when distribution in [:space_around, :space_evenly] and count > 0 ->
+        {free_space / 2, gap}
 
       _ ->
         {0.0, gap}
@@ -5624,10 +5623,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp flex_line_boxes(lines, style, x, y, content_width, content_height, container_flow_id) do
     main_axis = flex_main_axis(style)
     cross_gap = flex_cross_gap(style)
+    line_count = length(lines)
+    wrapped_columns? = main_axis == :column and Map.get(style, :flex_wrap, :nowrap) == :wrap
+
+    {lines, cross_start, cross_gap} =
+      if wrapped_columns? do
+        occupied_width =
+          Enum.reduce(lines, 0.0, &(&1.cross + &2)) + cross_gap * (line_count - 1)
+
+        free_space = content_width - occupied_width
+
+        {lines, free_space} =
+          if Map.get(style, :align_content, :stretch) == :stretch and free_space > 0 do
+            extra = free_space / line_count
+            {Enum.map(lines, &%{&1 | cross: &1.cross + extra}), 0.0}
+          else
+            {lines, free_space}
+          end
+
+        {offset, gap} =
+          content_distribution(style, :align_content, free_space, cross_gap, line_count)
+
+        {lines, offset, gap}
+      else
+        {lines, 0.0, cross_gap}
+      end
 
     {lines, _cross_offset} =
-      Enum.reduce(lines, {[], 0.0}, fn line, {acc, cross_offset} ->
-        line_cross = flex_line_cross(line, style, length(lines), content_height)
+      Enum.reduce(lines, {[], cross_start}, fn line, {acc, cross_offset} ->
+        line_cross =
+          if wrapped_columns?,
+            do: line.cross,
+            else: flex_line_cross(line, style, line_count, content_height)
 
         positioned =
           flex_position_line(
@@ -5756,7 +5783,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       ) != {false, false}
 
     align = if cross_auto, do: :flex_start, else: align
-    available_cross = if main_axis == :row, do: line_cross, else: content_width
+
+    available_cross =
+      if main_axis == :column and Map.get(style, :flex_wrap, :nowrap) == :nowrap,
+        do: content_width,
+        else: line_cross
 
     cross_position =
       if cross_auto,
@@ -5783,11 +5814,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         })
 
       :column ->
-        box_width = flex_aligned_cross_box(item, align, content_width, :column)
+        box_width = flex_aligned_cross_box(item, align, available_cross, :column)
         box_height = item.main_box
 
         Map.merge(item, %{
-          x: x + cross_position + item.margin.left,
+          x: x + cross_offset + cross_position + item.margin.left,
           y: y - main_offset - item.margin.top,
           box_width: box_width,
           box_height: box_height,
@@ -6049,8 +6080,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             flex_cross_gap(style) * max(length(lines) - 1, 0)
 
         :column ->
-          [line] = lines
-          line.main
+          Enum.reduce(lines, 0.0, &max(&1.main, &2))
       end
 
     resolved_content_size(style, :height, Map.get(style, :_containing_height), intrinsic)
