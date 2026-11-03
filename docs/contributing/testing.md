@@ -118,7 +118,7 @@ durations can differ.
 | Execution | Up to six modules; process-wide environment changes and load-sensitive cases stay serial |
 | Browser state | Fresh process and context per capture, print media, author JavaScript disabled; processes/profiles cleaned afterward |
 | Input encoding | Generated reference inputs declare UTF-8 with a BOM; authored fixture bytes remain unchanged |
-| Readiness | Wait for frame/resources, fonts and image decoding; verify stable frame tree; retain readiness/timeout diagnostics beside PDFs |
+| Readiness | Chromium virtual time pauses for pending fetches; wait for frames, fonts and image decoding, then verify a stable frame tree. Capture deadlines use wall time; diagnostics stay beside PDFs |
 | Failures | Use suite timeout, preserve broken-resource fallback; never retry to hide a failed comparison |
 | Shared sheets | Only independent cases with separate regions and unchanged checks; root-document, pagination and custom-reference cases stay separate |
 

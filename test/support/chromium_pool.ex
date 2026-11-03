@@ -6,7 +6,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   @doc """
   Prints a fixture in a fresh browser process and context, bounded by test concurrency.
   The `:clock`, `:timeout` and `:request_observer` options let readiness tests
-  advance a deadline after observing the resource being tested.
+  advance a deadline after observing the resource being tested. `:browser_args`
+  lets those tests exercise Chromium's parser scheduling controls.
   """
   @spec print_pdf!(String.t(), String.t(), String.t(), map() | nil, keyword()) :: :ok
   def print_pdf!(binary, fixture, output, reference \\ nil, opts \\ []) do
@@ -87,7 +88,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
           "browser_log=$1; shift; exec \"$@\" 3<&0 4>&1 2>\"$browser_log\"",
           "browser-pipe",
           log,
-          binary | args
+          binary | args ++ Keyword.get(opts, :browser_args, [])
         ]
       ])
 
@@ -154,6 +155,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
       {_, state} = command(state, "Page.setLifecycleEventsEnabled", %{enabled: true}, session)
       {_, state} = command(state, "Emulation.setScriptExecutionDisabled", %{value: true}, session)
       {_, state} = command(state, "Emulation.setEmulatedMedia", %{media: "print"}, session)
+
+      # Keep parser work and embedded-content initialization on Chromium's
+      # virtual clock. With wall-clock scheduling, a parser yield can initialize
+      # an <object> before its children are parsed, leaving it without a frame
+      # even after the parent's load event. Pending fetches still gate progress;
+      # the capture's independent wall-clock deadline remains in force.
+      {_, state} =
+        command(
+          state,
+          "Emulation.setVirtualTimePolicy",
+          %{policy: "pauseIfNetworkFetchesPending"},
+          session
+        )
 
       state =
         if reference do

@@ -142,6 +142,70 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
     assert Enum.any?(images, &(&1["complete"] and &1["width"] == 0))
   end
 
+  test "parser yields preserve object documents and failed-resource fallback without retries" do
+    observer = self()
+
+    objects =
+      Enum.map_join(1..12, fn index ->
+        ~s|<object data="/child-#{index}" type="text/html"><p>Unused fallback #{index}</p></object>|
+      end)
+
+    url =
+      serve(fn path ->
+        send(observer, {:resource_request, path})
+
+        cond do
+          path == "/" ->
+            {200, "text/html",
+             """
+             <html><head><style>object{display:block;width:280px;height:100px}</style></head><body>
+             #{objects}
+             <object data="/missing" type="text/html"><p>Missing object fallback</p></object>
+             <script>document.body.textContent='Author script ran';</script>
+             </body></html>
+             """}
+
+          String.starts_with?(path, "/child-") ->
+            {200, "text/html",
+             """
+             <p>Object child #{path}</p>
+             <object data="/leaf#{path}" type="text/html"><p>Unused nested fallback</p></object>
+             """}
+
+          String.starts_with?(path, "/leaf/child-") ->
+            {200, "text/html", "<p>Nested object leaf #{path}</p>"}
+
+          true ->
+            {404, "text/plain", "Missing"}
+        end
+      end)
+
+    output = Paths.project("tmp/browser_parity/chromium_readiness/parser_yields.pdf")
+    File.mkdir_p!(Path.dirname(output))
+    browser = System.get_env("CHROMIUM_BIN") || System.find_executable("chromium")
+
+    assert :ok =
+             ChromiumPool.print_pdf!(browser, url, output, nil,
+               browser_args: ["--enable-blink-features=HTMLParserYieldAndDelayOftenForTesting"]
+             )
+
+    assert {text, 0} = System.cmd("pdftotext", [output, "-"])
+    assert length(Regex.scan(~r/Object child/, text)) == 12
+    assert length(Regex.scan(~r/Nested object leaf/, text)) == 12
+    assert text =~ "Missing object fallback"
+    refute text =~ "Unused"
+    refute text =~ "Author script ran"
+
+    frames = output |> Kernel.<>(".readiness.json") |> File.read!() |> :json.decode()
+    assert Enum.count(frames, &String.contains?(&1["url"], "/child-")) == 24
+    assert Enum.all?(frames, &(&1["ready"] == "complete" and &1["fonts"] == "loaded"))
+
+    for path <- ["/missing" | Enum.flat_map(1..12, &["/child-#{&1}", "/leaf/child-#{&1}"])] do
+      assert_received {:resource_request, ^path}
+      refute_received {:resource_request, ^path}
+    end
+  end
+
   @tag timeout: 15_000
   test "unfinished child loads fail with pending resource diagnostics when the deadline expires" do
     url =
