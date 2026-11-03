@@ -8,6 +8,133 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
 
   @fixture_directory Paths.fixture("pdf_reader")
 
+  test "object capacity reports limits across xref encodings and retains exact boundaries" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    classic =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    for source <- [
+          classic.pdf,
+          xref_stream_pdf(),
+          xref_stream_pdf(index: [0, 2, 2, 2]),
+          xref_stream_pdf(indirect_length: true),
+          File.read!(Path.join(@fixture_directory, "hybrid-xref.pdf")),
+          File.read!(Path.join(@fixture_directory, "object-stream.pdf")),
+          File.read!(Path.join(@fixture_directory, "incremental-update.pdf"))
+        ] do
+      Limits.install(limits)
+      assert {:ok, document} = Reader.read(source)
+      required = max(map_size(document.xref), document.trailer["Size"] - 1)
+      Limits.install(%{limits | max_pdf_objects: required})
+      assert {:ok, ^document} = Reader.read(source)
+
+      for allowance <- Enum.uniq([required - 1, 1]) do
+        Limits.install(%{limits | max_pdf_objects: allowance})
+
+        for {result, operation, module} <- [
+              {Reader.read(source), :read, Reader},
+              {NativeElixirPdfUtilities.Info.page_count(source), :page_count,
+               NativeElixirPdfUtilities.Info}
+            ] do
+          assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+          assert diagnostic.stage == :limits
+          assert diagnostic.reason == :resource_limit_exceeded
+          assert diagnostic.operation == operation
+          assert diagnostic.module == module
+          assert diagnostic.message =~ "max_pdf_objects"
+        end
+      end
+    end
+  end
+
+  test "sparse xrefs preserve the separate entry-count and allocated-ID limits" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    classic =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    sparse =
+      classic.pdf
+      |> String.replace("trailer\n", "9 1\n" <> classic_entry(0, 0, "f") <> "trailer\n")
+      |> String.replace("/Size 3", "/Size 10")
+
+    Limits.install(%{limits | max_pdf_objects: 9})
+    assert {:ok, document} = Reader.read(sparse)
+    assert map_size(document.xref) == 4
+    assert document.xref[9] == {:free, 0, 0}
+    Limits.install(%{limits | max_pdf_objects: 8})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(sparse)
+    assert diagnostic.message == "PDF object IDs exceed max_pdf_objects"
+
+    Limits.install(%{limits | max_pdf_objects: 3})
+
+    for source <- [
+          String.replace(classic.pdf, "xref\n0 3", "xref\n0 0\n0 3", global: false),
+          xref_stream_pdf(index: [0, 0, 0, 3])
+        ] do
+      assert {:ok, document} = Reader.read(source)
+      assert map_size(document.xref) == 3
+    end
+
+    for source <- [
+          String.replace(
+            classic.pdf,
+            "trailer\n",
+            "3 1\n" <> classic_entry(0, 0, "f") <> "trailer\n"
+          )
+          |> String.replace("/Size 3", "/Size 4"),
+          xref_stream_pdf(index: [0, 2, 2, 2])
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(source)
+
+      assert diagnostic.message ==
+               "PDF object count including object zero exceeds max_pdf_objects"
+    end
+  end
+
+  test "malformed xrefs remain input errors within the object allowance" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_pdf_objects: 10})
+
+    classic =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"}
+      ])
+
+    for source <- [
+          String.replace(classic.pdf, "xref\n0 3", "xref\n-1 3", global: false),
+          String.replace(classic.pdf, "xref\n0 3", "xref\n0 -1", global: false),
+          String.replace(
+            classic.pdf,
+            "trailer\n",
+            "0 1\n" <> classic_entry(0, 65_535, "f") <> "trailer\n"
+          ),
+          xref_stream_pdf(index: [0, 2, 1, 2]),
+          xref_stream_pdf(index: [0, 5]),
+          xref_stream_pdf(index: [0]),
+          xref_stream_pdf(widths: [0, 0, 0]),
+          xref_stream_pdf() |> String.replace("/Size 4", "/Size 0"),
+          xref_stream_pdf() |> String.replace("/Size 4", "/Size /Invalid")
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = Reader.read(source)
+      assert diagnostic.reason == :invalid_pdf_input
+      assert diagnostic.stage == :xref
+      assert diagnostic.operation == :read
+      assert diagnostic.module == Reader
+    end
+  end
+
   test "revision admission preserves exact limits and diagnoses cycles before exhaustion" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)

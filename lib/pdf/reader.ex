@@ -396,8 +396,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_classic_sections(tokens, entries) do
-    max_objects = Limits.get(:max_pdf_objects)
-
     case tokens do
       [:trailer | rest] ->
         with {:ok, trailer, _rest} <- parse_value(rest),
@@ -409,8 +407,15 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         end
 
       [{:int, first}, {:int, count} | rest]
-      when first >= 0 and count >= 0 and first + count <= max_objects + 1 ->
-        with {:ok, entries, rest} <- parse_classic_entries(rest, first, count, entries) do
+      when first >= 0 and count >= 0 ->
+        with :ok <-
+               PdfValidator.validate_object_capacity(
+                 map_size(entries) + count,
+                 max(first + count, 1),
+                 operation: :read,
+                 module: __MODULE__
+               ),
+             {:ok, entries, rest} <- parse_classic_entries(rest, first, count, entries) do
           parse_classic_sections(rest, entries)
         end
 
@@ -649,9 +654,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     size = Map.get(dictionary, "Size")
     widths = Map.get(dictionary, "W")
     index = Map.get(dictionary, "Index", if(is_integer(size), do: [0, size], else: nil))
-    max_objects = Limits.get(:max_pdf_objects)
 
-    with true <- is_integer(size) and size > 0 and size <= max_objects + 1,
+    with :ok <-
+           PdfValidator.validate_object_capacity(0, size, operation: :read, module: __MODULE__),
          [type_width, field_width, generation_width] <- widths,
          true <-
            Enum.all?(
@@ -689,15 +694,23 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
             [first, count]
             when is_integer(first) and first >= 0 and is_integer(count) and count >= 0 and
                    first + count <= size ->
-              PdfValidator.charge_reader_budget(:max_pdf_reader_values, count)
-              range = if count == 0, do: [], else: Enum.to_list(first..(first + count - 1))
+              with :ok <-
+                     PdfValidator.validate_object_capacity(MapSet.size(seen) + count, size,
+                       operation: :read,
+                       module: __MODULE__
+                     ) do
+                PdfValidator.charge_reader_budget(:max_pdf_reader_values, count)
+                range = if count == 0, do: [], else: Enum.to_list(first..(first + count - 1))
 
-              if Enum.any?(range, &MapSet.member?(seen, &1)) do
-                {:halt, error(:xref, :invalid_pdf_input, "xref stream Index ranges overlap")}
+                if Enum.any?(range, &MapSet.member?(seen, &1)) do
+                  {:halt, error(:xref, :invalid_pdf_input, "xref stream Index ranges overlap")}
+                else
+                  {:cont,
+                   {:ok, Enum.reverse(range, objects),
+                    Enum.reduce(range, seen, &MapSet.put(&2, &1))}}
+                end
               else
-                {:cont,
-                 {:ok, Enum.reverse(range, objects),
-                  Enum.reduce(range, seen, &MapSet.put(&2, &1))}}
+                {:error, _} = capacity_error -> {:halt, capacity_error}
               end
 
             _ ->
