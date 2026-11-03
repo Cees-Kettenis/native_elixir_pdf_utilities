@@ -956,6 +956,21 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end)
   end
 
+  @doc "Checks whether a direct or indirect value resolves to the expected PDF name."
+  @spec named?(document(), value(), binary()) :: boolean()
+  def named?(document, value, expected) do
+    case value do
+      {:ref, _ref} ->
+        case resolve(document, value) do
+          {:ok, value} -> named?(value, expected)
+          {:error, _} -> false
+        end
+
+      value ->
+        named?(value, expected)
+    end
+  end
+
   @doc """
   Resolves an optional dictionary entry, applying its default after resolving PDF null.
   Null operands inside arrays and required values retain their original semantics.

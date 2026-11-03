@@ -180,17 +180,18 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp named_link_destination?(document, value) do
     case value do
-      %{"Subtype" => {:name, "Link"}} = dictionary ->
-        case link_destination(document, dictionary) do
-          {:ok, {_location, destination}} -> named_destination?(document, destination)
-          :none -> false
-        end
-
       values when is_list(values) ->
         Enum.any?(values, &named_link_destination?(document, &1))
 
       dictionary when is_map(dictionary) ->
-        Enum.any?(dictionary, fn {_key, value} -> named_link_destination?(document, value) end)
+        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link") do
+          case link_destination(document, dictionary) do
+            {:ok, {_location, destination}} -> named_destination?(document, destination)
+            :none -> false
+          end
+        else
+          Enum.any?(dictionary, fn {_key, value} -> named_link_destination?(document, value) end)
+        end
 
       _ ->
         false
@@ -209,8 +210,10 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
           action ->
             case PdfValidator.resolve(document, action) do
-              {:ok, %{"S" => {:name, "GoTo"}} = action} ->
-                {:ok, {{:action, action}, Map.get(action, "D")}}
+              {:ok, action} when is_map(action) ->
+                if PdfValidator.named?(document, Map.get(action, "S"), "GoTo"),
+                  do: {:ok, {{:action, action}, Map.get(action, "D")}},
+                  else: :none
 
               _ ->
                 :none
@@ -237,16 +240,17 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp normalize_named_link_value(document, named_destinations, value) do
     case value do
-      %{"Subtype" => {:name, "Link"}} = dictionary ->
-        normalize_named_link_dictionary(document, named_destinations, dictionary)
-
       dictionary when is_map(dictionary) ->
-        Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
-          case normalize_named_link_value(document, named_destinations, value) do
-            {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
-            {:error, _} = error -> {:halt, error}
-          end
-        end)
+        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link") do
+          normalize_named_link_dictionary(document, named_destinations, dictionary)
+        else
+          Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
+            case normalize_named_link_value(document, named_destinations, value) do
+              {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
+              {:error, _} = error -> {:halt, error}
+            end
+          end)
+        end
 
       values when is_list(values) ->
         values

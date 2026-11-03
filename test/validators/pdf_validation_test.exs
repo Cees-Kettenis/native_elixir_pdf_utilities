@@ -10,6 +10,25 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
 
   @fixture_directory Paths.fixture("pdf_reader")
 
+  test "name classification resolves generation-aware chains without treating strings or cycles as names" do
+    document = %{
+      objects: %{
+        {1, 2} => %{value: {:ref, {2, 0}}, stream: nil},
+        {2, 0} => %{value: {:name, "Link"}, stream: nil},
+        {3, 0} => %{value: {:string, "Link"}, stream: nil},
+        {4, 0} => %{value: {:ref, {4, 0}}, stream: nil}
+      }
+    }
+
+    assert PdfValidator.named?(document, {:name, "Link"}, "Link")
+    assert PdfValidator.named?(document, {:ref, {1, 2}}, "Link")
+    refute PdfValidator.named?(document, {:ref, {1, 2}}, "Text")
+
+    for value <- [nil, {:string, "Link"}, {:ref, {1, 0}}, {:ref, {3, 0}}, {:ref, {4, 0}}] do
+      refute PdfValidator.named?(document, value, "Link")
+    end
+  end
+
   test "normalizes Contents and rejects missing, cyclic, and non-stream references" do
     document = %{
       objects: %{

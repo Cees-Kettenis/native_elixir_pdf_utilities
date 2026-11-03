@@ -411,6 +411,126 @@ defmodule NativeElixirPdfUtilities.TransformTest do
     end
   end
 
+  test "preserves named links with indirect subtype and action names across rebuild operations" do
+    for subtype <- ["/Link", "20 0 R"],
+        action_type <- ["/GoTo", "22 0 R"],
+        annotation_form <- [:indirect, :direct, :indirect_array] do
+      annotations =
+        "[<< /Subtype #{subtype} /Rect [0 0 10 10] /Dest /Legacy >> " <>
+          "<< /Subtype #{subtype} /Rect [0 0 10 10] /A 23 0 R >>]"
+
+      {entry, objects} =
+        case annotation_form do
+          :indirect ->
+            {"[16 0 R 17 0 R]",
+             [
+               {16, "<< /Subtype #{subtype} /Rect [0 0 10 10] /Dest /Legacy >>"},
+               {17, "<< /Subtype #{subtype} /Rect [0 0 10 10] /A 23 0 R >>"}
+             ]}
+
+          :direct ->
+            {annotations, []}
+
+          :indirect_array ->
+            {"16 0 R", [{16, annotations}]}
+        end
+
+      source =
+        three_page_pdf(
+          "/Annots #{entry}",
+          objects ++
+            [
+              {18, "<< /Names [(modern) 19 0 R] >>"},
+              {19, "<< /D [4 0 R /Fit] >>"},
+              {20, "21 0 R"},
+              {21, "/Link"},
+              {22, "/GoTo"},
+              {23, "<< /S #{action_type} /D (modern) >>"}
+            ],
+          "/Dests << /Legacy [5 0 R /Fit] >> /Names << /Dests 18 0 R >>"
+        )
+
+      assert {:ok, merged} = Merge.merge([source, source])
+      assert link_target_pages(merged, 1) == [3, 2]
+      assert link_target_pages(merged, 4) == [6, 5]
+      assert {:ok, picked} = Transform.pick_pages(source, [3, 2, 1])
+      assert link_target_pages(picked, 3) == [1, 2]
+      assert {:ok, deleted} = Transform.delete_pages(source, [2])
+      assert link_target_pages(deleted, 1) == [2]
+      assert {:ok, rotated} = Transform.rotate_pages(source, 90)
+      assert link_target_pages(rotated, 1) == [3, 2]
+      assert {:ok, [range]} = Split.by_ranges(source, [1..3])
+      assert link_target_pages(range, 1) == [3, 2]
+      assert {:ok, [first, _second, _third]} = Split.by_page(source)
+      assert link_target_pages(first, 1) == []
+    end
+  end
+
+  test "indirect link names retain explicit targets and omit links to removed pages" do
+    for subtype <- ["/Link", "20 0 R"],
+        action_type <- ["/GoTo", "21 0 R"],
+        destination <- ["/Dest [5 0 R /Fit]", "/A << /S #{action_type} /D [5 0 R /Fit] >>"] do
+      source =
+        three_page_pdf("/Annots [16 0 R]", [
+          {16, "<< /Subtype #{subtype} /Rect [0 0 10 10] #{destination} >>"},
+          {20, "/Link"},
+          {21, "/GoTo"}
+        ])
+
+      assert {:ok, picked} = Transform.pick_pages(source, [3, 1])
+      assert link_target_pages(picked, 2) == [1]
+      assert {:ok, removed} = Transform.pick_pages(source, [1])
+      assert link_target_pages(removed, 1) == []
+      refute removed =~ "/Annots"
+    end
+  end
+
+  test "indirect external actions and non-link annotations retain their original meaning" do
+    source =
+      three_page_pdf("/Annots [16 0 R 17 0 R]", [
+        {16,
+         "<< /Subtype 20 0 R /Rect [0 0 10 10] /A << /S 21 0 R /URI (https://example.com) >> >>"},
+        {17, "<< /Subtype 22 0 R /Rect [0 0 10 10] /Contents (retained note) >>"},
+        {20, "/Link"},
+        {21, "/URI"},
+        {22, "/Text"}
+      ])
+
+    for result <- [Merge.merge([source]), Transform.pick_pages(source, [1])] do
+      assert {:ok, output} = result
+      assert {:ok, document} = Reader.read(output)
+      assert {:ok, page} = Reader.resolve(document, {:ref, hd(document.pages).ref})
+      assert {:ok, [link, note]} = Reader.resolve(document, page["Annots"])
+      assert {:ok, link} = Reader.resolve(document, link)
+      assert {:ok, {:name, "Link"}} = Reader.resolve(document, link["Subtype"])
+      assert {:ok, action} = Reader.resolve(document, link["A"])
+      assert {:ok, {:name, "URI"}} = Reader.resolve(document, action["S"])
+      assert action["URI"] == {:string, "https://example.com"}
+      assert {:ok, note} = Reader.resolve(document, note)
+      assert {:ok, {:name, "Text"}} = Reader.resolve(document, note["Subtype"])
+      assert note["Contents"] == {:string, "retained note"}
+    end
+  end
+
+  test "indirect link names retain malformed destination diagnostics" do
+    for destination <- ["/Dest 42", "/A << /S 21 0 R /D 42 >>", "/A 42"] do
+      source =
+        three_page_pdf("/Annots [16 0 R]", [
+          {16, "<< /Subtype 20 0 R /Rect [0 0 10 10] #{destination} >>"},
+          {20, "/Link"},
+          {21, "/GoTo"}
+        ])
+
+      assert {:error,
+              {:invalid_pdf_input,
+               %{stage: :annotations, reason: :invalid_pdf_input, message: message}}} =
+               Transform.pick_pages(source, [1])
+
+      assert message =~ "link"
+      assert message =~ "malformed" or message =~ "dictionary"
+    end
+  end
+
   test "direct named annotation errors retain diagnostics and effective page inheritance" do
     annotation = "<< /Subtype /Link /Rect [0 0 10 10] /Dest /Target >>"
     source = three_page_pdf("/Annots [#{annotation}]", [], "/Dests << /Target (broken) >>")
@@ -570,8 +690,14 @@ defmodule NativeElixirPdfUtilities.TransformTest do
         case Map.get(annotation, "Dest") do
           nil ->
             case Reader.resolve(document, Map.get(annotation, "A")) do
-              {:ok, %{"S" => {:name, "GoTo"}} = action} -> Map.get(action, "D")
-              _ -> nil
+              {:ok, action} when is_map(action) ->
+                case Reader.resolve(document, Map.get(action, "S")) do
+                  {:ok, {:name, "GoTo"}} -> Map.get(action, "D")
+                  _ -> nil
+                end
+
+              _ ->
+                nil
             end
 
           destination ->
