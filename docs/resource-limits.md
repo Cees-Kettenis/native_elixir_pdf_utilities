@@ -30,8 +30,8 @@ the BEAM runtime maximum.
 
 ## Operation time and memory
 
-Document operations and PDF reads run in disposable workers. Nested calls share
-one allowance. Applications control concurrency.
+Document operations, PDF reads, and standalone stream decodes run in disposable
+workers. Nested calls share one allowance. Applications control concurrency.
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |

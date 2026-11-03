@@ -95,7 +95,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidator do
           with :ok <- reserve(:max_pdf_form_font_work_bytes, byte_size(bytes)), do: {:ok, bytes}
 
         :error ->
-          with {:ok, bytes} <- Reader.decoded_stream(document, {:ref, stream.ref}),
+          # Keep unique font decodes inside the inspection's shared reader budget.
+          with {:ok, prepared} <-
+                 PdfValidator.prepare_decoded_stream(document, {:ref, stream.ref},
+                   operation: :read,
+                   module: Reader
+                 ),
+               {:ok, bytes} <- Reader.decode_prepared_stream(prepared),
                :ok <- reserve(:max_pdf_form_font_work_bytes, byte_size(bytes)) do
             scope = Process.get(@scope_key)
             Process.put(@scope_key, %{scope | fonts: Map.put(scope.fonts, stream.ref, bytes)})

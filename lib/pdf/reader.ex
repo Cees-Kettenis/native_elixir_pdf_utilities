@@ -212,18 +212,23 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
   @doc """
   Resolves an indirect stream and decodes its declared filters.
+
+  Standalone calls run in a bounded operation worker. Nested calls share the
+  owning operation's deadline, memory allowance, and active reader budget.
   """
   @spec decoded_stream(document(), value()) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def decoded_stream(document, value) do
-    PdfValidator.with_reader_budget(fn ->
-      with {:ok, stream_context} <-
-             PdfValidator.prepare_decoded_stream(document, value,
-               operation: :read,
-               module: __MODULE__
-             ) do
-        decode_stream(stream_context.stream, stream_context.filters, stream_context.ref)
-      end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      PdfValidator.with_reader_budget(fn ->
+        with {:ok, stream_context} <-
+               PdfValidator.prepare_decoded_stream(document, value,
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          decode_stream(stream_context.stream, stream_context.filters, stream_context.ref)
+        end
+      end)
     end)
   end
 
