@@ -4,6 +4,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ExplicitBlockSpaceTest do
   alias NativeElixirPdfUtilities.{HtmlToPdf, Info, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Pagination, PdfWriter}
 
+  test "fractional block tails do not create a blank page from arithmetic roundoff" do
+    height = 3 / 2.54 * 72
+    source_height = 3 * 72 / 2.54
+    delta = source_height - height
+    assert delta > 0 and delta < 1.0e-12
+
+    paint = %{
+      type: :rect,
+      x: 0,
+      y: height - 10,
+      width: 10,
+      height: 10,
+      fill_color: {1, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0
+    }
+
+    layout = %{
+      type: :layout,
+      page_size: {150, height},
+      margin: 0,
+      boxes: [
+        paint,
+        %{
+          type: :flow_marker,
+          role: :explicit_block_space,
+          x: 0,
+          y: -delta,
+          width: 0,
+          height: source_height - 10
+        },
+        %{
+          type: :page_break,
+          x: 0,
+          y: -delta,
+          width: 0,
+          height: 0,
+          break_before: :auto,
+          break_after: :page
+        },
+        %{paint | y: -delta - 10}
+      ]
+    }
+
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) == 2
+    assert Enum.all?(pages, fn page -> Enum.any?(page.boxes, &(&1.type == :rect)) end)
+
+    # A real overflow must still consume its own page before the authored break.
+    excess = 0.000001
+    [paint, tail, page_break, following] = layout.boxes
+
+    layout = %{
+      layout
+      | boxes: [
+          paint,
+          %{tail | y: -excess, height: height + excess - 10},
+          %{page_break | y: -excess},
+          %{following | y: -excess - 10}
+        ]
+    }
+
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) == 3
+  end
+
   test "prepared block-space markers without optional clips preserve following placement" do
     layout = %{
       type: :layout,

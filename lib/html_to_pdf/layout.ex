@@ -1729,7 +1729,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                      Enum.any?(children, fn child ->
                        Map.get(Map.get(child, :style, %{}), :display) == :inline_block
                      end) do
-                  inline_content_size(
+                  rounded_content_size(
                     style,
                     :height,
                     Map.get(style, :_containing_height),
@@ -4952,7 +4952,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_flex(style, children, x, y, width, previous \\ nil) do
     margin = Map.get(style, :margin, edges(0.0, 0.0, Map.get(style, :margin_after, 0.0), 0.0))
+
+    rounded_rows? =
+      flex_main_axis(style) == :row and Map.get(style, :flex_wrap, :nowrap) == :wrap and
+        is_number(resolved_content_size(style, :height, Map.get(style, :_containing_height), nil))
+
     padding = Map.get(style, :padding, edges(0.0))
+
+    padding =
+      if rounded_rows? do
+        Map.new(padding, fn {side, value} ->
+          {side, Float.floor(value / @css_pixel_points * 64) / 64 * @css_pixel_points}
+        end)
+      else
+        padding
+      end
+
+    style = if rounded_rows?, do: Map.put(style, :padding, padding), else: style
     border_widths = Map.get(style, :border_widths, edges(0.0))
     available_box_width = width - margin.left - margin.right
 
@@ -4979,10 +4995,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     content_x = box_x + border_widths.left + padding.left
     content_top = box_top - border_widths.top - padding.top
 
+    # Keep the row origin on the same subpixel grid as allocated row sizes.
+    content_top =
+      if rounded_rows?,
+        do: Float.ceil(content_top / @css_pixel_points * 64) / 64 * @css_pixel_points,
+        else: content_top
+
     main_axis = flex_main_axis(style)
 
     containing_height =
-      resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
+      if rounded_rows?,
+        do: rounded_content_size(style, :height, Map.get(style, :_containing_height), nil),
+        else: resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
 
     containing_height =
       if is_number(containing_height),
@@ -5624,19 +5648,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     main_axis = flex_main_axis(style)
     cross_gap = flex_cross_gap(style)
     line_count = length(lines)
-    wrapped_columns? = main_axis == :column and Map.get(style, :flex_wrap, :nowrap) == :wrap
+    wrapped? = Map.get(style, :flex_wrap, :nowrap) == :wrap
 
     {lines, cross_start, cross_gap} =
-      if wrapped_columns? do
-        occupied_width =
+      if wrapped? do
+        available_cross = if main_axis == :row, do: content_height, else: content_width
+
+        occupied_cross =
           Enum.reduce(lines, 0.0, &(&1.cross + &2)) + cross_gap * (line_count - 1)
 
-        free_space = content_width - occupied_width
+        free_space = available_cross - occupied_cross
 
         {lines, free_space} =
           if Map.get(style, :align_content, :stretch) == :stretch and free_space > 0 do
-            extra = free_space / line_count
-            {Enum.map(lines, &%{&1 | cross: &1.cross + extra}), 0.0}
+            {lines, _remaining} =
+              Enum.map_reduce(Enum.with_index(lines), free_space, fn {line, index}, remaining ->
+                extra =
+                  if main_axis == :row do
+                    Float.floor(remaining / (line_count - index) / @css_pixel_points * 64) / 64 *
+                      @css_pixel_points
+                  else
+                    free_space / line_count
+                  end
+
+                {%{line | cross: line.cross + extra}, remaining - extra}
+              end)
+
+            {lines, 0.0}
           else
             {lines, free_space}
           end
@@ -5652,9 +5690,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     {lines, _cross_offset} =
       Enum.reduce(lines, {[], cross_start}, fn line, {acc, cross_offset} ->
         line_cross =
-          if wrapped_columns?,
-            do: line.cross,
-            else: flex_line_cross(line, style, line_count, content_height)
+          cond do
+            wrapped? -> line.cross
+            main_axis == :row -> content_height
+            true -> resolved_content_size(style, :width, nil, line.cross)
+          end
 
         positioned =
           flex_position_line(
@@ -6083,15 +6123,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Enum.reduce(lines, 0.0, &max(&1.main, &2))
       end
 
-    resolved_content_size(style, :height, Map.get(style, :_containing_height), intrinsic)
-  end
-
-  defp flex_line_cross(line, style, line_count, content_height) do
-    case {flex_main_axis(style), line_count} do
-      {:row, 1} -> content_height
-      {:row, _} -> line.cross
-      {:column, _} -> resolved_content_size(style, :width, nil, line.cross)
-    end
+    if flex_main_axis(style) == :row and Map.get(style, :flex_wrap, :nowrap) == :wrap,
+      do: rounded_content_size(style, :height, Map.get(style, :_containing_height), intrinsic),
+      else: resolved_content_size(style, :height, Map.get(style, :_containing_height), intrinsic)
   end
 
   defp flex_position_available_main(main_axis, content_width, content_height) do
@@ -12445,10 +12479,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  # Fixed browser layout precision applies before an atomic inline box is
-  # measured, aligned to its line, and painted. Intrinsic sizes retain their
-  # existing font measurements.
-  defp inline_content_size(style, property, available_size, default) do
+  # Fixed browser layout precision applies before explicit inline and flex sizes
+  # determine alignment and paint. Intrinsic sizes retain their font measurements.
+  defp rounded_content_size(style, property, available_size, default) do
     size = resolved_content_size(style, property, available_size, default)
 
     if is_number(Map.get(style, property)) and is_number(size) do
@@ -12479,7 +12512,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         width
 
       %{style: %{_color_state: _} = style} ->
-        inline_content_size(
+        rounded_content_size(
           style,
           :width,
           available_width,
@@ -12491,7 +12524,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         width
 
       %{style: %{embedded_document: _surface} = style} ->
-        inline_content_size(
+        rounded_content_size(
           style,
           :width,
           available_width,
@@ -12576,7 +12609,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               default_width
           end
 
-        inline_content_size(style, :width, available_width, default_width)
+        rounded_content_size(style, :width, available_width, default_width)
     end
   end
 
@@ -12699,7 +12732,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
 
     content_height =
-      inline_content_size(style, :height, Map.get(style, :_containing_height), intrinsic_height)
+      rounded_content_size(style, :height, Map.get(style, :_containing_height), intrinsic_height)
 
     margin = Map.get(style, :margin, edges(0.0))
     padding = Map.get(style, :padding, edges(0.0))

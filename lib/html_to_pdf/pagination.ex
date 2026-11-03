@@ -957,7 +957,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     available = max(top - margins.bottom, 0.0)
-    taken = min(group.height, available)
+    # Equivalent boundaries can differ after binary64 subtraction. Allow four
+    # rounding steps, rather than emitting a page for an arithmetic remainder.
+    roundoff = 4 * 2.220446049250313e-16 * max(full_height, abs(top))
+    taken = if group.height <= available + roundoff, do: group.height, else: available
     [marker] = shift_boxes([source], top - group.top)
 
     marker = %{

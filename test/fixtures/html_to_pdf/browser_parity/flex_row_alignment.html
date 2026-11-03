@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="UTF-8"><style>
+@page { size: 480pt 720pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+.sample { position: absolute; width: 100pt; }
+.rows { display: flex; flex-wrap: wrap; width: 100pt; height: 100pt; row-gap: 10pt; background: #eee; }
+.red { width: 60pt; height: 20pt; flex: none; background: red; }
+.blue { width: 60pt; height: 30pt; flex: none; background: blue; }
+.following { height: 5pt; background: lime; }
+</style></head><body>
+<div class="sample" style="left:10pt;top:20pt"><div class="rows"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:130pt;top:20pt"><div class="rows" style="align-content:flex-start"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:250pt;top:20pt"><div class="rows" style="align-content:flex-end"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:370pt;top:20pt"><div class="rows" style="align-content:center"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:10pt;top:170pt"><div class="rows" style="align-content:space-between"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:130pt;top:170pt"><div class="rows" style="align-content:space-around"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:250pt;top:170pt"><div class="rows" style="align-content:space-evenly"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:370pt;top:170pt"><div class="rows" style="align-content:flex-end"><div class="red"></div></div></div>
+<div class="sample" style="left:10pt;top:320pt"><div class="rows" style="flex-wrap:nowrap;align-content:flex-end"><div class="red" style="width:50pt"></div><div class="blue" style="width:50pt;height:auto"></div></div></div>
+<div class="sample" style="left:130pt;top:320pt"><div class="rows"><div class="red" style="width:50pt"></div><div class="blue" style="width:50pt;height:auto"></div><div class="red" style="width:50pt;height:30pt"></div><div class="blue" style="width:50pt;height:10pt;margin-top:auto"></div></div></div>
+<div class="sample" style="left:250pt;top:320pt"><div class="rows" style="align-items:center"><div class="red"></div><div class="blue"></div></div></div>
+<div class="sample" style="left:370pt;top:320pt"><div class="rows" style="height:auto;min-height:100pt;align-content:flex-end"><div class="red"></div><div class="blue"></div></div><div class="following"></div></div>
+<div class="sample" style="left:10pt;top:500pt"><div class="rows" style="align-content:flex-end"><div class="red" style="height:70pt"></div><div class="blue" style="height:70pt"></div></div></div>
+<div class="sample" style="left:130pt;top:500pt"><div class="rows" style="align-content:center"><div class="red" style="height:70pt"></div><div class="blue" style="height:70pt"></div></div></div>
+<div class="sample" style="left:250pt;top:500pt;height:200pt"><div class="rows" style="height:50%;align-content:flex-end"><div class="red"></div><div class="blue"></div></div><div class="following"></div></div>
+<div class="sample" style="left:370pt;top:500pt"><div class="rows" style="box-sizing:border-box;padding:4pt;border:6pt solid black;align-items:center"><div class="red"></div><div class="blue"></div></div></div>
+</body></html>
