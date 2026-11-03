@@ -68,7 +68,9 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
            context.pages |> Enum.with_index(1) |> Map.new(fn {page, number} -> {number, page} end),
          page_tree_refs: Map.new(document.pages, &{&1.ref, true}),
          all_page_refs:
-           input.objects |> Enum.filter(&page_object?/1) |> Map.new(&{{&1.obj, &1.gen}, true})
+           input.objects
+           |> Enum.filter(&page_object?(document, &1))
+           |> Map.new(&{{&1.obj, &1.gen}, true})
        }}
     end
   end
@@ -359,9 +361,9 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
     end
   end
 
-  defp page_object?(object) do
+  defp page_object?(document, object) do
     case object do
-      %{value: %{"Type" => {:name, "Page"}}} -> true
+      %{value: %{"Type" => type}} -> PdfValidator.named?(document, type, "Page")
       _ -> false
     end
   end

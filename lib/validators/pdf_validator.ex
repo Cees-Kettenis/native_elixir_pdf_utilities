@@ -893,7 +893,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         }
 
         with {:ok, catalog} <- dictionary(document, root, opts),
-             true <- named?(Map.get(catalog, "Type"), "Catalog"),
+             {:ok, type} <- resolve(document, Map.get(catalog, "Type"), opts),
+             true <- named?(type, "Catalog"),
              {:ok, page_tree_ref} <- required_reference(catalog, "Pages", opts),
              {:ok, traversal, _descendant_count} <-
                walk_page_tree(
@@ -1369,12 +1370,13 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                    expected_parent,
                    traversal,
                    opts
-                 ) do
+                 ),
+               {:ok, type} <- resolve(document, Map.get(dictionary, "Type"), opts) do
             inherited = inherit_page_values(dictionary, ref, inherited)
             ancestors = Map.put(ancestors, ref, true)
             traversal = %{traversal | seen: Map.put(traversal.seen, ref, true)}
 
-            case Map.get(dictionary, "Type") do
+            case type do
               {:name, "Page"} ->
                 page = %{
                   ref: ref,
