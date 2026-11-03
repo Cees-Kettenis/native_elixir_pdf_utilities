@@ -51,7 +51,7 @@ The [runtime matrix](https://github.com/Cees-Kettenis/native_elixir_pdf_utilitie
 | Source | Tracked and non-ignored untracked bytes, including edits, frozen in `.quality/logs/<run>/source.tar` |
 | Isolation | Separate source copies, outputs and runtime caches; application build cleaned before compile |
 | Concurrency | Two correctness lanes; `QUALITY_MATRIX_JOBS=1` runs serially |
-| Performance | Starts after all local correctness containers exit; CI finishes correctness first on each runner |
+| Performance | Starts after all local correctness containers exit; CI runs it after ordinary checks on a runner separate from browser parity |
 | Failures | Later stages skip for that runtime; other runtimes continue |
 | Lock recovery | Inspect `.quality/matrix.lock` PID and `pdf-quality-<run>-*` containers; remove only after confirming the run stopped |
 | CI agreement | Same check policy and `--matrix-json` validation; host orchestration tests cover concurrency, isolation, failure reporting, performance ordering and future-runtime policy |
@@ -96,10 +96,18 @@ Resolve errors before publishing. Documentation builds are excluded from routine
 Visible rendering changes require focused unit coverage and a Chromium fixture.
 Every supported runtime runs the full parity suite.
 
+CI runs three file partitions per runtime on separate runners, alongside the
+ordinary checks. Every test file belongs to exactly one partition. The existing
+`Elixir <version>` checks require all jobs to pass. Local matrix lanes run the
+same three partitions sequentially to avoid competing browser workloads on one
+machine. The large generated rendering suite stays together, so partition
+durations can differ.
+
 | Task | Command |
 | --- | --- |
 | Focused host feedback | `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity` |
 | Smaller host | `mise exec -- mix test.browser_parity --max-cases 2` |
+| One CI partition | `MIX_TEST_PARTITION=1 mise exec -- mix test.browser_parity --partitions 3 --warnings-as-errors` |
 | Diagnose CLI printing | `BROWSER_PARITY_BROWSER=cli mise exec -- mix test.browser_parity` |
 
 | Concern | Requirement or behavior |

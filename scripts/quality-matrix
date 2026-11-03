@@ -95,7 +95,7 @@ if [[ "${1:-}" == --runtime ]]; then
     run_stage tests mix test --warnings-as-errors
     run_stage coverage mix test --cover --warnings-as-errors
     run_stage dialyzer mix dialyzer --no-compile
-    run_stage parity mix test.browser_parity --warnings-as-errors
+    run_stage parity bash -c 'set -e; for partition in 1 2 3; do MIX_TEST_PARTITION="$partition" mix test.browser_parity --partitions 3 --warnings-as-errors; done'
     if [[ "${canonical}" != true ]]; then
       run_stage performance true
     fi

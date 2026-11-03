@@ -98,8 +98,10 @@ case "$1" in
     "$ready" ;;
   test.browser_parity)
     [[ "$(cat source.txt)" == "$MOCK_RUNTIME" ]]
+    [[ "$MIX_TEST_PARTITION" =~ ^[123]$ ]]
+    printf '%s\t%s\n' "$MOCK_RUNTIME" "$MIX_TEST_PARTITION" >> "$MOCK_TRACE/partitions"
     touch "$MOCK_TRACE/done-$MOCK_RUNTIME"
-    if [[ "$MOCK_RUNTIME" == "${MOCK_FAIL_PARITY:-}" ]]; then exit 3; fi ;;
+    if [[ "$MOCK_RUNTIME" == "${MOCK_FAIL_PARITY:-}" && "$MIX_TEST_PARTITION" == 2 ]]; then exit 3; fi ;;
   test.performance)
     [[ "$(find "$MOCK_TRACE" -name 'done-*' | wc -l)" -eq "$MOCK_COUNT" ]]
     [[ "$ERL_FLAGS" == '+S 4:4 +SDcpu 4 +SDio 10' ]]
@@ -128,7 +130,10 @@ check grep -Fq 'QUALITY_MATRIX_SUMMARY status=PASS' "$project/output"
 check test "$(cat "$project/source.txt")" = 'pending change'
 check test ! -e "$project/tmp/browser_parity/output"
 for version in 1.19 1.20 1.21; do
-  check grep -Fq "$version"$'\ttest.browser_parity --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
+  check test "$(grep -Fc "$version"$'\ttest.browser_parity --partitions 3 --warnings-as-errors\ttest' "$MOCK_TRACE/commands")" -eq 3
+  for partition in 1 2 3; do
+    check test "$(grep -Fxc "$version"$'\t'"$partition" "$MOCK_TRACE/partitions")" -eq 1
+  done
   if grep -Fq "$version"$'\tdocs' "$MOCK_TRACE/commands"; then
     fail "publishing_only_docs_in_routine_matrix=$version"
   fi
@@ -155,6 +160,7 @@ check test "$status" -eq 1
 check grep -Fq 'runtime=1.19 stage=parity status=FAIL' "$project/output"
 check grep -Fq 'runtime=1.21 stage=performance status=PASS' "$project/output"
 check grep -Fq 'QUALITY_MATRIX_SUMMARY status=FAIL' "$project/output"
+check test "$(grep -Fc '1.19' "$MOCK_TRACE/partitions")" -eq 2
 artifacts=("$project"/.quality/logs/*/elixir-1.19/browser-parity-artifacts/output)
 check test "$(cat "${artifacts[0]}")" = 1.19
 check test ! -e "$project/.quality/matrix.lock"
