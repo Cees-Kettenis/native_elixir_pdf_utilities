@@ -91,7 +91,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
     with {:ok, document, dictionary} <- information_dictionary(context) do
       @field_keys
       |> Enum.reduce_while({:ok, %{}}, fn {field, key}, {:ok, info} ->
-        case normalized_existing_value(document, field, Map.get(dictionary, key)) do
+        case normalized_existing_value(document, dictionary, field, key) do
           {:ok, value} -> {:cont, {:ok, Map.put(info, field, value)}}
           {:error, _} = info_error -> {:halt, info_error}
         end
@@ -188,15 +188,11 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   defp information_dictionary(context) do
     case context do
       %{document: %{trailer: trailer} = document} when is_map(trailer) ->
-        case Map.get(trailer, "Info") do
-          nil ->
-            {:ok, document, %{}}
-
-          value ->
-            case PdfValidator.dictionary(document, value) do
-              {:ok, dictionary} -> {:ok, document, dictionary}
-              {:error, _reason} -> error(:info, "PDF Info entry does not resolve to a dictionary")
-            end
+        with {:ok, value} <- PdfValidator.optional_entry(document, trailer, "Info", %{}),
+             {:ok, dictionary} <- PdfValidator.dictionary(document, value) do
+          {:ok, document, dictionary}
+        else
+          {:error, _reason} -> error(:info, "PDF Info entry does not resolve to a dictionary")
         end
 
       _ ->
@@ -204,16 +200,11 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
     end
   end
 
-  defp normalized_existing_value(document, field, value) do
-    case value do
-      nil ->
-        {:ok, nil}
-
-      value ->
-        case PdfValidator.resolve(document, value) do
-          {:ok, resolved} -> decode_existing_value(field, resolved)
-          {:error, _reason} -> error(:info, "PDF information field #{field} cannot be resolved")
-        end
+  defp normalized_existing_value(document, dictionary, field, key) do
+    case PdfValidator.optional_entry(document, dictionary, key, nil) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, value} -> decode_existing_value(field, value)
+      {:error, _reason} -> error(:info, "PDF information field #{field} cannot be resolved")
     end
   end
 

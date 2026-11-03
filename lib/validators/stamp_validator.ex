@@ -447,7 +447,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   defp resolved_user_unit(document, dictionary) do
-    case PdfValidator.resolve(document, Map.get(dictionary, "UserUnit", 1)) do
+    case PdfValidator.optional_entry(document, dictionary, "UserUnit", 1) do
       {:ok, value} ->
         with {:ok, value} <- PdfValidator.float_number(value), true <- value > 0 do
           {:ok, value}
