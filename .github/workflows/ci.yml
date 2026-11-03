@@ -71,7 +71,23 @@ jobs:
             mix-elixir-${{ steps.runtime.outputs.cache-key }}-
 
       - name: Install dependencies
-        run: mix deps.get
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          # Hex bootstrap and package downloads can fail transiently. Retry only
+          # dependency acquisition; compilation and tests must pass on one run.
+          for attempt in 1 2 3; do
+            if mix deps.get; then
+              exit 0
+            else
+              status=$?
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit "$status"
+            fi
+            echo "Dependency acquisition failed on attempt $attempt; retrying." >&2
+            sleep "$((attempt * 5))"
+          done
 
       - name: Compile dependencies
         run: mix deps.compile
