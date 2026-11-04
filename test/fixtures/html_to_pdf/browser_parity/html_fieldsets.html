@@ -1,0 +1,37 @@
+<!doctype html><html><head><style>
+@page {size:320pt 620pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+body {padding:12pt;}
+fieldset {margin-bottom:6pt;}
+p {margin:0;}
+legend {color:#174c70;}
+fieldset:disabled {color:#87351e;}
+input,textarea,select {display:block;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;box-sizing:border-box;width:85pt;height:18pt;padding:1pt 2pt;border:1pt solid #505050;background:#ffffff;color:#174c70;}
+input:disabled,textarea:disabled,select:disabled {color:#87351e;background:#eeeeee;}
+input[type=radio],input[type=checkbox] {width:10pt;height:10pt;padding:0;border:0;background:white;}
+.radio-row {display:grid;grid-template-columns:12pt 70pt 12pt 140pt;align-items:center;gap:2pt;}
+.custom {border:3pt dashed #38734b;padding:6pt;background:#f3f7ec;}
+.custom legend {padding:1.5pt 3pt;border:0.75pt solid #174c70;}
+.flex {display:flex;gap:8pt;}
+.grid {display:grid;grid-template-columns:1fr 1fr;gap:3pt;}
+.inline {display:inline-block;width:90pt;min-width:0;}
+</style></head><body>
+<fieldset><legend>Default caption</legend><p>Default grouped prose</p></fieldset>
+<fieldset disabled=false><legend><input name=toggle value="Exempt"> First legend exception</legend>
+<p>Disabled text <input name=locked value="Locked"></p>
+<fieldset><legend>Nested caption <input name=nested value="Nested locked"></legend><p>Outer disabling still applies</p></fieldset>
+<div class=radio-row><input type=radio name=mode value=A checked><span>Earlier radio</span><input type=radio name=mode value=B checked><span>Selected disabled radio</span></div>
+<select name=choice><option selected>Choice</option></select><textarea name=notes>Notes</textarea>
+</fieldset>
+<div style="break-before:page"><fieldset class=custom><legend align=center>Centered authored caption</legend><p>Transparent legend keeps the background</p></fieldset>
+<fieldset><legend align=right>Right caption</legend><p>Right alignment keeps grouped prose</p></fieldset>
+<fieldset class=flex><legend>Flex caption</legend><span>Flex first</span><span>Flex second</span></fieldset>
+<fieldset class=grid><legend>Grid caption</legend><span>Grid first</span><span>Grid second</span></fieldset>
+<fieldset class=inline><legend>Inline caption</legend><p>Inline group</p></fieldset><span>Following inline text</span>
+<fieldset style="width:90pt;min-width:0"><legend>A long wrapping legend caption</legend><p>Narrow grouped prose</p></fieldset>
+<fieldset><legend></legend><p>Empty caption body</p></fieldset>
+<fieldset></fieldset>
+<fieldset style="border:0;padding:0;width:0;height:0;min-width:0"><legend style="font-size:0;line-height:0;padding:0"></legend></fieldset>
+<p>After fieldsets</p></div>
+<template><fieldset disabled><legend>Unused caption</legend><input name=unused><img src=denied.png></fieldset></template>
+</body></html>

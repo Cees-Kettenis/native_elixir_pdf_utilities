@@ -4,15 +4,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.TextEncoding
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
   import Bitwise
 
   @max_cid 65_535
-  @unicode_mapping_section ~r/(\d+)\s+begin(bfchar|bfrange)\s*.*?\s*end\2/s
-  @codespace_section ~r/(\d+)\s+begincodespacerange\s*(.*?)\s*endcodespacerange/s
-  @cid_mapping_section ~r/(\d+)\s+begin(cidchar|cidrange|notdefchar|notdefrange)\s*.*?\s*end\2/s
+  @cmap_whitespace ~S(\x00\t\n\f\r )
+  @cmap_space "[#{@cmap_whitespace}]"
+  @cmap_hex_body "#{@cmap_space}*[0-9A-Fa-f][0-9A-Fa-f#{@cmap_whitespace}]*"
+  @unicode_mapping_section ~r/(\d+)#{@cmap_space}+begin(bfchar|bfrange)#{@cmap_space}*.*?#{@cmap_space}*end\2/s
+  @codespace_section ~r/(\d+)#{@cmap_space}+begincodespacerange#{@cmap_space}*(.*?)#{@cmap_space}*endcodespacerange/s
+  @cid_mapping_section ~r/(\d+)#{@cmap_space}+begin(cidchar|cidrange|notdefchar|notdefrange)#{@cmap_space}*.*?#{@cmap_space}*end\2/s
 
   @doc """
   Prepares reachable fonts, strings, and Form XObjects for text execution.
@@ -88,6 +92,13 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
   defp prepare_instruction(instruction, document, resources, state, page, depth) do
     case instruction do
+      %{operator: "BDC", operands: [_tag, properties]} ->
+        with {:ok, properties} <- marked_properties(document, resources, properties, page),
+             {:ok, text, preparation} <-
+               replacement_text(document, properties, page, state.preparation) do
+          {:ok, Map.put(instruction, :actual_text, text), %{state | preparation: preparation}}
+        end
+
       %{operator: "q"} ->
         {:ok, instruction, %{state | stack: [state.font | state.stack]}}
 
@@ -179,6 +190,82 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
+  defp marked_properties(document, resources, properties, page) do
+    case properties do
+      {:name, name} ->
+        with {:ok, resources} <- Reader.dictionary(document, resources),
+             {:ok, properties} <- Reader.dictionary(document, Map.get(resources, "Properties")),
+             {:ok, value} <- required_value(properties, name, "marked-content property", page),
+             {:ok, dictionary} <- Reader.dictionary(document, value) do
+          {:ok, dictionary}
+        end
+
+      properties ->
+        {:ok, properties}
+    end
+  end
+
+  defp replacement_text(document, properties, page, preparation) do
+    case Map.fetch(properties, "ActualText") do
+      :error ->
+        {:ok, nil, preparation}
+
+      {:ok, value} ->
+        with {:ok, value} <- Reader.resolve(document, value) do
+          case value do
+            {kind, bytes} when kind in [:string, :hex, :hex_string] and is_binary(bytes) ->
+              remaining = Limits.get(:max_extracted_text_bytes) - preparation.extracted_bytes
+
+              minimum_decoded_bytes =
+                case bytes do
+                  <<0xFE, 0xFF, encoded::binary>> -> div(byte_size(encoded), 2)
+                  <<0xEF, 0xBB, 0xBF, encoded::binary>> -> byte_size(encoded)
+                  bytes -> byte_size(bytes)
+                end
+
+              if minimum_decoded_bytes > remaining do
+                error(
+                  :limits,
+                  :resource_limit_exceeded,
+                  "ActualText bytes exceed the extraction limit",
+                  page: page
+                )
+              else
+                case InfoCodec.decode_text(bytes) do
+                  {:ok, text} when byte_size(text) <= remaining ->
+                    {:ok, text,
+                     %{
+                       preparation
+                       | extracted_bytes: preparation.extracted_bytes + byte_size(text)
+                     }}
+
+                  {:ok, _text} ->
+                    error(
+                      :limits,
+                      :resource_limit_exceeded,
+                      "decoded ActualText bytes exceed the extraction limit",
+                      page: page
+                    )
+
+                  :error ->
+                    error(
+                      :content,
+                      :invalid_pdf_input,
+                      "ActualText must contain a valid PDF text string",
+                      page: page
+                    )
+                end
+              end
+
+            _ ->
+              error(:content, :invalid_pdf_input, "ActualText must be a PDF text string",
+                page: page
+              )
+          end
+        end
+    end
+  end
+
   defp prepare_form(
          name,
          document,
@@ -198,8 +285,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         with {:ok, resources} <- Reader.dictionary(document, resources),
              {:ok, xobjects} <- Reader.dictionary(document, Map.get(resources, "XObject")),
              {:ok, xobject_ref} <- required_value(xobjects, name, "XObject", page),
-             {:ok, xobject} <- Reader.dictionary(document, xobject_ref) do
-          case name?(Map.get(xobject, "Subtype"), "Form") do
+             {:ok, xobject} <- Reader.dictionary(document, xobject_ref),
+             {:ok, subtype} <- Reader.resolve(document, Map.get(xobject, "Subtype")) do
+          case name?(subtype, "Form") do
             true ->
               with {:ok, preparation_context} <-
                      TextValidator.charge_form_expansion(preparation_context, page),
@@ -221,11 +309,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                        page,
                        depth + 1
                      ) do
-                {:ok, %{instructions: instructions, matrix: matrix}, state.preparation}
+                {:ok, %{instructions: instructions, matrix: matrix, source_ref: xobject_ref},
+                 state.preparation}
               end
 
             false ->
-              {:ok, nil, preparation_context}
+              if name?(subtype, "Image") do
+                with {:ok, width} <- Reader.resolve(document, Map.get(xobject, "Width")),
+                     {:ok, height} <- Reader.resolve(document, Map.get(xobject, "Height")) do
+                  {:ok, %{image: name, width: width, height: height}, preparation_context}
+                end
+              else
+                {:ok, nil, preparation_context}
+              end
           end
         end
     end
@@ -311,7 +407,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           {:ok, {prepared_font, stream_uses}} ->
             case TextValidator.charge_stream_uses(preparation_context, stream_uses, page) do
               {:ok, preparation_context} ->
-                {:ok, Map.put(prepared_font, :name, font_name), preparation_context}
+                {:ok, Map.merge(prepared_font, %{name: font_name, source_ref: font_ref}),
+                 preparation_context}
 
               {:error, {reason, diagnostic}} ->
                 {:error, {reason, with_debug_details(diagnostic, page: page, font: font_name)}}
@@ -331,7 +428,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                 | prepared_fonts: Map.put(preparation_context.prepared_fonts, ref, cached)
               }
 
-              {:ok, prepared_font, preparation_context}
+              {:ok, Map.put(prepared_font, :source_ref, font_ref), preparation_context}
             end
         end
 
@@ -365,7 +462,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     with {:ok, cmap, preparation_context} <- cmap,
          {:ok, cid_encoding, preparation_context} <-
            type0_cid_encoding(document, font, page, font_name, preparation_context),
-         {:ok, widths, default_width} <- font_metrics(document, font) do
+         {:ok, preparation_context} <- reserve_font_work(preparation_context, 1),
+         {:ok, widths, default_width, preparation_context} <-
+           font_metrics(document, font, preparation_context) do
       {:ok,
        %{
          name: font_name,
@@ -373,16 +472,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          cmap: cmap,
          cid_encoding: cid_encoding,
          document: document,
+         encoding_key: make_ref(),
          widths: widths,
          default_width: default_width
        }, preparation_context}
     end
   end
 
-  defp font_metrics(document, font) do
+  defp font_metrics(document, font, preparation) do
     case name?(Map.get(font, "Subtype"), "Type0") do
-      true -> type0_font_metrics(document, font)
-      false -> simple_font_metrics(document, font)
+      true -> type0_font_metrics(document, font, preparation)
+      false -> simple_font_metrics(document, font, preparation)
     end
   end
 
@@ -457,7 +557,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp simple_font_metrics(document, font) do
+  defp simple_font_metrics(document, font, preparation) do
     first_char = Map.get(font, "FirstChar", 0)
 
     with true <- is_integer(first_char) and first_char >= 0,
@@ -465,7 +565,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          true <-
            is_nil(widths) or
              (is_list(widths) and Enum.all?(widths, &PdfValidator.valid_number?/1)),
-         {:ok, default_width} <- simple_default_width(document, font) do
+         {:ok, scale, default_width} <- simple_width_scale(document, font),
+         {:ok, preparation} <-
+           reserve_font_work(preparation, if(is_list(widths), do: length(widths), else: 0)) do
       width_map =
         case widths do
           nil ->
@@ -474,13 +576,32 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           widths ->
             widths
             |> Enum.with_index(first_char)
-            |> Map.new(fn {width, code} -> {code, width} end)
+            |> Map.new(fn {width, code} -> {code, width * scale} end)
         end
 
-      {:ok, width_map, default_width}
+      {:ok, width_map, default_width, preparation}
     else
       false -> error(:font, :invalid_pdf_input, "simple font width metrics are malformed")
       {:error, _} = metric_error -> metric_error
+    end
+  end
+
+  defp simple_width_scale(document, font) do
+    if name?(Map.get(font, "Subtype"), "Type3") do
+      with {:ok, matrix} <-
+             PdfValidator.number_array(document, Map.get(font, "FontMatrix"), 6,
+               operation: :extract,
+               module: __MODULE__,
+               source: "Type3 FontMatrix"
+             ) do
+        # Type 3 Widths are in glyph space. Only FontMatrix's horizontal
+        # component contributes to text advance, even for a rotated glyph.
+        {:ok, hd(matrix) * 1000, 0}
+      end
+    else
+      with {:ok, width} <- simple_default_width(document, font) do
+        {:ok, 1, width}
+      end
     end
   end
 
@@ -501,48 +622,82 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp type0_font_metrics(document, font) do
+  defp type0_font_metrics(document, font, preparation) do
     with {:ok, descendants} <- Reader.resolve(document, Map.get(font, "DescendantFonts")),
-         [descendant | _] <- descendants,
-         {:ok, descendant} <- Reader.dictionary(document, descendant),
-         default_width = Map.get(descendant, "DW", 1000),
-         true <- PdfValidator.valid_number?(default_width),
-         {:ok, widths} <- Reader.resolve(document, Map.get(descendant, "W")),
-         {:ok, widths} <- cid_widths(widths) do
-      {:ok, widths, default_width}
+         [descendant_ref | _] <- descendants do
+      cached =
+        case descendant_ref do
+          {:ref, ref} -> Map.fetch(preparation.cid_metrics, ref)
+          _ -> :error
+        end
+
+      case cached do
+        {:ok, {widths, default_width}} ->
+          {:ok, widths, default_width, preparation}
+
+        :error ->
+          with {:ok, descendant} <- Reader.dictionary(document, descendant_ref),
+               default_width = Map.get(descendant, "DW", 1000),
+               true <- PdfValidator.valid_number?(default_width),
+               {:ok, values} <- Reader.resolve(document, Map.get(descendant, "W")),
+               {:ok, widths, preparation} <- cid_widths(values, preparation) do
+            preparation =
+              case descendant_ref do
+                {:ref, ref} ->
+                  %{
+                    preparation
+                    | cid_metrics: Map.put(preparation.cid_metrics, ref, {widths, default_width})
+                  }
+
+                _ ->
+                  preparation
+              end
+
+            {:ok, widths, default_width, preparation}
+          else
+            {:error, _} = metric_error -> metric_error
+            _ -> error(:font, :invalid_pdf_input, "Type0 descendant font metrics are malformed")
+          end
+      end
     else
       {:error, _} = metric_error -> metric_error
       _ -> error(:font, :invalid_pdf_input, "Type0 descendant font metrics are malformed")
     end
   end
 
-  defp cid_widths(values) do
+  defp cid_widths(values, preparation) do
     case values do
       nil ->
-        {:ok, %{}}
+        {:ok, %{}, preparation}
 
       values when is_list(values) ->
-        parse_cid_widths(values, %{}, 0)
+        parse_cid_widths(values, %{}, 0, preparation)
 
       _ ->
         error(:font, :invalid_pdf_input, "CID font W array is malformed")
     end
   end
 
-  defp parse_cid_widths(values, widths, entry_count) do
+  defp parse_cid_widths(values, widths, entry_count, preparation) do
     case values do
       [] ->
-        {:ok, widths}
+        {:ok, widths, preparation}
 
       [first, listed | rest] when is_integer(first) and first >= 0 and is_list(listed) ->
         count = length(listed)
 
         with true <- Enum.all?(listed, &PdfValidator.valid_number?/1),
-             :ok <- validate_cid_width_entries(first, count, entry_count) do
+             :ok <- validate_cid_width_entries(first, count, entry_count),
+             {:ok, preparation} <- reserve_font_work(preparation, count) do
           listed_widths =
             Map.new(Enum.with_index(listed, first), fn {width, code} -> {code, width} end)
 
-          parse_cid_widths(rest, Map.merge(widths, listed_widths), entry_count + count)
+          parse_cid_widths(
+            rest,
+            Map.merge(widths, listed_widths),
+            entry_count + count,
+            preparation
+          )
         else
           false -> error(:font, :invalid_pdf_input, "CID font listed widths are malformed")
           {:error, _} = width_error -> width_error
@@ -554,9 +709,16 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         count = last - first + 1
 
         with true <- PdfValidator.valid_number?(width),
-             :ok <- validate_cid_width_entries(first, count, entry_count) do
+             :ok <- validate_cid_width_entries(first, count, entry_count),
+             {:ok, preparation} <- reserve_font_work(preparation, count) do
           range_widths = Map.new(first..last, &{&1, width})
-          parse_cid_widths(rest, Map.merge(widths, range_widths), entry_count + count)
+
+          parse_cid_widths(
+            rest,
+            Map.merge(widths, range_widths),
+            entry_count + count,
+            preparation
+          )
         else
           false ->
             error(
@@ -571,6 +733,20 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
       _ ->
         error(:font, :invalid_pdf_input, "CID font W array is malformed")
+    end
+  end
+
+  defp reserve_font_work(preparation, count) do
+    work = preparation.font_work + count
+
+    if work <= Limits.get(:max_text_font_work) do
+      {:ok, %{preparation | font_work: work}}
+    else
+      error(
+        :font,
+        :resource_limit_exceeded,
+        "aggregate font preparation work exceeds max_text_font_work"
+      )
     end
   end
 
@@ -598,7 +774,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         _ -> 0
       end
 
-    with {:ok, preparation} <- charge_cmap_work(preparation, work, page, font && font.name),
+    with {:ok, font, preparation} <- prepare_decoding_font(font, preparation, page),
+         {:ok, preparation} <- charge_cmap_work(preparation, work, page, font && font.name),
          {:ok, decoded} <- decode_string_bytes(string, font, page, remaining) do
       {:ok, decoded,
        %{preparation | extracted_bytes: preparation.extracted_bytes + byte_size(decoded.text)}}
@@ -634,8 +811,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp decode_simple_font(bytes, font, page, remaining) do
-    with {:ok, encoding, differences} <- font_encoding(font.document, font.dictionary),
-         {:ok, decoded} <- decode_simple_bytes(bytes, encoding, differences, remaining) do
+    {encoding, differences} = font.simple_encoding
+
+    with {:ok, decoded} <- decode_simple_bytes(bytes, encoding, differences, remaining) do
       {:ok, decoded}
     else
       {:error, {reason, diagnostic}} ->
@@ -643,16 +821,45 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp font_encoding(document, font) do
+  defp prepare_decoding_font(font, preparation, page) do
+    cond do
+      is_nil(font) or not is_nil(font.cmap) or name?(Map.get(font.dictionary, "Subtype"), "Type0") ->
+        {:ok, font, preparation}
+
+      true ->
+        case Map.fetch(preparation.font_encodings, font.encoding_key) do
+          {:ok, encoding} ->
+            {:ok, Map.put(font, :simple_encoding, encoding), preparation}
+
+          :error ->
+            with {:ok, base, differences, preparation} <-
+                   font_encoding(font.document, font.dictionary, preparation) do
+              encoding = {base, differences}
+
+              preparation = %{
+                preparation
+                | font_encodings: Map.put(preparation.font_encodings, font.encoding_key, encoding)
+              }
+
+              {:ok, Map.put(font, :simple_encoding, encoding), preparation}
+            else
+              {:error, {reason, diagnostic}} ->
+                {:error, {reason, with_debug_details(diagnostic, page: page, font: font.name)}}
+            end
+        end
+    end
+  end
+
+  defp font_encoding(document, font, preparation) do
     case Map.get(font, "Encoding") do
       nil ->
         with {:ok, encoding} <- default_font_encoding(font) do
-          {:ok, encoding, %{}}
+          {:ok, encoding, %{}, preparation}
         end
 
       {:name, name} ->
         if TextEncoding.supported?(name) do
-          {:ok, name, %{}}
+          {:ok, name, %{}, preparation}
         else
           error(:text_encoding, :unsupported_text_encoding, "simple font encoding is unsupported")
         end
@@ -668,8 +875,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
 
           with {:ok, base} <- base,
                true <- TextEncoding.supported?(base),
-               {:ok, differences} <- differences(Map.get(encoding, "Differences")) do
-            {:ok, base, differences}
+               {:ok, differences, preparation} <-
+                 differences(Map.get(encoding, "Differences"), preparation) do
+            {:ok, base, differences, preparation}
           else
             false ->
               error(
@@ -738,29 +946,31 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end
   end
 
-  defp differences(values) do
+  defp differences(values, preparation) do
     case values do
       nil ->
-        {:ok, %{}}
+        {:ok, %{}, preparation}
 
       values when is_list(values) ->
-        values
-        |> Enum.reduce_while({:ok, %{}, nil}, fn value, {:ok, mappings, code} ->
-          case value do
-            value when is_integer(value) and value in 0..255 ->
-              {:cont, {:ok, mappings, value}}
+        with {:ok, preparation} <- reserve_font_work(preparation, length(values)) do
+          values
+          |> Enum.reduce_while({:ok, %{}, nil}, fn value, {:ok, mappings, code} ->
+            case value do
+              value when is_integer(value) and value in 0..255 ->
+                {:cont, {:ok, mappings, value}}
 
-            {:name, glyph} when is_integer(code) and code in 0..255 ->
-              {:cont, {:ok, Map.put(mappings, code, glyph), code + 1}}
+              {:name, glyph} when is_integer(code) and code in 0..255 ->
+                {:cont, {:ok, Map.put(mappings, code, glyph), code + 1}}
 
-            _ ->
-              {:halt,
-               error(:text_encoding, :invalid_pdf_input, "font Differences array is malformed")}
+              _ ->
+                {:halt,
+                 error(:text_encoding, :invalid_pdf_input, "font Differences array is malformed")}
+            end
+          end)
+          |> case do
+            {:ok, mappings, _code} -> {:ok, mappings, preparation}
+            {:error, _} = differences_error -> differences_error
           end
-        end)
-        |> case do
-          {:ok, mappings, _code} -> {:ok, mappings}
-          {:error, _} = differences_error -> differences_error
         end
 
       _ ->
@@ -816,7 +1026,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp parse_cmap(stream, page, font, cmap_bytes) do
     stream = strip_cmap_comments(stream)
 
-    case Regex.match?(~r/\/\S+\s+usecmap\b/, stream) do
+    case Regex.match?(~r/\/[^#{@cmap_whitespace}]+#{@cmap_space}+usecmap\b/, stream) do
       true ->
         error(
           :cmap,
@@ -827,7 +1037,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         )
 
       false ->
-        with {:ok, codespaces} <- parse_codespaces(stream, "ToUnicode"),
+        with {:ok, codespaces} <- parse_codespaces(stream, "ToUnicode", font),
              {:ok, mappings, remaining} <-
                parse_unicode_mappings(
                  stream,
@@ -868,7 +1078,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     stream = strip_cmap_comments(stream)
 
     cond do
-      Regex.match?(~r/\/\S+\s+usecmap\b/, stream) ->
+      Regex.match?(~r/\/[^#{@cmap_whitespace}]+#{@cmap_space}+usecmap\b/, stream) ->
         error(
           :cmap,
           :unsupported_text_encoding,
@@ -877,7 +1087,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           font: font
         )
 
-      Regex.match?(~r/\/WMode\s+1\s+def\b/, stream) ->
+      Regex.match?(~r/\/WMode#{@cmap_space}+1#{@cmap_space}+def\b/, stream) ->
         error(
           :cmap,
           :unsupported_text_encoding,
@@ -887,7 +1097,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         )
 
       true ->
-        with {:ok, codespaces} <- parse_codespaces(stream, "Type0 Encoding"),
+        with {:ok, codespaces} <- parse_codespaces(stream, "Type0 Encoding", font),
              {:ok, mappings} <-
                parse_cid_mappings(stream, ["cidchar", "cidrange"], 0),
              {:ok, notdef} <-
@@ -920,7 +1130,10 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp strip_cmap_comments(stream) do
-    Regex.replace(~r/%[^\r\n]*/, stream, "")
+    # A percent byte inside a hexadecimal string is invalid data, not a comment.
+    Regex.replace(~r/<<|<[^>]*>|%[^\r\n\f]*/, stream, fn token ->
+      if String.starts_with?(token, "%"), do: "", else: token
+    end)
   end
 
   # Reserve expansion and lookup work independently of retained map cardinality.
@@ -955,19 +1168,26 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           case operator do
             range when range in ["bfrange", "cidrange", "notdefrange"] ->
               Regex.scan(
-                ~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:\[[^\]]*\]|<[0-9A-Fa-f]+>|\d+)/,
+                ~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>#{@cmap_space}*(?:\[[^\]]*\]|<#{@cmap_hex_body}>|\d+)/,
                 section
               )
 
             _ ->
-              Regex.scan(~r/<[0-9A-Fa-f]+>\s*(?:<[0-9A-Fa-f]+>|\d+)/, section)
+              Regex.scan(
+                ~r/<#{@cmap_hex_body}>#{@cmap_space}*(?:<#{@cmap_hex_body}>|\d+)/,
+                section
+              )
           end
 
         Enum.reduce_while(entries, {:ok, preparation}, fn entry, {:ok, preparation} ->
           count =
             case entry do
               [_, first, last] ->
-                max(String.to_integer(last, 16) - String.to_integer(first, 16) + 1, 0)
+                max(
+                  :binary.decode_unsigned(hex_bytes(last)) -
+                    :binary.decode_unsigned(hex_bytes(first)) + 1,
+                  0
+                )
 
               [_] ->
                 1
@@ -1066,49 +1286,63 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
     end)
   end
 
-  defp parse_codespaces(stream, label) do
+  defp parse_codespaces(stream, label, font) do
     sections = Regex.scan(@codespace_section, stream)
 
     sections
     |> Enum.reduce_while({:ok, []}, fn [_, count, section], {:ok, values} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, section)
+      entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>/, section)
 
       valid? =
         String.to_integer(count) == length(entries) and
-          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>/)
+          cmap_section_consumed?(
+            section,
+            ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>/
+          )
 
       if valid? do
         parsed =
           Enum.map(entries, fn [_, first, last] -> {hex_bytes(first), hex_bytes(last)} end)
 
         if Enum.all?(parsed, fn {first, last} ->
-             is_binary(first) and byte_size(first) == byte_size(last) and first <= last
+             byte_size(first) == byte_size(last) and first <= last
            end) do
           {:cont, {:ok, Enum.reverse(parsed, values)}}
         else
-          {:halt, error(:cmap, :invalid_pdf_input, "#{label} codespace range is malformed")}
+          {:halt,
+           error(:cmap, :invalid_pdf_input, "#{label} codespace range is malformed", font: font)}
         end
       else
-        {:halt, error(:cmap, :invalid_pdf_input, "#{label} codespace count is malformed")}
+        {:halt,
+         error(:cmap, :invalid_pdf_input, "#{label} codespace count is malformed", font: font)}
       end
     end)
     |> case do
-      {:ok, []} -> error(:cmap, :invalid_pdf_input, "#{label} codespace range is missing")
-      {:ok, values} -> {:ok, Enum.reverse(values)}
-      result -> result
+      {:ok, []} ->
+        error(:cmap, :invalid_pdf_input, "#{label} codespace range is missing", font: font)
+
+      {:ok, values} ->
+        {:ok, Enum.reverse(values)}
+
+      result ->
+        result
     end
   end
 
   defp parse_cid_char(stream, operator, existing) do
-    pattern = Regex.compile!("(\\d+)\\s+begin#{operator}\\s*(.*?)\\s*end#{operator}", "s")
+    pattern =
+      Regex.compile!(
+        "(\\d+)#{@cmap_space}+begin#{operator}#{@cmap_space}*(.*?)#{@cmap_space}*end#{operator}",
+        "s"
+      )
 
     Regex.scan(pattern, stream)
     |> Enum.reduce_while({:ok, %{}}, fn [_, count, section], {:ok, mappings} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s+(\d+)/, section)
+      entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}+(\d+)/, section)
 
       valid? =
         String.to_integer(count) == length(entries) and
-          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s+\d+/)
+          cmap_section_consumed?(section, ~r/<#{@cmap_hex_body}>#{@cmap_space}+\d+/)
 
       case valid? do
         true ->
@@ -1117,8 +1351,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
               {hex_bytes(source), String.to_integer(cid)}
             end)
 
-          case Enum.all?(parsed, fn {source, cid} ->
-                 is_binary(source) and cid in 0..@max_cid
+          case Enum.all?(parsed, fn {_source, cid} ->
+                 cid in 0..@max_cid
                end) do
             true ->
               mappings = Map.merge(mappings, Map.new(parsed))
@@ -1139,15 +1373,26 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_cid_range(stream, operator, existing, mapping_type) do
-    pattern = Regex.compile!("(\\d+)\\s+begin#{operator}\\s*(.*?)\\s+end#{operator}", "s")
+    pattern =
+      Regex.compile!(
+        "(\\d+)#{@cmap_space}+begin#{operator}#{@cmap_space}*(.*?)#{@cmap_space}+end#{operator}",
+        "s"
+      )
 
     Regex.scan(pattern, stream)
     |> Enum.reduce_while({:ok, %{}}, fn [_, declared_count, section], {:ok, mappings} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(\d+)/, section)
+      entries =
+        Regex.scan(
+          ~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>#{@cmap_space}*(\d+)/,
+          section
+        )
 
       valid? =
         String.to_integer(declared_count) == length(entries) and
-          cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*\d+/)
+          cmap_section_consumed?(
+            section,
+            ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>#{@cmap_space}*\d+/
+          )
 
       case valid? do
         true ->
@@ -1156,8 +1401,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             last = hex_bytes(last)
             cid = String.to_integer(cid)
 
-            case is_binary(first) and is_binary(last) and
-                   byte_size(first) == byte_size(last) and first <= last do
+            case byte_size(first) == byte_size(last) and first <= last do
               true ->
                 count = :binary.decode_unsigned(last) - :binary.decode_unsigned(first) + 1
 
@@ -1201,17 +1445,24 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_bfchar(stream, remaining) do
-    Regex.scan(~r/(\d+)\s+beginbfchar\s*(.*?)\s*endbfchar/s, stream)
+    Regex.scan(
+      ~r/(\d+)#{@cmap_space}+beginbfchar#{@cmap_space}*(.*?)#{@cmap_space}*endbfchar/s,
+      stream
+    )
     |> Enum.reduce_while({:ok, %{}, remaining}, fn [_, count, section],
                                                    {:ok, mappings, remaining} ->
-      entries = Regex.scan(~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/, section)
+      entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>/, section)
 
       if String.to_integer(count) == length(entries) and
-           cmap_section_consumed?(section, ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>/) do
+           cmap_section_consumed?(
+             section,
+             ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>/
+           ) do
         Enum.reduce_while(entries, {:ok, mappings, remaining}, fn [_, source, target],
                                                                   {:ok, mappings, remaining} ->
-          with source when is_binary(source) <- hex_bytes(source),
-               {:ok, target} <- utf16(hex_bytes(target)),
+          source = hex_bytes(source)
+
+          with {:ok, target} <- utf16(hex_bytes(target)),
                {:ok, remaining} <-
                  charge_bytes(remaining, byte_size(source) + byte_size(target), :cmap) do
             {:cont, {:ok, Map.put(mappings, source, target), remaining}}
@@ -1234,12 +1485,15 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_bfrange(stream, existing, remaining) do
-    Regex.scan(~r/(\d+)\s+beginbfrange\s*(.*?)\s*endbfrange/s, stream)
+    Regex.scan(
+      ~r/(\d+)#{@cmap_space}+beginbfrange#{@cmap_space}*(.*?)#{@cmap_space}*endbfrange/s,
+      stream
+    )
     |> Enum.reduce_while({:ok, %{}, remaining}, fn [_, declared_count, section],
                                                    {:ok, mappings, remaining} ->
       entries =
         Regex.scan(
-          ~r/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(\[[^\]]*\]|<[0-9A-Fa-f]+>)/,
+          ~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>#{@cmap_space}*(\[[^\]]*\]|<#{@cmap_hex_body}>)/,
           section
         )
 
@@ -1249,16 +1503,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         declared_count == length(entries) and
           cmap_section_consumed?(
             section,
-            ~r/<[0-9A-Fa-f]+>\s*<[0-9A-Fa-f]+>\s*(?:\[[^\]]*\]|<[0-9A-Fa-f]+>)/
+            ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>#{@cmap_space}*(?:\[[^\]]*\]|<#{@cmap_hex_body}>)/
           )
 
       if section_valid? do
         entries
         |> Enum.reduce_while({:ok, mappings, remaining}, fn [_, first, last, target],
                                                             {:ok, mappings, remaining} ->
-          with first when is_binary(first) <- hex_bytes(first),
-               last when is_binary(last) and byte_size(last) == byte_size(first) <-
-                 hex_bytes(last),
+          first = hex_bytes(first)
+          last = hex_bytes(last)
+
+          with true <- byte_size(last) == byte_size(first),
                true <- first <= last,
                count <- :binary.decode_unsigned(last) - :binary.decode_unsigned(first) + 1,
                true <- count + existing + map_size(mappings) <= Limits.get(:max_cmap_entries),
@@ -1285,16 +1540,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp cmap_section_consumed?(section, entry_pattern) do
     section
     |> then(&Regex.replace(entry_pattern, &1, ""))
-    |> String.trim()
-    |> then(&(&1 == ""))
+    |> then(&Regex.match?(~r/\A#{@cmap_space}*\z/, &1))
   end
 
   defp bfrange_entries(first, count, target, remaining) do
     case target do
       "[" <> array ->
-        targets = for [_, target] <- Regex.scan(~r/<([0-9A-Fa-f]+)>/, array), do: target
+        targets = for [_, target] <- Regex.scan(~r/<(#{@cmap_hex_body})>/, array), do: target
 
-        if length(targets) == count do
+        if length(targets) == count and
+             cmap_section_consumed?(
+               String.trim_trailing(array, "]"),
+               ~r/<#{@cmap_hex_body}>/
+             ) do
           Enum.with_index(targets)
           |> Enum.reduce_while({:ok, %{}, remaining}, fn {target, offset},
                                                          {:ok, mappings, remaining} ->
@@ -1308,33 +1566,32 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             end
           end)
         else
-          error(:cmap, :invalid_pdf_input, "ToUnicode bfrange array length is invalid")
+          error(
+            :cmap,
+            :invalid_pdf_input,
+            "ToUnicode bfrange array is malformed or its length is invalid"
+          )
         end
 
       target ->
         target = target |> String.trim_leading("<") |> String.trim_trailing(">") |> hex_bytes()
 
-        if is_binary(target) do
-          0..(count - 1)
-          |> Enum.reduce_while({:ok, %{}, remaining}, fn offset, {:ok, mappings, remaining} ->
-            with source when is_binary(source) <- increment_binary(first, offset),
-                 destination when is_binary(destination) <- increment_binary(target, offset),
-                 {:ok, text} <- utf16(destination),
-                 {:ok, remaining} <-
-                   charge_bytes(remaining, byte_size(source) + byte_size(text), :cmap) do
-              {:cont, {:ok, Map.put(mappings, source, text), remaining}}
-            else
-              {:error, _} = limit_error ->
-                {:halt, limit_error}
+        0..(count - 1)
+        |> Enum.reduce_while({:ok, %{}, remaining}, fn offset, {:ok, mappings, remaining} ->
+          with source when is_binary(source) <- increment_binary(first, offset),
+               destination when is_binary(destination) <- increment_binary(target, offset),
+               {:ok, text} <- utf16(destination),
+               {:ok, remaining} <-
+                 charge_bytes(remaining, byte_size(source) + byte_size(text), :cmap) do
+            {:cont, {:ok, Map.put(mappings, source, text), remaining}}
+          else
+            {:error, _} = limit_error ->
+              {:halt, limit_error}
 
-              _ ->
-                {:halt,
-                 error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination overflows")}
-            end
-          end)
-        else
-          error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination is malformed")
-        end
+            _ ->
+              {:halt, error(:cmap, :invalid_pdf_input, "ToUnicode bfrange destination overflows")}
+          end
+        end)
     end
   end
 
@@ -1355,17 +1612,20 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
       bytes ->
         candidate =
           cmap.sizes
-          |> Enum.find(fn size ->
-            byte_size(bytes) >= size and
-              (cmap.codespaces == [] or
-                 Enum.any?(cmap.codespaces, fn {first, last} ->
-                   byte_size(first) == size and binary_part(bytes, 0, size) >= first and
-                     binary_part(bytes, 0, size) <= last
-                 end))
+          |> Enum.find_value(fn size ->
+            if byte_size(bytes) >= size do
+              <<code::binary-size(^size), rest::binary>> = bytes
+
+              if cmap.codespaces == [] or
+                   Enum.any?(cmap.codespaces, fn {first, last} ->
+                     byte_size(first) == size and code >= first and code <= last
+                   end),
+                 do: {code, rest}
+            end
           end)
 
         if candidate do
-          <<code::binary-size(^candidate), rest::binary>> = bytes
+          {code, rest} = candidate
 
           case Map.get(cmap.mappings, code) do
             nil ->
@@ -1454,22 +1714,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp hex_bytes(hex) do
-    case Base.decode16(hex, case: :mixed) do
-      {:ok, bytes} -> bytes
-      :error -> nil
-    end
+    # Callers admit only hex digits and the specified whitespace bytes.
+    # Padding applies after whitespace removal, including embedded CMaps.
+    hex = Regex.replace(~r/[#{@cmap_whitespace}]/, hex, "")
+    hex = if rem(byte_size(hex), 2) == 1, do: hex <> "0", else: hex
+    Base.decode16!(hex, case: :mixed)
   end
 
   defp utf16(bytes) do
-    case bytes do
-      nil ->
-        :error
-
-      bytes ->
-        case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
-          value when is_binary(value) -> {:ok, value}
-          _ -> :error
-        end
+    case :unicode.characters_to_binary(bytes, {:utf16, :big}, :utf8) do
+      value when is_binary(value) -> {:ok, value}
+      _ -> :error
     end
   end
 

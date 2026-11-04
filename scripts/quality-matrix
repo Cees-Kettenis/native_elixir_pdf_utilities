@@ -8,285 +8,279 @@ if ((BASH_VERSINFO[0] < 4)); then
 fi
 
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-matrix_file="${repository_root}/ci/runtime-matrix.json"
-run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-log_root="${repository_root}/.quality/logs/${run_id}"
-user_id="$(id -u)"
-group_id="$(id -g)"
-stages=(setup runtime dependencies dependency_compile compile format coverage performance dialyzer parity)
+cd "${repository_root}" || exit 2
+matrix_file=ci/runtime-matrix.json
+stages=(runtime dependencies dependency_compile compile format tests coverage dialyzer parity performance)
 
-declare -a runtime_entries=()
-declare -a runtime_versions=()
-declare -A results=()
-declare -A warning_counts=()
+# Shared by local orchestration and CI's runtime discovery.
+validate_matrix() {
+  jq -e '
+    .include as $runtimes |
+    ($runtimes | type == "array" and length > 0) and
+    (($runtimes | map(select(.canonical == true)) | length) == 1) and
+    (($runtimes | map(.elixir) | unique | length) == ($runtimes | length)) and
+    all($runtimes[];
+      (.elixir | type == "string" and test("^[0-9]+\\.[0-9]+$")) and
+      (.image | type == "string" and length > 0) and
+      (.canonical | type == "boolean")
+    ) and
+    (($runtimes | map(select(.canonical == true)) | .[0].elixir) ==
+      ($runtimes | sort_by(.elixir | split(".") | map(tonumber)) | .[-1].elixir))
+  ' "${matrix_file}" >/dev/null || {
+    echo 'QUALITY_MATRIX_ERROR invalid_matrix=one_canonical_latest_runtime_required' >&2
+    return 2
+  }
+}
 
-for command in docker jq; do
-  if ! command -v "${command}" >/dev/null 2>&1; then
-    echo "QUALITY_MATRIX_ERROR missing_command=${command}" >&2
+# Used on the host for setup and inside each runtime container for Mix checks.
+run_stage() {
+  local stage="$1" status=PASS warnings=0 log="${log_dir}/$1.log"
+  local started="${SECONDS}" elapsed=0 not_applicable=""
+  local -a pipeline_status
+  shift
+
+  case "${stage}" in
+    format|coverage|dialyzer|performance)
+      [[ "${canonical}" == true ]] || not_applicable=canonical-runtime-only ;;
+    tests)
+      [[ "${canonical}" != true ]] || not_applicable=included-in-coverage ;;
+  esac
+
+  if [[ -n "${not_applicable}" ]]; then
+    status=N/A
+    log="${not_applicable}"
+  elif [[ -n "${failed_stage}" ]]; then
+    status=SKIP
+    log="dependency:${failed_stage}"
+  else
+    printf '\nQUALITY_MATRIX_START runtime=%s stage=%s\n' "${version}" "${stage}"
+    "$@" 2>&1 | tee "${log}"
+    pipeline_status=("${PIPESTATUS[@]}")
+    elapsed=$((SECONDS - started))
+    # Count diagnostic headers, including Erlang's file:line[:column] form.
+    # Ignore terminal colour codes without changing the retained stage log.
+    warnings="$(sed -E $'s/\033\\[[0-9;]*m//g' "${log}" |
+      grep -Eic '^[[:space:]]*(warning:|([[:alpha:]]:)?[^:]+:[[:digit:]]+(:[[:digit:]]+)?:[[:space:]]*warning:)' || true)"
+    warnings="${warnings:-0}"
+
+    if ((pipeline_status[0] != 0 || pipeline_status[1] != 0)); then
+      status=FAIL
+      failed_stage="${stage}"
+    elif ((warnings > 0)); then
+      status=WARN
+    fi
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${version}" "${stage}" "${status}" "${warnings}" "${log}" "${elapsed}" >>"${log_dir}/results.tsv" || exit 2
+  printf 'QUALITY_MATRIX_EVENT runtime=%s stage=%s status=%s warnings=%s seconds=%s log=%s\n' \
+    "${version}" "${stage}" "${status}" "${warnings}" "${elapsed}" "${log}"
+}
+
+# One isolated workspace runs correctness checks; performance follows the host barrier.
+if [[ "${1:-}" == --runtime ]]; then
+  [[ "$#" == 5 ]] || { echo 'QUALITY_MATRIX_ERROR invalid_runtime_arguments=true' >&2; exit 2; }
+  version="$2"
+  canonical="$3"
+  log_dir=".quality/logs/$4/elixir-${version}"
+  phase="$5"
+  failed_stage="$(awk -F '\t' '$3 == "FAIL" {print $2; exit}' "${log_dir}/results.tsv")"
+
+  if [[ "${phase}" == performance && "${canonical}" == true ]]; then
+    export PERFORMANCE_REPORT="${repository_root}/${log_dir}/performance.json"
+    run_stage performance ./scripts/check-performance
+  elif [[ "${phase}" == checks ]]; then
+    run_stage runtime bash -c \
+      'set -e; for tool in chromium pdftoppm pdftotext pdffonts fc-match; do command -v "$tool"; done; elixir --version; elixir --version | grep -F "Elixir $1."' bash "${version}"
+    run_stage dependencies mix deps.get
+    run_stage dependency_compile mix deps.compile
+    run_stage compile bash -c 'mix clean && mix compile --warnings-as-errors'
+    run_stage format bash -c 'mix format --check-formatted && mix deps.unlock --check-unused'
+    run_stage tests mix test --warnings-as-errors
+    run_stage coverage mix test --cover --warnings-as-errors
+    run_stage dialyzer mix dialyzer --no-compile
+    run_stage parity bash -c 'set -e; for partition in 1 2 3; do MIX_TEST_PARTITION="$partition" mix test.browser_parity --partitions 3 --warnings-as-errors; done'
+    if [[ "${canonical}" != true ]]; then
+      run_stage performance true
+    fi
+    if [[ "${failed_stage}" == parity && -d tmp/browser_parity ]]; then
+      cp -a tmp/browser_parity "${log_dir}/browser-parity-artifacts" || exit 2
+    fi
+  else
+    echo 'QUALITY_MATRIX_ERROR invalid_runtime_phase=true' >&2
     exit 2
   fi
+  [[ -z "${failed_stage}" ]]
+  exit "$?"
+fi
+
+[[ -z "${1:-}" || ("${1:-}" == --matrix-json && "$#" == 1) ]] || {
+  echo 'Usage: scripts/quality-matrix [--matrix-json]' >&2
+  exit 2
+}
+command -v jq >/dev/null 2>&1 || { echo 'QUALITY_MATRIX_ERROR missing_command=jq' >&2; exit 2; }
+validate_matrix || exit 2
+if [[ "${1:-}" == --matrix-json ]]; then
+  jq -c . "${matrix_file}"
+  exit "$?"
+fi
+for command in docker git tar; do
+  command -v "${command}" >/dev/null 2>&1 || { echo "QUALITY_MATRIX_ERROR missing_command=${command}" >&2; exit 2; }
 done
+docker info >/dev/null 2>&1 || { echo 'QUALITY_MATRIX_ERROR docker_unavailable=true' >&2; exit 2; }
+parallel_jobs="${QUALITY_MATRIX_JOBS:-2}"
+[[ "${parallel_jobs}" =~ ^[1-9][0-9]*$ ]] || { echo 'QUALITY_MATRIX_ERROR QUALITY_MATRIX_JOBS=positive_integer_required' >&2; exit 2; }
 
-if ! docker info >/dev/null 2>&1; then
-  echo "QUALITY_MATRIX_ERROR docker_unavailable=true" >&2
+mkdir -p .quality || exit 2
+lock_dir=.quality/matrix.lock
+mkdir "${lock_dir}" 2>/dev/null || {
+  echo 'QUALITY_MATRIX_ERROR matrix_already_running_or_stale_lock=.quality/matrix.lock' >&2
   exit 2
-fi
-
-mapfile -t runtime_entries < <(jq -c '.include[]' "${matrix_file}")
-
-if ! jq -e '
-  .include as $runtimes |
-  ($runtimes | type == "array" and length > 0) and
-  (($runtimes | map(select(.canonical == true)) | length) == 1) and
-  (($runtimes | map(.elixir) | unique | length) == ($runtimes | length)) and
-  all($runtimes[];
-    (.elixir | type == "string" and length > 0) and
-    (.image | type == "string" and length > 0) and
-    (.canonical | type == "boolean")
-  )
-' "${matrix_file}" >/dev/null; then
-  echo "QUALITY_MATRIX_ERROR invalid_matrix=${matrix_file}" >&2
-  exit 2
-fi
-
-mkdir -p "${log_root}"
-
-record_result() {
-  local version="$1"
-  local stage="$2"
-  local status="$3"
-  local warnings="$4"
-  local log_file="$5"
-
-  results["${version}:${stage}"]="${status}"
-  warning_counts["${version}:${stage}"]="${warnings}"
-  printf 'QUALITY_MATRIX_EVENT runtime=%s stage=%s status=%s warnings=%s log=%s\n' \
-    "${version}" "${stage}" "${status}" "${warnings}" "${log_file}"
 }
-
-run_logged() {
-  local version="$1"
-  local stage="$2"
-  shift 2
-
-  local runtime_log_root="${log_root}/elixir-${version}"
-  local log_file="${runtime_log_root}/${stage}.log"
-  local exit_code
-  local warnings
-  local status
-
-  mkdir -p "${runtime_log_root}"
-  printf '\nQUALITY_MATRIX_START runtime=%s stage=%s\n' "${version}" "${stage}"
-  "$@" 2>&1 | tee "${log_file}"
-  exit_code=${PIPESTATUS[0]}
-  warnings="$(grep -Eic '^[[:space:]]*warning:' "${log_file}" || true)"
-
-  if [[ ${exit_code} -ne 0 ]]; then
-    status="FAIL"
-  elif [[ ${warnings} -gt 0 ]]; then
-    status="WARN"
-  else
-    status="PASS"
-  fi
-
-  record_result "${version}" "${stage}" "${status}" "${warnings}" "${log_file}"
-  return "${exit_code}"
-}
-
-prepare_image() {
-  local source_image="$1"
-  local local_image="$2"
-
-  docker pull --quiet "${source_image}"
-  docker build \
-    --quiet \
-    --build-arg "BASE_IMAGE=${source_image}" \
-    --file "${repository_root}/ci/Dockerfile.quality" \
-    --tag "${local_image}" \
-    "${repository_root}/ci"
-}
-
-mark_remaining_skipped() {
-  local version="$1"
-  local failed_stage="$2"
-  local skip=false
-
-  for stage in "${stages[@]}"; do
-    if [[ "${stage}" == "${failed_stage}" ]]; then
-      skip=true
-      continue
-    fi
-
-    if [[ "${skip}" == true ]]; then
-      record_result "${version}" "${stage}" "SKIP" "0" "dependency:${failed_stage}"
-    fi
+printf '%s\n' "$$" >"${lock_dir}/pid"
+worker_pids=()
+container_names=()
+cleanup() {
+  local code="$?" pid container
+  trap - EXIT INT TERM
+  for container in "${container_names[@]}"; do
+    docker rm -f "${container}" >/dev/null 2>&1 || true
   done
+  for pid in "${worker_pids[@]}"; do
+    kill "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
+  done
+  rm -f "${lock_dir}/pid"
+  rmdir "${lock_dir}" 2>/dev/null || true
+  exit "${code}"
 }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-for entry in "${runtime_entries[@]}"; do
-  version="$(jq -r '.elixir' <<<"${entry}")"
-  source_image="$(jq -r '.image' <<<"${entry}")"
-  canonical="$(jq -r '.canonical' <<<"${entry}")"
-  local_image="native-elixir-pdf-utilities-quality:elixir-${version}"
-  runtime_root="${repository_root}/.quality/elixir-${version}"
-  runtime_versions+=("${version}")
-
-  mkdir -p \
-    "${runtime_root}/build" \
-    "${runtime_root}/cache" \
-    "${runtime_root}/deps" \
-    "${runtime_root}/hex" \
-    "${runtime_root}/home" \
-    "${runtime_root}/mix"
-
-  if ! run_logged "${version}" setup prepare_image "${source_image}" "${local_image}"; then
-    mark_remaining_skipped "${version}" setup
-    continue
+run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+log_root=".quality/logs/${run_id}"
+mkdir -p "${log_root}" || exit 2
+snapshot="${repository_root}/${log_root}/source.tar"
+# Git lists modified tracked and non-ignored untracked files. Omit deleted paths;
+# never copy caches, ignored work records or another runtime's writable outputs.
+git ls-files --cached --others --exclude-standard -z >"${log_root}/source-files.list" || exit 2
+while IFS= read -r -d '' path; do
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    printf '%s\0' "${path}"
   fi
-
-  docker_command=(
-    docker run --rm
-    --user "${user_id}:${group_id}"
-    --mount "type=bind,source=${repository_root},target=/workspace"
-    --workdir /workspace
-    --env CHROMIUM_BIN=/usr/bin/chromium
-    --env "HEX_HOME=/workspace/.quality/elixir-${version}/hex"
-    --env "HOME=/workspace/.quality/elixir-${version}/home"
-    --env MIX_ENV=test
-    --env "MIX_BUILD_PATH=/workspace/.quality/elixir-${version}/build"
-    --env "MIX_DEPS_PATH=/workspace/.quality/elixir-${version}/deps"
-    --env "MIX_HOME=/workspace/.quality/elixir-${version}/mix"
-    --env "XDG_CACHE_HOME=/workspace/.quality/elixir-${version}/cache"
-    --env "EXPECTED_ELIXIR=${version}"
-    "${local_image}"
-  )
-
-  if ! run_logged "${version}" runtime "${docker_command[@]}" sh -c \
-    'elixir --version && elixir --version | grep -F "Elixir ${EXPECTED_ELIXIR}."'; then
-    mark_remaining_skipped "${version}" runtime
-    continue
-  fi
-
-  if ! run_logged "${version}" dependencies "${docker_command[@]}" mix deps.get; then
-    mark_remaining_skipped "${version}" dependencies
-    continue
-  fi
-
-  if ! run_logged "${version}" dependency_compile "${docker_command[@]}" mix deps.compile; then
-    mark_remaining_skipped "${version}" dependency_compile
-    continue
-  fi
-
-  if ! run_logged "${version}" compile "${docker_command[@]}" mix compile --warnings-as-errors; then
-    mark_remaining_skipped "${version}" compile
-    continue
-  fi
-
-  if [[ "${canonical}" == "true" ]]; then
-    if ! run_logged "${version}" format "${docker_command[@]}" sh -c \
-      'mix format --check-formatted && mix deps.unlock --check-unused'; then
-      mark_remaining_skipped "${version}" format
-      continue
-    fi
-  else
-    record_result "${version}" format "N/A" "0" "canonical-runtime-only"
-  fi
-
-  if ! run_logged "${version}" coverage "${docker_command[@]}" \
-    mix test --cover --warnings-as-errors; then
-    mark_remaining_skipped "${version}" coverage
-    continue
-  fi
-
-  if ! run_logged "${version}" performance "${docker_command[@]}" \
-    mix test.performance; then
-    mark_remaining_skipped "${version}" performance
-    continue
-  fi
-
-  if ! run_logged "${version}" dialyzer "${docker_command[@]}" mix dialyzer --no-compile; then
-    mark_remaining_skipped "${version}" dialyzer
-    continue
-  fi
-
-  if ! run_logged "${version}" parity "${docker_command[@]}" \
-    mix test.browser_parity --warnings-as-errors; then
-    if [[ -d "${repository_root}/tmp/browser_parity" ]]; then
-      cp -a \
-        "${repository_root}/tmp/browser_parity" \
-        "${log_root}/elixir-${version}/browser-parity-artifacts"
-    fi
-  fi
-done
-
-summary_file="${log_root}/summary.txt"
-results_file="${log_root}/results.tsv"
+done <"${log_root}/source-files.list" >"${log_root}/snapshot-files.list"
+tar --null -cf "${snapshot}" -T "${log_root}/snapshot-files.list" || exit 2
+jq -c . "${matrix_file}" >"${log_root}/runtime-matrix.json" || exit 2
 overall_exit=0
+version=host canonical=true failed_stage="" log_dir="${log_root}/host"
+mkdir -p "${log_dir}" || exit 2
+: >"${log_dir}/results.tsv" || exit 2
+run_stage orchestration bash scripts/test-quality-matrix
+[[ -z "${failed_stage}" ]] || exit 1
 
-{
-  printf 'Elixir\tSetup\tVerify\tDeps\tDep compile\tCompile\tFormat\tCoverage\tPerformance\tDialyzer\tParity\tOverall\n'
+ensure_image() {
+  local image="$1"
+  if ! docker image inspect "${image}" >/dev/null 2>&1; then
+    docker pull --quiet "${image}" || return
+  fi
+  printf 'QUALITY_MATRIX_IMAGE image=%s\n' "${image}"
+  docker image inspect --format '{{.Id}}' "${image}"
+}
 
-  for version in "${runtime_versions[@]}"; do
-    overall="PASS"
+prepare_workspace() {
+  mkdir -p "${workspace}" || return
+  tar -xf "${snapshot}" -C "${workspace}"
+}
 
-    for stage in "${stages[@]}"; do
-      result="${results["${version}:${stage}"]:-SKIP}"
-
-      if [[ "${result}" == "FAIL" || "${result}" == "SKIP" ]]; then
-        overall="FAIL"
-      elif [[ "${result}" == "WARN" && "${overall}" == "PASS" ]]; then
-        overall="WARN"
-      fi
-    done
-
-    if [[ "${overall}" == "FAIL" ]]; then
-      overall_exit=1
+run_container() {
+  local phase="$1" name="pdf-quality-${run_id}-${version}-$1"
+  local -a pipeline_status
+  docker run --rm --name "${name}" \
+    --user "$(id -u):$(id -g)" \
+    --mount "type=bind,source=${workspace},target=/workspace" \
+    --mount "type=bind,source=${repository_root}/.quality,target=/workspace/.quality" \
+    --workdir /workspace \
+    --env CHROMIUM_BIN=/usr/bin/chromium --env MIX_ENV=test \
+    --env "HEX_HOME=/workspace/.quality/elixir-${version}/hex" \
+    --env "HOME=/workspace/.quality/elixir-${version}/home" \
+    --env "MIX_BUILD_PATH=/workspace/.quality/elixir-${version}/build" \
+    --env "MIX_DEPS_PATH=/workspace/.quality/elixir-${version}/deps" \
+    --env "MIX_HOME=/workspace/.quality/elixir-${version}/mix" \
+    --env "XDG_CACHE_HOME=/workspace/.quality/elixir-${version}/cache" \
+    --env PERFORMANCE_BASELINE_REPORT \
+    --env "PERFORMANCE_BASELINE_KEY=${PERFORMANCE_BASELINE_KEY:-elixir-${version}.json}" \
+    "${image_id}" bash scripts/quality-matrix --runtime "${version}" "${canonical}" "${run_id}" "${phase}" \
+    2>&1 | tee "${log_dir}/container-${phase}.log"
+  pipeline_status=("${PIPESTATUS[@]}")
+  if ((pipeline_status[0] != 0 || pipeline_status[1] != 0)); then
+    if ! grep -q $'\tFAIL\t' "${log_dir}/results.tsv"; then
+      printf '%s\tcontainer-%s\tFAIL\t0\t%s/container-%s.log\t0\n' \
+        "${version}" "${phase}" "${log_dir}" "${phase}" >>"${log_dir}/results.tsv"
     fi
+    return 1
+  fi
+}
 
-    results["${version}:overall"]="${overall}"
+run_lane() {
+  local version="$1" canonical="$2" image="$3" failed_stage=""
+  local log_dir="${log_root}/elixir-$1" workspace="${repository_root}/${log_root}/elixir-$1/workspace" image_id
+  mkdir -p "${log_dir}" "${repository_root}/.quality/elixir-${version}"/{build,cache,deps,hex,home,mix} || return 2
+  : >"${log_dir}/results.tsv" || return 2
+  run_stage setup ensure_image "${image}"
+  run_stage workspace prepare_workspace
+  if [[ -z "${failed_stage}" ]]; then
+    image_id="$(docker image inspect --format '{{.Id}}' "${image}")" || return 2
+    printf '%s\n' "${image_id}" >"${log_dir}/image-id"
+    run_container checks || return 1
+  else
+    return 1
+  fi
+}
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "${version}" \
-      "${results["${version}:setup"]:-SKIP}" \
-      "${results["${version}:runtime"]:-SKIP}" \
-      "${results["${version}:dependencies"]:-SKIP}" \
-      "${results["${version}:dependency_compile"]:-SKIP}" \
-      "${results["${version}:compile"]:-SKIP}" \
-      "${results["${version}:format"]:-SKIP}" \
-      "${results["${version}:coverage"]:-SKIP}" \
-      "${results["${version}:performance"]:-SKIP}" \
-      "${results["${version}:dialyzer"]:-SKIP}" \
-      "${results["${version}:parity"]:-SKIP}" \
-      "${overall}"
+while IFS=$'\t' read -r version image canonical; do
+  container_names+=("pdf-quality-${run_id}-${version}-checks" "pdf-quality-${run_id}-${version}-performance")
+  run_lane "${version}" "${canonical}" "${image}" &
+  worker_pids+=("$!")
+  if ((${#worker_pids[@]} >= parallel_jobs)); then
+    wait "${worker_pids[0]}" || overall_exit=1
+    worker_pids=("${worker_pids[@]:1}")
+  fi
+done < <(jq -r '.include[] | [.elixir, .image, .canonical] | @tsv' "${log_root}/runtime-matrix.json")
+for pid in "${worker_pids[@]}"; do wait "${pid}" || overall_exit=1; done
+worker_pids=()
+
+# All correctness containers have exited before the canonical timing workload.
+version="$(jq -r '.include[] | select(.canonical) | .elixir' "${log_root}/runtime-matrix.json")"
+canonical=true
+log_dir="${log_root}/elixir-${version}"
+workspace="${repository_root}/${log_dir}/workspace"
+failed_stage="$(awk -F '\t' '$3 == "FAIL" {print $2; exit}' "${log_dir}/results.tsv")"
+if [[ -z "${failed_stage}" ]]; then
+  image_id="$(cat "${log_dir}/image-id")" || exit 2
+  run_container performance || overall_exit=1
+else
+  run_stage performance true
+fi
+
+# Unexpected exits must not leave unreported stages or a passing summary.
+while IFS=$'\t' read -r version canonical; do
+  log_dir="${log_root}/elixir-${version}"
+  failed_stage="$(awk -F '\t' '$3 == "FAIL" {print $2; exit}' "${log_dir}/results.tsv")"
+  for stage in "${stages[@]}"; do
+    if ! cut -f2 "${log_dir}/results.tsv" | grep -qx "${stage}"; then
+      failed_stage="${failed_stage:-container-exit}"
+      overall_exit=1
+      run_stage "${stage}" true
+    fi
   done
-} >"${results_file}"
-
+done < <(jq -r '.include[] | [.elixir, .canonical] | @tsv' "${log_root}/runtime-matrix.json")
+results_file="${log_root}/results.tsv"
 {
-  printf '\n%-6s | %-5s | %-6s | %-4s | %-11s | %-7s | %-6s | %-8s | %-11s | %-8s | %-6s | %-7s\n' \
-    Elixir Setup Verify Deps "Dep compile" Compile Format Coverage Performance Dialyzer Parity Overall
-  printf '%s\n' \
-    '-------+-------+--------+------+-------------+---------+--------+----------+-------------+----------+--------+--------'
-
-  for version in "${runtime_versions[@]}"; do
-    printf '%-6s | %-5s | %-6s | %-4s | %-11s | %-7s | %-6s | %-8s | %-11s | %-8s | %-6s | %-7s\n' \
-      "${version}" \
-      "${results["${version}:setup"]:-SKIP}" \
-      "${results["${version}:runtime"]:-SKIP}" \
-      "${results["${version}:dependencies"]:-SKIP}" \
-      "${results["${version}:dependency_compile"]:-SKIP}" \
-      "${results["${version}:compile"]:-SKIP}" \
-      "${results["${version}:format"]:-SKIP}" \
-      "${results["${version}:coverage"]:-SKIP}" \
-      "${results["${version}:performance"]:-SKIP}" \
-      "${results["${version}:dialyzer"]:-SKIP}" \
-      "${results["${version}:parity"]:-SKIP}" \
-      "${results["${version}:overall"]:-FAIL}"
-  done
-} | tee "${summary_file}"
-
-printf '\nQUALITY_MATRIX_SUMMARY status=%s logs=%s results=%s\n' \
-  "$([[ ${overall_exit} -eq 0 ]] && printf PASS || printf FAIL)" \
-  "${log_root}" \
-  "${results_file}"
-
+  printf 'Elixir\tStage\tResult\tWarnings\tLog\tSeconds\n'
+  cat "${log_root}/host/results.tsv" "${log_root}"/elixir-*/results.tsv
+} >"${results_file}" || exit 2
+awk -F '\t' '{printf "%-7s | %-18s | %-6s | %-8s | %-7s | %s\n", $1, $2, $3, $4, $6, $5}' \
+  "${results_file}" | tee "${log_root}/summary.txt" || exit 2
+printf '\nQUALITY_MATRIX_SUMMARY status=%s seconds=%s logs=%s results=%s\n' \
+  "$([[ ${overall_exit} -eq 0 ]] && printf PASS || printf FAIL)" "${SECONDS}" "${log_root}" "${results_file}"
 exit "${overall_exit}"

@@ -1,0 +1,18 @@
+<!doctype html><html><head><style>
+@page {size:240pt 300pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+p {margin:0;color:#163d76;} a {color:black;text-decoration:none;}
+.selected {display:block;width:120pt;height:65pt;border:1pt solid #26313b;margin:4pt 0;}
+.fallback {background:#e4eddf;}
+</style></head><body>
+<p>Before <object class="fallback"><b>inline fallback</b></object> after</p>
+<object type="application/x-native-test" data="__ASSET_ROOT__/object_child.html" style="display:block;margin:4pt 0;">
+  <div class="fallback">Unsupported type fallback</div>
+</object>
+<object class="selected" data="__ASSET_ROOT__/object_child.html" type="text/html">
+  <p>Unselected child fallback</p>
+</object>
+<p>Parent after selected object</p>
+<object class="selected" data="__ASSET_ROOT__/object_child.html" width="160" height="87"></object>
+<p>End parent</p>
+</body></html>

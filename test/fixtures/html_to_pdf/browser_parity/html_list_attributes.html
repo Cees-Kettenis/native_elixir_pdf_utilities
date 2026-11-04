@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><style>
+@page { size: 612pt 792pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { padding: 24pt; font-family: "DejaVu Sans"; font-size: 10pt; line-height: 14pt; }
+p { margin: 0; }
+</style></head><body>
+<p>Starting and per-item values</p>
+<ol start="7"><li>Seven<li value="12">Twelve<li>Thirteen</ol>
+<ol reversed><li>Three<li style="display:none">Hidden<li>Two<li>One</ol>
+<ol reversed start="-1"><li>Negative one<li value="4">Four<li>Three</ol>
+<ol type="a" start="25"><li>Lowercase Y<li>Z<li>AA<li type="I" value="9">Roman nine</ol>
+<ol type="A" start="26"><li>Uppercase Z<li>AA<li type="i" value="4">Roman four</ol>
+<ul type="square"><li>Legacy square<li type="circle">Legacy circle</ul>
+<ol type="i" style="list-style-type:upper-alpha"><li>Author override</ol>
+<ol style="list-style-type:decimal-leading-zero"><li>Padded one<li value="-2">Padded negative</ol>
+<div style="break-before:page">
+<p>Inside markers and styled item boxes</p>
+<ol start="9" style="width:180pt;list-style-position:inside">
+<li style="padding:4pt;border:1pt solid #336699;background-color:#eef2ff">Inside numbering wraps with the text over several lines.</li>
+<li>Second inside item with <strong>bold text</strong>.</li>
+</ol>
+<ul style="list-style:square inside;width:180pt"><li>Square inside wraps with the text across several lines.<li></ul>
+<ol style="list-style-type:lower-roman; width:180pt"><li style="padding-left:5pt;background-color:#f0f0f0">Outside marker and padding<li style="display:block">Unmarked block<li style="display:none">Hidden<li>Next numbered item</ol>
+<ul style="list-style:none"><li>Marker suppressed<li><p>Block paragraph</p><p>Another paragraph</p></li></ul>
+<ul><li>Nested outer<ol reversed type="A"><li>Nested B<li>Nested A</ol></li><li>Next outer</li></ul>
+<pre style="margin:0;font-family:'DejaVu Sans'"><!-- boundary -->
+A newline after a comment remains.
+</pre>
+<pre style="font-size:0;margin:0">A	B</pre>
+<p>Text after invisible preformatted tabs.</p>
+</div>
+</body></html>

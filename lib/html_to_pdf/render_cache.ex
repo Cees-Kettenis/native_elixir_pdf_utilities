@@ -48,6 +48,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderCache do
   end
 
   @doc false
+  @spec lookup(reference(), term(), term()) :: {:ok, term()} | :error
+  def lookup(cache, partition, key) do
+    cache |> Process.get() |> Map.get(partition, %{}) |> Map.fetch(key)
+  end
+
+  # Keep many small per-node keys separate from large font/resource keys. A
+  # growing shared hash map otherwise repeatedly hashes full font registries.
+  @doc false
+  @spec fetch_partition(reference(), term(), term(), (-> result)) :: result when result: term()
+  def fetch_partition(cache, partition, key, loader) do
+    case lookup(cache, partition, key) do
+      {:ok, result} ->
+        result
+
+      :error ->
+        result = loader.()
+
+        Process.put(
+          cache,
+          Map.update(Process.get(cache), partition, %{key => result}, &Map.put(&1, key, result))
+        )
+
+        result
+    end
+  end
+
+  @doc false
   @spec fetch(reference(), term(), (-> result)) :: result when result: term()
   def fetch(cache, key, loader) do
     case Map.fetch(Process.get(cache), key) do

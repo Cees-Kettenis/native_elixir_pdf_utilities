@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page {size:420px 400px;margin:12px;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12px;line-height:16px;}
+p {margin:0;}
+svg {display:block;width:380px;height:108px;font-family:"DejaVu Sans";font-size:28px;}
+</style></head><body>
+<p>Whole-object gradients over actual selected glyphs</p>
+<svg viewBox="0 0 380 108"><defs><linearGradient id="linear"><stop offset="0" stop-color="#df2433"/><stop offset=".4" stop-color="#21935b"/><stop offset="1" stop-color="#244bdc"/></linearGradient><radialGradient id="radial" fx="30%" fy="35%"><stop offset="0" stop-color="#e9a518"/><stop offset="1" stop-color="#603dbc"/></radialGradient></defs><text x="8" y="38" fill="url(#linear)">office café Ω</text><text x="8" y="85" fill="url(#radial)" font-weight="700">Radial paint Ω</text></svg>
+<p>Transformed user-space gradient and clip opacity</p>
+<svg viewBox="0 0 380 108"><defs><linearGradient id="user" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="280" y2="0" gradientTransform="rotate(8)"><stop offset="0" stop-color="#cd3827" stop-opacity=".8"/><stop offset="1" stop-color="#2744c7" stop-opacity=".8"/></linearGradient><clipPath id="window"><rect x="0" y="0" width="350" height="105"/></clipPath></defs><g transform="translate(12 8) rotate(-5)" clip-path="url(#window)" opacity=".7"><text x="8" y="36" fill="url(#user)" fill-opacity=".8">Affine café Ω<tspan x="8" y="83" font-style="italic">Same server</tspan></text></g></svg>
+<p>Native tiles in user-space and object bounding boxes</p>
+<svg viewBox="0 0 380 108"><defs><pattern id="tile" patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(12)"><rect width="10" height="10" fill="#244bbb"/><rect width="5" height="5" fill="#e24729"/></pattern><pattern id="bbox" width=".12" height=".3"><rect width="32" height="20" fill="#2e994d"/><circle cx="5" cy="5" r="4" fill="#dec12d"/></pattern></defs><text x="8" y="36" fill="url(#tile)">Pattern office Ω</text><text x="8" y="83" fill="url(#bbox)">BBox café Ω</text></svg>
+</body></html>

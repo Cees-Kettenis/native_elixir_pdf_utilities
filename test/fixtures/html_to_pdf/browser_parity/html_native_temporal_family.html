@@ -1,0 +1,24 @@
+<!doctype html><html lang=en-US><head><style>
+@page {size:300pt 360pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+body {padding:12pt;}p {margin:0 0 3pt;}.row {margin:0 0 9pt;}
+input {font-family:"DejaVu Sans Mono";display:block;}
+</style></head><body>
+<div class=row><p>Month picker</p><input type=month value=2026-10></div>
+<div class=row><p>Empty symbolic month</p><input type=month></div>
+<div class=row><p>Bounded readonly month</p><input type=month readonly name=month min=2000-01 max=2030-12 value=2026-09></div>
+<div class=row><p>Week picker</p><input type=week value=2026-W42></div>
+<div class=row><p>Empty week</p><input type=week></div>
+<div class=row><p>Readonly leap ISO week</p><input type=week readonly name=week value=2020-W53></div>
+<div class=row style=break-before:page><p>Local datetime picker</p><input type=datetime-local value=2026-10-13T13:02></div>
+<div class=row><p>Empty local datetime</p><input type=datetime-local></div>
+<div class=row><p>Readonly local fraction</p><input type=datetime-local readonly name=local value="2026-10-13 13:02:03.100"></div>
+<div class=row><p>Minimum requires seconds</p><input type=datetime-local min=2026-10-13T00:00:01 value=2026-10-13T13:02></div>
+<div class=row><p>Disabled colored fields</p><input type=month disabled name=disabled_month value=2026-10 style=color:red></div>
+<div class=row><p>Readonly colored fields</p><input type=week readonly name=colored_week value=2026-W42 style=color:blue></div>
+<div class=row style=break-before:page><p>Disabled date separators</p><input type=date disabled value=2026-10-13 style=color:red></div>
+<div class=row><p>Disabled time separators</p><input type=time disabled value=13:02:03.100 style=color:blue></div>
+<div class=row><p>Clipped symbolic month</p><input type=month readonly value=2026-09 style="width:40pt;border-radius:3pt;"></div>
+<div class=row><p>Clipped local datetime</p><input type=datetime-local readonly value=2026-10-13T13:02 style="width:100pt;border-radius:3pt;"></div>
+<p>After temporal family</p>
+</body></html>

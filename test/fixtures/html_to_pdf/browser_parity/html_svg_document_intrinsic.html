@@ -1,0 +1,10 @@
+<!doctype html><html><head><style>
+@page { size: 350pt 240pt; margin: 0; }
+html,body { margin:0; padding:0; }
+.row { display:flex; gap:12pt; margin:12pt; }
+object,embed { display:block; background:#ddd; }
+iframe { display:block;width:120pt;height:90pt;border:0; }
+</style></head><body>
+<div class="row"><object data="assets/svg-doc-no-viewbox.svg" type="image/svg+xml"></object><embed src="assets/svg-doc-mismatch.svg" type="image/svg+xml"></div>
+<div class="row"><iframe src="assets/svg-document-child.html"></iframe><a href="https://example.test/svg-document"><object data="assets/svg-doc-align.svg" type="image/svg+xml" style="width:120pt;height:90pt;border:1pt solid blue"></object></a></div>
+</body></html>

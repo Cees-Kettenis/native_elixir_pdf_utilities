@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="UTF-8"><style>
+@page { size: 300pt 400pt; margin: 0; }
+html, body { margin: 0; }
+section { display: grid; width: 200pt; grid-template-columns: auto auto; margin-bottom: 10pt; }
+section > div { min-width: 20pt; height: 20pt; }
+</style></head><body>
+<section><div style="background:red"></div><div style="background:blue"></div></section>
+<section style="justify-content:normal;column-gap:20pt"><div style="background:red"></div><div style="background:blue"></div></section>
+<section style="justify-content:start"><div style="background:red"></div><div style="background:blue"></div></section>
+<section style="justify-content:center"><div style="background:red"></div><div style="background:blue"></div></section>
+<section style="grid-template-columns:minmax(50pt,auto) auto"><div style="background:red"></div><div style="background:blue"></div></section>
+<section style="grid-template-columns:minmax(auto,40pt) auto"><div style="background:red"></div><div style="background:blue"></div></section>
+<section style="height:auto;min-height:100pt;grid-template-columns:100pt;grid-template-rows:auto auto"><div style="height:auto;background:red"></div><div style="height:auto;background:blue"></div></section>
+</body></html>

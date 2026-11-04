@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><style>
+@page { size:264pt 300pt; margin:0; }
+html,body { margin:0; padding:0; }
+body { padding:12pt; font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+input { display:block; width:180pt; box-sizing:border-box; border:1px solid #777777;
+ background:white; padding:1.5pt 3pt; margin:0 0 6pt;
+ font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+[type="unknown"] { color:#21517b; }
+[type="hidden "] { color:#993300; }
+[type*="K"] { color:#21517b; }
+[readonly] { background:#f7f7f7; }
+[disabled] { color:#666666; background:#f4f4f4; }
+</style></head><body>
+<input name="missing" value="Missing type reference">
+<input type="text" name="text" value="Text reference">
+<input type="" name="empty-type" value="Empty type">
+<input type=" " name="space-type" value="Whitespace type">
+<input type="unknown" name="unknown" value="Unknown type">
+<input type="hidden " readonly name="not-hidden" value="Visible text default">
+<input type="checKbox" name="not-checkbox" value="Text default">
+<input type="ſearch" name="not-search" value="A&#13;B&#10;C">
+<input type="datetime" readonly disabled name="obsolete" value="Obsolete type default">
+<input type="unregistered" name="empty-value">
+</body></html>

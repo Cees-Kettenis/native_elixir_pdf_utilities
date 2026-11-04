@@ -5,6 +5,34 @@ defmodule NativeElixirPdfUtilities.Validators.IncrementalValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
+  @doc "Admits new objects against the active xref, retaining object zero and sparse ID bounds."
+  @spec validate_object_capacity(term(), non_neg_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_object_capacity(context, additional) do
+    case context do
+      %{document: %{trailer: %{"Size" => size}, xref: xref}}
+      when is_integer(size) and size > 0 and is_map(xref) ->
+        PdfValidator.validate_object_capacity(map_size(xref) + additional, size + additional)
+
+      _ ->
+        error("prepared incremental context is missing a validated xref and Size")
+    end
+  end
+
+  @doc "Checks the active trailer Root reference before shared incremental serialization."
+  @spec validate_root(map()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_root(trailer) do
+    case Map.get(trailer, "Root") do
+      {:ref, {object, generation}}
+      when is_integer(object) and object >= 0 and
+             is_integer(generation) and generation >= 0 ->
+        :ok
+
+      _ ->
+        error("active trailer Root is malformed")
+    end
+  end
+
   @doc false
   @spec validate_revision_capacity(PdfValidator.context(), pos_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}

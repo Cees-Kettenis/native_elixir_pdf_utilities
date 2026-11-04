@@ -11,7 +11,9 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Validators.PdfDateValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+  alias NativeElixirPdfUtilities.Validators.CollectionValidator
 
   @field_keys %{
     title: "Title",
@@ -64,27 +66,19 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   @spec validate_incremental_object_capacity(term(), term()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_incremental_object_capacity(trailer, xref) do
-    case {trailer, xref} do
-      {%{"Size" => size}, xref} when is_map(xref) ->
-        max_pdf_objects = Limits.get(:max_pdf_objects)
+    case NativeElixirPdfUtilities.Validators.IncrementalValidator.validate_object_capacity(
+           %{document: %{trailer: trailer, xref: xref}},
+           1
+         ) do
+      {:error, {:resource_limit_exceeded, _}} ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "PDF object count cannot accommodate an information update"
+        )
 
-        cond do
-          not is_integer(size) or size <= 0 ->
-            error(:incremental_write, "active trailer Size is malformed")
-
-          size > max_pdf_objects or map_size(xref) >= max_pdf_objects ->
-            Diagnostics.error(
-              :limits,
-              :resource_limit_exceeded,
-              "PDF object count cannot accommodate an information update"
-            )
-
-          true ->
-            :ok
-        end
-
-      _ ->
-        error(:incremental_write, "active cross-reference state is malformed")
+      result ->
+        result
     end
   end
 
@@ -97,7 +91,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
     with {:ok, document, dictionary} <- information_dictionary(context) do
       @field_keys
       |> Enum.reduce_while({:ok, %{}}, fn {field, key}, {:ok, info} ->
-        case normalized_existing_value(document, field, Map.get(dictionary, key)) do
+        case normalized_existing_value(document, dictionary, field, key) do
           {:ok, value} -> {:cont, {:ok, Map.put(info, field, value)}}
           {:error, _} = info_error -> {:halt, info_error}
         end
@@ -163,6 +157,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
       case InfoCodec.serialize_value(updated) do
         {:ok, _iodata} -> {:ok, %{document: document, dictionary: updated}}
         :error -> error(:info, "information dictionary contains an unsupported value")
+        {:error, _} = limit_error -> limit_error
       end
     else
       false -> error(:input, "prepared information patch is malformed")
@@ -193,15 +188,11 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   defp information_dictionary(context) do
     case context do
       %{document: %{trailer: trailer} = document} when is_map(trailer) ->
-        case Map.get(trailer, "Info") do
-          nil ->
-            {:ok, document, %{}}
-
-          value ->
-            case PdfValidator.dictionary(document, value) do
-              {:ok, dictionary} -> {:ok, document, dictionary}
-              {:error, _reason} -> error(:info, "PDF Info entry does not resolve to a dictionary")
-            end
+        with {:ok, value} <- PdfValidator.optional_entry(document, trailer, "Info", %{}),
+             {:ok, dictionary} <- PdfValidator.dictionary(document, value) do
+          {:ok, document, dictionary}
+        else
+          {:error, _reason} -> error(:info, "PDF Info entry does not resolve to a dictionary")
         end
 
       _ ->
@@ -209,16 +200,11 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
     end
   end
 
-  defp normalized_existing_value(document, field, value) do
-    case value do
-      nil ->
-        {:ok, nil}
-
-      value ->
-        case PdfValidator.resolve(document, value) do
-          {:ok, resolved} -> decode_existing_value(field, resolved)
-          {:error, _reason} -> error(:info, "PDF information field #{field} cannot be resolved")
-        end
+  defp normalized_existing_value(document, dictionary, field, key) do
+    case PdfValidator.optional_entry(document, dictionary, key, nil) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, value} -> decode_existing_value(field, value)
+      {:error, _reason} -> error(:info, "PDF information field #{field} cannot be resolved")
     end
   end
 
@@ -232,7 +218,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
 
       {field, {kind, bytes}} when field in @date_fields and kind in [:string, :hex] ->
         with {:ok, date_text} <- InfoCodec.decode_text(bytes),
-             {:ok, date_time, _date} <- InfoCodec.parse_date(date_text) do
+             {:ok, date_time, _date} <- PdfDateValidator.parse_date(date_text) do
           {:ok, date_time}
         else
           _ -> error(:info, "PDF information field #{field} has an invalid PDF date")
@@ -250,7 +236,11 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
                PdfValidator.number_array(document, media_box, 4),
              true <- right > left and top > bottom,
              {:ok, rotation} <- normalized_rotation(document, rotate),
-             {:ok, user_unit} <- normalized_user_unit(document, dictionary) do
+             {:ok, user_unit} <- normalized_user_unit(document, dictionary),
+             {:ok, media_left} <- PdfValidator.float_number(left),
+             {:ok, media_bottom} <- PdfValidator.float_number(bottom),
+             {:ok, media_right} <- PdfValidator.float_number(right),
+             {:ok, media_top} <- PdfValidator.float_number(top) do
           unrotated_width = (right - left) * user_unit
           unrotated_height = (top - bottom) * user_unit
 
@@ -260,23 +250,36 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
               false -> {unrotated_width, unrotated_height}
             end
 
-          {:ok,
-           %{
-             page_number: page_number,
-             width: width,
-             height: height,
-             unit: :point,
-             rotation: rotation,
-             media_box: %{
-               left: left * 1.0,
-               bottom: bottom * 1.0,
-               right: right * 1.0,
-               top: top * 1.0
-             }
-           }}
+          if width > 0 and height > 0 do
+            {:ok,
+             %{
+               page_number: page_number,
+               width: width,
+               height: height,
+               unit: :point,
+               rotation: rotation,
+               media_box: %{
+                 left: media_left,
+                 bottom: media_bottom,
+                 right: media_right,
+                 top: media_top
+               }
+             }}
+          else
+            page_error(page_number, "has unrepresentable physical page geometry")
+          end
         else
           {:error, :user_unit} ->
             page_error(page_number, "has a UserUnit value that is not a positive number")
+
+          {:error, :user_unit_range} ->
+            page_error(
+              page_number,
+              "has a UserUnit outside the representable max_pdf_numeric_magnitude range"
+            )
+
+          :error ->
+            page_error(page_number, "has unrepresentable MediaBox geometry")
 
           _ ->
             page_error(page_number, "has a malformed effective MediaBox or Rotate value")
@@ -285,6 +288,8 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
       _ ->
         page_error(page_number, "context is malformed")
     end
+  rescue
+    ArithmeticError -> page_error(page_number, "has unrepresentable physical page geometry")
   end
 
   defp normalized_rotation(document, value) do
@@ -298,9 +303,12 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   end
 
   defp normalized_user_unit(document, dictionary) do
-    case PdfValidator.resolve(document, Map.get(dictionary, "UserUnit", 1)) do
+    case PdfValidator.optional_entry(document, dictionary, "UserUnit", 1) do
       {:ok, user_unit} when is_number(user_unit) and user_unit > 0 ->
-        {:ok, user_unit * 1.0}
+        case PdfValidator.float_number(user_unit) do
+          {:ok, value} -> {:ok, value}
+          :error -> {:error, :user_unit_range}
+        end
 
       _ ->
         {:error, :user_unit}
@@ -345,6 +353,9 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
                    {:ok, Map.put(patch, Map.fetch!(@field_keys, field), normalized), total_bytes}}
               end
 
+            {:error, _} = failure ->
+              {:halt, failure}
+
             :error ->
               message =
                 if field in @date_fields,
@@ -381,13 +392,25 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   defp normalized_text_value(field, value) do
     case {field, value} do
       {:keywords, values} when is_list(values) ->
-        case Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
-          true ->
-            joined = Enum.join(values, ", ")
-            {:ok, InfoCodec.encode_text(joined), byte_size(joined)}
+        # Even empty keywords require two separator bytes between entries.
+        maximum_count = div(Limits.get(:max_pdf_info_value_bytes), 2) + 1
 
-          false ->
+        case CollectionValidator.bounded_length(values, maximum_count) do
+          {:ok, _count} ->
+            case Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
+              true ->
+                joined = Enum.join(values, ", ")
+                {:ok, InfoCodec.encode_text(joined), byte_size(joined)}
+
+              false ->
+                :error
+            end
+
+          :invalid ->
             :error
+
+          :limit_exceeded ->
+            limit_error("PDF information field keywords exceeds the byte limit")
         end
 
       {_field, value} when is_binary(value) ->
@@ -402,8 +425,8 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   end
 
   defp normalized_date_value(value) do
-    with {:ok, value} <- InfoCodec.normalize_date(value),
-         {:ok, _date_time, _components} <- InfoCodec.parse_date(value) do
+    with {:ok, value} <- PdfDateValidator.normalize_date(value),
+         {:ok, _date_time, _components} <- PdfDateValidator.parse_date(value) do
       {:ok, InfoCodec.encode_text(value), byte_size(value)}
     end
   end

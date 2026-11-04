@@ -1,0 +1,8 @@
+<!doctype html><html><head><style>
+@page{size:300pt 300pt;margin:12pt}html,body{margin:0;padding:0}body{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}p{margin:0 0 6pt}.atomic{display:inline-block;width:260pt;vertical-align:top}table{width:260pt;table-layout:fixed;border-collapse:collapse;margin:0 0 10pt}td{padding:3pt;vertical-align:baseline;border:1px solid #789}col{width:50%}.small{font-size:8pt;line-height:12pt}.large{font-size:18pt;line-height:24pt}.nested{width:100%;margin:0}.nested-large{font-size:14pt;line-height:18pt}
+</style></head><body>
+<p>First nested row follows a top caption</p><div class="atomic"><table><tr><td><table class="nested"><caption>Top caption</caption><tr><td class="small">Small</td><td class="nested-large">Nested</td></tr><tr><td colspan="2">Second row</td></tr></table></td><td class="large">Peer outer</td></tr></table></div>
+<p>Bottom caption does not replace the first row</p><div class="atomic"><table><tr><td><table class="nested"><caption style="caption-side:bottom">Bottom caption</caption><tr><td class="small">Small</td><td class="nested-large">Nested</td></tr><tr><td colspan="2">Second row</td></tr></table></td><td class="large">Peer outer</td></tr></table></div>
+<p>Fallback baseline uses first row content edge</p><div class="atomic"><table><tr><td><table class="nested"><tr><td style="vertical-align:middle;height:30pt">Middle</td><td style="vertical-align:top" class="small">Top</td></tr><tr><td colspan="2">Later row</td></tr></table></td><td class="large">Peer outer</td></tr></table></div>
+<p>End nested baseline document</p>
+</body></html>

@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page {size:300pt 420pt;margin:12pt;}
+html,body {margin:0;padding:0;}
+body {font-family:"DejaVu Sans";font-size:9pt;line-height:12pt;}
+p {margin:0 0 6pt;}
+table {width:240pt;table-layout:fixed;border-collapse:collapse;margin:0 0 12pt;}
+td,th {padding:3pt;border:.75pt solid #555;text-align:left;vertical-align:top;}
+caption {padding:3pt;border:.75pt solid #555;text-align:left;background:#eef;}
+caption p {margin:0 0 4pt;}
+caption div {margin:0;}
+a {color:black;text-decoration:none;}
+</style></head><body>
+<p>Block captions before.</p>
+<table><caption>
+<p><strong>Block title</strong> <a href="https://example.com/caption">Caption linked</a></p>
+<div style="padding:2pt;border:.75pt solid #777;background:#eee"><p style="margin:0">First detail</p><p style="margin:0">Second detail</p></div>
+<div style="padding-top:3pt">Mixed image <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" style="width:12pt;height:9pt;vertical-align:middle"> end.</div>
+</caption><thead><tr><th>Column</th><th>Value</th></tr></thead><tbody><tr><td>Body one</td><td>One</td></tr><tr><td>Body two</td><td>Two</td></tr></tbody></table>
+<table><caption style="height:12pt;padding:0;background:#efe"><div>Fixed caption</div></caption><tr><td>Fixed body</td><td>Fixed value</td></tr></table>
+<table><caption style="height:6pt;padding:0;background:#fee"></caption><tr><td>Empty caption body</td><td>Visible value</td></tr></table>
+<p>Block captions after.</p></body></html>

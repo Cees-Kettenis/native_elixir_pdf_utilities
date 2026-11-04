@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="UTF-8"><style>
+@page { size: 300pt 420pt; margin: 12pt; }
+html, body { margin: 0; padding: 0; }
+.columns { display: flex; flex-direction: column; flex-wrap: wrap; width: 100pt; height: 30pt; margin-bottom: 10pt; background: #eee; }
+.item { flex: none; width: 40pt; height: 20pt; }
+.red { background: red; }
+.blue { background: blue; }
+.green { background: lime; }
+</style></head><body>
+<div class="columns"><div class="item red"></div><div class="item blue"></div></div>
+<div class="columns" style="flex-direction:column-reverse"><div class="item red"></div><div class="item blue"></div></div>
+<div class="columns" style="column-gap:10pt"><div class="item red" style="width:20pt"></div><div class="item blue" style="width:30pt"></div></div>
+<div class="columns" style="column-gap:10pt"><div class="item red" style="width:auto"></div><div class="item blue" style="width:20pt;margin-left:auto"></div></div>
+<div class="columns" style="column-gap:10pt;align-content:space-between"><div class="item red" style="width:20pt"></div><div class="item blue" style="width:30pt"></div></div>
+<div class="columns" style="align-content:flex-end"><div class="item red" style="width:20pt"></div></div>
+<div class="columns" style="margin-left:30pt;column-gap:10pt;align-content:center"><div class="item red" style="width:70pt"></div><div class="item blue" style="width:70pt"></div></div>
+<div style="height:100pt">
+  <div class="columns" style="width:120pt;height:50%;box-sizing:border-box;padding:4pt;border:6pt solid black;margin-bottom:0"><div class="item red"></div><div class="item blue"></div></div>
+  <div class="green" style="width:120pt;height:10pt"></div>
+</div>
+</body></html>

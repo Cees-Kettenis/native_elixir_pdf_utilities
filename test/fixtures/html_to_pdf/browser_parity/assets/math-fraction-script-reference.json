@@ -1,0 +1,385 @@
+{
+  "source_sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+  "core_sha256": "f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373",
+  "reference_sha256": "b1eed6017e8ac0976744ddb108c995747bb19d49bfb24fc51ee472922e6e0217",
+  "fonttools_version": "4.60.1",
+  "family": "Math Fraction Script Reference",
+  "units_per_em": 1000,
+  "aliases": [
+    {
+      "character": "0",
+      "level": 1,
+      "alias": 58112,
+      "source_gid": 4273,
+      "glyph": "zero.ssty",
+      "advance": 580
+    },
+    {
+      "character": "1",
+      "level": 1,
+      "alias": 58113,
+      "source_gid": 4274,
+      "glyph": "one.ssty",
+      "advance": 509
+    },
+    {
+      "character": "2",
+      "level": 1,
+      "alias": 58114,
+      "source_gid": 4275,
+      "glyph": "two.ssty",
+      "advance": 524
+    },
+    {
+      "character": "3",
+      "level": 1,
+      "alias": 58115,
+      "source_gid": 4276,
+      "glyph": "three.ssty",
+      "advance": 524
+    },
+    {
+      "character": "4",
+      "level": 1,
+      "alias": 58116,
+      "source_gid": 4277,
+      "glyph": "four.ssty",
+      "advance": 564
+    },
+    {
+      "character": "5",
+      "level": 1,
+      "alias": 58117,
+      "source_gid": 4278,
+      "glyph": "five.ssty",
+      "advance": 502
+    },
+    {
+      "character": "6",
+      "level": 1,
+      "alias": 58118,
+      "source_gid": 4279,
+      "glyph": "six.ssty",
+      "advance": 544
+    },
+    {
+      "character": "7",
+      "level": 1,
+      "alias": 58119,
+      "source_gid": 4280,
+      "glyph": "seven.ssty",
+      "advance": 513
+    },
+    {
+      "character": "8",
+      "level": 1,
+      "alias": 58120,
+      "source_gid": 4281,
+      "glyph": "eight.ssty",
+      "advance": 525
+    },
+    {
+      "character": "9",
+      "level": 1,
+      "alias": 58121,
+      "source_gid": 4282,
+      "glyph": "nine.ssty",
+      "advance": 544
+    },
+    {
+      "character": "+",
+      "level": 1,
+      "alias": 58122,
+      "source_gid": 4283,
+      "glyph": "plus.ssty",
+      "advance": 772
+    },
+    {
+      "character": "0",
+      "level": 2,
+      "alias": 58123,
+      "source_gid": 4522,
+      "glyph": "zero.ssty2",
+      "advance": 606
+    },
+    {
+      "character": "1",
+      "level": 2,
+      "alias": 58124,
+      "source_gid": 4523,
+      "glyph": "one.ssty2",
+      "advance": 561
+    },
+    {
+      "character": "2",
+      "level": 2,
+      "alias": 58125,
+      "source_gid": 4524,
+      "glyph": "two.ssty2",
+      "advance": 559
+    },
+    {
+      "character": "3",
+      "level": 2,
+      "alias": 58126,
+      "source_gid": 4525,
+      "glyph": "three.ssty2",
+      "advance": 561
+    },
+    {
+      "character": "4",
+      "level": 2,
+      "alias": 58127,
+      "source_gid": 4526,
+      "glyph": "four.ssty2",
+      "advance": 599
+    },
+    {
+      "character": "5",
+      "level": 2,
+      "alias": 58128,
+      "source_gid": 4527,
+      "glyph": "five.ssty2",
+      "advance": 538
+    },
+    {
+      "character": "6",
+      "level": 2,
+      "alias": 58129,
+      "source_gid": 4528,
+      "glyph": "six.ssty2",
+      "advance": 587
+    },
+    {
+      "character": "7",
+      "level": 2,
+      "alias": 58130,
+      "source_gid": 4529,
+      "glyph": "seven.ssty2",
+      "advance": 538
+    },
+    {
+      "character": "8",
+      "level": 2,
+      "alias": 58131,
+      "source_gid": 4530,
+      "glyph": "eight.ssty2",
+      "advance": 564
+    },
+    {
+      "character": "9",
+      "level": 2,
+      "alias": 58132,
+      "source_gid": 4531,
+      "glyph": "nine.ssty2",
+      "advance": 587
+    },
+    {
+      "character": "+",
+      "level": 2,
+      "alias": 58133,
+      "source_gid": 4532,
+      "glyph": "plus.ssty2",
+      "advance": 800
+    }
+  ],
+  "tokens": {
+    "small-n": {
+      "text": "123",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue301\ue302\ue303",
+      "source_gids": [
+        4274,
+        4275,
+        4276
+      ],
+      "advances": [
+        509,
+        524,
+        524
+      ]
+    },
+    "small-d": {
+      "text": "4",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue304",
+      "source_gids": [
+        4277
+      ],
+      "advances": [
+        564
+      ]
+    },
+    "small-zero-n": {
+      "text": "5",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue305",
+      "source_gids": [
+        4278
+      ],
+      "advances": [
+        502
+      ]
+    },
+    "small-zero-d": {
+      "text": "67",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue306\ue307",
+      "source_gids": [
+        4279,
+        4280
+      ],
+      "advances": [
+        544,
+        513
+      ]
+    },
+    "medium-n": {
+      "text": "12",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue301\ue302",
+      "source_gids": [
+        4274,
+        4275
+      ],
+      "advances": [
+        509,
+        524
+      ]
+    },
+    "medium-d": {
+      "text": "3",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue303",
+      "source_gids": [
+        4276
+      ],
+      "advances": [
+        524
+      ]
+    },
+    "medium-zero-n": {
+      "text": "4",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue304",
+      "source_gids": [
+        4277
+      ],
+      "advances": [
+        564
+      ]
+    },
+    "medium-zero-d": {
+      "text": "56",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue305\ue306",
+      "source_gids": [
+        4278,
+        4279
+      ],
+      "advances": [
+        502,
+        544
+      ]
+    },
+    "nested-n": {
+      "text": "1",
+      "computed_depth": 2,
+      "level": 2,
+      "alias_text": "\ue30c",
+      "source_gids": [
+        4523
+      ],
+      "advances": [
+        561
+      ]
+    },
+    "nested-d": {
+      "text": "2",
+      "computed_depth": 2,
+      "level": 2,
+      "alias_text": "\ue30d",
+      "source_gids": [
+        4524
+      ],
+      "advances": [
+        559
+      ]
+    },
+    "large-d1": {
+      "text": "34",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue303\ue304",
+      "source_gids": [
+        4276,
+        4277
+      ],
+      "advances": [
+        524,
+        564
+      ]
+    },
+    "large-op": {
+      "text": "+",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "+",
+      "source_gids": [
+        4283
+      ],
+      "advances": [
+        772
+      ]
+    },
+    "large-d2": {
+      "text": "5",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue305",
+      "source_gids": [
+        4278
+      ],
+      "advances": [
+        502
+      ]
+    },
+    "authored-d": {
+      "text": "10",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue301\ue300",
+      "source_gids": [
+        4274,
+        4273
+      ],
+      "advances": [
+        509,
+        580
+      ]
+    },
+    "linked-n": {
+      "text": "11",
+      "computed_depth": 1,
+      "level": 1,
+      "alias_text": "\ue301\ue301",
+      "source_gids": [
+        4274,
+        4274
+      ],
+      "advances": [
+        509,
+        509
+      ]
+    }
+  },
+  "layout_adjustments": []
+}

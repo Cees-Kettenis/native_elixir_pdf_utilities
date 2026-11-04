@@ -1,0 +1,11 @@
+<!doctype html><html><head><style>
+@page{size:240pt 390pt;margin:12pt}html,body{margin:0;padding:0}body{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}p{margin:0 0 6pt}table{width:180pt;margin:0 0 6pt;background:#eef;border:.75pt solid #555;border-spacing:0}td{padding:0;height:12pt}caption{text-align:left}caption div{padding:2pt;background:#def}a{color:black;text-decoration:none}
+</style></head><body>
+<p>Bottom captions before</p>
+<table style="caption-side:bottom"><caption><div><a href="https://example.com/bottom-caption">Inherited bottom link</a><p style="margin:0">Caption block</p></div></caption><tr><td>Separate body</td></tr></table>
+<table style="border-collapse:collapse"><caption align="bottom"><div>Legacy bottom</div></caption><tr><td>Collapsed body</td></tr></table>
+<table style="caption-side:bottom"><caption align="bottom" style="caption-side:top"><div>CSS top override</div></caption><tr><td>After top</td></tr></table>
+<table style="border-collapse:collapse;caption-side:bottom"><caption style="height:12pt;background:#fde">Empty grid bottom</caption></table>
+<table style="caption-side:bottom"><caption hidden>Hidden caption</caption><tr><td>Visible body</td></tr></table>
+<p>Bottom captions after</p>
+</body></html>

@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size:420px 430px; margin:12px; }
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12px;line-height:16px;color:#174a86;}
+p {margin:0;}
+body > svg {display:block;width:360px;height:88px;font-family:"SVG Byte Mono";font-size:18px;}
+.anchor {text-anchor:middle;}
+.local {fill:#a03333;font-weight:700;}
+</style></head><body>
+<p>Selected exact font bytes and original Unicode Ω</p>
+<svg viewBox="0 0 360 88"><text x="8" y="24">café Ω<tspan dx="12" class="local">Bold</tspan></text><text x="180" y="62" class="anchor">Centered source text</text></svg>
+<p>Initial tspan positions, anchors and affine text</p>
+<svg viewBox="0 0 360 88"><text x="12" y="22">One<tspan x="110" y="46" class="local">Two</tspan><tspan dx="8" dy="18">Three</tspan></text><g transform="translate(228 4) rotate(-8)"><text x="0" y="38">Turn Ω</text></g></svg>
+<p>Repeated logical text follows two source instances</p>
+<svg viewBox="0 0 360 88"><defs><g id="label"><text y="22">Repeat Ω</text></g></defs><use href="#label" x="8" y="8"/><use href="#label" x="186" y="40" font-size="20"/></svg>
+<p>Clipping, opacity and hidden span handling</p>
+<svg viewBox="0 0 360 88"><defs><clipPath id="window"><rect x="4" y="0" width="196" height="84"/></clipPath></defs><g clip-path="url(#window)" opacity=".65"><text x="8" y="28" class="local">Clipped exact bytes</text></g><text x="8" y="68" visibility="hidden">Hidden<tspan visibility="visible">Visible Ω</tspan></text><text x="230" y="68" display="none">Removed</text></svg>
+<p>Visible SVG text survived</p>
+</body></html>

@@ -1,0 +1,3932 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 250,
+          "numerator": 1437
+        },
+        "descent": {
+          "denominator": 25,
+          "numerator": 63
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 12
+            },
+            "glyph_id": 3354,
+            "text": "x",
+            "width": {
+              "denominator": 250,
+              "numerator": 1677
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 42
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 2500,
+              "numerator": 10689
+            },
+            "x": {
+              "denominator": 250,
+              "numerator": 1677
+            },
+            "y": {
+              "denominator": 25,
+              "numerator": -63
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 250,
+          "numerator": 1437
+        },
+        "ink_descent": {
+          "denominator": 25,
+          "numerator": 63
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 2500,
+          "numerator": 28659
+        },
+        "min_content_width": {
+          "denominator": 2500,
+          "numerator": 28659
+        },
+        "text": "x1",
+        "width": {
+          "denominator": 2500,
+          "numerator": 28659
+        }
+      },
+      "name": "msub-12",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 12
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 42
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 12
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msub"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 2500,
+          "numerator": 28521
+        },
+        "descent": {
+          "denominator": 10,
+          "numerator": 27
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 12
+            },
+            "glyph_id": 3331,
+            "text": "f",
+            "width": {
+              "denominator": 250,
+              "numerator": 1731
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 42
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 625,
+              "numerator": 2751
+            },
+            "x": {
+              "denominator": 250,
+              "numerator": 1791
+            },
+            "y": {
+              "denominator": 250,
+              "numerator": 1443
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 2500,
+          "numerator": 28521
+        },
+        "ink_descent": {
+          "denominator": 10,
+          "numerator": 27
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 1250,
+          "numerator": 15057
+        },
+        "min_content_width": {
+          "denominator": 1250,
+          "numerator": 15057
+        },
+        "text": "f2",
+        "width": {
+          "denominator": 1250,
+          "numerator": 15057
+        }
+      },
+      "name": "msup-12",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 12
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "f"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 42
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 12
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 2500,
+          "numerator": 25491
+        },
+        "descent": {
+          "denominator": 2500,
+          "numerator": 7107
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 12
+            },
+            "glyph_id": 3354,
+            "text": "x",
+            "width": {
+              "denominator": 250,
+              "numerator": 1677
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 42
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 2500,
+              "numerator": 10689
+            },
+            "x": {
+              "denominator": 250,
+              "numerator": 1677
+            },
+            "y": {
+              "denominator": 2500,
+              "numerator": -7107
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 42
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 625,
+              "numerator": 2751
+            },
+            "x": {
+              "denominator": 250,
+              "numerator": 1707
+            },
+            "y": {
+              "denominator": 25,
+              "numerator": 114
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 2500,
+          "numerator": 25491
+        },
+        "ink_descent": {
+          "denominator": 2500,
+          "numerator": 7107
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 1250,
+          "numerator": 14637
+        },
+        "min_content_width": {
+          "denominator": 1250,
+          "numerator": 14637
+        },
+        "text": "x12",
+        "width": {
+          "denominator": 1250,
+          "numerator": 14637
+        }
+      },
+      "name": "msubsup-12",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 12
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 42
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 42
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 12
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msubsup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 4311
+        },
+        "descent": {
+          "denominator": 50,
+          "numerator": 189
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 3354,
+            "text": "x",
+            "width": {
+              "denominator": 500,
+              "numerator": 5031
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 5000,
+              "numerator": 32067
+            },
+            "x": {
+              "denominator": 500,
+              "numerator": 5031
+            },
+            "y": {
+              "denominator": 50,
+              "numerator": -189
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 500,
+          "numerator": 4311
+        },
+        "ink_descent": {
+          "denominator": 50,
+          "numerator": 189
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 5000,
+          "numerator": 85977
+        },
+        "min_content_width": {
+          "denominator": 5000,
+          "numerator": 85977
+        },
+        "text": "x1",
+        "width": {
+          "denominator": 5000,
+          "numerator": 85977
+        }
+      },
+      "name": "msub-18",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msub"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 5000,
+          "numerator": 85563
+        },
+        "descent": {
+          "denominator": 20,
+          "numerator": 81
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 3331,
+            "text": "f",
+            "width": {
+              "denominator": 500,
+              "numerator": 5193
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 500,
+              "numerator": 5373
+            },
+            "y": {
+              "denominator": 500,
+              "numerator": 4329
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 5000,
+          "numerator": 85563
+        },
+        "ink_descent": {
+          "denominator": 20,
+          "numerator": 81
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 2500,
+          "numerator": 45171
+        },
+        "min_content_width": {
+          "denominator": 2500,
+          "numerator": 45171
+        },
+        "text": "f2",
+        "width": {
+          "denominator": 2500,
+          "numerator": 45171
+        }
+      },
+      "name": "msup-18",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "f"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 5000,
+          "numerator": 76473
+        },
+        "descent": {
+          "denominator": 5000,
+          "numerator": 21321
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 3354,
+            "text": "x",
+            "width": {
+              "denominator": 500,
+              "numerator": 5031
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 5000,
+              "numerator": 32067
+            },
+            "x": {
+              "denominator": 500,
+              "numerator": 5031
+            },
+            "y": {
+              "denominator": 5000,
+              "numerator": -21321
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 500,
+              "numerator": 5121
+            },
+            "y": {
+              "denominator": 25,
+              "numerator": 171
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 5000,
+          "numerator": 76473
+        },
+        "ink_descent": {
+          "denominator": 5000,
+          "numerator": 21321
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 2500,
+          "numerator": 43911
+        },
+        "min_content_width": {
+          "denominator": 2500,
+          "numerator": 43911
+        },
+        "text": "x12",
+        "width": {
+          "denominator": 2500,
+          "numerator": 43911
+        }
+      },
+      "name": "msubsup-18",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msubsup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 125,
+          "numerator": 1437
+        },
+        "descent": {
+          "denominator": 25,
+          "numerator": 126
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 24
+            },
+            "glyph_id": 3354,
+            "text": "x",
+            "width": {
+              "denominator": 125,
+              "numerator": 1677
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 84
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 1250,
+              "numerator": 10689
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 1677
+            },
+            "y": {
+              "denominator": 25,
+              "numerator": -126
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 125,
+          "numerator": 1437
+        },
+        "ink_descent": {
+          "denominator": 25,
+          "numerator": 126
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 1250,
+          "numerator": 28659
+        },
+        "min_content_width": {
+          "denominator": 1250,
+          "numerator": 28659
+        },
+        "text": "x1",
+        "width": {
+          "denominator": 1250,
+          "numerator": 28659
+        }
+      },
+      "name": "msub-24",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 24
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 84
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 24
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msub"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 1250,
+          "numerator": 28521
+        },
+        "descent": {
+          "denominator": 5,
+          "numerator": 27
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 24
+            },
+            "glyph_id": 3331,
+            "text": "f",
+            "width": {
+              "denominator": 125,
+              "numerator": 1731
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 84
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 625,
+              "numerator": 5502
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 1791
+            },
+            "y": {
+              "denominator": 125,
+              "numerator": 1443
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 1250,
+          "numerator": 28521
+        },
+        "ink_descent": {
+          "denominator": 5,
+          "numerator": 27
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 625,
+          "numerator": 15057
+        },
+        "min_content_width": {
+          "denominator": 625,
+          "numerator": 15057
+        },
+        "text": "f2",
+        "width": {
+          "denominator": 625,
+          "numerator": 15057
+        }
+      },
+      "name": "msup-24",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 24
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "f"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 84
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 24
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 1250,
+          "numerator": 25491
+        },
+        "descent": {
+          "denominator": 1250,
+          "numerator": 7107
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 24
+            },
+            "glyph_id": 3354,
+            "text": "x",
+            "width": {
+              "denominator": 125,
+              "numerator": 1677
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 84
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 1250,
+              "numerator": 10689
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 1677
+            },
+            "y": {
+              "denominator": 1250,
+              "numerator": -7107
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 84
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 625,
+              "numerator": 5502
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 1707
+            },
+            "y": {
+              "denominator": 25,
+              "numerator": 228
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 1250,
+          "numerator": 25491
+        },
+        "ink_descent": {
+          "denominator": 1250,
+          "numerator": 7107
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 625,
+          "numerator": 14637
+        },
+        "min_content_width": {
+          "denominator": 625,
+          "numerator": 14637
+        },
+        "text": "x12",
+        "width": {
+          "denominator": 625,
+          "numerator": 14637
+        }
+      },
+      "name": "msubsup-24",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 24
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 84
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 84
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 24
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msubsup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 50,
+          "numerator": 567
+        },
+        "descent": {
+          "denominator": 5000,
+          "numerator": 22689
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 1144,
+            "text": "7",
+            "width": {
+              "denominator": 100,
+              "numerator": 891
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4276,
+            "text": "3",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 5000,
+              "numerator": 5769
+            },
+            "y": {
+              "denominator": 500,
+              "numerator": -1647
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 50,
+          "numerator": 567
+        },
+        "ink_descent": {
+          "denominator": 5000,
+          "numerator": 17289
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 100,
+          "numerator": 891
+        },
+        "min_content_width": {
+          "denominator": 100,
+          "numerator": 891
+        },
+        "text": "73",
+        "width": {
+          "denominator": 100,
+          "numerator": 891
+        }
+      },
+      "name": "munder-normal",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "7"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "3"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "munder"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 5000,
+          "numerator": 64143
+        },
+        "descent": {
+          "denominator": 125,
+          "numerator": 18
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 1144,
+            "text": "7",
+            "width": {
+              "denominator": 100,
+              "numerator": 891
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4276,
+            "text": "3",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 5000,
+              "numerator": 5769
+            },
+            "y": {
+              "denominator": 100,
+              "numerator": 1449
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 5000,
+          "numerator": 114723
+        },
+        "ink_descent": {
+          "denominator": 125,
+          "numerator": 18
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 100,
+          "numerator": 891
+        },
+        "min_content_width": {
+          "denominator": 100,
+          "numerator": 891
+        },
+        "text": "73",
+        "width": {
+          "denominator": 100,
+          "numerator": 891
+        }
+      },
+      "name": "mover-normal",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "7"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "3"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 5000,
+          "numerator": 64143
+        },
+        "descent": {
+          "denominator": 5000,
+          "numerator": 22689
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 1144,
+            "text": "7",
+            "width": {
+              "denominator": 100,
+              "numerator": 891
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4276,
+            "text": "3",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 5000,
+              "numerator": 5769
+            },
+            "y": {
+              "denominator": 500,
+              "numerator": -1647
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 5000,
+              "numerator": 5769
+            },
+            "y": {
+              "denominator": 100,
+              "numerator": 1449
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 5000,
+          "numerator": 114723
+        },
+        "ink_descent": {
+          "denominator": 5000,
+          "numerator": 17289
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 100,
+          "numerator": 891
+        },
+        "min_content_width": {
+          "denominator": 100,
+          "numerator": 891
+        },
+        "text": "732",
+        "width": {
+          "denominator": 100,
+          "numerator": 891
+        }
+      },
+      "name": "munderover-normal",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "7"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "3"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "munderover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 6039
+        },
+        "descent": {
+          "denominator": 500,
+          "numerator": 729
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 1144,
+            "text": "7",
+            "width": {
+              "denominator": 100,
+              "numerator": 891
+            },
+            "x": {
+              "denominator": 1000,
+              "numerator": 261
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 4276,
+            "text": "3",
+            "width": {
+              "denominator": 125,
+              "numerator": 1179
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 125,
+              "numerator": -18
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 500,
+          "numerator": 5967
+        },
+        "ink_descent": {
+          "denominator": 500,
+          "numerator": 189
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 125,
+          "numerator": 1179
+        },
+        "min_content_width": {
+          "denominator": 125,
+          "numerator": 1179
+        },
+        "text": "73",
+        "width": {
+          "denominator": 125,
+          "numerator": 1179
+        }
+      },
+      "name": "munder-accent",
+      "tree": {
+        "attributes": {
+          "accentunder": "true"
+        },
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "7"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "3"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "munder"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 6651
+        },
+        "descent": {
+          "denominator": 500,
+          "numerator": 117
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 1144,
+            "text": "7",
+            "width": {
+              "denominator": 100,
+              "numerator": 891
+            },
+            "x": {
+              "denominator": 200,
+              "numerator": 9
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 4276,
+            "text": "3",
+            "width": {
+              "denominator": 125,
+              "numerator": 1179
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": -27
+            },
+            "y": {
+              "denominator": 50,
+              "numerator": 567
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 500,
+          "numerator": 11709
+        },
+        "ink_descent": {
+          "denominator": 125,
+          "numerator": 18
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 125,
+          "numerator": 1179
+        },
+        "min_content_width": {
+          "denominator": 125,
+          "numerator": 1179
+        },
+        "text": "73",
+        "width": {
+          "denominator": 125,
+          "numerator": 1179
+        }
+      },
+      "name": "mover-accent",
+      "tree": {
+        "attributes": {
+          "accent": "true"
+        },
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "7"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "3"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 8271
+        },
+        "descent": {
+          "denominator": 50,
+          "numerator": 603
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 1647,
+            "text": "∑",
+            "width": {
+              "denominator": 125,
+              "numerator": 2502
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 5000,
+              "numerator": 32067
+            },
+            "x": {
+              "denominator": 10000,
+              "numerator": 68013
+            },
+            "y": {
+              "denominator": 125,
+              "numerator": -2421
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4437,
+            "text": "n",
+            "width": {
+              "denominator": 2500,
+              "numerator": 20601
+            },
+            "x": {
+              "denominator": 5000,
+              "numerator": 29439
+            },
+            "y": {
+              "denominator": 500,
+              "numerator": 10971
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 5000,
+          "numerator": 142281
+        },
+        "ink_descent": {
+          "denominator": 125,
+          "numerator": 2421
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 125,
+          "numerator": 2502
+        },
+        "min_content_width": {
+          "denominator": 125,
+          "numerator": 2502
+        },
+        "text": "∑1n",
+        "width": {
+          "denominator": 125,
+          "numerator": 2502
+        }
+      },
+      "name": "sum-normal",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "normal"
+            },
+            "tag": "mo",
+            "text": "∑"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "n"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "normal"
+        },
+        "tag": "munderover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 5000,
+          "numerator": 82251
+        },
+        "descent": {
+          "denominator": 125,
+          "numerator": 918
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 1646,
+            "text": "∑",
+            "width": {
+              "denominator": 125,
+              "numerator": 2106
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 5000,
+              "numerator": 32067
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 2106
+            },
+            "y": {
+              "denominator": 125,
+              "numerator": -918
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4437,
+            "text": "n",
+            "width": {
+              "denominator": 2500,
+              "numerator": 20601
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 2106
+            },
+            "y": {
+              "denominator": 125,
+              "numerator": 1242
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 5000,
+          "numerator": 82251
+        },
+        "ink_descent": {
+          "denominator": 125,
+          "numerator": 918
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 2500,
+          "numerator": 64521
+        },
+        "min_content_width": {
+          "denominator": 2500,
+          "numerator": 64521
+        },
+        "text": "∑1n",
+        "width": {
+          "denominator": 2500,
+          "numerator": 64521
+        }
+      },
+      "name": "sum-compact",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mo",
+            "text": "∑"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "n"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "munderover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 10000,
+          "numerator": 188973
+        },
+        "descent": {
+          "denominator": 5000,
+          "numerator": 19467
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 3354,
+            "text": "x",
+            "width": {
+              "denominator": 500,
+              "numerator": 5031
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4430,
+            "text": "i",
+            "width": {
+              "denominator": 2500,
+              "numerator": 10269
+            },
+            "x": {
+              "denominator": 500,
+              "numerator": 5031
+            },
+            "y": {
+              "denominator": 50,
+              "numerator": -189
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 625,
+              "numerator": 9306
+            },
+            "y": {
+              "denominator": 25,
+              "numerator": 162
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 10,
+              "numerator": 99
+            },
+            "glyph_id": 4525,
+            "text": "3",
+            "width": {
+              "denominator": 10000,
+              "numerator": 55539
+            },
+            "x": {
+              "denominator": 250,
+              "numerator": 5373
+            },
+            "y": {
+              "denominator": 5000,
+              "numerator": 60183
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 10000,
+          "numerator": 188973
+        },
+        "ink_descent": {
+          "denominator": 5000,
+          "numerator": 19467
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 10000,
+          "numerator": 282699
+        },
+        "min_content_width": {
+          "denominator": 10000,
+          "numerator": 282699
+        },
+        "text": "xi23",
+        "width": {
+          "denominator": 10000,
+          "numerator": 282699
+        }
+      },
+      "name": "nested",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [
+              {
+                "attributes": {},
+                "children": [],
+                "style": {
+                  "font_size": {
+                    "denominator": 1,
+                    "numerator": 18
+                  },
+                  "math_depth": 0,
+                  "math_shift": "normal",
+                  "math_style": "compact"
+                },
+                "tag": "mi",
+                "text": "x"
+              },
+              {
+                "attributes": {},
+                "children": [],
+                "style": {
+                  "font_size": {
+                    "denominator": 5,
+                    "numerator": 63
+                  },
+                  "math_depth": 1,
+                  "math_shift": "compact",
+                  "math_style": "compact"
+                },
+                "tag": "mi",
+                "text": "i"
+              }
+            ],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "msub"
+          },
+          {
+            "attributes": {},
+            "children": [
+              {
+                "attributes": {},
+                "children": [],
+                "style": {
+                  "font_size": {
+                    "denominator": 5,
+                    "numerator": 63
+                  },
+                  "math_depth": 1,
+                  "math_shift": "normal",
+                  "math_style": "compact"
+                },
+                "tag": "mn",
+                "text": "2"
+              },
+              {
+                "attributes": {},
+                "children": [],
+                "style": {
+                  "font_size": {
+                    "denominator": 10,
+                    "numerator": 99
+                  },
+                  "math_depth": 2,
+                  "math_shift": "normal",
+                  "math_style": "compact"
+                },
+                "tag": "mn",
+                "text": "3"
+              }
+            ],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "msup"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 1250,
+          "numerator": 28521
+        },
+        "descent": {
+          "denominator": 5,
+          "numerator": 27
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 24
+            },
+            "glyph_id": 3331,
+            "text": "f",
+            "width": {
+              "denominator": 125,
+              "numerator": 1731
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 84
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 625,
+              "numerator": 5502
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 1791
+            },
+            "y": {
+              "denominator": 125,
+              "numerator": 1443
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 1250,
+          "numerator": 28521
+        },
+        "ink_descent": {
+          "denominator": 5,
+          "numerator": 27
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 625,
+          "numerator": 15057
+        },
+        "min_content_width": {
+          "denominator": 625,
+          "numerator": 15057
+        },
+        "text": "f2",
+        "width": {
+          "denominator": 625,
+          "numerator": 15057
+        }
+      },
+      "name": "cramped",
+      "tree": {
+        "attributes": {
+          "shift": "compact"
+        },
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 24
+              },
+              "math_depth": 0,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "f"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 84
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 24
+          },
+          "math_depth": 0,
+          "math_shift": "compact",
+          "math_style": "compact"
+        },
+        "tag": "msup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 8127
+        },
+        "descent": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2111,
+            "text": "⏞",
+            "width": {
+              "denominator": 50,
+              "numerator": 1593
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 100,
+          "numerator": 2703
+        },
+        "ink_descent": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 1,
+          "numerator": 30
+        },
+        "min_content_width": {
+          "denominator": 1,
+          "numerator": 30
+        },
+        "text": "⏞",
+        "width": {
+          "denominator": 50,
+          "numerator": 1593
+        }
+      },
+      "name": "brace-30",
+      "tree": {
+        "attributes": {
+          "accent": "true"
+        },
+        "children": [
+          {
+            "attributes": {
+              "height": "12",
+              "width": "30"
+            },
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mspace"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mo",
+            "text": "⏞"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 250,
+          "numerator": 4671
+        },
+        "descent": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2106,
+            "text": "⏞",
+            "width": {
+              "denominator": 125,
+              "numerator": 2151
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2073,
+            "text": "⏞",
+            "width": {
+              "denominator": 2,
+              "numerator": 27
+            },
+            "x": {
+              "denominator": 1000,
+              "numerator": 14643
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2073,
+            "text": "⏞",
+            "width": {
+              "denominator": 2,
+              "numerator": 27
+            },
+            "x": {
+              "denominator": 500,
+              "numerator": 12789
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2107,
+            "text": "⏞",
+            "width": {
+              "denominator": 250,
+              "numerator": 4239
+            },
+            "x": {
+              "denominator": 1000,
+              "numerator": 36513
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2073,
+            "text": "⏞",
+            "width": {
+              "denominator": 2,
+              "numerator": 27
+            },
+            "x": {
+              "denominator": 125,
+              "numerator": 6363
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2073,
+            "text": "⏞",
+            "width": {
+              "denominator": 2,
+              "numerator": 27
+            },
+            "x": {
+              "denominator": 1000,
+              "numerator": 61839
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2108,
+            "text": "⏞",
+            "width": {
+              "denominator": 125,
+              "numerator": 2151
+            },
+            "x": {
+              "denominator": 500,
+              "numerator": 36387
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 12
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 50,
+          "numerator": 1473
+        },
+        "ink_descent": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 1,
+          "numerator": 90
+        },
+        "min_content_width": {
+          "denominator": 1,
+          "numerator": 90
+        },
+        "text": "⏞",
+        "width": {
+          "denominator": 1,
+          "numerator": 90
+        }
+      },
+      "name": "brace-90",
+      "tree": {
+        "attributes": {
+          "accent": "true"
+        },
+        "children": [
+          {
+            "attributes": {
+              "height": "12",
+              "width": "90"
+            },
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mspace"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mo",
+            "text": "⏞"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 5000,
+          "numerator": 114273
+        },
+        "descent": {
+          "denominator": 50,
+          "numerator": 531
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 18
+            },
+            "glyph_id": 2105,
+            "text": "⏞",
+            "width": {
+              "denominator": 50,
+              "numerator": 567
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 5000,
+              "numerator": 32067
+            },
+            "x": {
+              "denominator": 10000,
+              "numerator": 24633
+            },
+            "y": {
+              "denominator": 250,
+              "numerator": -9
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 5,
+              "numerator": 63
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 1250,
+              "numerator": 8253
+            },
+            "x": {
+              "denominator": 1250,
+              "numerator": 2961
+            },
+            "y": {
+              "denominator": 250,
+              "numerator": 7317
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 5000,
+          "numerator": 188613
+        },
+        "ink_descent": {
+          "denominator": 250,
+          "numerator": 9
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 50,
+          "numerator": 567
+        },
+        "min_content_width": {
+          "denominator": 50,
+          "numerator": 567
+        },
+        "text": "⏞12",
+        "width": {
+          "denominator": 50,
+          "numerator": 567
+        }
+      },
+      "name": "stretch-stack",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 18
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mo",
+            "text": "⏞"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 5,
+                "numerator": 63
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "munderover"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 50,
+          "numerator": 711
+        },
+        "descent": {
+          "denominator": 10,
+          "numerator": 77
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 20
+            },
+            "glyph_id": 3331,
+            "text": "f",
+            "width": {
+              "denominator": 50,
+              "numerator": 577
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 500,
+              "numerator": 3563
+            },
+            "x": {
+              "denominator": 25,
+              "numerator": 189
+            },
+            "y": {
+              "denominator": 10,
+              "numerator": -77
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 50,
+          "numerator": 711
+        },
+        "ink_descent": {
+          "denominator": 10,
+          "numerator": 77
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 500,
+          "numerator": 7743
+        },
+        "min_content_width": {
+          "denominator": 500,
+          "numerator": 7743
+        },
+        "text": "f1",
+        "width": {
+          "denominator": 500,
+          "numerator": 7743
+        }
+      },
+      "name": "corner-msub-f-italic",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 20
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "f"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msub"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 50,
+          "numerator": 473
+        },
+        "descent": {
+          "denominator": 5,
+          "numerator": 21
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 20
+            },
+            "glyph_id": 279,
+            "text": "x",
+            "width": {
+              "denominator": 50,
+              "numerator": 479
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 500,
+              "numerator": 3563
+            },
+            "x": {
+              "denominator": 25,
+              "numerator": 257
+            },
+            "y": {
+              "denominator": 5,
+              "numerator": -21
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 50,
+          "numerator": 473
+        },
+        "ink_descent": {
+          "denominator": 5,
+          "numerator": 21
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 500,
+          "numerator": 9103
+        },
+        "min_content_width": {
+          "denominator": 500,
+          "numerator": 9103
+        },
+        "text": "x1",
+        "width": {
+          "denominator": 500,
+          "numerator": 9103
+        }
+      },
+      "name": "corner-msub-x-latin",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 20
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msub"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 9479
+        },
+        "descent": {
+          "denominator": 2,
+          "numerator": 9
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 20
+            },
+            "glyph_id": 3331,
+            "text": "f",
+            "width": {
+              "denominator": 50,
+              "numerator": 577
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 500,
+              "numerator": 3563
+            },
+            "x": {
+              "denominator": 50,
+              "numerator": 597
+            },
+            "y": {
+              "denominator": 50,
+              "numerator": 481
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 500,
+          "numerator": 9479
+        },
+        "ink_descent": {
+          "denominator": 2,
+          "numerator": 9
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 500,
+          "numerator": 9933
+        },
+        "min_content_width": {
+          "denominator": 500,
+          "numerator": 9933
+        },
+        "text": "f1",
+        "width": {
+          "denominator": 500,
+          "numerator": 9933
+        }
+      },
+      "name": "corner-msup-f-italic",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 20
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "f"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 8269
+        },
+        "descent": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 20
+            },
+            "glyph_id": 279,
+            "text": "x",
+            "width": {
+              "denominator": 50,
+              "numerator": 479
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 500,
+              "numerator": 3563
+            },
+            "x": {
+              "denominator": 50,
+              "numerator": 479
+            },
+            "y": {
+              "denominator": 5,
+              "numerator": 36
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 500,
+          "numerator": 8269
+        },
+        "ink_descent": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 500,
+          "numerator": 8753
+        },
+        "min_content_width": {
+          "denominator": 500,
+          "numerator": 8753
+        },
+        "text": "x1",
+        "width": {
+          "denominator": 500,
+          "numerator": 8753
+        }
+      },
+      "name": "corner-msup-x-latin",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 20
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 9507
+        },
+        "descent": {
+          "denominator": 10,
+          "numerator": 77
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 20
+            },
+            "glyph_id": 3331,
+            "text": "f",
+            "width": {
+              "denominator": 50,
+              "numerator": 577
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 500,
+              "numerator": 3563
+            },
+            "x": {
+              "denominator": 25,
+              "numerator": 189
+            },
+            "y": {
+              "denominator": 10,
+              "numerator": -77
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 125,
+              "numerator": 917
+            },
+            "x": {
+              "denominator": 50,
+              "numerator": 597
+            },
+            "y": {
+              "denominator": 50,
+              "numerator": 481
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 500,
+          "numerator": 9507
+        },
+        "ink_descent": {
+          "denominator": 10,
+          "numerator": 77
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 250,
+          "numerator": 5019
+        },
+        "min_content_width": {
+          "denominator": 250,
+          "numerator": 5019
+        },
+        "text": "f12",
+        "width": {
+          "denominator": 250,
+          "numerator": 5019
+        }
+      },
+      "name": "corner-msubsup-f-italic",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 20
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mi",
+            "text": "f"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msubsup"
+      }
+    },
+    {
+      "expected": {
+        "accent": null,
+        "ascent": {
+          "denominator": 500,
+          "numerator": 8497
+        },
+        "descent": {
+          "denominator": 500,
+          "numerator": 2369
+        },
+        "glyphs": [
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 20
+            },
+            "glyph_id": 279,
+            "text": "x",
+            "width": {
+              "denominator": 50,
+              "numerator": 479
+            },
+            "x": {
+              "denominator": 1,
+              "numerator": 0
+            },
+            "y": {
+              "denominator": 1,
+              "numerator": 0
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4274,
+            "text": "1",
+            "width": {
+              "denominator": 500,
+              "numerator": 3563
+            },
+            "x": {
+              "denominator": 25,
+              "numerator": 257
+            },
+            "y": {
+              "denominator": 500,
+              "numerator": -2369
+            }
+          },
+          {
+            "font_size": {
+              "denominator": 1,
+              "numerator": 14
+            },
+            "glyph_id": 4275,
+            "text": "2",
+            "width": {
+              "denominator": 125,
+              "numerator": 917
+            },
+            "x": {
+              "denominator": 50,
+              "numerator": 479
+            },
+            "y": {
+              "denominator": 5,
+              "numerator": 38
+            }
+          }
+        ],
+        "ink_ascent": {
+          "denominator": 500,
+          "numerator": 8497
+        },
+        "ink_descent": {
+          "denominator": 500,
+          "numerator": 2369
+        },
+        "italic": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "max_content_width": {
+          "denominator": 500,
+          "numerator": 9103
+        },
+        "min_content_width": {
+          "denominator": 500,
+          "numerator": 9103
+        },
+        "text": "x12",
+        "width": {
+          "denominator": 500,
+          "numerator": 9103
+        }
+      },
+      "name": "corner-msubsup-x-latin",
+      "tree": {
+        "attributes": {},
+        "children": [
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 20
+              },
+              "math_depth": 0,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "x"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "compact",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "1"
+          },
+          {
+            "attributes": {},
+            "children": [],
+            "style": {
+              "font_size": {
+                "denominator": 1,
+                "numerator": 14
+              },
+              "math_depth": 1,
+              "math_shift": "normal",
+              "math_style": "compact"
+            },
+            "tag": "mn",
+            "text": "2"
+          }
+        ],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "msubsup"
+      }
+    }
+  ],
+  "core_sha256": "f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373",
+  "dated_ambiguities": [
+    "limit line extents versus translated ink",
+    "overscript half-width offset versus attachment width",
+    "actual assembly joins"
+  ],
+  "font_sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+  "fonttools": "4.60.1",
+  "opentype_corner_source": "https://learn.microsoft.com/en-us/typography/opentype/spec/math#mathkerninfo-table",
+  "scope": "Core vertical metrics with selected-font OpenType corner spacing; source-only, no browser reference approval",
+  "source_tables": {
+    "GPOS": "786b3b32fd6a42dd7a309dd9c8c7cc778d5b8f8c832b6181c3ad3645f3d05b45",
+    "GSUB": "2692052a2b2dd66ef649980eb90ef500adca39d91eabdf7617d2f915a3dcd567",
+    "MATH": "0af4bf095e9d3a968b460b83d589b5c0a6dc58762fe1f3cb3dece03fd5344c4a",
+    "glyf": "ef284adae364228891a893d4481d6ec743033e38df609c334a59abfa54326765",
+    "hmtx": "aff6ab32af160dd4ff37edf4b5f70681eceefa60f413677ea987d9608172a7b2"
+  }
+}

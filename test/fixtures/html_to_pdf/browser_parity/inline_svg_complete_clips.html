@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 400px 470px; margin: 12px; }
+html, body { margin: 0; padding: 0; font-family: "DejaVu Sans"; font-size: 12px; line-height: 18px; }
+p { margin: 0; }
+body > svg { display: block; width: 360px; height: 84px; }
+</style></head><body>
+<p>Independent shape unions and mixed clip rules</p>
+<svg viewBox="0 0 360 84"><defs>
+<clipPath id="union"><path d="M4 4H82V76H4Z M18 18V62H68V18Z" clip-rule="evenodd"/><path d="M48 12V70H110V12Z"/><circle cx="88" cy="42" r="24"/></clipPath>
+</defs><rect width="116" height="84" fill="#174a86" clip-path="url(#union)"/>
+<g transform="translate(120 0)" opacity=".5" clip-path="url(#union)"><rect width="116" height="84" fill="#168250"/><circle cx="48" cy="42" r="32" fill="#dd8800"/></g>
+<g transform="translate(240 0) scale(-1 1) translate(-116 0)" clip-path="url(#union)"><rect width="116" height="84" fill="#a03333"/></g></svg>
+<p>Actual object bounds reused at different sizes</p>
+<svg viewBox="0 0 360 84"><defs><clipPath id="bounds" clipPathUnits="objectBoundingBox"><circle cx=".35" cy=".5" r=".42"/><rect x=".3" y=".15" width=".65" height=".7"/></clipPath></defs>
+<rect x="4" y="8" width="104" height="68" fill="#168250" clip-path="url(#bounds)"/>
+<rect x="124" y="18" width="88" height="48" fill="#174a86" clip-path="url(#bounds)"/>
+<g transform="translate(244 6) rotate(8 45 34)"><rect width="92" height="68" fill="#dd8800" clip-path="url(#bounds)"/></g></svg>
+<p>Reference geometry and linked intersections</p>
+<svg viewBox="0 0 360 84"><defs><path id="shape" d="M4 4H106V76H4Z M24 20H86V62H24Z" clip-rule="evenodd"/>
+<clipPath id="disk"><circle cx="56" cy="42" r="36"/></clipPath>
+<clipPath id="linked" clip-path="url(#disk)"><use href="#shape"/><rect x="10" y="34" width="92" height="16"/></clipPath>
+<clipPath id="child"><use href="#shape" clip-path="url(#disk)"/><circle cx="100" cy="42" r="10"/></clipPath></defs>
+<rect width="116" height="84" fill="#174a86" clip-path="url(#linked)"/>
+<g transform="translate(120 0)" clip-path="url(#child)"><rect width="116" height="84" fill="#168250"/></g>
+<g transform="translate(240 0)" clip-path="url(#linked)"><rect width="116" height="84" fill="#a03333"/></g></svg>
+<p>Empty clips and real HTML inside a union clip</p>
+<svg viewBox="0 0 360 84"><defs><clipPath id="empty"/><clipPath id="html"><rect x="120" y="6" width="64" height="68"/><circle cx="200" cy="40" r="32"/></clipPath></defs>
+<rect width="110" height="84" fill="red" clip-path="url(#empty)"/><rect x="4" y="4" width="48" height="24" fill="#168250"/>
+<foreignObject x="120" y="6" width="114" height="68" clip-path="url(#html)"><div xmlns="http://www.w3.org/1999/xhtml" style="background:#174a86;color:white;height:68px;font-size:12px;line-height:18px">Real HTML<br/>Selected café Ω<br/>Vector Form</div></foreignObject>
+<rect x="244" y="4" width="48" height="24" fill="#dd8800"/></svg>
+<p>Static clipping geometry retained</p>
+</body></html>

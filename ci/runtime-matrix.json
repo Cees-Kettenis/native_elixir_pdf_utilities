@@ -2,12 +2,12 @@
   "include": [
     {
       "elixir": "1.19",
-      "image": "sigdevelopers/sigportal-ci:v2.6",
+      "image": "sigdevelopers/native-elixir-pdf-ci:elixir-1.19",
       "canonical": false
     },
     {
       "elixir": "1.20",
-      "image": "sigdevelopers/sigportal-ci:v2.7",
+      "image": "sigdevelopers/sigportal-ci:v2.8",
       "canonical": true
     }
   ]

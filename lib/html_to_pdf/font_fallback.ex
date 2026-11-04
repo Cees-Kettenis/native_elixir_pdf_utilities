@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type styled_tree :: NativeElixirPdfUtilities.HtmlToPdf.Style.styled_tree()
@@ -89,19 +90,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
               {candidates, Map.put(cached_candidates, key, {selected, candidates})}
           end
 
-        graphemes =
-          node.text
-          |> String.replace("\r\n", "\n")
-          |> String.replace("\r", "\n")
-          |> String.graphemes()
-          |> Enum.map(fn grapheme ->
-            layout_whitespace? =
-              grapheme
-              |> String.to_charlist()
-              |> Enum.all?(&(&1 in [9, 10, 13]))
+        text = HtmlValidator.preprocess_html(node.text)
 
-            %{text: grapheme, layout_whitespace?: layout_whitespace?}
-          end)
+        # A fully covered run needs no font-boundary segmentation. Source
+        # provenance still follows individual graphemes through normalization.
+        graphemes =
+          if text != "" and not Map.has_key?(style, :_source_glyph_characters) and
+               Font.supports_text?(selected, text) do
+            [%{text: text, layout_whitespace?: false}]
+          else
+            text
+            |> String.graphemes()
+            |> Enum.map(fn grapheme ->
+              %{
+                text: grapheme,
+                layout_whitespace?: HtmlLineBreakValidator.layout_whitespace?(grapheme, style)
+              }
+            end)
+          end
+
+        graphemes =
+          case Map.get(style, :_source_glyph_characters) do
+            characters when is_list(characters) ->
+              characters =
+                NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator.normalize_characters(
+                  characters,
+                  %{white_space: :pre}
+                )
+
+              {graphemes, []} =
+                Enum.map_reduce(graphemes, characters, fn grapheme, remaining ->
+                  {source, remaining} =
+                    Enum.split(remaining, length(String.codepoints(grapheme.text)))
+
+                  {Map.put(grapheme, :source_characters, source), remaining}
+                end)
+
+              graphemes
+
+            _ ->
+              graphemes
+          end
 
         prepared =
           node
@@ -112,7 +141,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
       %{type: :element, children: children} = element ->
         {children, cache} = Enum.map_reduce(children, cache, &prepare_candidate_node/2)
-        {%{element | children: children}, cache}
+
+        case element do
+          %{style: %{_list_marker: markers} = style} ->
+            {markers, cache} = Enum.map_reduce(markers, cache, &prepare_candidate_node/2)
+
+            {%{element | style: Map.put(style, :_list_marker, markers), children: children},
+             cache}
+
+          _ ->
+            {%{element | children: children}, cache}
+        end
     end
   end
 
@@ -150,27 +189,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                   end
               end
 
-            append_run(runs, node, style, font_face, text)
+            source = Map.get(grapheme, :source_characters)
+
+            source =
+              if source && text != grapheme.text,
+                do: [%{displayed: text, fragments: Enum.flat_map(source, & &1.fragments)}],
+                else: source
+
+            append_run(runs, node, style, font_face, text, source)
           end)
 
         Enum.reverse(resolved)
 
       %{type: :element, children: children} = element when is_list(children) ->
+        element =
+          case element do
+            %{style: %{_list_marker: markers} = style} ->
+              markers = resolve_prepared_nodes(markers, unsupported_glyphs)
+              %{element | style: Map.put(style, :_list_marker, markers)}
+
+            _ ->
+              element
+          end
+
         [%{element | children: resolve_prepared_nodes(children, unsupported_glyphs)}]
     end
   end
 
-  defp append_run(runs, node, style, font_face, grapheme) do
+  defp append_run(runs, node, style, font_face, grapheme, source) do
     case runs do
       [%{style: %{font_face: previous_face}} = previous | remaining]
       when previous_face == font_face ->
-        [%{previous | text: previous.text <> grapheme} | remaining]
+        combined_style =
+          if source,
+            do: Map.update!(previous.style, :_source_glyph_characters, &(&1 ++ source)),
+            else: previous.style
+
+        [%{previous | text: previous.text <> grapheme, style: combined_style} | remaining]
 
       _ ->
         resolved_style =
           style
           |> Map.put(:font_face, font_face)
           |> Map.put(:font_family, font_face.family)
+
+        resolved_style =
+          if source,
+            do: Map.put(resolved_style, :_source_glyph_characters, source),
+            else: resolved_style
 
         [%{node | text: grapheme, style: resolved_style} | runs]
     end

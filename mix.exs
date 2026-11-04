@@ -2,14 +2,22 @@ defmodule NativeElixirPdfUtilities.MixProject do
   use Mix.Project
 
   def project do
+    build_root =
+      System.get_env("MIX_BUILD_PATH") || Path.join("_build", Atom.to_string(Mix.env()))
+
+    application_root = Path.join([build_root, "lib", "native_elixir_pdf_utilities"])
+
     [
       app: :native_elixir_pdf_utilities,
-      version: "1.0.0",
+      version: "1.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, forms, attachments, outlines, text extraction, and native HTML/CSS rendering.",
+        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, forms, attachments, outlines, text extraction, and native HTML/CSS and MathML rendering.",
       deps: deps(),
+      dialyzer: [
+        paths: [Path.join(application_root, "ebin")]
+      ],
       package: package(),
       docs: docs(),
       aliases: aliases(),
@@ -48,8 +56,16 @@ defmodule NativeElixirPdfUtilities.MixProject do
   defp package do
     [
       name: "native_elixir_pdf_utilities",
-      files: ~w(lib assets priv/fonts priv/licenses docs mix.exs README.md CHANGELOG.md LICENSE),
-      licenses: ["MIT", "Bitstream-Vera", "BSD-3-Clause"],
+      files:
+        ~w(lib assets priv/fonts priv/licenses priv/html_to_pdf/temporal docs mix.exs README.md CONTRIBUTING.md CHANGELOG.md LICENSE),
+      licenses: [
+        "MIT",
+        "Bitstream-Vera",
+        "BSD-3-Clause",
+        "OFL-1.1",
+        "Apache-2.0",
+        "Unicode-3.0"
+      ],
       links: %{"GitHub" => "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"}
     ]
   end
@@ -61,6 +77,10 @@ defmodule NativeElixirPdfUtilities.MixProject do
       extras: [
         "README.md",
         "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "docs/contributing/architecture.md",
+        "docs/contributing/testing.md",
+        "docs/contributing/scripts.md",
         {"docs/README.md", [filename: "user-guide"]},
         "docs/licenses.md",
         "docs/diagnostics.md",
@@ -78,10 +98,15 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "docs/pdf-forms.md",
         "docs/pdf-attachments.md",
         "docs/html-to-pdf-compatibility.md",
-        "docs/html-to-pdf-browser-parity-coverage.md",
         "docs/html-to-pdf-examples.md"
       ],
       groups_for_extras: [
+        Contributing: [
+          "CONTRIBUTING.md",
+          "docs/contributing/architecture.md",
+          "docs/contributing/testing.md",
+          "docs/contributing/scripts.md"
+        ],
         "Reference Guides": [
           "docs/diagnostics.md",
           "docs/resource-limits.md",
@@ -102,7 +127,6 @@ defmodule NativeElixirPdfUtilities.MixProject do
         ],
         "HTML to PDF": [
           "docs/html-to-pdf-compatibility.md",
-          "docs/html-to-pdf-browser-parity-coverage.md",
           "docs/html-to-pdf-examples.md"
         ]
       ],
@@ -124,6 +148,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
         "PDF Building Blocks": [
           NativeElixirPdfUtilities.Pdf.Reader,
           NativeElixirPdfUtilities.Pdf.GlyphName,
+          NativeElixirPdfUtilities.Pdf.IncrementalWriter,
           NativeElixirPdfUtilities.Diagnostics
         ],
         "HTML Rendering Pipeline": [
@@ -140,6 +165,8 @@ defmodule NativeElixirPdfUtilities.MixProject do
         ],
         "Validation Pipeline": [
           NativeElixirPdfUtilities.Validators.PdfValidator,
+          NativeElixirPdfUtilities.Validators.HtmlValidator,
+          NativeElixirPdfUtilities.Validators.ObjectValidator,
           NativeElixirPdfUtilities.Validators.InfoValidator,
           NativeElixirPdfUtilities.Validators.MergeValidator,
           NativeElixirPdfUtilities.Validators.OutlineValidator,
@@ -147,14 +174,14 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Validators.WriterValidator
         ]
       ],
-      source_ref: "v1.0.0",
+      source_ref: "v1.1.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end
 
   defp aliases do
     [
-      "test.browser_parity": "test --only browser_parity",
+      "test.browser_parity": "test --only browser_parity --max-cases 6",
       "test.performance": "run scripts/performance-regression.exs"
     ]
   end

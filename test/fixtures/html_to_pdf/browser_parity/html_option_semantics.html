@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Option labels and groups</title>
+<style>
+html,body {margin:0;padding:0;}
+body {font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;color:#172033;}
+main {width:390pt;padding:18pt;box-sizing:border-box;}
+p {margin:0 0 8pt;}
+.row {display:grid;grid-template-columns:150pt 160pt;gap:8pt;align-items:center;margin-bottom:8pt;}
+select {font-family:"DejaVu Sans";font-size:10pt;line-height:12pt;width:160pt;box-sizing:border-box;border:0.75pt solid #878787;padding:1.5pt 2.25pt;background-color:white;color:#172033;}
+</style></head><body><main>
+<p>Option labels, values and groups</p>
+<div class="row"><label for="label">Explicit display label</label><select id="label" name="label"><option value="a" label="Visible label">Underlying value</option></select></div>
+<div class="row"><label for="text">Collapsed option text</label><select id="text" name="text"><option>  Alpha
+  Beta  </option></select></div>
+<div class="row"><label for="fallback">Disabled group fallback</label><select id="fallback" name="fallback"><optgroup label="Closed" disabled><option value="a">Unavailable</option></optgroup><optgroup label="Open"><option value="b" label="Available label">Beta</option></optgroup></select></div>
+<div class="row"><label for="selected">Explicit disabled selection</label><select id="selected" name="selected"><optgroup label="Closed" disabled><option value="a" selected label="Selected label">Alpha</option></optgroup><option value="b">Beta</option></select></div>
+<div class="row"><label for="empty">Empty dropdown height</label><select id="empty" name="empty"></select></div>
+<div class="row"><label for="blank">Blank option height</label><select id="blank" name="blank"><option></option></select></div>
+<div class="row"><label for="none">Disabled options height</label><select id="none" name="none"><optgroup label="Closed" disabled><option>Unavailable</option></optgroup></select></div>
+<p>End of option semantics</p></main></body></html>

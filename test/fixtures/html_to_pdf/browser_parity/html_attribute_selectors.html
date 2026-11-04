@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><style>
+  @page { size: 300pt 340pt; margin: 12pt; }
+  body { margin: 0; font-family: 'DejaVu Sans'; font-size: 10.5pt; line-height: 13.5pt; color: #111111; }
+  p { margin: 0; padding: 0; }
+  [data-equal="abc" i] { color: #0066cc; }
+  /* native-sensitive */ [data-exact="ABC"] { color: #cc3300; }
+  [title~="TWO" I] { color: #0066cc; }
+  [data-lang|="EN" i] { color: #cc3300; }
+  [data-kind^="ab" i] { color: #0066cc; }
+  [data-kind$="CD" I] { color: #cc3300; }
+  /* native-sensitive */ [data-kind*="bC"] { color: #0066cc; }
+  /* native-sensitive-uppercase */ [data-kind*="bc"] { font-weight: bold; }
+  [title~="one two"] { color: #ff0000; }
+  [data-kind^=""], [data-kind$=""], [data-kind*=""] { color: #ff0000; }
+  [data-kind="skip" i]::before { content: 'Prefix '; color: #0066cc; }
+  p:not([data-kind="skip" i])[data-label]::after { content: ' suffix'; color: #cc3300; }
+</style></head><body>
+  <p data-equal="AbC">Insensitive equality matches</p>
+  <p data-equal="ab">Different equality stays dark</p>
+  <p data-exact="ABC">Sensitive equality matches</p>
+  <p data-exact="abc">Sensitive lowercase stays dark</p>
+  <p title="one&#9;Two&#10;three">ASCII token separators match</p>
+  <p title="one&#160;Two">Nonbreaking separator stays dark</p>
+  <p title="one Two">Multiword token stays dark</p>
+  <p data-lang="en">Dash exact value matches</p>
+  <p data-lang="en-US">Dash language prefix matches</p>
+  <p data-lang="english">Dash partial value stays dark</p>
+  <p data-kind="Abxy">Insensitive prefix matches</p>
+  <p data-kind="xyCd">Insensitive suffix matches</p>
+  <p data-kind="xbCy">Sensitive substring matches</p>
+  <p data-kind="xbcY">Sensitive lowercase is bold</p>
+  <p data-kind="">Empty patterns stay dark</p>
+  <p>Missing attributes stay dark</p>
+  <p data-kind="SKIP">Generated content matches</p>
+  <p data-kind="other" data-label="present">Negated value matches</p>
+  <p data-equal="Ö">Unicode case stays exact</p>
+</body></html>

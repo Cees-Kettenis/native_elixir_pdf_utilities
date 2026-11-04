@@ -1,0 +1,24 @@
+<!doctype html><html><head><style>
+@page {size:264pt 264pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;}
+body {padding:12pt;}
+p {margin:0 0 8pt;}
+.override mark {background:#dbeafe;color:#164e63;}
+.override ins,.override del,.override strike {text-decoration:none;}
+</style></head><body>
+<p>Before <mark>highlight <strong>bold</strong></mark> after</p>
+<p><ins cite="https://example.com/change" datetime="2026-10-09T00:00Z">Added <em>nested</em></ins> and <del>removed</del></p>
+<p>Legacy <strike>struck text</strike> remains visible</p>
+<div><ins><p>Inserted block content</p>Inserted tail</ins></div>
+<div><del><p>Deleted block content</p>Deleted tail</del></div>
+<p class=override><mark>Custom highlight</mark> <ins>plain added</ins></p>
+<p class=override><del>plain removed</del> <strike>plain legacy</strike></p>
+<p inert>Inert <mark>visible mark</mark> <del>visible deletion</del></p>
+<p>Empty <mark></mark><ins></ins><del></del><strike></strike> end</p>
+<div style="break-before:page;font-size:12pt;line-height:18pt">
+<p style="width:150pt"><mark>Wrapped highlighting <strong>retains bold words</strong> and continues across several lines.</mark></p>
+<p><mark>Parent <span style="background:blue;color:white;font-size:18pt">child</span> parent</mark></p>
+<p><mark>Before <span style="display:inline-block;width:45pt;height:20pt;background:#dbeafe">Box</span> after</mark></p>
+<p><mark><a href="https://example.com/visible" style="text-decoration:underline;color:blue">Highlighted link</a></mark></p>
+</div>
+</body></html>

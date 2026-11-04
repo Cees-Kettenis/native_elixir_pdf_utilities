@@ -37,18 +37,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset do
     {glyph_chunks, offsets, position} =
       Enum.reduce(0..(plan.glyph_count - 1), {[], [], 0}, fn glyph_id,
                                                              {chunks, offsets, position} ->
-        start = elem(plan.offsets, glyph_id)
-        finish = elem(plan.offsets, glyph_id + 1)
+        if MapSet.member?(plan.retained, glyph_id) do
+          start = elem(plan.offsets, glyph_id)
+          finish = elem(plan.offsets, glyph_id + 1)
+          glyph = binary_part(plan.glyf, start, finish - start)
+          padding = rem(2 - rem(byte_size(glyph), 2), 2)
 
-        glyph =
-          if MapSet.member?(plan.retained, glyph_id),
-            do: binary_part(plan.glyf, start, finish - start),
-            else: <<>>
-
-        padding = rem(2 - rem(byte_size(glyph), 2), 2)
-
-        {[:binary.copy(<<0>>, padding), glyph | chunks], [position | offsets],
-         position + byte_size(glyph) + padding}
+          {[:binary.copy(<<0>>, padding), glyph | chunks], [position | offsets],
+           position + byte_size(glyph) + padding}
+        else
+          {chunks, [position | offsets], position}
+        end
       end)
 
     offsets = Enum.reverse([position | offsets])
@@ -69,13 +68,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset do
     range_shift = count * 16 - search_range
     first_offset = 12 + 16 * count
 
-    {records, payloads, _next_offset} =
-      Enum.reduce(tables, {[], [], first_offset}, fn {tag, data}, {records, payloads, offset} ->
+    {records, payloads, _next_offset, table_checksum} =
+      Enum.reduce(tables, {[], [], first_offset, 0}, fn {tag, data},
+                                                        {records, payloads, offset, total} ->
         padding = rem(4 - rem(byte_size(data), 4), 4)
-        record = <<tag::binary-size(4), checksum(data)::32, offset::32, byte_size(data)::32>>
+        table_checksum = checksum(data)
+        record = <<tag::binary-size(4), table_checksum::32, offset::32, byte_size(data)::32>>
 
         {[record | records], [:binary.copy(<<0>>, padding), data | payloads],
-         offset + byte_size(data) + padding}
+         offset + byte_size(data) + padding, total + table_checksum}
       end)
 
     directory =
@@ -85,7 +86,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset do
     font = IO.iodata_to_binary([directory, Enum.reverse(payloads)])
     head_offset = first_offset + table_payload_offset(tables, "head")
     adjustment_offset = head_offset + 8
-    adjustment = 0xB1B0_AFBA - checksum(font) &&& 0xFFFF_FFFF
+    # Tables start on word boundaries, so their existing checksums also give
+    # the payload checksum without scanning the assembled font a second time.
+    adjustment = 0xB1B0_AFBA - checksum(directory) - table_checksum &&& 0xFFFF_FFFF
     <<before::binary-size(^adjustment_offset), _old::32, after_adjustment::binary>> = font
     <<before::binary, adjustment::32, after_adjustment::binary>>
   end
@@ -99,10 +102,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset do
   end
 
   defp checksum(data) do
-    padding = rem(4 - rem(byte_size(data), 4), 4)
+    checksum_words(data, 0)
+  end
 
-    for <<word::32 <- data <> :binary.copy(<<0>>, padding)>>, reduce: 0 do
-      total -> total + word &&& 0xFFFF_FFFF
+  defp checksum_words(data, total) do
+    case data do
+      <<first::32, second::32, third::32, fourth::32, remaining::binary>> ->
+        checksum_words(remaining, total + first + second + third + fourth)
+
+      <<word::32, remaining::binary>> ->
+        checksum_words(remaining, total + word)
+
+      <<>> ->
+        total &&& 0xFFFF_FFFF
+
+      remaining ->
+        # OpenType checksums pad the final word with zero bytes on the right.
+        word = :binary.decode_unsigned(remaining) <<< ((4 - byte_size(remaining)) * 8)
+        total + word &&& 0xFFFF_FFFF
     end
   end
 

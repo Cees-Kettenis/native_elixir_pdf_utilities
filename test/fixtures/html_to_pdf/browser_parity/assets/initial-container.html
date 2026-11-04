@@ -1,0 +1,10 @@
+<!doctype html><html><head><base href="initial-nested/"><style>
+@font-face {font-family:'DejaVu Sans';src:url(../../../../../../priv/fonts/dejavu/DejaVuSans.ttf)}
+html,body {margin:0;padding:0;overflow:hidden;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+p {margin:0;color:#163d76;} a {color:#163d76;text-decoration:none;}
+</style></head><body>
+<p id="target">Container target scope</p>
+<iframe src="leaf.html" style="display:block;width:180pt;height:24pt;border:0"></iframe>
+<iframe src="https://denied.invalid/unused.html" style="display:block;width:180pt;height:24pt;border:0" srcdoc="&lt;style&gt;@font-face{font-family:'DejaVu Sans';src:url(../../../../../../priv/fonts/dejavu/DejaVuSans.ttf)}&lt;/style&gt;&lt;body style='margin:0;overflow:hidden;font-family:DejaVu Sans;font-size:10pt;line-height:13pt'&gt;&lt;p style='margin:0'&gt;Inherited inline base&lt;img src='../embedded-neutral.jpg' style='width:12pt;height:6pt'&gt;&lt;/p&gt;&lt;/body&gt;"></iframe>
+<p><a href="#target">Container target link</a></p>
+</body></html>

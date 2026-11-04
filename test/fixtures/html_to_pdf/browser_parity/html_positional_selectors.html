@@ -1,0 +1,28 @@
+<!doctype html><html><head><style>
+@page {size:264pt 390pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+h2 {font-size:11pt;line-height:14pt;margin:6pt 0 0;}
+p,span {display:block;margin:0;}
+html:first-child:last-child:first-of-type:last-of-type:only-child:only-of-type:nth-child(1):nth-last-child(1):nth-of-type(1):nth-last-of-type(1) {color:#064f80;}
+#forward > p:nth-child(2n+1) {color:#064f80;font-weight:bold;}
+#reverse > p:nth-last-child(-n+2) {background-color:#e8f2fa;}
+#types > p:nth-of-type(-n+3) {color:#972727;}
+#types > p:nth-last-of-type(2n) {font-weight:bold;}
+#types > p:not(:nth-of-type(-n+3)) {color:#064f80;}
+#only > p:only-child {color:#064f80;font-weight:bold;}
+#single > span:only-of-type {color:#972727;}
+#zero > p:nth-of-type(0n), #zero > p:nth-of-type(-3) {color:red;}
+</style></head><body>
+<p>Document root matches positions</p>
+<h2>Forward element positions</h2>
+<div id=forward><p>Forward one</p><span>Other type</span><p>Forward two</p><template><p>Unused</p></template><p>Forward three</p><p>Forward four</p><p>Forward five</p></div>
+<h2>Reverse positions</h2>
+<div id=reverse><p>Reverse one</p><span>Other type</span><p>Reverse two</p><p>Reverse three</p></div>
+<h2>Type positions and negative steps</h2>
+<div id=types><p>Type one</p><span>Other type</span><p>Type two</p><template><p>Unused</p></template><p>Type three</p><p>Type four</p><p>Type five</p></div>
+<h2>Only element and only type</h2>
+<div id=only><!--ignored--><p>Only element</p></div>
+<div id=single><p>First paragraph</p><span>Only span</span><p>Second paragraph</p></div>
+<div id=zero><p>Zero and negative indices match nothing</p></div>
+</body></html>

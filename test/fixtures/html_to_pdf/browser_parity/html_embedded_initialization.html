@@ -1,0 +1,18 @@
+<!doctype html><html><head><style>
+@page {size:300pt 400pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+p {margin:0;} a {color:#26313b;text-decoration:none;}
+.blank {width:45pt;height:15pt;border:1pt solid #26313b;vertical-align:top;}
+.child {display:block;width:252pt;height:84pt;border:1pt solid #26313b;margin:3pt 0;}
+</style></head><body>
+<p id="target">Parent target and blank source variants</p>
+<p><iframe class="blank" src="ABOUT:blank"></iframe><iframe class="blank" src="about:blank?query#fragment"></iframe><embed class="blank" src="about:blank#fragment"><embed class="blank" src="about:blank?query#fragment"></p>
+<p>Selected srcdoc takes precedence</p>
+<iframe style="display:block;width:252pt;height:30pt;border:1pt solid #26313b;margin:3pt 0;" src="https://denied.invalid/unused.html" srcdoc="&lt;style&gt;@font-face{font-family:'DejaVu Sans';src:url(__FONT_ROOT__/DejaVuSans.ttf)}&lt;/style&gt;&lt;body style='margin:0;overflow:hidden;font-family:DejaVu Sans;font-size:10pt;line-height:13pt'&gt;&lt;p style='margin:0;color:#163d76'&gt;Selected inline source&lt;/p&gt;&lt;/body&gt;"></iframe>
+<iframe class="blank" src="__ASSET_ROOT__/object_child.html" srcdoc=""></iframe>
+<p>Nested object child and inherited local base</p>
+<object class="child" data="__ASSET_ROOT__/initial-container.html" type="text/html"><p>Unused object fallback</p></object>
+<p>Nested embed child and distinct source scope</p>
+<embed class="child" src="__ASSET_ROOT__/initial-container.html" type="text/html">
+<p><a href="#target">Parent target link after children</a></p>
+</body></html>

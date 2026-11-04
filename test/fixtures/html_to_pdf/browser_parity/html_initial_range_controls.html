@@ -1,0 +1,25 @@
+<!doctype html><html lang=en><head><style>
+@page {size:300pt 360pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+body {padding:12pt;} p {margin:0 0 3pt;} .row {margin:0 0 9pt;}
+</style></head><body>
+<div class=row><p>Default midpoint</p><input type=range name=default></div>
+<div class=row><p>Minimum</p><input type=range name=minimum value=0></div>
+<div class=row><p>Maximum</p><input type=range name=maximum value=100></div>
+<div class=row><p>Positive step tie</p><input type=range name=tie min=0 max=100 step=20 value=50></div>
+<div class=row><p>Negative decimal tie</p><input type=range name=decimal min=-1 max=1 step=.2 value=-.5></div>
+<div class=row><p>Any step lexical exponent</p><input type=range name=any min=0 max=1 step=any value=2.50e-1></div>
+<div class=row><p>Disabled initial slider</p><input type=range name=disabled disabled value=70></div>
+<div class=row><p>Invalid value default</p><input type=range name=invalid value=invalid></div>
+<div class=row><p>Appearance none</p><input type=range name=none style="appearance:none;background:#ffeecc;"></div>
+<p>After first page ranges</p>
+<div style="break-before:page">
+<div class=row><p>Small font fixed thumb</p><input type=range name=small value=15 style="font-size:8pt;"></div>
+<div class=row><p>Large font fixed thumb</p><input type=range name=large value=85 style="font-size:24pt;"></div>
+<div class=row><p>Wide tall accent</p><input type=range name=tall value=35 style="width:150pt;height:30pt;accent-color:#446688;"></div>
+<div class=row><p>Narrow short</p><input type=range name=short value=80 style="width:30pt;height:6pt;"></div>
+<p>Inline range <input type=range name=inline value=40 style="width:60pt;position:relative;left:3pt;"> Tail</p>
+<div class=row><p>Authored border padding background</p><input type=range name=authored value=20 style="width:100pt;height:24pt;border:1.5pt solid #555555;padding:3pt;background:#ffeecc;border-radius:3pt;"></div>
+<p>After second page ranges</p>
+<a href="https://example.test/range-evidence">Range evidence link</a>
+</div></body></html>

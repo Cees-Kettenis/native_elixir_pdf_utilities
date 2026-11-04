@@ -1,3 +1,7 @@
+alias NativeElixirPdfUtilities.TestSupport.Paths
+
+Code.require_file(Paths.support("chromium_pool.ex"))
+
 defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   @moduledoc false
 
@@ -16,51 +20,187 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           required(:dpi) => pos_integer(),
           required(:pixel_channel_tolerance) => non_neg_integer(),
           required(:chromium_version) => String.t(),
+          required(:scripting) => :disabled,
           required(:rasterizer_version) => String.t(),
           required(:font_sources) => [map()],
           required(:embedded_fonts) => %{chromium: String.t(), native: String.t()},
-          required(:artifact_dir) => String.t()
+          required(:artifact_dir) => String.t(),
+          optional(:strict_vector_comparison) => map()
         }
 
-  @type visual_change_stats :: %{
-          required(:page) => pos_integer(),
-          required(:width) => pos_integer(),
-          required(:height) => pos_integer(),
-          required(:changed_pixels) => pos_integer(),
-          required(:changed_ratio) => float(),
-          required(:bounds) =>
-            {non_neg_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}
-        }
+  @doc "Rasterizes PDF bytes with Poppler and returns RGB pixels for each page."
+  @spec rasterize_pdf!(binary(), keyword()) :: [map()]
+  def rasterize_pdf!(pdf, opts) do
+    directory = Keyword.fetch!(opts, :artifact_dir)
+    File.rm_rf!(directory)
+    File.mkdir_p!(directory)
+    path = Path.join(directory, "input.pdf")
+    File.write!(path, pdf)
+
+    rasterize_pdf!(
+      pdftoppm_bin!(),
+      path,
+      Path.join(directory, "page"),
+      Keyword.get(opts, :dpi, 72)
+    )
+    |> Enum.map(&read_ppm!/1)
+  end
+
+  @doc "Measures changed Poppler pixels and their bounds without using native layout geometry."
+  @spec assert_pdf_visual_change!(binary(), binary(), keyword()) :: [map()]
+  def assert_pdf_visual_change!(before_pdf, after_pdf, opts) do
+    directory = Keyword.fetch!(opts, :artifact_dir)
+
+    before =
+      rasterize_pdf!(before_pdf, Keyword.put(opts, :artifact_dir, Path.join(directory, "before")))
+
+    after_pages =
+      rasterize_pdf!(after_pdf, Keyword.put(opts, :artifact_dir, Path.join(directory, "after")))
+
+    assert length(before) == length(after_pages), "Raster comparison page count changed"
+
+    before
+    |> Enum.zip(after_pages)
+    |> Enum.with_index(1)
+    |> Enum.map(fn {{reference, actual}, number} ->
+      stats = visual_change_stats!(reference, actual, number, directory)
+      assert stats.changed_pixels > 0, "No changed pixels on page #{number}"
+      stats
+    end)
+  end
+
+  @doc false
+  @spec gauge_reference(String.t()) :: String.t()
+  def gauge_reference(html) do
+    # Chromium 152 overflows max-min for these finite meter endpoints and paints
+    # zero. HTML requires the relative midpoint. Compare equivalent finite range
+    # geometry while the native validator/layout tests retain the extreme inputs.
+    String.replace(html, "min=-1e308 max=1e308 value=0", "min=0 max=1 value=.5")
+  end
+
+  @doc false
+  @spec render_with_chromium_arial(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def render_with_chromium_arial(html, opts) do
+    # Supply the physical caller font which Chromium already selects for the
+    # untouched Arial UA style. Reference fonts and markup remain unchanged.
+    directory = liberation_font_directory("initial Number controls")
+
+    font = %{
+      family: "Arial",
+      path: Path.join(directory, "LiberationSans-Regular.ttf"),
+      weight: 400
+    }
+
+    source_sha256 =
+      font.path
+      |> File.read!()
+      |> then(&:crypto.hash(:sha256, &1))
+      |> Base.encode16(case: :lower)
+
+    assert source_sha256 in [
+             "bade59d822652f76e6941aa87b40a87c13d1cc70db98ededb5011127efafd1d3",
+             "baccc64becc3eb7d104b7c84d99f5314a0a1f896e2b3ea6c2f22fc08d2003bee"
+           ],
+           "Initial Number Arial source does not match the verified Chromium font: #{font.path} SHA256 #{source_sha256}"
+
+    HtmlToPdf.render(html, Keyword.update!(opts, :fonts, &(&1 ++ [font])))
+  end
+
+  @doc "Renders unchanged embedded HTML using the exact caller-provided font bytes in each child scope."
+  @spec render_embedded_font_bytes(String.t(), keyword(), String.t()) ::
+          {:ok, binary()} | {:error, term()}
+  def render_embedded_font_bytes(html, opts, fixture_path) do
+    fonts =
+      Enum.map(Keyword.fetch!(default_render_opts(fixture_path), :fonts), fn font ->
+        font |> Map.put(:data, File.read!(Map.fetch!(font, :path))) |> Map.delete(:path)
+      end)
+
+    HtmlToPdf.render(html, Keyword.put(opts, :fonts, fonts))
+  end
+
+  @doc "Runs a browser comparison with the exact bundled font directory and the existing host font-rendering policy, restoring the caller environment."
+  @spec with_embedded_font_configuration(String.t(), (-> term())) :: term()
+  def with_embedded_font_configuration(fixture_path, callback) do
+    fonts = Keyword.fetch!(default_render_opts(fixture_path), :fonts)
+    directory = Path.expand("tmp/embedded-document-fontconfig")
+    File.mkdir_p!(directory)
+    configuration = Path.join(directory, "fonts.conf")
+    font_directories = fonts |> Enum.map(&Path.dirname(&1.path)) |> Enum.uniq()
+    declarations = Enum.map_join(font_directories, &"<dir>#{&1}</dir>")
+
+    File.write!(configuration, """
+    <?xml version="1.0"?>
+    <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+    <fontconfig><include>/etc/fonts/fonts.conf</include>#{declarations}<cachedir>#{directory}/cache</cachedir></fontconfig>
+    """)
+
+    previous = System.get_env("FONTCONFIG_FILE")
+    System.put_env("FONTCONFIG_FILE", configuration)
+
+    try do
+      callback.()
+    after
+      if previous,
+        do: System.put_env("FONTCONFIG_FILE", previous),
+        else: System.delete_env("FONTCONFIG_FILE")
+    end
+  end
+
+  @doc "Checks that converted SVG artwork is stored as image data rather than custom glyph programs."
+  @spec assert_svg_image_artwork!(binary()) :: :ok
+  def assert_svg_image_artwork!(pdf) do
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    images =
+      for {_ref, %{value: %{"Subtype" => {:name, "Image"}}} = object} <- document.objects,
+          do: object
+
+    assert images != [], "Expected converted SVG artwork in a PDF Image XObject"
+
+    for image <- images do
+      assert is_integer(image.value["Width"]) and image.value["Width"] > 0
+      assert is_integer(image.value["Height"]) and image.value["Height"] > 0
+      assert image.value["BitsPerComponent"] == 8
+      assert is_binary(image.stream) and byte_size(image.stream) > 0
+    end
+
+    refute pdf =~ "/Subtype /Type3"
+    refute pdf =~ "/NativeOriginalGID"
+    refute pdf =~ "/NativeSourceFont"
+    :ok
+  end
+
+  @doc "Checks that SVG image artwork has no selectable or source-only text."
+  @spec assert_svg_image_without_text!(binary()) :: :ok
+  def assert_svg_image_without_text!(pdf) do
+    assert {:error,
+            {:no_extractable_text,
+             %{stage: :text_extraction, reason: :no_extractable_text, message: message}}} =
+             NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+
+    assert is_binary(message) and message != ""
+    refute pdf =~ "/ActualText"
+    assert_svg_image_artwork!(pdf)
+  end
 
   @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
   def assert_browser_match!(fixture_path, opts \\ []) do
-    fixture_path = Path.expand(fixture_path)
-    fixture_name = fixture_path |> Path.basename() |> Path.rootname()
+    %{
+      fixture_path: fixture_path,
+      artifact_dir: artifact_dir,
+      chromium_bin: chromium_bin,
+      pdftoppm_bin: pdftoppm_bin,
+      dpi: dpi,
+      render_opts: render_opts,
+      chromium_pdf: chromium_pdf,
+      native_pdf: native_pdf,
+      native_result: native_result
+    } = prepare_browser_fixture!(fixture_path, opts)
 
-    artifact_dir =
-      Keyword.get(opts, :artifact_dir, Path.join(["tmp", "browser_parity", fixture_name]))
+    opts = Keyword.put(opts, :dpi, dpi)
 
-    chromium_bin = Keyword.get(opts, :chromium_bin, chromium_bin!())
-    pdftoppm_bin = Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!())
-    dpi = Keyword.get(opts, :dpi, 72)
-
-    render_opts =
-      fixture_path
-      |> default_render_opts()
-      |> Keyword.merge(Keyword.get(opts, :render_opts, []))
-
-    File.rm_rf!(artifact_dir)
-    File.mkdir_p!(artifact_dir)
-
-    chromium_pdf = Path.join(artifact_dir, "chromium.pdf")
-    native_pdf = Path.join(artifact_dir, "native.pdf")
-    chromium_fixture_path = chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
-
-    render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf)
-
-    html = File.read!(fixture_path)
-    assert {:ok, native_pdf_binary} = HtmlToPdf.render(html, render_opts)
+    assert {:ok, native_pdf_binary} = native_result
     File.write!(native_pdf, native_pdf_binary)
 
     chromium_pages =
@@ -82,8 +222,71 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       |> Enum.zip(native_pages)
       |> Enum.with_index(1)
       |> Enum.map(fn {{chromium_page, native_page}, page_number} ->
-        compare_page!(chromium_page, native_page, page_number, artifact_dir)
+        compare_page!(chromium_page, native_page, page_number, artifact_dir, opts)
       end)
+
+    strict_vector_comparison =
+      if Keyword.get(opts, :svg_reference) == :png do
+        vector_pages =
+          rasterize_pdf!(
+            pdftoppm_bin,
+            Path.rootname(chromium_pdf) <> "-vector.pdf",
+            Path.join(artifact_dir, "chromium-vector"),
+            72
+          )
+
+        original_native_pages =
+          rasterize_pdf!(pdftoppm_bin, native_pdf, Path.join(artifact_dir, "native-strict"), 72)
+
+        original_opts = opts |> Keyword.delete(:svg_reference) |> Keyword.put(:dpi, 72)
+
+        original_pages =
+          Enum.zip(vector_pages, original_native_pages)
+          |> Enum.with_index(1)
+          |> Enum.map(fn {{reference, actual}, number} ->
+            try do
+              compare_page!(reference, actual, number, artifact_dir, original_opts)
+            rescue
+              error in ExUnit.AssertionError -> %{page: number, error: Exception.message(error)}
+            end
+          end)
+
+        changed_limit = Keyword.get(opts, :max_changed_ratio, 0.12)
+        average_limit = Keyword.get(opts, :max_average_delta, 0.03)
+
+        passed =
+          length(vector_pages) == length(original_native_pages) and
+            Enum.all?(original_pages, fn page ->
+              not Map.has_key?(page, :error) and
+                changed_ratio_within_limit?(page.changed_ratio, changed_limit) and
+                page.average_delta <= average_limit and
+                Enum.all?(
+                  page.regions,
+                  &(changed_ratio_within_limit?(&1.changed_ratio, &1.max_changed_ratio) and
+                      &1.average_delta <= &1.max_average_delta and
+                      &1.native_ink_pixels >= &1.minimum_ink_pixels)
+                )
+            end)
+
+        proof = %{
+          reference: :chromium_vector_pdf,
+          dpi: 72,
+          pixel_channel_tolerance: 12,
+          status: if(passed, do: :pass, else: :fail),
+          pages: original_pages,
+          chromium_page_count: length(vector_pages),
+          native_page_count: length(original_native_pages),
+          changed_ratio_limit: changed_limit,
+          average_delta_limit: average_limit
+        }
+
+        File.write!(
+          Path.join(artifact_dir, "strict-vector-stats.exs"),
+          inspect(proof, pretty: true, limit: :infinity)
+        )
+
+        proof
+      end
 
     stats = %{
       fixture: fixture_path,
@@ -95,27 +298,24 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       dpi: dpi,
       pixel_channel_tolerance: 12,
       chromium_version: command_output!(chromium_bin, ["--version"]),
+      scripting: :disabled,
       rasterizer_version: command_output!(pdftoppm_bin, ["-v"]) |> String.split("\n") |> hd(),
-      font_sources:
-        render_opts
-        |> Keyword.get(:fonts, [])
-        |> Enum.map(fn font ->
-          font
-          |> Map.take([:family, :path, :weight, :style])
-          |> Map.put(
-            :sha256,
-            font.path
-            |> File.read!()
-            |> then(&:crypto.hash(:sha256, &1))
-            |> Base.encode16(case: :lower)
-          )
-        end),
+      font_sources: source_fonts(render_opts),
       embedded_fonts: %{
         chromium: command_output!(pdffonts_bin!(), [chromium_pdf]),
         native: command_output!(pdffonts_bin!(), [native_pdf])
       },
       artifact_dir: Path.expand(artifact_dir)
     }
+
+    stats =
+      if strict_vector_comparison,
+        do:
+          Map.merge(stats, %{
+            reference: :chromium_svg_png,
+            strict_vector_comparison: strict_vector_comparison
+          }),
+        else: Map.put(stats, :reference, :chromium_vector_pdf)
 
     File.write!(
       Path.join(artifact_dir, "stats.exs"),
@@ -125,7 +325,25 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     max_changed_ratio = Keyword.get(opts, :max_changed_ratio, 0.12)
     max_average_delta = Keyword.get(opts, :max_average_delta, 0.03)
 
-    assert stats.max_changed_ratio < max_changed_ratio,
+    region_failures =
+      for page <- page_stats,
+          region <- page.regions,
+          {failed?, message} <- [
+            {not changed_ratio_within_limit?(region.changed_ratio, region.max_changed_ratio),
+             "changed-pixel ratio #{region.changed_ratio}, allowed #{region.max_changed_ratio}"},
+            {region.average_delta > region.max_average_delta,
+             "average delta #{region.average_delta}, allowed #{region.max_average_delta}"},
+            {region.native_ink_pixels < region.minimum_ink_pixels,
+             "visible ink #{region.native_ink_pixels}, required #{region.minimum_ink_pixels}"}
+          ],
+          failed?,
+          do: "#{region.name}: #{message}"
+
+    assert region_failures == [],
+           "Browser parity samples failed for #{fixture_path}:\n" <>
+             Enum.join(region_failures, "\n") <> "\nartifacts: #{stats.artifact_dir}"
+
+    assert changed_ratio_within_limit?(stats.max_changed_ratio, max_changed_ratio),
            """
            Browser parity changed-pixel threshold exceeded for #{fixture_path}
            changed ratio: #{Float.round(stats.max_changed_ratio, 5)}
@@ -148,49 +366,89 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     stats
   end
 
-  @doc false
-  @spec assert_pdf_visual_change!(binary(), binary(), keyword()) :: [visual_change_stats()]
-  def assert_pdf_visual_change!(before_pdf, after_pdf, opts \\ []) do
-    stats = pdf_visual_stats!(before_pdf, after_pdf, opts)
+  defp prepare_browser_fixture!(fixture_path, opts) do
+    fixture_path = Path.expand(fixture_path)
+    fixture_name = fixture_path |> Path.basename() |> Path.rootname()
 
-    for page <- stats do
-      assert page.changed_pixels > 0,
-             "Visual comparison found no changed pixels on page #{page.page}"
-    end
+    artifact_dir =
+      Keyword.get(opts, :artifact_dir, Path.join(["tmp", "browser_parity", fixture_name]))
 
-    stats
-  end
-
-  @doc false
-  @spec pdf_visual_stats!(binary(), binary(), keyword()) :: [visual_change_stats()]
-  def pdf_visual_stats!(before_pdf, after_pdf, opts \\ []) do
-    artifact_dir = Keyword.get(opts, :artifact_dir, Path.join("tmp", "stamp_visual"))
+    chromium_bin = Keyword.get(opts, :chromium_bin, chromium_bin!())
     pdftoppm_bin = Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!())
-    dpi = Keyword.get(opts, :dpi, 72)
+
+    dpi =
+      Keyword.get(
+        opts,
+        :dpi,
+        if(Keyword.get(opts, :svg_reference) == :png,
+          do: 96 * NativeElixirPdfUtilities.Limits.get(:svg_raster_scale),
+          else: 72
+        )
+      )
+
+    render_opts =
+      fixture_path
+      |> default_render_opts()
+      |> Keyword.merge(Keyword.get(opts, :render_opts, []))
 
     File.rm_rf!(artifact_dir)
     File.mkdir_p!(artifact_dir)
 
-    before_path = Path.join(artifact_dir, "before.pdf")
-    after_path = Path.join(artifact_dir, "after.pdf")
-    File.write!(before_path, before_pdf)
-    File.write!(after_path, after_pdf)
+    chromium_pdf = Path.join(artifact_dir, "chromium.pdf")
+    native_pdf = Path.join(artifact_dir, "native.pdf")
 
-    before_pages =
-      rasterize_pdf!(pdftoppm_bin, before_path, Path.join(artifact_dir, "before"), dpi)
+    {chromium_fixture_path, temporary_input} =
+      chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
 
-    after_pages =
-      rasterize_pdf!(pdftoppm_bin, after_path, Path.join(artifact_dir, "after"), dpi)
+    try do
+      render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf, opts, render_opts)
+    after
+      if temporary_input, do: File.rm!(temporary_input)
+    end
 
-    assert length(before_pages) == length(after_pages),
-           "Visual comparison page count changed; artifacts: #{Path.expand(artifact_dir)}"
+    html = File.read!(fixture_path)
+    native_renderer = Keyword.get(opts, :native_renderer, &HtmlToPdf.render/2)
 
-    before_pages
-    |> Enum.zip(after_pages)
-    |> Enum.with_index(1)
-    |> Enum.map(fn {{before_page, after_page}, page_number} ->
-      visual_change_stats!(before_page, after_page, page_number, artifact_dir)
+    %{
+      fixture_path: fixture_path,
+      artifact_dir: artifact_dir,
+      chromium_bin: chromium_bin,
+      pdftoppm_bin: pdftoppm_bin,
+      dpi: dpi,
+      render_opts: render_opts,
+      chromium_pdf: chromium_pdf,
+      native_pdf: native_pdf,
+      native_result: native_renderer.(html, render_opts)
+    }
+  end
+
+  defp source_fonts(render_opts) do
+    render_opts
+    |> Keyword.get(:fonts, [])
+    |> Enum.map(fn font ->
+      font
+      |> Map.take([:family, :path, :weight, :style])
+      |> Map.put(
+        :sha256,
+        font.path
+        |> File.read!()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+      )
     end)
+  end
+
+  # Both ordinary explicit-family fixtures and the native-only Number caller
+  # input use the same installed Liberation source directory.
+  defp liberation_font_directory(fixture_path) do
+    directory =
+      ["/usr/share/fonts/liberation", "/usr/share/fonts/truetype/liberation"]
+      |> Enum.find(&File.regular?(Path.join(&1, "LiberationSans-Regular.ttf")))
+
+    assert directory,
+           "Install Liberation Sans to compare #{fixture_path} with identical font files"
+
+    directory
   end
 
   defp default_render_opts(fixture_path) do
@@ -199,7 +457,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       |> fixture_page_options()
       |> Keyword.put(:base_url, Path.dirname(fixture_path))
 
-    font_dir = Path.expand("../../priv/fonts/dejavu", __DIR__)
+    font_dir = Paths.project("priv/fonts/dejavu")
 
     fonts = [
       %{family: "DejaVu Sans", path: Path.join(font_dir, "DejaVuSans.ttf"), weight: 400},
@@ -221,12 +479,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     fonts =
       case String.contains?(File.read!(fixture_path), "Liberation Sans") do
         true ->
-          liberation_dir =
-            ["/usr/share/fonts/liberation", "/usr/share/fonts/truetype/liberation"]
-            |> Enum.find(&File.regular?(Path.join(&1, "LiberationSans-Regular.ttf")))
-
-          assert liberation_dir,
-                 "Install Liberation Sans to compare #{fixture_path} with identical font files"
+          liberation_dir = liberation_font_directory(fixture_path)
 
           fonts ++
             [
@@ -244,6 +497,107 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
         false ->
           fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "DejaVu Sans Mono") do
+        fonts ++
+          Enum.map(
+            [
+              {"", 400, :normal},
+              {"-Bold", 700, :normal},
+              {"-Oblique", 400, :italic},
+              {"-BoldOblique", 700, :italic}
+            ],
+            fn {suffix, weight, style} ->
+              %{
+                family: "DejaVu Sans Mono",
+                path: Path.join(font_dir, "DejaVuSansMono#{suffix}.ttf"),
+                weight: weight,
+                style: style
+              }
+            end
+          )
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "STIX Two Math") do
+        fonts ++
+          [
+            %{
+              family: "STIX Two Math",
+              path: Paths.project("priv/fonts/stix/STIXTwoMath-Regular.ttf"),
+              weight: 400,
+              style: :normal
+            }
+          ]
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Glyph Test Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Glyph Test Reference",
+              weight: 400,
+              style: :normal,
+              path: Paths.fixture("html_to_pdf/browser_parity/assets/math-glyph-reference.ttf")
+            }
+          ]
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Row Test Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Row Test Reference",
+              weight: 400,
+              style: :normal,
+              path: Paths.fixture("html_to_pdf/browser_parity/assets/math-row-reference.ttf")
+            }
+          ]
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Stretch Test Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Stretch Test Reference",
+              weight: 400,
+              style: :normal,
+              path: Paths.fixture("html_to_pdf/browser_parity/assets/math-stretch-reference.ttf")
+            }
+          ]
+      else
+        fonts
+      end
+
+    fonts =
+      if String.contains?(File.read!(fixture_path), "Math Operator Core Reference") do
+        fonts ++
+          [
+            %{
+              family: "Math Operator Core Reference",
+              weight: 400,
+              style: :normal,
+              path:
+                Paths.fixture(
+                  "html_to_pdf/browser_parity/assets/math-operator-core-reference.ttf"
+                )
+            }
+          ]
+      else
+        fonts
       end
 
     Enum.each(fonts, fn font ->
@@ -288,14 +642,70 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   defp command_output!(command, args) do
-    case System.cmd(command, args, stderr_to_stdout: true) do
-      {output, 0} -> String.trim(output)
-      {output, status} -> flunk("#{command} failed with status #{status}: #{output}")
+    # Executables stay fixed within a test VM. Font inventories depend on each
+    # PDF and must still run for every comparison.
+    cacheable? = args in [["--version"], ["-v"]]
+    key = {__MODULE__, :version, command, args}
+    cached = if cacheable?, do: :persistent_term.get(key, nil)
+
+    if cached do
+      cached
+    else
+      case System.cmd(command, args, stderr_to_stdout: true) do
+        {output, 0} ->
+          output = String.trim(output)
+          if cacheable?, do: :persistent_term.put(key, output)
+          output
+
+        {output, status} ->
+          flunk("#{command} failed with status #{status}: #{output}")
+      end
     end
   end
 
-  defp render_chromium_pdf!(chromium_bin, fixture_path, output_path) do
+  defp render_chromium_pdf!(chromium_bin, fixture_path, output_path, opts, render_opts) do
+    if Keyword.get(opts, :svg_reference) == :png do
+      {:ok, {width, height}} =
+        NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.normalize_page_size(
+          Keyword.fetch!(render_opts, :page_size)
+        )
+
+      {:ok, margin} =
+        NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.normalize_margins(
+          Keyword.get(render_opts, :margin, 0)
+        )
+
+      NativeElixirPdfUtilities.TestSupport.ChromiumPool.print_pdf!(
+        chromium_bin,
+        fixture_path,
+        output_path,
+        %{
+          width: (width - margin.left - margin.right) / 0.75,
+          height: (height - margin.top - margin.bottom) / 0.75,
+          scale: NativeElixirPdfUtilities.Limits.get(:svg_raster_scale)
+        }
+      )
+    else
+      if System.get_env("BROWSER_PARITY_BROWSER") == "cli" do
+        render_chromium_cli!(chromium_bin, fixture_path, output_path)
+      else
+        NativeElixirPdfUtilities.TestSupport.ChromiumPool.print_pdf!(
+          chromium_bin,
+          fixture_path,
+          output_path
+        )
+      end
+    end
+  end
+
+  defp render_chromium_cli!(chromium_bin, fixture_path, output_path) do
     profile_dir = Path.join(Path.dirname(output_path), "chromium-profile")
+    File.mkdir_p!(Path.join(profile_dir, "Default"))
+
+    File.write!(
+      Path.join([profile_dir, "Default", "Preferences"]),
+      :json.encode(%{profile: %{default_content_setting_values: %{javascript: 2}}})
+    )
 
     args = [
       "--headless",
@@ -328,6 +738,34 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     end
   end
 
+  @doc "Builds equivalent CSS artwork for the fixed horizontal-rule fixture's pinned HTML presentation hints."
+  @spec horizontal_rule_reference(String.t()) :: String.t()
+  def horizontal_rule_reference(html) do
+    # Chromium 151 sets hr color as background/border color and implements size
+    # as content height, including invalid/nonpositive sizes. Pinned HTML instead
+    # specifies color and, for color/noshade, half-size border widths. Keep every
+    # native case unchanged; supply independent, explicit CSS to the browser.
+    css = """
+    <style>
+    hr {color:#808080;background-color:transparent;border-color:#808080;}
+    hr[color="RebeccaPurple"] {color:#663399;border-color:#663399;}
+    hr[color="chucknorris"] {color:#c00000;border-color:#c00000;}
+    hr[color="#abc"] {color:#aabbcc;border-color:#aabbcc;}
+    hr[color="#abcdef12"] {color:#abde12;border-color:#abde12;}
+    hr[color="red"] {color:#ff0000;border-color:#ff0000;}
+    hr[color="navy"] {color:#000080;border-color:#000080;}
+    hr[color="goldenrod"] {color:#daa520;border-color:#daa520;}
+    hr[size="0"],hr[size="-1"] {height:auto;border-bottom-width:1px;}
+    hr[size="0"][noshade] {border-width:0;}
+    hr[size="1"][noshade] {height:auto;border-width:0.5px;}
+    hr[size="3"][noshade],hr[size="3"][color] {height:auto;border-width:1.5px;}
+    hr[size="8"][color] {height:auto;border-width:4px;}
+    </style>
+    """
+
+    String.replace(html, "</head>", css <> "</head>", global: false)
+  end
+
   defp chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts) do
     page_size =
       Keyword.get(opts, :chromium_page_size) ||
@@ -336,15 +774,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     page_furniture = Keyword.get(opts, :chromium_page_furniture)
     fonts = Keyword.get(render_opts, :fonts, [])
 
-    case {page_size, page_furniture, fonts} do
-      {nil, nil, []} ->
-        fixture_path
+    chromium_transform = Keyword.get(opts, :chromium_transform)
+
+    case {page_size, page_furniture, fonts, chromium_transform} do
+      {nil, nil, [], nil} ->
+        {fixture_path, nil}
 
       _configured ->
         chromium_fixture_path = Path.join(artifact_dir, "chromium-input.html")
 
-        fixture_path
-        |> File.read!()
+        html = File.read!(fixture_path)
+        html = if chromium_transform, do: chromium_transform.(html), else: html
+
+        html
         |> maybe_inject_chromium_fonts(fonts)
         |> maybe_inject_chromium_page_css(page_size)
         |> maybe_inject_chromium_page_furniture(
@@ -352,9 +794,30 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           Keyword.get(opts, :chromium_page_margin, 0)
         )
         |> maybe_inject_chromium_page_margin_css(Keyword.get(opts, :chromium_page_margin_css))
-        |> then(&File.write!(chromium_fixture_path, &1))
+        |> then(fn html ->
+          # Native rendering consumes a UTF-8 string. Declare that same encoding
+          # before injected CSS can push authored metadata beyond the prescan.
+          input =
+            case html do
+              <<239, 187, 191, _rest::binary>> -> html
+              _ -> [<<239, 187, 191>>, html]
+            end
 
-        chromium_fixture_path
+          File.write!(chromium_fixture_path, input)
+        end)
+
+        # Font injection must preserve the original document's resource directory.
+        # Loading the artifact copy changes relative authored image/child URLs.
+        # Retain that exact evidence copy while loading a temporary sibling;
+        # source markup/resource references receive no reference transformation.
+        temporary_input =
+          Path.join(
+            Path.dirname(fixture_path),
+            ".chromium-input-#{System.pid()}-#{System.unique_integer([:positive])}.html"
+          )
+
+        File.cp!(chromium_fixture_path, temporary_input)
+        {temporary_input, temporary_input}
     end
   end
 
@@ -517,14 +980,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     end
   end
 
-  defp compare_page!(chromium_page, native_page, page_number, artifact_dir) do
+  defp compare_page!(chromium_page, native_page, page_number, artifact_dir, opts) do
     chromium = read_ppm!(chromium_page)
     native = read_ppm!(native_page)
 
     width_delta = abs(native.width - chromium.width)
     height_delta = abs(native.height - chromium.height)
 
-    assert width_delta <= 1 and height_delta <= 1,
+    # The existing page-box tolerance is one PDF point. Keep that physical
+    # tolerance when comparing SVGs at their actual PNG output density.
+    pixel_tolerance =
+      if Keyword.get(opts, :svg_reference) == :png, do: Keyword.fetch!(opts, :dpi) / 72, else: 1
+
+    assert width_delta <= pixel_tolerance and height_delta <= pixel_tolerance,
            """
            Browser parity page dimensions differ on page #{page_number}
            chromium: #{chromium.width}x#{chromium.height}
@@ -541,13 +1009,46 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         crop_pixels(native, comparison_width, comparison_height)
       )
 
-    Map.put(stats, :page, page_number)
+    regions =
+      for {name, {source_x, source_y, source_width, source_height}} <-
+            Keyword.get(opts, :regions, []) do
+        scale =
+          if Keyword.get(opts, :svg_reference) == :png,
+            do: Keyword.fetch!(opts, :dpi) / 72,
+            else: 1
+
+        x = round(source_x * scale)
+        y = round(source_y * scale)
+        width = round((source_x + source_width) * scale) - x
+        height = round((source_y + source_height) * scale) - y
+        assert x >= 0 and y >= 0 and width > 0 and height > 0
+        assert x + width <= comparison_width and y + height <= comparison_height
+
+        reference = crop_pixels(chromium, width, height, x, y)
+        actual = crop_pixels(native, width, height, x, y)
+        thresholds = opts |> Keyword.get(:region_thresholds, %{}) |> Map.get(name, %{})
+
+        # Each sample retains its own denominator. Blank neighbors cannot dilute
+        # a regression, and sparse artwork must still paint visible pixels.
+        Map.merge(diff_stats(reference, actual), %{
+          name: name,
+          bounds: {x, y, width, height},
+          max_changed_ratio:
+            Map.get(thresholds, :max_changed_ratio, Keyword.get(opts, :max_changed_ratio, 0.12)),
+          max_average_delta:
+            Map.get(thresholds, :max_average_delta, Keyword.get(opts, :max_average_delta, 0.03)),
+          minimum_ink_pixels: ceil(20 * scale * scale),
+          native_ink_pixels:
+            for <<r, g, b <- actual>>, reduce: 0 do
+              ink -> if min(r, min(g, b)) < 243, do: ink + 1, else: ink
+            end
+        })
+      end
+
+    Map.merge(stats, %{page: page_number, regions: regions})
   end
 
-  defp visual_change_stats!(before_page, after_page, page_number, artifact_dir) do
-    before = read_ppm!(before_page)
-    after_image = read_ppm!(after_page)
-
+  defp visual_change_stats!(before, after_image, page_number, artifact_dir) do
     assert {before.width, before.height} == {after_image.width, after_image.height},
            "Visual comparison page dimensions changed on page #{page_number}; artifacts: #{Path.expand(artifact_dir)}"
 
@@ -599,13 +1100,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     }
   end
 
-  defp crop_pixels(image, width, height) do
+  defp crop_pixels(image, width, height, x \\ 0, y \\ 0) do
     row_size = image.width * 3
     cropped_row_size = width * 3
 
     0..(height - 1)
     |> Enum.map(fn row ->
-      binary_part(image.pixels, row * row_size, cropped_row_size)
+      binary_part(image.pixels, (row + y) * row_size + x * 3, cropped_row_size)
     end)
     |> IO.iodata_to_binary()
   end
@@ -685,29 +1186,32 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   defp diff_stats(chromium_pixels, native_pixels) do
-    chromium_pixels
-    |> :binary.bin_to_list()
-    |> Enum.zip(:binary.bin_to_list(native_pixels))
-    |> Enum.chunk_every(3)
-    |> Enum.reduce(
-      %{changed_pixels: 0, total_pixels: 0, total_delta: 0, max_channel_delta: 0},
-      fn pixel_channels, acc ->
-        channel_deltas =
-          Enum.map(pixel_channels, fn {chromium_channel, native_channel} ->
-            abs(chromium_channel - native_channel)
-          end)
+    diff_stats(chromium_pixels, native_pixels, {0, 0, 0, 0})
+  end
 
-        changed? = Enum.any?(channel_deltas, &(&1 > 12))
+  defp diff_stats(chromium_pixels, native_pixels, {changed, count, delta, maximum}) do
+    case {chromium_pixels, native_pixels} do
+      {<<>>, <<>>} ->
+        normalize_diff_stats(%{
+          changed_pixels: changed,
+          total_pixels: count,
+          total_delta: delta,
+          max_channel_delta: maximum
+        })
 
-        %{
-          changed_pixels: acc.changed_pixels + if(changed?, do: 1, else: 0),
-          total_pixels: acc.total_pixels + 1,
-          total_delta: acc.total_delta + Enum.sum(channel_deltas),
-          max_channel_delta: max(acc.max_channel_delta, Enum.max(channel_deltas))
-        }
-      end
-    )
-    |> normalize_diff_stats()
+      {<<r, g, b, reference::binary>>, <<nr, ng, nb, actual::binary>>} ->
+        red = abs(r - nr)
+        green = abs(g - ng)
+        blue = abs(b - nb)
+        pixel_maximum = max(red, max(green, blue))
+
+        diff_stats(reference, actual, {
+          changed + if(pixel_maximum > 12, do: 1, else: 0),
+          count + 1,
+          delta + red + green + blue,
+          max(maximum, pixel_maximum)
+        })
+    end
   end
 
   defp normalize_diff_stats(stats) do
@@ -718,6 +1222,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       average_delta: stats.total_delta / (stats.total_pixels * 3 * 255),
       max_channel_delta: stats.max_channel_delta
     }
+  end
+
+  defp changed_ratio_within_limit?(ratio, limit) do
+    # Smaller ceilings stay strict. An explicit 100% allowance can include 100%,
+    # while the independent average-color and visible-ink checks still apply.
+    ratio < limit or (limit == 1.0 and ratio == 1.0)
   end
 
   defp max_stat(stats, key) do

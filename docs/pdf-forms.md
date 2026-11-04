@@ -1,9 +1,8 @@
 # PDF forms
 
-Use `NativeElixirPdfUtilities.Forms` to inspect, fill and flatten AcroForm
-fields. HTML rendering creates these fields by default. An ordinary PDF with
-printed lines or scanned boxes has no field names to fill; use `Stamp.text/3`
-for explicit text placement in those documents.
+Use `NativeElixirPdfUtilities.Forms` to inspect, fill and flatten AcroForm fields.
+HTML rendering creates these fields by default. Drawn lines and scanned boxes
+have no fields to fill; use `Stamp.text/3` to place text on those PDFs.
 
 ## Generate and complete a form
 
@@ -25,46 +24,91 @@ html = """
 File.write!("completed.pdf", flattened)
 ```
 
-`fields/1` returns a list of maps with `:name`, `:type`, `:value`, `:choices`,
-`:read_only`, `:export_values` and `:widgets`. Each widget has a one-based
-`:page` and a `:rect` of `[left, bottom, right, top]` in PDF page coordinates.
-Choice entries contain `:value` and `:label`. Checkbox values are booleans;
-radio export values are strings.
+`Forms.fields/1` returns a list of field maps:
+
+| Field | Meaning |
+| --- | --- |
+| `:name`, `:type`, `:value` | Field key, type and current value |
+| `:read_only` | `true` means filling is blocked |
+| `:choices` | Choice entries with `:value` and `:label` |
+| `:export_values` | Declared radio/checkbox export values |
+| `:widgets` | Each widget's one-based `:page` and `:rect`: `[left, bottom, right, top]` in PDF coordinates |
 
 ## HTML field names and compatibility
 
-Text inputs, textareas, checkboxes, radio buttons and single-selection selects
-become interactive fields. Buttons remain static artwork. Use
-`HtmlToPdf.render(html, forms: :static)` for the pre-0.18 behavior.
+Controls become editable fields by default. Use `forms: :static` for artwork only.
 
-A nonempty HTML `name` becomes the field key. Otherwise the renderer generates
-`TYPE_PAGENR_ELEMENT`, such as `TEXT_1_1`, `CHECKBOX_1_2`, `RADIO_2_1` or
-`CHOICE_2_2`. Textareas use `TEXT`. Pages and element numbers start at 1.
-The element number counts controls on that page in HTML document order after
-pagination. CSS visual ordering does not change this order. The HTML `id`
-attribute does not supply a field name.
+| HTML control | PDF field |
+| --- | --- |
+| Text, search, telephone, URL, email and number inputs | Text |
+| Password | Masked text; stored value remains readable |
+| Textarea | Multiline text |
+| Checkbox / radio | Checkbox / radio group |
+| Single / multiple select | Choice field |
+| Buttons and submit/reset/button inputs | Static artwork |
+| Hidden input | No output |
 
-All explicit names are reserved before assigning generated names. A generated
-name that collides gains `_1`, `_2`, and so on until unique. Explicit duplicate
-names fail, except for radio controls sharing a group name. Radio group values
-must be distinct, nonempty, and different from the reserved `Off` state. At
-most one radio control in a group may be checked. Select options require unique
-values. HTML names cannot contain a period or NUL; periods separate nested
-field names in existing PDFs.
+Missing or unknown input types use Text. Type names ignore case, but whitespace
+is not trimmed. See [other control restrictions](html-to-pdf-compatibility.md#forms).
 
-Generated names can change when pagination changes. Supply `name` for keys
-used by application code. Controls cannot span pages or repeat with the same
-control identity in page furniture. HTML `disabled` makes a field read-only.
-All members of a radio group must be enabled or all disabled. Interactive
-rendering rejects mixed groups with `:unsupported_form` because PDF read-only
-status applies to the whole field. Use `forms: :static` to render mixed groups
-as artwork without interactive fields.
-The HTML parser still supports its documented subset; HTML listboxes and
-multiple-selection selects are not implemented.
+### Field names
 
-Initial appearances use the rendered HTML styling. Text extraction reads page
-content, so flatten fields first when you need their values included in
-`Text.extract/2` output.
+Set `name` for stable application keys. Generated names can change with pagination.
+
+| Rule | Behavior |
+| --- | --- |
+| Explicit name | Nonempty HTML `name` becomes the key; `id` does not |
+| Generated names | `TEXT_1_1`, `CHECKBOX_1_2`, `RADIO_2_1`, `CHOICE_2_2` |
+| Numbering | One-based page and control numbers, in document order after pagination |
+| Collisions | Explicit names reserved first; generated collisions gain `_1`, `_2`, etc. |
+| Duplicates | Rejected, except radios in the same group |
+| HTML name restrictions | No period or NUL. Existing PDF names may use periods for nesting |
+| Radio groups | Follow HTML form ownership; separate owners need distinct PDF names |
+| Radio values | Distinct, nonempty strings; `Off` is reserved |
+| Initial checked radio | Last checked member wins; unnamed radios stay independent |
+| Explicit `form` reference | Must identify a form; unmatched references leave the control unowned |
+
+### Initial values and choices
+
+| Input | Value cleanup |
+| --- | --- |
+| Text, search, telephone, password | Remove CR/LF line breaks: `A&#10;B` becomes `AB` |
+| URL / single email | Also trim surrounding ASCII whitespace |
+| Multiple email | Remove CR/LF, trim each address, rejoin with commas |
+| Textarea | Keep line breaks |
+| Internationalized domains | No display conversion |
+
+Invalid initial values still render. Constraints such as `required` and `pattern`
+affect initial HTML selectors. Filling a PDF does not rerun HTML validation.
+Editable required fields carry the PDF Required flag.
+
+| Choice setting | Behavior |
+| --- | --- |
+| Dropdown selection | Last selected option; otherwise first enabled option |
+| Selected disabled option | Stays selected |
+| No available selection | `nil`; a selected empty option returns `""` |
+| Multiple select | List of selected values |
+| Option values | Must be unique; explicit `value` preserved, otherwise collapsed option text |
+| Display labels | Nonempty `label`, otherwise option text |
+| Disabled option groups | Affect initial selection; PDF viewers may still allow choosing those options |
+
+### Read-only fields and placement
+
+| Setting | Behavior |
+| --- | --- |
+| `disabled` | Makes the PDF field read-only |
+| `readonly` | Applies to text-entry inputs and textareas; keeps normal styling |
+| Boolean attributes | Presence enables them, even `readonly="false"` or `disabled="false"` |
+| Read-only filling | Returns `:read_only_form_field`; flattening is allowed |
+| Radio groups | All enabled or all disabled; use static mode for mixed groups |
+| Placement | Controls cannot span pages or repeat in page furniture |
+| Child-document controls | Editable, with separate names from `Forms.fields/1`; cannot repeat across pages or page furniture |
+| Unsupported widget transforms | Return diagnostics; use static mode for artwork |
+| HTML appearance | Uses HTML styling; use `[readonly]` to style read-only fields |
+| Text extraction | Flatten first so values become page content |
+
+Passwords display bullets, but `Forms.fields/1` returns their stored values.
+Filling and flattening do not redact passwords or earlier revisions.
 
 ## Fill an existing PDF
 
@@ -75,10 +119,13 @@ IO.inspect(fields)
 {:ok, completed} = Forms.fill(original, %{"applicant.full_name" => "Cees Kettenis"})
 ```
 
-Use the fully qualified names returned by inspection, including parent names
-separated by periods. Repeated widgets of a field are updated together.
-Unselected fields and unrelated annotations, metadata and page content remain
-in place.
+Use exact names from `Forms.fields/1`, including any parent names and periods.
+Filling a field updates all its widgets. Other fields, annotations, metadata and
+page content stay in place.
+
+For exclusive radio groups with repeated export values, filling preserves the
+currently selected matching widget, or selects the first match in field order.
+Groups with the PDF RadiosInUnison flag select all matching widgets.
 
 | Field type | Fill value |
 | --- | --- |
@@ -87,31 +134,43 @@ in place.
 | Checkbox | `true` or `false` |
 | Radio group | One declared export-value string |
 | Single choice | One declared value, including `""` if offered, or `nil` to clear |
-| Multiple choice | A list of distinct declared values, or `nil` to clear |
+| Multiple choice | A list of distinct declared values, or `nil` to clear; PDF must allow multiple selections |
 
-Multiple choice is supported for existing PDFs with the appropriate field flag.
-Clearing a choice with `nil` removes its value; selecting an option with an empty
-export value (`""`) keeps that option selected. Inspection includes declared
-choices and export values. Unknown names,
-read-only fields, invalid selections and field `MaxLen` violations return
-[diagnostics](diagnostics.md).
+`nil` clears a choice; `""` selects its empty-value option. Unknown names, read-only
+fields, invalid choices and `MaxLen` violations return [diagnostics](diagnostics.md).
 
-Filling generates text and choice appearances using bundled DejaVu Sans and
-black text. Text shrinks to fit, up to 12 points, with a two-point inset.
-Explicit line breaks are retained; automatic word wrapping is not performed.
-PDF left, center and right alignment are respected. Missing glyphs and widgets
-too small for the inset return diagnostics. Existing external font/style
-instructions are replaced by this supported appearance style.
+### Fill appearance
 
-Checkbox and radio fills preserve their existing Off/on artwork. Fields
-generated by this library retain their background and border artwork when
-filled. Existing external text-field decorations inside an old appearance are
-not reconstructed. All filled fields have self-contained appearances and do
-not depend on a viewer regenerating them.
+| Setting | Behavior |
+| --- | --- |
+| Default / `appearance: :fit` | Black DejaVu Sans, shrunk to fit, up to 12pt; 2pt inset |
+| Line breaks | Explicit breaks kept; no automatic word wrapping |
+| Alignment | PDF left, center or right alignment preserved |
+| Unrenderable values | Missing glyphs or widgets too small for the inset return diagnostics |
+| Checkboxes / radios | Keep existing Off/on artwork |
+| Backgrounds and borders | Preserved for library-generated fields; old external text-field decorations are not reconstructed |
+| List boxes | Keep labels and redraw highlights, even when cleared; scroll to the first selection |
+| Dropdowns | Show the selected label |
+| Viewer regeneration | Filled appearances are self-contained |
+| `NeedAppearances` | Partial fills keep the request; filling every field clears it |
 
-Partial fills preserve the existing form-wide `NeedAppearances` request because
-untouched appearances may be missing or stale. Filling every field clears the
-request after preparing appearances for all fields.
+To keep a library-generated field's original fonts and styling:
+
+```elixir
+{:ok, completed} = Forms.fill(original, %{"applicant.full_name" => "Cees Kettenis"},
+  appearance: :source)
+```
+
+| Source appearance | Behavior |
+| --- | --- |
+| Fonts and geometry | Keep original size, style and clipping; long values may be clipped |
+| Missing glyphs | Return a diagnostic if the captured fonts cannot draw the value |
+| No supported source template | Fall back to fitted appearance |
+| New HTML list boxes | Preserve row geometry, visibility, group labels and fonts |
+| Older / external list boxes | Reconstruct rows from PDF choice entries |
+| Unsupported appearance programs | Inspection allowed; modifying fields returns `:unsupported_form` |
+
+See [SVG restrictions](image-processing.md#svg-images) when combining SVG and controls.
 
 ## Flatten selected fields
 
@@ -121,40 +180,37 @@ request after preparing appearances for all fields.
   %{"applicant.full_name" => "Cees Kettenis"}, flatten: true)
 ```
 
-`flatten: true` flattens only the fields supplied to that fill call.
-`Forms.flatten(pdf)` flattens all supported fields. `fields: []` selects none.
-Flattening paints current appearances into page content, removes selected
-widgets and prunes their field tree. Remaining fields stay interactive.
-Selected widgets are painted in each page's annotation order, preserving their
-stacking relative to one another even when the field tree has a different order.
-Appearance transforms, page rotation and existing resource names are preserved.
-Flattening preserves screen visibility. Widgets marked Hidden or NoView are
-removed without painting their appearances, including fields whose widgets
-are all hidden. The Print flag does not change this screen policy;
-print-only widgets are omitted and screen-only widgets become ordinary page
-content. Invisible does not hide the supported Widget annotation type.
-Missing or degenerate appearances on visible widgets return errors.
+| Call | Selected fields |
+| --- | --- |
+| `Forms.flatten(pdf)` | All supported fields |
+| `Forms.flatten(pdf, fields: names)` | Only those names; `[]` selects none |
+| `Forms.fill(..., flatten: true)` | Only fields supplied to that fill call |
 
-Updates are incremental. Earlier field values and attachments can remain in
-historical revisions. Flattening removes active interactivity and is not secure
-redaction.
+Flattening paints selected appearances into page content and removes their widgets
+and field-tree entries. Other fields remain editable.
+
+| Detail | Behavior |
+| --- | --- |
+| Stacking | Uses page annotation order |
+| Geometry | Preserves appearance transforms, page rotation and resource names |
+| Hidden / NoView widgets | Removed without painting |
+| Print flag | Screen visibility wins: print-only widgets omitted; screen-only widgets become page content |
+| Invisible flag | Does not hide Widget annotations |
+| Missing / degenerate visible appearance | Returns an error |
+
+Earlier values and attachments can remain in PDF history. Flattening is not secure redaction.
 
 ## Unsupported structures
 
-XFA, pushbuttons, signature operations, password/comb/rich-text fields,
-editable combo boxes, field/widget actions and widget-specific rotation are
-unsupported. Changing signed PDFs or PDFs with signature permissions is
-rejected. Encrypted input follows the reader's existing rejection policy.
-Malformed field trees, ambiguous names and widgets not uniquely associated
-with a page fail with diagnostics. Automatic detection or conversion of drawn
-or scanned forms is outside this API.
+| Input | Result |
+| --- | --- |
+| XFA, pushbuttons, signatures, comb/rich-text fields, editable combo boxes | Unsupported |
+| Field/widget actions or widget-specific rotation | Unsupported |
+| Signed PDFs or signature permissions | Changes rejected |
+| Encrypted PDFs | Rejected by the reader |
+| Malformed trees, ambiguous names, widgets without a unique page | Diagnostic error |
+| Selected field/widget `/A` or `/AA` actions | Rejected, including indirect actions and chains |
 
-Selected fields and widgets with either primary `/A` or additional `/AA`
-actions are rejected, including indirect actions and action chains. Inspection
-and editing unrelated fields do not certify a PDF as safe to open. Filling,
-flattening, merging and other edits are not document sanitization; applications
-must apply their own policy to uploaded PDFs before distributing them.
+Inspection and edits do not sanitize a PDF. Apply your own upload policy before sharing it.
 
-See [resource limits](resource-limits.md#forms-and-attachments) for field,
-appearance-object and byte budgets, and [attachments](pdf-attachments.md) for
-embedding supporting files.
+[Resource limits](resource-limits.md#forms-and-attachments) · [Attachments](pdf-attachments.md).

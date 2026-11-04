@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><style>
+@page { size: A4; margin: 18px; }
+body { margin: 0; font-family: "DejaVu Sans"; font-size: 14px; line-height: 20px; }
+p { margin: 0; }
+.absent { width: 2rem; height: 25%; --size: var(--outer, 2em); background-image: url(missing.png); }
+@media screen { p { font-size: 125%; background-image: url(screen.png); } }
+</style></head>
+<body>
+<?marker name="A">
+<template for="A"><style>.absent { width: var(--size, 2em); }</style><div style="width:200px"><p style="width:var(--width,50%);height:30px;background-color:var(--color,blue);color:white">Inserted</p></div></template>
+<p>After template</p>
+</body>
+</html>

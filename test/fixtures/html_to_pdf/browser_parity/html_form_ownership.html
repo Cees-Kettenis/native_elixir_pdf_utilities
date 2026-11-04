@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Initial form ownership</title>
+<style>
+html,body {margin:0;padding:0;}
+body {font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;color:#172033;}
+main {width:360pt;padding:18pt;box-sizing:border-box;}
+p {margin:0 0 8pt;}
+form {margin:0 0 8pt;padding:0;}
+label {display:inline;}
+.row {display:grid;grid-template-columns:16pt 130pt 16pt 130pt;gap:4pt;align-items:center;margin-bottom:6pt;}
+input[type="radio"],input[type="checkbox"] {display:block;width:12pt;margin:0;padding:0;}
+</style></head><body><main>
+<p>Initial ownership and labels</p>
+<form id="first"><div class="row">
+<input id="alpha" type="radio" name="mode" value="a" checked><label for="alpha">First unchecked</label>
+<input id="beta" type="radio" name="mode" value="b" checked><label for="beta">Last checked</label>
+</div></form>
+<form id="second"><div class="row">
+<input id="gamma" type="radio" name="mode" value="c" checked><label for="gamma">Independent checked</label>
+<input id="delta" type="radio" name="mode" value="d"><label for="delta">Independent unchecked</label>
+</div></form>
+<div class="row">
+<input id="forward" type="radio" name="external" value="e" form="later" checked><label for="forward">Forward unchecked</label>
+<input id="last" type="radio" name="external" value="f" form="later" checked><label for="last">Forward checked</label>
+</div><form id="later"></form>
+<div class="row">
+<input id="nameless" type="radio" checked><label for="nameless">Nameless checked</label>
+<input id="other" type="radio" checked><label for="other">Also checked</label>
+</div>
+<label><input type="hidden">Implicit label text</label>
+</main></body></html>

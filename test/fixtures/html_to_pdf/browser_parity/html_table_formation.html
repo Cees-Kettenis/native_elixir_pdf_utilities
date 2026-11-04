@@ -1,0 +1,19 @@
+<!doctype html><html><head><style>
+@page {size:300pt 420pt;margin:12pt;}
+html,body {margin:0;padding:0;}
+body {font-family:"DejaVu Sans";font-size:9pt;line-height:12pt;}
+p {margin:0 0 9pt;}
+table {width:180pt;table-layout:fixed;border-collapse:collapse;margin:0 0 12pt;}
+td,th {padding:3pt;border:.75pt solid #555;vertical-align:top;text-align:left;}
+a {color:black;text-decoration:none;}
+</style></head><body>
+<p>Table formation before.</p>
+<table><colgroup><col style="width:80pt"><col style="width:100pt"></colgroup>
+<thead><tr><th>Label</th><th>Value</th></tr></thead>
+<tbody><tr><td rowspan="0" style="background:#eee">Zero group</td><td><a href="https://example.com/table">First linked</a></td></tr><tr style="height:15pt"></tr><tr><td>Last in group</td></tr></tbody>
+<tbody><tr><td>Next group</td><td>Next value</td></tr></tbody>
+<tfoot><tr><td>Footer label</td><td>Footer value</td></tr></tfoot></table>
+<table><tr><td rowspan="0" style="background:#eef">Implied group</td><td>One</td><tr style="height:12pt"></tr><tr><td>Two</td></tr><tbody></tbody></table>
+<table><tr><td colspan="0">Zero column</td><td>Neighbor</td></tr></table>
+<table><colgroup span="1001"></colgroup><tr><td colspan="1001">Bounded columns</td></tr></table>
+<p>Table formation after.</p></body></html>

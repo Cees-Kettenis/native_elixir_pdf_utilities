@@ -1,0 +1,1022 @@
+defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
+  use ExUnit.Case
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
+  alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
+  alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+  test "root body trailing padding keeps the final fragment within its page" do
+    for {height, padding, count} <- [{"auto", 12, 2}, {"auto", 0, 1}, {"20pt", 12, 1}] do
+      html =
+        "<style>body{margin:0;padding:12pt 12pt #{padding}pt;height:#{height};font-size:10.5pt;line-height:13.5pt}p{margin:0 0 3pt}</style><body><div style=height:300pt>First</div><p>After</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 330}, margin: 0)
+      assert {:ok, pages} = Pagination.paginate(layout)
+      assert length(pages) == count
+      assert Enum.any?(hd(pages).boxes, &(Map.get(&1, :text) == "First"))
+      last = List.last(pages)
+      assert Enum.any?(last.boxes, &(Map.get(&1, :text) == "After"))
+      markers = Enum.filter(last.boxes, &(Map.get(&1, :role) == :block_end_padding))
+      assert length(markers) == if(height == "auto" and padding > 0, do: 1, else: 0)
+
+      if count == 2 do
+        after_line = Enum.find(last.boxes, &(Map.get(&1, :text) == "After"))
+        assert_in_delta after_line.y + after_line.line_baseline_depth, 330, 0.001
+        assert [marker] = markers
+        assert marker.type == :flow_marker and marker.width == 0 and marker.height == 12
+      end
+
+      assert {:ok, _} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render(pages, forms: :static)
+    end
+  end
+
+  test "root body end padding follows only the last multiline fragment and preserves overflow" do
+    for overflow <- ["visible", "hidden"] do
+      html =
+        "<style>body{margin:0;padding:12pt;overflow:#{overflow};font-size:10.5pt;line-height:13.5pt}p{margin:0 0 3pt}</style><body><div style=height:300pt>First</div><p>Middle<br>Last</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 330}, margin: 0)
+      assert {:ok, [first, last]} = Pagination.paginate(layout)
+      refute Enum.any?(first.boxes, &(Map.get(&1, :role) == :block_end_padding))
+
+      assert Enum.map(Enum.filter(last.boxes, &(&1.type == :text)), & &1.text) == [
+               "Middle",
+               "Last"
+             ]
+
+      [marker] = Enum.filter(last.boxes, &(Map.get(&1, :role) == :block_end_padding))
+      last_line = Enum.find(last.boxes, &(Map.get(&1, :text) == "Last"))
+      assert marker.fragment_id == last_line.fragment_id
+      assert marker.y + marker.height < last_line.y
+    end
+  end
+
+  test "root padding before a forced final break keeps content and positioned tails on their owning pages" do
+    for after_break <- ["", "break-after:page"] do
+      html =
+        "<style>body{margin:0;padding:12pt;position:relative;font-size:10.5pt;line-height:13.5pt}p{margin:0 0 3pt}</style><body><div style=height:300pt>First</div><p style='#{after_break}'>After</p><p style='position:absolute;top:24pt'>Absolute</p></body>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {300, 330}, margin: 0)
+      assert {:ok, [first, last]} = Pagination.paginate(layout)
+      assert Enum.any?(first.boxes, &(Map.get(&1, :text) == "Absolute"))
+      refute Enum.any?(last.boxes, &(Map.get(&1, :text) == "Absolute"))
+      assert Enum.any?(last.boxes, &(Map.get(&1, :text) == "After"))
+      refute Enum.any?(first.boxes, &(Map.get(&1, :text) == "After"))
+    end
+  end
+
+  test "root end-padding markers use the existing cumulative layout and writer budgets" do
+    alias NativeElixirPdfUtilities.Limits
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<body style='margin:0;padding:12pt'><p style=margin:0>Body</p></body>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
+    assert Enum.any?(layout.boxes, &(Map.get(&1, :role) == :block_end_padding))
+    assert {:ok, pages} = Pagination.paginate(layout)
+    count = Enum.sum(Enum.map(pages, &length(&1.boxes)))
+    Limits.install(%{previous | max_layout_boxes: count - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
+    assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Layout.layout(styled, page_size: {100, 100}, margin: 0)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+  end
+
+  test "empty hidden and absolute-only root bodies do not attach padding to positioned paint" do
+    for content <- [
+          "",
+          "<p style=display:none>Hidden</p>",
+          "<p style='position:absolute;top:10pt'>Absolute</p>"
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<body style='margin:0;padding:12pt'>#{content}</body>")
+
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
+      refute Enum.any?(layout.boxes, &(Map.get(&1, :role) == :block_end_padding))
+      assert {:ok, [_]} = Pagination.paginate(layout)
+    end
+  end
+
+  test "fragmented fieldsets keep side borders and paint the legend notch only on their first page" do
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               File.read!(
+                 "test/fixtures/html_to_pdf/browser_parity/html_fieldset_fragmentation.html"
+               )
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {210, 180}, margin: 12)
+    assert {:ok, [first, middle, last]} = Pagination.paginate(layout, margin: 12)
+    [first_border] = Enum.filter(first.boxes, &(Map.get(&1, :role) == :fieldset))
+    [middle_border] = Enum.filter(middle.boxes, &(Map.get(&1, :role) == :fieldset))
+    [last_border] = Enum.filter(last.boxes, &(Map.get(&1, :role) == :fieldset))
+    assert first_border.border_widths.top == 1.5 and first_border.border_widths.bottom == 0
+    assert middle_border.border_widths.top == 0 and middle_border.border_widths.bottom == 0
+    assert middle_border.y == 12 and middle_border.height == 156
+    assert last_border.border_widths.top == 0 and last_border.border_widths.bottom == 1.5
+
+    for border <- [first_border, middle_border, last_border],
+        do: assert(border.border_widths.left == 1.5 and border.border_widths.right == 1.5)
+
+    assert Map.has_key?(first_border, :border_cutout)
+    refute Map.has_key?(middle_border, :border_cutout)
+    refute Map.has_key?(last_border, :border_cutout)
+    assert Enum.any?(first.boxes, &(Map.get(&1, :text) == "Fragmented group"))
+    refute Enum.any?(middle.boxes ++ last.boxes, &(Map.get(&1, :text) == "Fragmented group"))
+  end
+
+  test "nested fieldsets retain background images and their own border identities across fragments" do
+    image =
+      "data:image/svg+xml;base64," <>
+        Base.encode64(
+          "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='yellow'/></svg>"
+        )
+
+    lines = Enum.map_join(1..18, &"<p>Line #{&1}</p>")
+
+    html =
+      "<style>p{margin:0}fieldset{background-image:url('#{image}');background-repeat:repeat;background-size:8pt 8pt}</style><fieldset><legend>Outer</legend><fieldset><legend>Inner</legend>#{lines}</fieldset></fieldset>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {160, 160}, margin: 10)
+    assert {:ok, pages} = Pagination.paginate(layout, margin: 10)
+    assert length(pages) >= 2
+
+    for page <- pages do
+      borders = Enum.filter(page.boxes, &(Map.get(&1, :role) == :fieldset and &1.type == :rect))
+      assert length(borders) == 2
+      assert borders |> Enum.map(& &1.fieldset_paint_id) |> Enum.uniq() |> length() == 2
+      assert Enum.any?(page.boxes, &(&1.type == :image))
+      for tile <- Enum.filter(page.boxes, &(&1.type == :image)), do: assert(tile.clip.height > 0)
+    end
+  end
+
+  test "empty inline lines retain their height at automatic page boundaries" do
+    for {content, height} <- [
+          {"<br>", 12},
+          {"<br><br>", 24},
+          {"<wbr><wbr>", 12},
+          {"<span style='white-space:pre'>\n</span>", 12},
+          {"", 0}
+        ] do
+      html =
+        "<div style='font-size:10pt;line-height:12pt'>" <>
+          "<div style='height:96pt'>First</div><p style='margin:0'>" <>
+          content <> "</p><p style='margin:0'>After</p></div>"
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, tree} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, layout} = Layout.layout(tree, page_size: {200, 96}, margin: 0)
+      assert {:ok, [first, second]} = Pagination.paginate(layout)
+      assert Enum.map_join(first.boxes, &Map.get(&1, :text, "")) == "First"
+      assert Enum.map_join(second.boxes, &Map.get(&1, :text, "")) == "After"
+      after_line = Enum.find(second.boxes, &(Map.get(&1, :text) == "After"))
+      assert_in_delta after_line.y + after_line.line_baseline_depth, 96 - height, 0.01
+      markers = Enum.filter(second.boxes, &(&1.type == :flow_marker))
+      assert Enum.map(markers, & &1.y) |> Enum.uniq() |> length() == div(height, 12)
+      assert Enum.all?(markers, &(&1.width == 0 and &1.height == 12))
+    end
+  end
+
+  test "forced page starts preserve child heading margins after a zero-height break marker" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
+
+    html =
+      "<div>First</div><div style='break-before:page'><hgroup><h2>Second</h2><p>Subtitle</p></hgroup></div>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 200}, margin: 0)
+    assert {:ok, [_, page]} = Pagination.paginate(layout, [])
+    heading = Enum.find(page.boxes, &(Map.get(&1, :text) == "Second"))
+    assert_in_delta 200 - (heading.y + heading.line_baseline_depth), 18 * 0.83, 0.01
+  end
+
+  test "body backgrounds cover every page while zero-margin padding positions content" do
+    html = """
+    <html><head><style>
+      body { margin: 0; padding: 30pt; background: #ddffdd; }
+      p { margin: 0; }
+    </style></head><body><p>First</p><p style="break-before: page">Second</p></body></html>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {240, 180})
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) == 2
+
+    for page <- pages do
+      assert [
+               %{
+                 type: :rect,
+                 position_anchor: :canvas,
+                 x: 0,
+                 y: 0,
+                 width: 240.0,
+                 height: 180.0,
+                 fill_color: color
+               }
+               | _
+             ] = page.boxes
+
+      assert color == {221 / 255, 1.0, 221 / 255}
+      assert [%{x: 30.0}] = Enum.filter(page.boxes, &(&1.type == :text))
+    end
+  end
+
+  test "outer table outlines keep borders and repeated headings on each page" do
+    html =
+      File.read!("test/fixtures/html_to_pdf/browser_parity/table_outer_border_pagination.html")
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {240, 180})
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) == 3
+
+    assert Enum.flat_map(pages, fn page ->
+             for %{type: :text, text: "Row " <> _ = text} <- page.boxes, do: text
+           end) == Enum.map(1..8, &"Row #{&1}")
+
+    for page <- pages do
+      assert [%{y: bottom, height: height}] =
+               Enum.filter(page.boxes, &(Map.get(&1, :role) == :table_outline))
+
+      borders = Enum.filter(page.boxes, &(Map.get(&1, :role) == :table_border))
+      text = for %{type: :text, text: text} <- page.boxes, do: text
+      assert "Item" in text
+      assert "Value" in text
+      assert length(borders) == length(text)
+      assert Enum.all?(borders, &(&1.y >= bottom and &1.y + &1.height <= bottom + height))
+
+      assert Enum.find_index(page.boxes, &(Map.get(&1, :role) == :table_outline)) <
+               Enum.find_index(page.boxes, &(Map.get(&1, :role) == :table_border))
+    end
+  end
+
+  test "collapsed table fragments close at automatic and early group page breaks" do
+    rows = Enum.map_join(1..8, fn n -> "<tr><td>Oversized #{n}</td><td>Value</td></tr>" end)
+
+    html = """
+    <style>
+      body { margin: 0; font-size: 10pt; line-height: 12pt; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #336699; padding: 2pt; }
+      tbody { break-inside: avoid; }
+      tbody tr { height: 30pt; }
+    </style>
+    <table>
+      <thead><tr><th>Item</th><th>Value</th></tr></thead>
+      <tbody><tr><td>First</td><td>Value</td></tr><tr><td colspan="2">Subtotal</td></tr></tbody>
+      <tbody><tr><td>Next</td><td>Value</td></tr><tr><td colspan="2">Subtotal</td></tr></tbody>
+      <tbody>#{rows}</tbody>
+    </table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {240, 140}, margin: 10)
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert length(pages) >= 4
+
+    for page <- pages do
+      borders = Enum.filter(page.boxes, &(Map.get(&1, :role) == :table_border))
+      bottom = borders |> Enum.map(& &1.y) |> Enum.min()
+      closing = Enum.filter(borders, &(&1.y == bottom))
+      assert Enum.all?(closing, &(&1.border_widths.bottom == 0.75))
+      assert Enum.all?(closing, &(&1.border_colors.bottom == {0.2, 0.4, 0.6}))
+      assert Enum.all?(closing, &(&1.border_styles.bottom == :solid))
+      assert Enum.any?(borders, &(&1.y > bottom and &1.border_widths.bottom == 0.0))
+    end
+
+    first_borders = Enum.filter(hd(pages).boxes, &(Map.get(&1, :role) == :table_border))
+    assert Enum.min(Enum.map(first_borders, & &1.y)) > 30
+  end
+
+  test "fragment closure respects explicitly absent bottom borders" do
+    html = """
+    <style>
+      table { border-collapse: collapse; }
+      td { border: 1pt solid black; border-bottom: none; padding: 2pt; height: 50pt; }
+    </style>
+    <table><tbody><tr><td>One</td></tr><tr><td>Two</td></tr></tbody></table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 100}, margin: 10)
+    assert {:ok, [first, _last]} = Pagination.paginate(layout)
+
+    assert Enum.all?(
+             Enum.filter(first.boxes, &(Map.get(&1, :role) == :table_border)),
+             &(&1.border_widths.bottom == 0)
+           )
+  end
+
+  test "a header-only table remains visible in an empty report" do
+    html = """
+    <table><thead><tr><th>Empty report</th></tr></thead></table>
+    <p>No records</p>
+    <table><thead><tr><th>Final heading</th></tr></thead></table>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, layout} = Layout.layout(styled, page_size: :a4)
+    assert {:ok, [page]} = Pagination.paginate(layout)
+
+    assert for(%{type: :text, text: text} <- page.boxes, do: text) ==
+             ["Empty report", "No records", "Final heading"]
+  end
+
+  test "semantic body groups move together and oversized groups split with their headings" do
+    for count <- [2, 8] do
+      rows = Enum.map_join(1..count, fn n -> "<tr><td>Item #{n}</td></tr>" end)
+
+      html = """
+      <style>
+        body { margin: 0; font-size: 10pt; line-height: 12pt; }
+        table { border-collapse: collapse; width: 100%; }
+        td, th { padding: 0; }
+        tbody { break-inside: avoid; }
+        tbody tr { height: 30pt; }
+      </style>
+      <div style="height: 70pt; background: #eee">Lead</div>
+      <table><thead><tr><th>Context</th></tr></thead><tbody>#{rows}</tbody></table>
+      """
+
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom)
+      assert {:ok, layout} = Layout.layout(styled, page_size: {200, 140}, margin: 10)
+      assert Enum.any?(layout.boxes, &Map.get(&1, :row_group_avoid, false))
+      assert {:ok, pages} = Pagination.paginate(layout)
+      text = fn page -> for %{type: :text, text: text} <- page.boxes, do: text end
+
+      if count == 2 do
+        assert Enum.map(pages, text) == [["Lead"], ["Context", "Item 1", "Item 2"]]
+      else
+        assert length(pages) > 2
+
+        for page <- pages, Enum.any?(text.(page), &String.starts_with?(&1, "Item")) do
+          assert "Context" in text.(page)
+        end
+
+        assert pages |> Enum.flat_map(text) |> Enum.filter(&String.starts_with?(&1, "Item")) ==
+                 Enum.map(1..count, &"Item #{&1}")
+      end
+
+      for page <- pages, box <- page.boxes do
+        {_top, bottom} = NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.box_vertical_bounds(box)
+        assert bottom >= 9.99
+      end
+    end
+  end
+
+  test "paginate keeps a fitting layout tree on one page" do
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [text_box("Hello", 78.0, {:block, 1})]
+    }
+
+    assert Pagination.paginate(layout_tree, []) ==
+             {:ok, [%{size: {200.0, 100.0}, boxes: [text_box("Hello", 78.0, {:block, 1})]}]}
+  end
+
+  test "paginate projects positioned descendants through their containing block fragments" do
+    html = """
+    <div style="height: 75pt; background: #eeeeee"></div>
+    <div style="position: relative; width: 80pt; height: 40pt; background: white">
+      <div style="position: absolute; right: 5pt; bottom: 5pt; width: 10pt; height: 10pt; background: blue"></div>
+    </div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    first_blue = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+    assert first_blue.y + first_blue.height <= first_blue.clip.y
+    blue = Enum.find(second_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+    assert blue.out_of_flow
+    assert_in_delta blue.x, 75.0, 0.0001
+    assert_in_delta blue.y, 60.0, 0.0001
+  end
+
+  test "paginate keeps root-positioned boxes on the first page in stacking order" do
+    html = """
+    <div style="height: 70pt; background: red"></div>
+    <div style="height: 70pt; background: green"></div>
+    <div style="position: absolute; left: 0; top: 0; width: 10pt; height: 10pt; background: blue"></div>
+    <div style="position: absolute; left: 20pt; top: 0; width: 10pt; height: 10pt; background: #ffff00; z-index: -1"></div>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 0)
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    yellow = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == {1.0, 1.0, 0.0}))
+    blue = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == {0, 0, 1}))
+
+    assert_in_delta yellow.y, 90.0, 0.0001
+    assert_in_delta blue.y, 90.0, 0.0001
+    assert Enum.find_index(first_page.boxes, &(&1 == yellow)) == 0
+    {:ok, green} = NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_color("green", nil)
+    green_box = Enum.find(first_page.boxes, &(Map.get(&1, :fill_color) == green))
+    assert green_box.height == 30.0
+
+    assert Enum.find_index(first_page.boxes, &(&1 == green_box)) <
+             Enum.find_index(first_page.boxes, &(&1 == blue))
+
+    refute Enum.any?(second_page.boxes, &Map.has_key?(&1, :position_anchor))
+  end
+
+  test "paginate supports default opts and empty pages" do
+    assert Pagination.paginate(%{
+             type: :layout,
+             page_size: {200.0, 100.0},
+             margin: 10.0,
+             boxes: []
+           }) ==
+             {:ok, [%{size: {200.0, 100.0}, boxes: []}]}
+  end
+
+  test "paginate creates automatic page breaks at the bottom margin" do
+    boxes =
+      [
+        text_box("One", 78.0, {:block, 1}),
+        text_box("Two", 51.6, {:block, 2}),
+        text_box("Three", 25.2, {:block, 3}),
+        text_box("Four", -1.2, {:block, 4})
+      ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["One", "Two", "Three"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Four"]
+    [four] = second_page.boxes
+    assert_in_delta four.y, 78.0, 0.0001
+  end
+
+  test "paginate fragments default auto paragraphs across the remaining page space" do
+    paragraph_boxes =
+      [63.6, 49.2, 34.8, 20.4, 6.0, -8.4]
+      |> Enum.with_index(1)
+      |> Enum.map(fn {y, index} ->
+        text_box("Line #{index}", y, {:block, :paragraph}, %{
+          break_inside: :auto,
+          fragment_id: {:line, :paragraph, index}
+        })
+      end)
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [text_box("Lead", 78.0, {:block, :lead})] ++ paragraph_boxes
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    assert Enum.map(first_page.boxes, & &1.text) ==
+             ["Lead", "Line 1", "Line 2", "Line 3", "Line 4"]
+
+    assert Enum.map(second_page.boxes, & &1.text) == ["Line 5", "Line 6"]
+  end
+
+  test "paginate moves a fitting break-inside avoid paragraph to a fresh page" do
+    lead = %{
+      type: :rect,
+      x: 10.0,
+      y: 30.0,
+      width: 180.0,
+      height: 60.0,
+      flow_id: {:block, :lead},
+      break_before: :auto,
+      break_after: :auto
+    }
+
+    paragraph_boxes =
+      [13.0, -1.4]
+      |> Enum.with_index(1)
+      |> Enum.map(fn {y, index} ->
+        text_box("Avoid #{index}", y, {:block, :avoid}, %{
+          break_inside: :avoid,
+          fragment_id: {:line, :avoid, index}
+        })
+      end)
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [lead] ++ paragraph_boxes
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert first_page.boxes == [lead]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Avoid 1", "Avoid 2"]
+  end
+
+  test "paginate fragments an oversized break-inside avoid paragraph" do
+    paragraph_boxes =
+      [78.0, 63.6, 49.2, 34.8, 20.4, 6.0, -8.4]
+      |> Enum.with_index(1)
+      |> Enum.map(fn {y, index} ->
+        text_box("Oversized #{index}", y, {:block, :oversized}, %{
+          break_inside: :avoid,
+          fragment_id: {:line, :oversized, index}
+        })
+      end)
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: paragraph_boxes
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    assert Enum.map(first_page.boxes, & &1.text) ==
+             ["Oversized 1", "Oversized 2", "Oversized 3", "Oversized 4", "Oversized 5"]
+
+    assert Enum.map(second_page.boxes, & &1.text) == ["Oversized 6", "Oversized 7"]
+  end
+
+  test "paginated page count supplies current and total page furniture tokens" do
+    boxes = [
+      text_box("One", 68.0, {:block, 1}),
+      text_box("Two", 41.6, {:block, 2}),
+      text_box("Three", 15.2, {:block, 3})
+    ]
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 20.0,
+      boxes: boxes
+    }
+
+    assert {:ok, pages} = Pagination.paginate(layout_tree, [])
+    assert length(pages) == 2
+
+    assert {:ok, [first_page, second_page]} =
+             PageFurniture.decorate(pages, layout_tree,
+               page_furniture: [
+                 header: "<div style=\"font-size: 8pt\">Page {{page}}/{{pages}}</div>"
+               ]
+             )
+
+    assert Enum.any?(first_page.boxes, &(&1.type == :text and &1.text == "Page 1/2"))
+    assert Enum.any?(second_page.boxes, &(&1.type == :text and &1.text == "Page 2/2"))
+  end
+
+  test "paginate preserves first page top offset from parent padding" do
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 0.0,
+      boxes: [text_box("Padded", 58.0, {:block, 1})]
+    }
+
+    assert {:ok, [page]} = Pagination.paginate(layout_tree, [])
+    [padded] = page.boxes
+
+    assert_in_delta padded.y, 58.0, 0.0001
+  end
+
+  test "paginate honors manual page breaks" do
+    boxes = [
+      text_box("Before", 78.0, {:block, 1}),
+      text_box("After", 51.6, {:block, 2}, %{break_before: :page})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["Before"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["After"]
+    [after_break] = second_page.boxes
+    assert_in_delta after_break.y, 78.0, 0.0001
+  end
+
+  test "paginate honors break-after and ignores empty page breaks" do
+    boxes = [
+      text_box("First", 78.0, {:block, 1}, %{break_after: :page}),
+      text_box("Second", 78.0, {:block, 2})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["First"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Second"]
+
+    leading_break_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [text_box("Only", 78.0, {:block, 1}, %{break_before: :page})]
+    }
+
+    assert {:ok, [%{boxes: [only]}]} = Pagination.paginate(leading_break_tree, [])
+    assert only.text == "Only"
+  end
+
+  test "paginate keeps child groups inside an already placed parent background" do
+    boxes = [
+      %{
+        type: :rect,
+        x: 0.0,
+        y: 0.0,
+        width: 200.0,
+        height: 100.0,
+        flow_id: {:block, :parent},
+        break_before: :auto,
+        break_after: :auto
+      },
+      text_box("Child", 78.0, {:block, :child})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 0.0, boxes: boxes}
+
+    assert {:ok, [page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(page.boxes, &Map.get(&1, :text, :rect)) == [:rect, "Child"]
+
+    child = Enum.find(page.boxes, &(&1.type == :text))
+    assert_in_delta child.y, 78.0, 0.0001
+  end
+
+  test "paginate preserves child positions when a parent background moves to a later page" do
+    boxes = [
+      text_box("First", 78.0, {:block, :first}, %{break_after: :page}),
+      %{
+        type: :rect,
+        x: 0.0,
+        y: -100.0,
+        width: 200.0,
+        height: 100.0,
+        flow_id: {:block, :parent},
+        break_before: :auto,
+        break_after: :auto
+      },
+      text_box("Child", -22.0, {:block, :child})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 0.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, &Map.get(&1, :text, :rect)) == ["First"]
+    assert Enum.map(second_page.boxes, &Map.get(&1, :text, :rect)) == [:rect, "Child"]
+
+    child = Enum.find(second_page.boxes, &(&1.type == :text))
+    assert_in_delta child.y, 78.0, 0.0001
+  end
+
+  test "paginate consumes empty manual page-break markers" do
+    boxes = [
+      text_box("First", 78.0, {:block, 1}),
+      %{
+        type: :page_break,
+        x: 10.0,
+        y: 63.6,
+        width: 180.0,
+        height: 0.0,
+        flow_id: {:block, 2},
+        break_before: :auto,
+        break_after: :page
+      },
+      text_box("Second", 63.6, {:block, 3})
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["First"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Second"]
+    refute Enum.any?(first_page.boxes ++ second_page.boxes, &match?(%{type: :page_break}, &1))
+  end
+
+  test "paginate handles non-text bounds and boxes without y coordinates" do
+    boxes = [
+      %{
+        type: :rect,
+        x: 10.0,
+        y: 50.0,
+        width: 20.0,
+        height: 10.0,
+        flow_id: {:shape, 1},
+        break_before: :auto,
+        break_after: :auto
+      },
+      %{
+        type: :text,
+        text: "Line",
+        x: 10.0,
+        y: 20.0,
+        width: 20.0,
+        annotation_width: 20.0,
+        font: "Helvetica",
+        line_height: 12.0,
+        color: {0, 0, 0},
+        flow_id: {:text, 1},
+        break_before: :auto,
+        break_after: :auto
+      },
+      %{
+        type: :text,
+        text: "Font size bounds",
+        x: 10.0,
+        y: 12.0,
+        width: 20.0,
+        annotation_width: 20.0,
+        font: "Helvetica",
+        font_size: 8.0,
+        color: {0, 0, 0},
+        flow_id: {:text, 2},
+        break_before: :auto,
+        break_after: :auto
+      },
+      %{type: :metadata, flow_id: {:metadata, 1}, break_before: :auto, break_after: :auto}
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
+
+    assert {:ok, [page]} = Pagination.paginate(layout_tree, [])
+    assert length(page.boxes) == 4
+    assert Enum.at(page.boxes, 3).type == :metadata
+  end
+
+  test "paginate overflows table body groups without a repeated header" do
+    boxes = [
+      text_box("One", 78.0, {:table_row, :table_without_head, 1}, %{
+        table_id: :table_without_head,
+        table_section: :body
+      }),
+      text_box("Two", -20.0, {:table_row, :table_without_head, 2}, %{
+        table_id: :table_without_head,
+        table_section: :body
+      })
+    ]
+
+    layout_tree = %{type: :layout, page_size: {200.0, 100.0}, margin: 10.0, boxes: boxes}
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["One"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Two"]
+  end
+
+  test "paginate repeats table headers when body rows continue on a new page" do
+    rows =
+      1..3
+      |> Enum.map(fn index ->
+        "<tr><td>Alpha #{index}</td><td>#{index}</td></tr>"
+      end)
+      |> Enum.join()
+
+    html =
+      "<style>th,td{padding:4pt}</style><table><thead><tr><th colspan=\"2\">Inventory</th></tr>" <>
+        "<tr><th>Name</th><th>Count</th></tr></thead><tbody>" <>
+        rows <> "</tbody></table>"
+
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled_tree} = Style.compute(dom, [])
+    assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {200, 100}, margin: 10)
+    assert {:ok, pages} = Pagination.paginate(layout_tree, [])
+    assert length(pages) > 1
+
+    for page <- pages do
+      assert Enum.count(page.boxes, &(&1.type == :text and &1.text == "Inventory")) == 1
+      assert Enum.count(page.boxes, &(&1.type == :text and &1.text == "Name")) == 1
+    end
+
+    last_page = List.last(pages)
+    assert Enum.any?(last_page.boxes, &(&1.type == :text and &1.text == "Alpha 3"))
+
+    title = Enum.find(last_page.boxes, &(&1.type == :text and &1.text == "Inventory"))
+    column_header = Enum.find(last_page.boxes, &(&1.type == :text and &1.text == "Name"))
+    body_text = Enum.find(last_page.boxes, &(&1.type == :text and &1.text == "Alpha 3"))
+
+    assert title.y > column_header.y
+    assert column_header.y > body_text.y
+  end
+
+  test "paginate removes outline anchors from repeated table header copies" do
+    table_id = :table_with_heading
+
+    header =
+      text_box("Heading", 78.0, {:table_row, table_id, :header}, %{
+        table_id: table_id,
+        table_section: :head,
+        repeat_table_header: true,
+        outline_anchor: %{title: "Heading", level: 1}
+      })
+
+    first_row =
+      text_box("First", 60.0, {:table_row, table_id, :first}, %{
+        table_id: table_id,
+        table_section: :body
+      })
+
+    second_row =
+      text_box("Second", -20.0, {:table_row, table_id, :second}, %{
+        table_id: table_id,
+        table_section: :body
+      })
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [header, first_row, second_row]
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+
+    assert Enum.find(first_page.boxes, &(&1.text == "Heading")).outline_anchor ==
+             header.outline_anchor
+
+    refute Map.has_key?(Enum.find(second_page.boxes, &(&1.text == "Heading")), :outline_anchor)
+  end
+
+  test "paginate keeps a near-page-height table row inside the page bounds" do
+    table_id = :near_page_height
+
+    header =
+      text_box("Header", 78.0, {:table_row, table_id, :header}, %{
+        table_id: table_id,
+        table_section: :head,
+        repeat_table_header: true
+      })
+
+    first_row =
+      text_box("First", 60.0, {:table_row, table_id, :first}, %{
+        table_id: table_id,
+        table_section: :body
+      })
+
+    tall_flow_id = {:table_row, table_id, :tall}
+
+    tall_row = [
+      %{
+        type: :rect,
+        x: 10.0,
+        y: -15.0,
+        width: 180.0,
+        height: 70.0,
+        flow_id: tall_flow_id,
+        table_id: table_id,
+        table_section: :body,
+        break_before: :auto,
+        break_after: :auto
+      },
+      text_box("Tall", 35.0, tall_flow_id, %{
+        table_id: table_id,
+        table_section: :body
+      })
+    ]
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {200.0, 100.0},
+      margin: 10.0,
+      boxes: [header, first_row | tall_row]
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, &Map.get(&1, :text, :rect)) == ["Header", "First"]
+    assert Enum.map(second_page.boxes, &Map.get(&1, :text, :rect)) == [:rect, "Tall"]
+
+    tall_background = hd(second_page.boxes)
+    assert_in_delta tall_background.y, 20.0, 0.0001
+    assert tall_background.y >= 10.0
+  end
+
+  test "paginate rejects invalid layout trees" do
+    assert {:error, {:invalid_layout, %{stage: :pagination}}} =
+             Pagination.paginate(:not_a_layout, [])
+
+    assert {:error,
+            {:invalid_layout,
+             %{
+               stage: :pagination,
+               reason: :invalid_layout,
+               operation: :paginate,
+               module: NativeElixirPdfUtilities.HtmlToPdf.Pagination
+             }}} = Pagination.paginate(%{boxes: []}, [])
+
+    assert {:error,
+            {:invalid_layout,
+             %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+             Pagination.paginate(
+               %{type: :layout, page_size: {-1, 100}, margin: 10, boxes: []},
+               []
+             )
+
+    assert {:error,
+            {:invalid_layout,
+             %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+             Pagination.paginate(
+               %{type: :layout, page_size: {100, 100}, margin: -1, boxes: []},
+               []
+             )
+
+    assert {:error,
+            {:invalid_layout,
+             %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+             Pagination.paginate(
+               %{type: :layout, page_size: :a4, margin: 10, boxes: []},
+               []
+             )
+
+    for margin <- [50, 60] do
+      assert {:error,
+              {:invalid_layout,
+               %{stage: :pagination, reason: :invalid_layout, operation: :paginate}}} =
+               Pagination.paginate(
+                 %{type: :layout, page_size: {100, 100}, margin: margin, boxes: []},
+                 []
+               )
+    end
+
+    assert {:ok, [%{size: {100, 100}, boxes: []}]} =
+             Pagination.paginate(
+               %{type: :layout, page_size: {100, 100}, margin: 49, boxes: []},
+               []
+             )
+  end
+
+  test "paginate uses asymmetric top and bottom page margins" do
+    margins = %{top: 10.0, right: 5.0, bottom: 30.0, left: 15.0}
+
+    layout_tree = %{
+      type: :layout,
+      page_size: {100.0, 100.0},
+      margin: margins,
+      margins: margins,
+      boxes: [
+        text_box("First", 78.0, {:block, 1}),
+        text_box("Second", 50.0, {:block, 2}),
+        text_box("Third", 20.0, {:block, 3})
+      ]
+    }
+
+    assert {:ok, [first_page, second_page]} = Pagination.paginate(layout_tree, [])
+    assert Enum.map(first_page.boxes, & &1.text) == ["First", "Second"]
+    assert Enum.map(second_page.boxes, & &1.text) == ["Third"]
+    assert_in_delta hd(second_page.boxes).y, 78.0, 0.0001
+
+    assert {:error, {:invalid_layout, %{stage: :pagination}}} =
+             Pagination.paginate(
+               %{layout_tree | margins: %{margins | left: 50.0, right: 50.0}},
+               []
+             )
+  end
+
+  defp text_box(text, y, flow_id, extra \\ %{}) do
+    Map.merge(
+      %{
+        type: :text,
+        text: text,
+        x: 10.0,
+        y: y,
+        width: 180.0,
+        annotation_width: 36.0,
+        font: "Helvetica",
+        font_size: 12.0,
+        line_height: 14.4,
+        color: {0, 0, 0},
+        flow_id: flow_id,
+        break_before: :auto,
+        break_after: :auto
+      },
+      extra
+    )
+  end
+end

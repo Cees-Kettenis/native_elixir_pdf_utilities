@@ -2,36 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntityData
-
-  @numeric_replacements %{
-    0x80 => 0x20AC,
-    0x82 => 0x201A,
-    0x83 => 0x0192,
-    0x84 => 0x201E,
-    0x85 => 0x2026,
-    0x86 => 0x2020,
-    0x87 => 0x2021,
-    0x88 => 0x02C6,
-    0x89 => 0x2030,
-    0x8A => 0x0160,
-    0x8B => 0x2039,
-    0x8C => 0x0152,
-    0x8E => 0x017D,
-    0x91 => 0x2018,
-    0x92 => 0x2019,
-    0x93 => 0x201C,
-    0x94 => 0x201D,
-    0x95 => 0x2022,
-    0x96 => 0x2013,
-    0x97 => 0x2014,
-    0x98 => 0x02DC,
-    0x99 => 0x2122,
-    0x9A => 0x0161,
-    0x9B => 0x203A,
-    0x9C => 0x0153,
-    0x9E => 0x017E,
-    0x9F => 0x0178
-  }
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @doc false
   @spec decode(String.t(), :text | :attribute) :: String.t()
@@ -39,6 +10,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities do
     case {text, context} do
       {text, context} when is_binary(text) and context in [:text, :attribute] ->
         decode_text(text, context, [])
+    end
+  end
+
+  @doc false
+  @spec decode_with_spans(String.t(), :text | :attribute) :: {String.t(), [tuple()]}
+  def decode_with_spans(text, context) do
+    decode_spans(text, context, 0, 0, [], [])
+  end
+
+  defp decode_spans(text, context, input_offset, output_offset, decoded, spans) do
+    case text do
+      "" ->
+        {decoded |> Enum.reverse() |> IO.iodata_to_binary(), Enum.reverse(spans)}
+
+      text ->
+        {characters, remaining} =
+          case text do
+            <<"&", rest::binary>> ->
+              case decode_reference(rest, context) do
+                {:ok, characters, remaining} -> {characters, remaining}
+                :not_found -> {"&", rest}
+              end
+
+            <<byte, rest::binary>> ->
+              {<<byte>>, rest}
+          end
+
+        input_length = byte_size(text) - byte_size(remaining)
+        output_length = byte_size(characters)
+
+        decode_spans(
+          remaining,
+          context,
+          input_offset + input_length,
+          output_offset + output_length,
+          [characters | decoded],
+          [{output_offset, output_length, input_offset, input_length} | spans]
+        )
     end
   end
 
@@ -95,28 +104,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities do
             _ -> remaining
           end
 
-        codepoint =
-          digits
-          |> String.to_integer(base)
-          |> normalize_numeric_codepoint()
+        codepoint = HtmlValidator.numeric_character_reference(digits, base)
 
         {:ok, <<codepoint::utf8>>, remaining}
 
       nil ->
         :not_found
-    end
-  end
-
-  defp normalize_numeric_codepoint(codepoint) do
-    cond do
-      codepoint == 0 ->
-        0xFFFD
-
-      codepoint > 0x10FFFF or codepoint in 0xD800..0xDFFF ->
-        0xFFFD
-
-      true ->
-        Map.get(@numeric_replacements, codepoint, codepoint)
     end
   end
 

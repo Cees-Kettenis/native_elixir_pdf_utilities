@@ -63,7 +63,6 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
       output_bytes = parsed.width_px * parsed.height_px * stride
       largest_row = passes |> Enum.map(& &1.row_bytes) |> Enum.max()
       rows = Enum.reduce(passes, 0, &(&2 + &1.height))
-      working_bytes = 3 * inflated_bytes + 3 * output_bytes + 64 * largest_row + 64 * rows
 
       parsed =
         Map.merge(parsed, %{
@@ -75,7 +74,7 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
           filter_stride: max(div(channels * depth + 7, 8), 1)
         })
 
-      with :ok <- validate_working_bytes(working_bytes),
+      with :ok <- validate_working_buffers(inflated_bytes, output_bytes, largest_row, rows),
            :ok <-
              if(reserve?,
                do:
@@ -112,7 +111,16 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
     end
   end
 
-  defp validate_working_bytes(bytes) do
+  @doc "Checks the shared PNG decoding working-buffer estimate before allocating pixels."
+  @spec validate_working_buffers(
+          non_neg_integer(),
+          non_neg_integer(),
+          non_neg_integer(),
+          non_neg_integer()
+        ) ::
+          :ok | {:error, {atom(), map()}}
+  def validate_working_buffers(inflated_bytes, output_bytes, largest_row, rows) do
+    bytes = 3 * inflated_bytes + 3 * output_bytes + 64 * largest_row + 64 * rows
     maximum = Limits.get(:max_png_working_bytes)
 
     if bytes > maximum do

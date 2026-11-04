@@ -1,0 +1,9 @@
+<!doctype html><html><head><style>
+@page{size:300pt 300pt;margin:12pt}
+html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:15pt}
+table{border-collapse:separate;border-spacing:0;width:220pt;margin:12pt 0}
+td{height:45pt;padding:0;width:110pt;transform:translate(4pt,0);background:#eef4f8}
+.flex{display:flex;width:220pt;height:60pt;margin:12pt 0}.grid{display:grid;grid-template-columns:110pt 110pt;width:220pt;height:60pt;margin:12pt 0}
+.track{height:60pt;width:110pt;background:#f1eee5;transform:translate(0,2pt)}
+.absolute{position:absolute;left:25%;top:50%;width:36pt;height:15pt;background:#305e84;color:white}p{margin:0}
+</style></head><body><table><tr><td><p>Cell flow</p><div class="absolute">Cell</div></td><td>Peer</td></tr></table><div class="flex"><div class="track"><p>Flex flow</p><div class="absolute">Flex</div></div><div class="track">Peer</div></div><div class="grid"><div class="track"><p>Grid flow</p><div class="absolute">Grid</div></div><div class="track">Peer</div></div></body></html>

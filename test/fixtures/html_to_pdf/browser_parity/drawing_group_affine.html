@@ -1,0 +1,31 @@
+<!doctype html><html><head><meta charset="UTF-8"><style>
+@page { size: 240pt 180pt; margin: 0; }
+html,body { margin:0; padding:0; }
+svg { display:block; width:240pt; height:180pt; }
+text { font-family:"DejaVu Sans"; font-size:12px; }
+</style></head><body>
+<!-- Direct native writer reference, expressed in genuine SVG point coordinates.
+     The root flips the PDF coordinate plane; each text flips its own glyphs. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180">
+<defs><clipPath id="panel"><rect width="60" height="45"/></clipPath>
+<clipPath id="nested"><rect width="24" height="28"/></clipPath></defs>
+<g transform="translate(0 180) scale(1 -1)">
+<g transform="matrix(0 1 -1 0 90 15)" clip-path="url(#panel)">
+<rect x="-5" y="-5" width="75" height="60" fill="#eef4f8"/>
+<a href="https://example.com/rotation"><text transform="scale(1 -1)" x="3" y="-8">Rotated N</text></a>
+<rect x="3" y="20" width="48" height="8" fill="#2878c8"/>
+</g>
+<g transform="matrix(1 .25 .5 1 105 20)" clip-path="url(#panel)">
+<rect x="-5" y="-5" width="75" height="60" fill="#f7efe6"/>
+<a href="https://example.com/shear"><text transform="scale(1 -1)" x="3" y="-8">Sheared N</text></a>
+<g transform="matrix(0 1 -1 0 50 16)" clip-path="url(#nested)">
+<a href="https://example.com/image"><image width="60" height="40" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC" preserveAspectRatio="none"/></a>
+</g>
+</g>
+<g transform="matrix(-1 0 0 1 105 110)" clip-path="url(#panel)">
+<rect x="-5" y="-5" width="75" height="60" fill="#eaf0dc"/>
+<a href="https://example.com/reflection"><text transform="scale(1 -1)" x="3" y="-8">Reflected N</text></a>
+<rect x="3" y="20" width="48" height="8" fill="#567742"/>
+</g>
+<text transform="scale(1 -1)" x="125" y="-125">Sibling N</text>
+</g></svg></body></html>

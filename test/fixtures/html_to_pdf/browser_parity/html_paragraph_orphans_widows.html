@@ -1,0 +1,14 @@
+<!doctype html><html lang=en-US><head><style>
+@page {size:200pt 100pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:12pt;}
+p {margin:0;}
+</style></head><body>
+<div style=height:88pt>Before short paragraph</div>
+<p>Short1<br>Short2</p>
+<div style="break-before:page;height:88pt;orphans:1;widows:1;">Before explicit one</div>
+<p style="orphans:1;widows:1;">Single1<br>Single2</p>
+<div style="break-before:page;height:64pt;orphans:3;widows:3;">Before inherited three</div>
+<div style="orphans:3;widows:3;"><p>Inherited1<br>Inherited2<br>Inherited3<br>Inherited4<br>Inherited5<br>Inherited6<br>Inherited7<br>Inherited8</p></div>
+<div style=break-before:page>Oversized paragraph</div>
+<p style=widows:3>Long1<br>Long2<br>Long3<br>Long4<br>Long5<br>Long6<br>Long7<br>Long8<br>Long9<br>Long10</p>
+</body></html>

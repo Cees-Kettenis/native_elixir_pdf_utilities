@@ -1,0 +1,13 @@
+<!doctype html><html><head><style>
+@page {size:264pt 240pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt;}
+body {padding:12pt;}
+p {margin:0 0 6pt;}
+noscript.panel {display:block;border:1px solid #777;padding:3pt;margin:0 0 6pt;}
+input {display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;padding:1.5pt 3pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+</style><noscript><style>.fallback {color:#164e63;} noscript>b {color:#9a3412;}</style><meta name=author content="Fallback author"></noscript></head><body>
+<p>Before <noscript class=fallback>inline &amp; <b>bold fallback</b></noscript> after</p>
+<noscript class=panel><p>Active block fallback</p><input name=fallback value="Active initial field"></noscript>
+<template><noscript><p>Unused fallback</p><style>p{color:red}</style><img src=denied.png><input name=fallback value=Unused></noscript></template>
+<p>After unused template fallback</p>
+</body></html>

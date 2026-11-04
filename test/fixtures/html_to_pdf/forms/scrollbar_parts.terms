@@ -1,0 +1,280 @@
+[
+  {%{
+     vertical: true,
+     horizontal: false,
+     client_width: 138.75,
+     viewport_height: 75.0,
+     client_height: 75.0,
+     viewport_width: 150.0,
+     scroll_height: 225.0,
+     scroll_width: 300.0
+   },
+   [
+     %{
+       x: 138.75,
+       y: 0.0,
+       width: 11.25,
+       kind: :track,
+       height: 75.0,
+       border_radius: 0.0
+     },
+     %{
+       x: 141.0,
+       y: 66.75,
+       width: 6.75,
+       kind: :arrow,
+       direction: :up,
+       height: 3.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 138.75, y: 61.5, width: 11.25, height: 13.5}
+     },
+     %{
+       x: 141.0,
+       y: 5.25,
+       width: 6.75,
+       kind: :arrow,
+       direction: :down,
+       height: 3.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 138.75, y: 0.0, width: 11.25, height: 13.5}
+     },
+     %{
+       x: 141.0,
+       y: 45.75,
+       width: 6.75,
+       kind: :thumb,
+       height: 15.75,
+       border_radius: 3.375
+     }
+   ]},
+  {%{
+     vertical: false,
+     horizontal: true,
+     client_width: 150.0,
+     viewport_height: 75.0,
+     client_height: 63.75,
+     viewport_width: 150.0,
+     scroll_height: 225.0,
+     scroll_width: 300.0
+   },
+   [
+     %{
+       x: 0.0,
+       y: 0.0,
+       width: 150.0,
+       kind: :track,
+       height: 11.25,
+       border_radius: 0.0
+     },
+     %{
+       x: 3.75,
+       y: 2.25,
+       width: 3.75,
+       kind: :arrow,
+       direction: :left,
+       height: 6.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 0.0, y: 0.0, width: 13.5, height: 11.25}
+     },
+     %{
+       x: 141.75,
+       y: 2.25,
+       width: 3.75,
+       kind: :arrow,
+       direction: :right,
+       height: 6.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 136.5, y: 0.0, width: 13.5, height: 11.25}
+     },
+     %{
+       x: 13.5,
+       y: 2.25,
+       width: 61.5,
+       kind: :thumb,
+       height: 6.75,
+       border_radius: 3.375
+     }
+   ]},
+  {%{
+     vertical: true,
+     horizontal: true,
+     client_width: 138.75,
+     viewport_height: 75.0,
+     client_height: 63.75,
+     viewport_width: 150.0,
+     scroll_height: 225.0,
+     scroll_width: 300.0
+   },
+   [
+     %{
+       x: 138.75,
+       y: 11.25,
+       width: 11.25,
+       kind: :track,
+       height: 63.75,
+       border_radius: 0.0
+     },
+     %{
+       x: 141.0,
+       y: 66.75,
+       width: 6.75,
+       kind: :arrow,
+       direction: :up,
+       height: 3.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 138.75, y: 61.5, width: 11.25, height: 13.5}
+     },
+     %{
+       x: 141.0,
+       y: 16.5,
+       width: 6.75,
+       kind: :arrow,
+       direction: :down,
+       height: 3.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 138.75, y: 11.25, width: 11.25, height: 13.5}
+     },
+     %{
+       x: 141.0,
+       y: 48.75,
+       width: 6.75,
+       kind: :thumb,
+       height: 12.75,
+       border_radius: 3.375
+     },
+     %{
+       x: 0.0,
+       y: 0.0,
+       width: 138.75,
+       kind: :track,
+       height: 11.25,
+       border_radius: 0.0
+     },
+     %{
+       x: 3.75,
+       y: 2.25,
+       width: 3.75,
+       kind: :arrow,
+       direction: :left,
+       height: 6.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 0.0, y: 0.0, width: 13.5, height: 11.25}
+     },
+     %{
+       x: 130.5,
+       y: 2.25,
+       width: 3.75,
+       kind: :arrow,
+       direction: :right,
+       height: 6.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 125.25, y: 0.0, width: 13.5, height: 11.25}
+     },
+     %{
+       x: 13.5,
+       y: 2.25,
+       width: 51.75,
+       kind: :thumb,
+       height: 6.75,
+       border_radius: 3.375
+     },
+     %{
+       x: 138.75,
+       y: 0.0,
+       width: 11.25,
+       kind: :track,
+       height: 11.25,
+       border_radius: 0.0
+     }
+   ]},
+  {%{
+     vertical: true,
+     horizontal: true,
+     client_width: 0,
+     viewport_height: 3.0,
+     client_height: 0,
+     viewport_width: 2.0,
+     scroll_height: 11.25,
+     scroll_width: 11.25
+   },
+   [
+     %{
+       x: 0,
+       y: -8.25,
+       width: 11.25,
+       kind: :track,
+       height: 11.25,
+       border_radius: 0.0
+     }
+   ]},
+  {%{
+     vertical: true,
+     horizontal: false,
+     client_width: 3.75,
+     viewport_height: 18.0,
+     client_height: 18.0,
+     viewport_width: 15.0,
+     scroll_height: 54.0,
+     scroll_width: 30.0
+   },
+   [
+     %{
+       x: 3.75,
+       y: 0.0,
+       width: 11.25,
+       kind: :track,
+       height: 18.0,
+       border_radius: 0.0
+     },
+     %{
+       x: 6.0,
+       y: 12.0,
+       width: 6.0,
+       kind: :arrow,
+       direction: :up,
+       height: 3.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 3.75, y: 9.0, width: 11.25, height: 9.0}
+     },
+     %{
+       x: 6.0,
+       y: 2.25,
+       width: 6.0,
+       kind: :arrow,
+       direction: :down,
+       height: 3.75,
+       border_radius: 0.0,
+       paint_clip: %{x: 3.75, y: 0.0, width: 11.25, height: 9.0}
+     }
+   ]},
+  {%{
+     vertical: false,
+     horizontal: false,
+     client_width: 0.0,
+     viewport_height: 0.0,
+     client_height: 0.0,
+     viewport_width: 0.0,
+     scroll_height: 11.25,
+     scroll_width: 11.25
+   }, []},
+  {%{
+     vertical: true,
+     horizontal: false,
+     client_width: 0,
+     viewport_height: 0.5,
+     client_height: 0.5,
+     viewport_width: 0.5,
+     scroll_height: 11.25,
+     scroll_width: 11.25
+   },
+   [
+     %{
+       x: -10.75,
+       y: 0.0,
+       width: 11.25,
+       kind: :track,
+       height: 0.5,
+       border_radius: 0.0
+     }
+   ]}
+]

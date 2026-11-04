@@ -1,0 +1,27 @@
+<!doctype html><html><head><style>
+@page {size:264pt 360pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:12pt}
+h1,h2,h3,h4,h5,h6 {font-size:10pt;line-height:12pt;margin:0 0 4pt}
+p {margin:0 0 4pt}
+x-box {display:block}
+.flex {display:flex;gap:8pt}
+.grid {display:grid;grid-template-columns:100pt 100pt;gap:4pt}
+</style></head><body>
+<h1>Root heading</h1>
+<x-box headingoffset="2"><h1>Offset child</h1><h2>Offset grandchild</h2>
+<section headingoffset="1"><h3>Nested sum</h3><h6>Level nine cap</h6></section>
+<div headingoffset="1" headingreset="false"><h2>Inclusive reset</h2></div>
+<h1 headingoffset="invalid">Invalid inherits</h1><h1 headingoffset="-3">Negative inherits</h1>
+<h1 headingoffset=" +03tail">Integer prefix</h1>
+</x-box>
+<div headingoffset="4"><h2 headingreset>Reset without offset</h2></div>
+<div headingoffset="2" class="flex"><h1>Flex heading</h1><h2>Flex child</h2></div>
+<div headingoffset="2" class="grid"><h1>Grid heading</h1><h2>Grid child</h2></div>
+<div headingoffset="2">Before<h1>Anonymous block heading</h1>After</div>
+<h1 headingoffset="1"><a href="https://example.com/heading">Linked <strong>heading</strong></a></h1>
+<h1 inert headingoffset="1">Inert printed heading</h1>
+<h1 hidden headingoffset="8">Hidden heading</h1><template><h1 headingoffset="8">Template heading</h1></template>
+<div headingoffset="2"><h1 style="display:inline">Inline <strong>heading</strong></h1> tail</div>
+<div headingoffset="2"><h2 style="display:inline-block">Atomic heading</h2></div>
+<h1>Final root</h1>
+</body></html>

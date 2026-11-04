@@ -1,0 +1,16 @@
+<!doctype html><html><head><style>
+@page {size:300pt 420pt;margin:12pt;}
+html,body {margin:0;padding:0;}
+body {font-family:"DejaVu Sans";font-size:9pt;line-height:12pt;}
+p {margin:0 0 9pt;}
+table {width:240pt;table-layout:fixed;border-collapse:collapse;margin:0 0 12pt;}
+td,th {padding:3pt;border:.75pt solid #555;vertical-align:top;text-align:left;}
+a {color:black;text-decoration:none;}
+</style></head><body>
+<p>Header associations before.</p><span hidden id="blocked">Hidden blocker</span>
+<table><thead><tr><th id="code" scope="invalid" abbr="C">Code</th><th id="quantity" scope="col">Quantity</th><th id="blocked">Description</th></tr></thead>
+<tbody><tr><th id="row" scope="row">Part A</th><td headers="quantity quantity row">12</td><td headers="blocked code"><a href="https://example.com/headers">Explicit linked</a></td></tr><tr><th scope="row">Part B</th><td>24</td><td>Automatic value</td></tr></tbody></table>
+<table><colgroup><col span="2"></colgroup><colgroup></colgroup><thead><tr><th scope="colgroup" colspan="2">Main group</th><th scope="col">Extra</th></tr></thead>
+<tbody><tr><th scope="rowgroup" rowspan="0">Row group</th><td>First data</td><td>Extra first</td></tr><tr><td>Last data</td><td>Extra last</td></tr></tbody></table>
+<table><tbody><tr><td rowspan="4">Positive clipped</td><td>Logical implied</td></tr></tbody><tbody><tr><td>Next visible</td><td>Next neighbor</td></tr></tbody></table>
+<p>Header associations after.</p></body></html>

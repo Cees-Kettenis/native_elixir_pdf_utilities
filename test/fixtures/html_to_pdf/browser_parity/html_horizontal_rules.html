@@ -1,0 +1,53 @@
+<!doctype html><html><head><style>
+@page {size:420pt 1400pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:13pt;line-height:16.5pt;}
+p {margin:0;}
+</style></head><body><p>Horizontal rule semantics</p>
+<p>Rule case 1: Default</p><hr >
+<p>Rule case 2: Named color</p><hr color=RebeccaPurple>
+<p>Rule case 3: Legacy word</p><hr color=chucknorris>
+<p>Rule case 4: Short hex</p><hr color=#abc>
+<p>Rule case 5: Long hex</p><hr color=#abcdef12>
+<p>Rule case 6: Transparent color</p><hr color=transparent>
+<p>Rule case 7: Empty color</p><hr color="">
+<p>Rule case 8: Boolean presence</p><hr noshade=false>
+<p>Rule case 9: Shaded size one</p><hr size=1>
+<p>Rule case 10: Shaded size five</p><hr size=5>
+<p>Rule case 11: Shaded size zero</p><hr size=0>
+<p>Rule case 12: Solid size zero</p><hr noshade size=0>
+<p>Rule case 13: Solid size one</p><hr noshade size=1>
+<p>Rule case 14: Solid size three</p><hr noshade size=3>
+<p>Rule case 15: Solid size eight</p><hr color=red size=8>
+<p>Rule case 16: Integer prefix</p><hr size="+5trailing">
+<p>Rule case 17: Invalid size</p><hr size="-1">
+<p>Rule case 18: Left quarter</p><hr align=LEFT width=25%>
+<p>Rule case 19: Right points</p><hr align=right width=80>
+<p>Rule case 20: Center</p><hr align=center width=40%>
+<p>Rule case 21: Spaced alignment default</p><hr align=" left " width=40%>
+<p>Rule case 22: Author overrides</p><hr color=red noshade size=8 width=90 align=right style="width:40pt;margin:1pt 2pt 3pt 4pt;color:blue;border:2pt dashed green;overflow:visible">
+<p>Repeated rules begin</p>
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<hr width="35%" color="navy" size="3">
+<p>Repeated rules end</p><p>Nested rule follows</p><div style="padding:3pt;border:0.75pt solid #bbb"><hr align="right" width="40%" color="goldenrod"></div>
+<hr hidden><hr style="display:none"><p>Hidden rules occupy no space</p>
+<select style="font-family:DejaVu Sans;font-size:13pt"><optgroup label="Group"><option>First<hr><option selected>Second</select>
+<p>End of horizontal rules</p>
+</body></html>

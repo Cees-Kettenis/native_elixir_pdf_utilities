@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page{size:440px 255px;margin:12px}html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12px;line-height:18px}p{margin:0}svg{display:block;width:400px;height:210px;font-size:30px}
+</style></head><body><p>Original selected glyph strokes share actual scene paint</p><svg viewBox="0 0 400 210"><defs>
+<linearGradient id="ramp" gradientUnits="userSpaceOnUse" x1="8" x2="320"><stop offset="0" stop-color="#df2433"/><stop offset=".4" stop-color="#21935b"/><stop offset="1" stop-color="#244bdc"/></linearGradient>
+<linearGradient id="alpha" spreadMethod="reflect" x1="0" x2=".3" gradientTransform="rotate(7)"><stop offset="0" stop-color="#df2433" stop-opacity=".3"/><stop offset="1" stop-color="#244bdc" stop-opacity=".9"/></linearGradient>
+<radialGradient id="radial" cx=".4" cy=".5" r=".65"><stop offset="0" stop-color="#21935b"/><stop offset="1" stop-color="#244bdc"/></radialGradient>
+<pattern id="bands" patternUnits="userSpaceOnUse" x="-3" y="2" width="12" height="10" patternTransform="rotate(-8)"><rect width="12" height="10" fill="#287445"/><rect width="6" height="10" fill="#e0c974"/></pattern>
+<clipPath id="clip"><rect x="4" y="2" width="390" height="206"/></clipPath>
+</defs><g clip-path="url(#clip)"><text x="8" y="40" fill="none" stroke="url(#ramp)" stroke-width="2">Source stroke office Ω</text>
+<g transform="translate(3 2) skewX(8)"><text x="8" y="88" fill="#f4e2bc" stroke="url(#radial)" stroke-width="2" paint-order="stroke fill">Radial café Ω</text></g>
+<text x="8" y="138" fill="none" stroke="url(#alpha)" stroke-width="2" stroke-opacity=".8">Alpha stroke ffi Ω</text>
+<text x="8" y="188" fill="none" stroke="url(#bands)" stroke-width="2">Pattern stroke café Ω</text></g></svg></body></html>

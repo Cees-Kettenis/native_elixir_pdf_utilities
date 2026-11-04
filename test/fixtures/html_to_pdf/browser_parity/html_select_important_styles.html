@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><style>
+@page {size:300pt 220pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+select {display:block;margin:0 0 8pt;font-family:"DejaVu Sans";font-size:10pt}
+.inline-width {width:180px!important}
+.rule-width {width:120px!important}
+.paint {width:160px;background:#e0e7ff!important;border:2px solid #1d4ed8!important}
+.base {appearance:base-select;width:160px;height:28px;padding:2px 4px;border:1px solid #767676;border-radius:0;background:white}
+.base::picker-icon {display:none}
+.rule-color {color:red!important}
+.inline-color {color:blue!important}
+</style></head><body>
+<select class="inline-width" style="width:120px!important"><option>Inline width</option></select>
+<select class="rule-width" style="width:180px"><option>Stylesheet width</option></select>
+<select class="paint"><option>Authored paint</option></select>
+<select disabled class="base rule-color" style="color:blue"><option>Stylesheet color</option></select>
+<select disabled class="base inline-color" style="color:red!important"><option>Inline color</option></select>
+<select disabled class="base" style="width:160px!important"><option>Default disabled color</option></select>
+</body></html>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><style>
+@page { size:264pt 360pt; margin:0; }
+html,body { margin:0; padding:0; }
+body { padding:12pt; font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+input,button { display:block; width:180pt; box-sizing:border-box;
+ border:1px solid #777777; background:#f0f0f0; padding:1.5pt 3pt; margin:0 0 6pt;
+ font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; border-radius:0; }
+input[type=submit] { color:#21517b; }
+input[type=reset] { color:#993300; }
+input[disabled] { color:#666666; background:#f4f4f4; }
+button[value] { color:#21517b; }
+.left { text-align:left; }
+</style></head><body>
+<input type="submit" name="submit">
+<input type="RESET" name="reset">
+<input type="button" value="Authored button label">
+<input type="SuBmIt" value="Authored submit label" class="left">
+<input type="reset" disabled="false" value="Disabled reset label">
+<input type="button" value="">
+<input type="submit" value="">
+<input type="reset" value="">
+<button value="Submission value">Child label</button>
+<button value="Unprinted value"></button>
+<input type="button" value=" A  B ">
+<input type="submit" value="Line&#10;Two">
+</body></html>

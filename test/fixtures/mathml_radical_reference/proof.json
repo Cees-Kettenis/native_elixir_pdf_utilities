@@ -1,0 +1,62 @@
+{
+  "activation": false,
+  "reversible_source_sha256": "cc76de79b7b35335a26c78ffe0efa09a5832b31cc5f6798d72365602ce042666",
+  "independent_rational_geometry_cases": 4,
+  "source_outlines_hints_advances_verified": true,
+  "linked_tree_byte_identical": true,
+  "new_outer_display_overrides": 4,
+  "reference_font_sha256": "57c71736ad6f2fffbb9cd1d4c4ca23dd8f5a90b0aed048246ba981a89379439f",
+  "fonttools_version": "4.60.1",
+  "source_gpos_default_latn_pair_proofs": [
+    {
+      "left": 1138,
+      "right": 1143,
+      "script": "latn",
+      "design_advance": 0,
+      "feature_index": 3,
+      "feature": "kern",
+      "lookups": [
+        {
+          "lookup": 0,
+          "match": null
+        },
+        {
+          "lookup": 3,
+          "match": null
+        }
+      ]
+    },
+    {
+      "left": 1138,
+      "right": 1139,
+      "script": "latn",
+      "design_advance": 0,
+      "feature_index": 3,
+      "feature": "kern",
+      "lookups": [
+        {
+          "lookup": 0,
+          "match": null
+        },
+        {
+          "lookup": 3,
+          "match": null
+        }
+      ]
+    }
+  ],
+  "complete_and_fragments_css_source_geometry_verified": [
+    {
+      "glyphs": 16,
+      "rules": 6,
+      "witnesses": 4,
+      "outer_dimensions": 4
+    },
+    {
+      "glyphs": 16,
+      "rules": 6,
+      "witnesses": 4,
+      "outer_dimensions": 4
+    }
+  ]
+}

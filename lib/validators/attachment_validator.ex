@@ -8,14 +8,20 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   @doc false
   @spec prepare(term(), term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
   def prepare(attachments, opts) do
+    count =
+      NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+        attachments,
+        Limits.get(:max_pdf_attachments)
+      )
+
     cond do
       opts != [] ->
         error("attachment options must be an empty keyword list")
 
-      not is_list(attachments) ->
+      count == :invalid ->
         error("attachments must be a list of maps")
 
-      length(attachments) > Limits.get(:max_pdf_attachments) ->
+      count == :limit_exceeded ->
         limit("attachment count exceeds max_pdf_attachments")
 
       true ->
@@ -43,22 +49,32 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   def inspect_document(context) do
     document = context.document
 
-    with {:ok, names} <- PdfValidator.dictionary(document, Map.get(context.catalog, "Names", %{})),
+    with {:ok, names_value} <-
+           PdfValidator.optional_entry(document, context.catalog, "Names", %{}),
+         {:ok, names} <- PdfValidator.dictionary(document, names_value),
          {:ok, entries, _seen} <-
            name_tree(document, Map.get(names, "EmbeddedFiles"), MapSet.new(), 0),
          true <- length(entries) <= Limits.get(:max_pdf_attachments),
          true <- length(Enum.uniq_by(entries, &elem(&1, 0))) == length(entries) do
       Enum.reduce_while(entries, {:ok, [], 0}, fn {name, value}, {:ok, files, total} ->
         with {:ok, spec} <- PdfValidator.dictionary(document, value),
-             {:ok, filename} <- text(Map.get(spec, "UF", Map.get(spec, "F"))),
-             {:ok, description} <- text(Map.get(spec, "Desc", {:string, ""})),
+             {:ok, filename_value} <-
+               PdfValidator.optional_entry(document, spec, "UF", Map.get(spec, "F")),
+             {:ok, filename_value} <- PdfValidator.resolve(document, filename_value),
+             {:ok, filename} <- text(filename_value),
+             {:ok, description_value} <-
+               PdfValidator.optional_entry(document, spec, "Desc", {:string, ""}),
+             {:ok, description} <- text(description_value),
              {:ok, ef} <- PdfValidator.dictionary(document, Map.get(spec, "EF")),
              {:ok, stream} <-
                PdfValidator.validate_stream(document, Map.get(ef, "UF", Map.get(ef, "F"))),
-             {:ok, params} <-
-               PdfValidator.dictionary(document, Map.get(stream.dictionary, "Params", %{})),
-             {:ok, mime} <- existing_mime(Map.get(stream.dictionary, "Subtype")),
-             size <- Map.get(params, "Size"),
+             {:ok, params_value} <-
+               PdfValidator.optional_entry(document, stream.dictionary, "Params", %{}),
+             {:ok, params} <- PdfValidator.dictionary(document, params_value),
+             {:ok, subtype} <-
+               PdfValidator.resolve(document, Map.get(stream.dictionary, "Subtype")),
+             {:ok, mime} <- existing_mime(subtype),
+             {:ok, size} <- PdfValidator.resolve(document, Map.get(params, "Size")),
              true <- is_nil(size) or (is_integer(size) and size >= 0),
              :ok <- byte_budget(total + byte_size(stream.stream)) do
           file = %{

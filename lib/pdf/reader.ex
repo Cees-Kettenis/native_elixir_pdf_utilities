@@ -13,6 +13,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   import Bitwise
 
+  # The 256-byte alphabet is fixed by LZW, not a configurable resource ceiling.
+  @lzw_initial_dictionary Map.new(0..255, fn value -> {value, <<value>>} end)
+
   @type ref :: {non_neg_integer(), non_neg_integer()}
   @type value ::
           nil
@@ -47,7 +50,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           | {:compressed, pos_integer(), non_neg_integer()}
   @type probe_context :: PdfValidator.probe_context()
   @type error_reason ::
-          :encrypted_pdf
+          :operation_worker_failed
+          | :encrypted_pdf
           | :invalid_pdf_input
           | :unsupported_pdf_feature
           | :resource_limit_exceeded
@@ -57,10 +61,73 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   """
   @spec read(binary()) :: {:ok, document()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def read(pdf) do
-    with {:ok, context} <- read_validated(pdf) do
-      {:ok, context.document}
-    end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      with {:ok, context} <- read_validated(pdf) do
+        {:ok, context.document}
+      end
+    end)
   end
+
+  @doc false
+  @spec parse_object_bodies(term()) ::
+          {:ok, [NativeElixirPdfUtilities.Pdf.IncrementalWriter.object_entry()]}
+          | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def parse_object_bodies(objects) do
+    PdfValidator.with_reader_budget(fn ->
+      with {:ok, objects} <-
+             PdfValidator.prepare_object_bodies(objects, operation: :read, module: __MODULE__) do
+        Enum.reduce_while(objects, {:ok, []}, fn {id, serialized}, {:ok, entries} ->
+          result =
+            with tokens when is_list(tokens) <-
+                   Tokenizer.new(serialized) |> Tokenizer.tokenize_all(),
+                 {:ok, value, rest} <- parse_value(tokens),
+                 {:ok, stream, remaining_tokens} <- parse_optional_stream(rest),
+                 :ok <-
+                   PdfValidator.validate_object_body(value, stream, remaining_tokens,
+                     operation: :read,
+                     module: __MODULE__,
+                     source: "object #{id} 0"
+                   ) do
+              body =
+                if is_binary(stream),
+                  do: {:stream, Map.delete(value, "Length"), stream},
+                  else: {:value, value}
+
+              {:ok, {id, 0, body}}
+            else
+              {:error, {_reason, _diagnostic}} = failure ->
+                tokenizer_error(failure, :object)
+
+              _ ->
+                error(
+                  :object,
+                  :invalid_pdf_input,
+                  "serialized object body has malformed or trailing data"
+                )
+            end
+
+          case result do
+            {:ok, entry} ->
+              {:cont, {:ok, [entry | entries]}}
+
+            {:error, {reason, diagnostic}} ->
+              {:halt, {:error, {reason, Map.put(diagnostic, :source, "object #{id} 0")}}}
+          end
+        end)
+        |> case do
+          {:ok, entries} -> {:ok, Enum.reverse(entries)}
+          failure -> failure
+        end
+      end
+    end)
+  end
+
+  @doc false
+  @spec parse_value_tokens([Tokenizer.token()]) ::
+          {:ok, value(), [Tokenizer.token()]}
+          | :error
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_value_tokens(tokens), do: parse_value(tokens)
 
   @doc """
   Parses and semantically validates a PDF into a reusable prepared context.
@@ -72,33 +139,35 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           {:ok, PdfValidator.context()}
           | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def read_validated(pdf) do
-    PdfValidator.with_reader_budget(fn ->
-      with {:ok, probe} <- probe(pdf),
-           :ok <-
-             PdfValidator.validate_unencrypted(probe.trailer,
-               operation: :read,
-               module: __MODULE__
-             ),
-           xref = probe.xref,
-           trailer = probe.trailer,
-           {:ok, objects} <- load_objects(pdf, xref),
-           {:ok, context} <-
-             PdfValidator.validate(
-               %{
-                 binary: pdf,
-                 objects: objects,
-                 trailer: trailer,
-                 xref: xref,
-                 xref_offset: probe.xref_offset,
-                 xref_revisions: probe.xref_revisions
-               },
-               operation: :read,
-               module: __MODULE__
-             ) do
-        {:ok, context}
-      else
-        {:error, {_reason, _diagnostic}} = reader_error -> reader_error
-      end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      PdfValidator.with_reader_budget(fn ->
+        with {:ok, probe} <- probe(pdf),
+             :ok <-
+               PdfValidator.validate_unencrypted(probe.trailer,
+                 operation: :read,
+                 module: __MODULE__
+               ),
+             xref = probe.xref,
+             trailer = probe.trailer,
+             {:ok, objects} <- load_objects(pdf, xref),
+             {:ok, context} <-
+               PdfValidator.validate(
+                 %{
+                   binary: pdf,
+                   objects: objects,
+                   trailer: trailer,
+                   xref: xref,
+                   xref_offset: probe.xref_offset,
+                   xref_revisions: probe.xref_revisions
+                 },
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          {:ok, context}
+        else
+          {:error, {_reason, _diagnostic}} = reader_error -> reader_error
+        end
+      end)
     end)
   end
 
@@ -106,27 +175,29 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @spec probe(term()) ::
           {:ok, probe_context()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def probe(pdf) do
-    PdfValidator.with_reader_budget(fn ->
-      with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
-           {:ok, xref_offset} <- final_xref_offset(pdf),
-           {:ok, xref, trailer, revisions} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
-           :ok <-
-             PdfValidator.validate_xref_structure(xref, trailer, pdf,
-               operation: :read,
-               module: __MODULE__
-             ) do
-        {:ok,
-         %{
-           binary: pdf,
-           xref_offset: xref_offset,
-           xref_revisions: revisions,
-           xref: xref,
-           trailer: trailer,
-           encrypted?: not is_nil(Map.get(trailer, "Encrypt"))
-         }}
-      else
-        {:error, {_reason, _diagnostic}} = reader_error -> reader_error
-      end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      PdfValidator.with_reader_budget(fn ->
+        with :ok <- PdfValidator.validate_input(pdf, operation: :read, module: __MODULE__),
+             {:ok, xref_offset} <- final_xref_offset(pdf),
+             {:ok, xref, trailer, revisions} <- parse_xref_chain(pdf, xref_offset, %{}, 0),
+             :ok <-
+               PdfValidator.validate_xref_structure(xref, trailer, pdf,
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          {:ok,
+           %{
+             binary: pdf,
+             xref_offset: xref_offset,
+             xref_revisions: revisions,
+             xref: xref,
+             trailer: trailer,
+             encrypted?: not is_nil(Map.get(trailer, "Encrypt"))
+           }}
+        else
+          {:error, {_reason, _diagnostic}} = reader_error -> reader_error
+        end
+      end)
     end)
   end
 
@@ -141,18 +212,23 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
   @doc """
   Resolves an indirect stream and decodes its declared filters.
+
+  Standalone calls run in a bounded operation worker. Nested calls share the
+  owning operation's deadline, memory allowance, and active reader budget.
   """
   @spec decoded_stream(document(), value()) ::
           {:ok, binary()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def decoded_stream(document, value) do
-    PdfValidator.with_reader_budget(fn ->
-      with {:ok, stream_context} <-
-             PdfValidator.prepare_decoded_stream(document, value,
-               operation: :read,
-               module: __MODULE__
-             ) do
-        decode_stream(stream_context.stream, stream_context.filters, stream_context.ref)
-      end
+    NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
+      PdfValidator.with_reader_budget(fn ->
+        with {:ok, stream_context} <-
+               PdfValidator.prepare_decoded_stream(document, value,
+                 operation: :read,
+                 module: __MODULE__
+               ) do
+          decode_stream(stream_context.stream, stream_context.filters, stream_context.ref)
+        end
+      end)
     end)
   end
 
@@ -215,25 +291,20 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_xref_chain(pdf, offset, seen, depth) do
-    cond do
-      Map.has_key?(seen, offset) ->
-        error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle")
-
-      depth >= Limits.get(:max_pdf_xref_revisions) ->
-        error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit")
-
-      true ->
-        with {:ok, entries, trailer} <- parse_xref_revision(pdf, offset),
-             {:ok, previous_entries, previous_trailer, revisions} <-
-               previous_xref_revision(
-                 pdf,
-                 Map.get(trailer, "Prev"),
-                 Map.put(seen, offset, true),
-                 depth
-               ) do
-          {:ok, Map.merge(previous_entries, entries), Map.merge(previous_trailer, trailer),
-           revisions}
-        end
+    with :ok <-
+           PdfValidator.validate_xref_revision(offset, seen, depth,
+             operation: :read,
+             module: __MODULE__
+           ),
+         {:ok, entries, trailer} <- parse_xref_revision(pdf, offset),
+         {:ok, previous_entries, previous_trailer, revisions} <-
+           previous_xref_revision(
+             pdf,
+             Map.get(trailer, "Prev"),
+             Map.put(seen, offset, true),
+             depth
+           ) do
+      {:ok, Map.merge(previous_entries, entries), Map.merge(previous_trailer, trailer), revisions}
     end
   end
 
@@ -330,8 +401,6 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_classic_sections(tokens, entries) do
-    max_objects = Limits.get(:max_pdf_objects)
-
     case tokens do
       [:trailer | rest] ->
         with {:ok, trailer, _rest} <- parse_value(rest),
@@ -343,8 +412,15 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         end
 
       [{:int, first}, {:int, count} | rest]
-      when first >= 0 and count >= 0 and first + count <= max_objects + 1 ->
-        with {:ok, entries, rest} <- parse_classic_entries(rest, first, count, entries) do
+      when first >= 0 and count >= 0 ->
+        with :ok <-
+               PdfValidator.validate_object_capacity(
+                 map_size(entries) + count,
+                 max(first + count, 1),
+                 operation: :read,
+                 module: __MODULE__
+               ),
+             {:ok, entries, rest} <- parse_classic_entries(rest, first, count, entries) do
           parse_classic_sections(rest, entries)
         end
 
@@ -583,9 +659,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     size = Map.get(dictionary, "Size")
     widths = Map.get(dictionary, "W")
     index = Map.get(dictionary, "Index", if(is_integer(size), do: [0, size], else: nil))
-    max_objects = Limits.get(:max_pdf_objects)
 
-    with true <- is_integer(size) and size > 0 and size <= max_objects + 1,
+    with :ok <-
+           PdfValidator.validate_object_capacity(0, size, operation: :read, module: __MODULE__),
          [type_width, field_width, generation_width] <- widths,
          true <-
            Enum.all?(
@@ -623,15 +699,23 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
             [first, count]
             when is_integer(first) and first >= 0 and is_integer(count) and count >= 0 and
                    first + count <= size ->
-              PdfValidator.charge_reader_budget(:max_pdf_reader_values, count)
-              range = if count == 0, do: [], else: Enum.to_list(first..(first + count - 1))
+              with :ok <-
+                     PdfValidator.validate_object_capacity(MapSet.size(seen) + count, size,
+                       operation: :read,
+                       module: __MODULE__
+                     ) do
+                PdfValidator.charge_reader_budget(:max_pdf_reader_values, count)
+                range = if count == 0, do: [], else: Enum.to_list(first..(first + count - 1))
 
-              if Enum.any?(range, &MapSet.member?(seen, &1)) do
-                {:halt, error(:xref, :invalid_pdf_input, "xref stream Index ranges overlap")}
+                if Enum.any?(range, &MapSet.member?(seen, &1)) do
+                  {:halt, error(:xref, :invalid_pdf_input, "xref stream Index ranges overlap")}
+                else
+                  {:cont,
+                   {:ok, Enum.reverse(range, objects),
+                    Enum.reduce(range, seen, &MapSet.put(&2, &1))}}
+                end
               else
-                {:cont,
-                 {:ok, Enum.reverse(range, objects),
-                  Enum.reduce(range, seen, &MapSet.put(&2, &1))}}
+                {:error, _} = capacity_error -> {:halt, capacity_error}
               end
 
             _ ->
@@ -723,7 +807,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                  operation: :read,
                  module: __MODULE__
                ) do
-          parse_array(rest, [], depth + 1, 0)
+          parse_array(rest, [], depth + 1, 0, Limits.effective())
         end
 
       [:dict_start | rest] ->
@@ -732,7 +816,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                  operation: :read,
                  module: __MODULE__
                ) do
-          parse_dictionary(rest, %{}, depth + 1, 0)
+          parse_dictionary(rest, %{}, depth + 1, 0, Limits.effective())
         end
 
       _ ->
@@ -740,28 +824,38 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     end
   end
 
-  defp parse_array(tokens, values, depth, count) do
+  defp parse_array(tokens, values, depth, count, limits) do
     case tokens do
       [:rbracket | rest] ->
         {:ok, Enum.reverse(values), rest}
 
       _ ->
-        with :ok <- PdfValidator.validate_reader_size(count + 1, :max_pdf_container_entries),
+        with :ok <-
+               PdfValidator.validate_container_entries(
+                 count + 1,
+                 [operation: :read, module: __MODULE__],
+                 limits
+               ),
              {:ok, value, rest} <- parse_value(tokens, depth) do
-          parse_array(rest, [value | values], depth, count + 1)
+          parse_array(rest, [value | values], depth, count + 1, limits)
         end
     end
   end
 
-  defp parse_dictionary(tokens, dictionary, depth, count) do
+  defp parse_dictionary(tokens, dictionary, depth, count, limits) do
     case tokens do
       [:dict_end | rest] ->
         {:ok, dictionary, rest}
 
       [{:name, key} | rest] ->
-        with :ok <- PdfValidator.validate_reader_size(count + 1, :max_pdf_container_entries),
+        with :ok <-
+               PdfValidator.validate_container_entries(
+                 count + 1,
+                 [operation: :read, module: __MODULE__],
+                 limits
+               ),
              {:ok, value, rest} <- parse_value(rest, depth) do
-          parse_dictionary(rest, Map.put(dictionary, key, value), depth, count + 1)
+          parse_dictionary(rest, Map.put(dictionary, key, value), depth, count + 1, limits)
         end
 
       _ ->
@@ -928,33 +1022,39 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp materialize_indirect_streams(pdf, objects, selected?) do
-    Enum.reduce_while(objects, {:ok, %{}}, fn {ref, parsed}, {:ok, resolved} ->
-      case Map.pop(parsed, :pending_stream) do
-        {nil, parsed} ->
-          {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+    PdfValidator.with_reference_resolution([operation: :read, module: __MODULE__], fn opts ->
+      Enum.reduce_while(objects, {:ok, %{}}, fn {ref, parsed}, {:ok, resolved} ->
+        case Map.pop(parsed, :pending_stream) do
+          {nil, parsed} ->
+            {:cont, {:ok, Map.put(resolved, ref, parsed)}}
 
-        {source, parsed} ->
-          case selected?.(parsed) do
-            true ->
-              case materialize_indirect_stream(pdf, objects, ref, parsed, source) do
-                {:ok, parsed} -> {:cont, {:ok, Map.put(resolved, ref, parsed)}}
-                {:error, _} = stream_error -> {:halt, stream_error}
-              end
+          {source, parsed} ->
+            case selected?.(parsed) do
+              true ->
+                case materialize_indirect_stream(pdf, objects, ref, parsed, source, opts) do
+                  {:ok, parsed} -> {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+                  {:error, _} = stream_error -> {:halt, stream_error}
+                end
 
-            false ->
-              parsed = Map.put(parsed, :pending_stream, source)
-              {:cont, {:ok, Map.put(resolved, ref, parsed)}}
-          end
-      end
+              false ->
+                parsed = Map.put(parsed, :pending_stream, source)
+                {:cont, {:ok, Map.put(resolved, ref, parsed)}}
+            end
+        end
+      end)
     end)
   end
 
-  defp materialize_indirect_stream(pdf, objects, ref, parsed, source) do
+  defp materialize_indirect_stream(
+         pdf,
+         objects,
+         ref,
+         parsed,
+         source,
+         opts \\ [operation: :read, module: __MODULE__]
+       ) do
     result =
-      PdfValidator.resolve(%{objects: objects}, {:ref, source.length_ref},
-        operation: :read,
-        module: __MODULE__
-      )
+      PdfValidator.resolve(%{objects: objects}, {:ref, source.length_ref}, opts)
 
     case result do
       {:ok, length} when is_integer(length) and length >= 0 ->
@@ -983,6 +1083,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
               object: ref
             )
         end
+
+      {:error, {:resource_limit_exceeded, _}} = error ->
+        error
 
       _ ->
         error(
@@ -1136,7 +1239,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
     with {:ok, decoded} <-
            Enum.reduce_while(filters, {:ok, stream}, &decode_filter(&1, &2, ref)),
-         :ok <- validate_decoded_size(stream, decoded) do
+         :ok <-
+           PdfValidator.validate_decoded_stream_size(byte_size(stream), byte_size(decoded)) do
       {:ok, decoded}
     else
       {:error, _} = error -> error
@@ -1180,14 +1284,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     try do
       :ok = :zlib.inflateInit(zlib)
 
-      limit =
-        min(
-          min(
-            Limits.get(:max_pdf_decoded_stream_bytes),
-            PdfValidator.remaining_reader_decoded_bytes()
-          ),
-          max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
-        )
+      limit = PdfValidator.reader_decode_limit(byte_size(data))
 
       inflate_chunks(zlib, data, limit, 0, [], ref)
     rescue
@@ -1202,23 +1299,14 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
     {status, output} = :zlib.safeInflate(zlib, data)
     decoded_size = decoded_size + IO.iodata_length(output)
 
-    cond do
-      decoded_size > limit ->
-        decoded_stream_limit_error(ref)
-
-      status == :finished ->
+    with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
+      if status == :finished do
         :ok = :zlib.inflateEnd(zlib)
         {:ok, IO.iodata_to_binary(Enum.reverse([output | decoded]))}
-
-      true ->
+      else
         inflate_chunks(zlib, <<>>, limit, decoded_size, [output | decoded], ref)
+      end
     end
-  end
-
-  defp decoded_stream_limit_error(ref) do
-    error(:limits, :resource_limit_exceeded, "decoded stream exceeds its safety limit",
-      object: ref
-    )
   end
 
   defp ascii_hex(data, ref) do
@@ -1353,14 +1441,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp run_length(data, ref) do
-    limit =
-      min(
-        min(
-          Limits.get(:max_pdf_decoded_stream_bytes),
-          PdfValidator.remaining_reader_decoded_bytes()
-        ),
-        max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
-      )
+    limit = PdfValidator.reader_decode_limit(byte_size(data))
 
     decode_run_length(data, 0, limit, [], ref)
   end
@@ -1380,9 +1461,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           <<literal::binary-size(^count), rest::binary>> = rest
           decoded_size = decoded_size + count
 
-          if decoded_size > limit do
-            decoded_stream_limit_error(ref)
-          else
+          with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
             decode_run_length(rest, decoded_size, limit, [literal | acc], ref)
           end
         else
@@ -1395,9 +1474,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
         count = 257 - length
         decoded_size = decoded_size + count
 
-        if decoded_size > limit do
-          decoded_stream_limit_error(ref)
-        else
+        with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
           decode_run_length(
             rest,
             decoded_size,
@@ -1417,16 +1494,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp decode_lzw(data, early_change, ref) do
-    dictionary = Enum.into(0..255, %{}, fn value -> {value, <<value>>} end)
+    dictionary = @lzw_initial_dictionary
 
-    limit =
-      min(
-        min(
-          Limits.get(:max_pdf_decoded_stream_bytes),
-          PdfValidator.remaining_reader_decoded_bytes()
-        ),
-        max(byte_size(data) * Limits.get(:max_pdf_decompression_ratio), 1)
-      )
+    limit = PdfValidator.reader_decode_limit(byte_size(data))
 
     decode_lzw_bits(data, 0, 9, dictionary, 258, nil, early_change, 0, limit, [], ref)
   end
@@ -1450,13 +1520,15 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       <<_::bitstring-size(^bit_offset), code::unsigned-big-integer-size(^width), _::bitstring>> =
         data
 
+      PdfValidator.charge_stream_work(1, ref)
+
       case code do
         256 ->
           decode_lzw_bits(
             data,
             bit_offset + width,
             9,
-            Enum.into(0..255, %{}, fn value -> {value, <<value>>} end),
+            @lzw_initial_dictionary,
             258,
             nil,
             early_change,
@@ -1485,11 +1557,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
           if is_binary(value) do
             decoded_size = decoded_size + byte_size(value)
 
-            if decoded_size > limit do
-              error(:limits, :resource_limit_exceeded, "decoded stream exceeds its safety limit",
-                object: ref
-              )
-            else
+            with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
               {dictionary, next_code} =
                 if previous && next_code < 4096 do
                   {Map.put(dictionary, next_code, previous <> binary_part(value, 0, 1)),
@@ -1531,182 +1599,124 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       1 ->
         {:ok, data}
 
-      2 ->
-        tiff_predictor(data, parameters, ref)
-
-      _predictor ->
-        png_predictor(data, parameters, ref)
-    end
-  end
-
-  defp tiff_predictor(data, parameters, ref) do
-    with {:ok, row_bytes, _bytes_per_pixel} <- predictor_dimensions(parameters, ref),
-         true <- rem(byte_size(data), row_bytes) == 0 do
-      colors = Map.get(parameters, "Colors", 1)
-      bits = Map.get(parameters, "BitsPerComponent", 8)
-      columns = Map.get(parameters, "Columns", 1)
-
-      rows =
-        for <<row::binary-size(^row_bytes) <- data>>,
-          do: tiff_row(row, colors, bits, columns)
-
-      {:ok, IO.iodata_to_binary(rows)}
-    else
-      false ->
-        error(:filter, :invalid_pdf_input, "TIFF predictor rows are truncated", object: ref)
-
-      {:error, _} = error ->
-        error
-    end
-  end
-
-  defp tiff_row(row, colors, bits, columns) do
-    sample_count = colors * columns
-    sample_bits = sample_count * bits
-    padding_bits = bit_size(row) - sample_bits
-    <<samples::bitstring-size(^sample_bits), padding::bitstring-size(^padding_bits)>> = row
-
-    {decoded, _values} =
-      samples
-      |> then(fn samples -> for <<sample::unsigned-big-size(^bits) <- samples>>, do: sample end)
-      |> Enum.with_index()
-      |> Enum.reduce({[], %{}}, fn {sample, index}, {decoded, values} ->
-        value = rem(sample + Map.get(values, index - colors, 0), 1 <<< bits)
-        {[value | decoded], Map.put(values, index, value)}
-      end)
-
-    decoded
-    |> Enum.reverse()
-    |> Enum.reduce(<<>>, fn sample, row ->
-      <<row::bitstring, sample::unsigned-big-size(bits)>>
-    end)
-    |> then(fn decoded -> <<decoded::bitstring, padding::bitstring>> end)
-  end
-
-  defp png_predictor(data, parameters, ref) do
-    with {:ok, row_bytes, bytes_per_pixel} <- predictor_dimensions(parameters, ref) do
-      cond do
-        data == <<>> ->
-          {:ok, <<>>}
-
-        byte_size(data) <= row_bytes ->
-          error(:filter, :invalid_pdf_input, "PNG predictor rows are truncated", object: ref)
-
-        true ->
-          decode_png_rows(
-            data,
-            row_bytes,
-            bytes_per_pixel,
-            :binary.copy(<<0>>, row_bytes),
-            [],
-            ref
-          )
-      end
-    end
-  end
-
-  defp decode_png_rows(data, row_bytes, bytes_per_pixel, previous, acc, ref) do
-    case data do
-      <<>> ->
-        {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
-
       _ ->
-        if byte_size(data) >= row_bytes + 1 do
-          <<filter, encoded::binary-size(^row_bytes), rest::binary>> = data
+        with {:ok, plan} <- PdfValidator.prepare_predictor(data, parameters, ref) do
+          case plan do
+            %{rows: 0} ->
+              {:ok, <<>>}
 
-          case png_row(filter, encoded, previous, bytes_per_pixel) do
-            {:ok, row} ->
-              decode_png_rows(rest, row_bytes, bytes_per_pixel, row, [row | acc], ref)
+            %{predictor: 2} ->
+              row_bytes = plan.row_bytes
 
-            :error ->
-              error(:filter, :invalid_pdf_input, "PNG predictor row has an invalid filter",
-                object: ref
-              )
+              decoded =
+                for <<row::binary-size(^row_bytes) <- data>>, into: <<>> do
+                  tiff_row(row, <<0::size(plan.pixel_bits)>>, plan, plan.columns, <<>>)
+                end
+
+              {:ok, decoded}
+
+            _ ->
+              {:ok, decode_png_rows(data, plan, :binary.copy(<<0>>, plan.row_bytes), <<>>)}
           end
-        else
-          error(:filter, :invalid_pdf_input, "PNG predictor rows are truncated", object: ref)
         end
     end
   end
 
-  defp png_row(filter, encoded, previous, bytes_per_pixel) do
-    case filter do
-      filter when filter in 0..4 ->
-        encoded
-        |> :binary.bin_to_list()
-        |> Enum.with_index()
-        |> Enum.reduce({[], %{}}, fn {byte, index}, {decoded, values} ->
-          left = Map.get(values, index - bytes_per_pixel, 0)
-          up = :binary.at(previous, index)
-
-          up_left =
-            if index < bytes_per_pixel,
-              do: 0,
-              else: :binary.at(previous, index - bytes_per_pixel)
-
-          value =
-            case filter do
-              0 -> byte
-              1 -> rem(byte + left, 256)
-              2 -> rem(byte + up, 256)
-              3 -> rem(byte + div(left + up, 2), 256)
-              4 -> rem(byte + paeth(left, up, up_left), 256)
-            end
-
-          {[value | decoded], Map.put(values, index, value)}
-        end)
-        |> then(fn {decoded, _values} ->
-          {:ok, decoded |> Enum.reverse() |> :erlang.list_to_binary()}
-        end)
+  defp tiff_row(data, previous, plan, columns, acc) do
+    case columns do
+      0 ->
+        <<acc::bitstring, data::bitstring>>
 
       _ ->
-        :error
+        pixel_bits = plan.pixel_bits
+        <<pixel::bitstring-size(^pixel_bits), remaining::bitstring>> = data
+        decoded = tiff_pixel(pixel, previous, plan.bits, <<>>)
+        tiff_row(remaining, decoded, plan, columns - 1, <<acc::bitstring, decoded::bitstring>>)
+    end
+  end
+
+  defp tiff_pixel(data, previous, bits, acc) do
+    case data do
+      <<>> ->
+        acc
+
+      <<sample::unsigned-big-size(^bits), remaining::bitstring>> ->
+        <<left::unsigned-big-size(^bits), previous::bitstring>> = previous
+        value = rem(sample + left, 1 <<< bits)
+        tiff_pixel(remaining, previous, bits, <<acc::bitstring, value::unsigned-big-size(bits)>>)
+    end
+  end
+
+  defp decode_png_rows(data, plan, previous, acc) do
+    row_bytes = plan.row_bytes
+
+    case data do
+      <<>> ->
+        acc
+
+      <<filter, encoded::binary-size(^row_bytes), remaining::binary>> ->
+        zeros = :binary.copy(<<0>>, plan.pixel_bytes)
+        row = png_row(encoded, previous, zeros, zeros, filter, plan.pixel_bytes, <<>>)
+        decode_png_rows(remaining, plan, row, <<acc::binary, row::binary>>)
+    end
+  end
+
+  defp png_row(data, previous, left, up_left, filter, pixel_bytes, acc) do
+    case data do
+      <<>> ->
+        acc
+
+      _ ->
+        size = min(pixel_bytes, byte_size(data))
+        <<pixel::binary-size(^size), remaining::binary>> = data
+        <<up::binary-size(^size), previous::binary>> = previous
+        decoded = png_pixel(pixel, up, left, up_left, filter, <<>>)
+
+        png_row(
+          remaining,
+          previous,
+          decoded,
+          up,
+          filter,
+          pixel_bytes,
+          <<acc::binary, decoded::binary>>
+        )
+    end
+  end
+
+  defp png_pixel(data, up, left, up_left, filter, acc) do
+    case data do
+      <<>> ->
+        acc
+
+      <<byte, remaining::binary>> ->
+        <<above, up::binary>> = up
+        <<before, left::binary>> = left
+        <<diagonal, up_left::binary>> = up_left
+
+        value =
+          case filter do
+            0 -> byte
+            1 -> rem(byte + before, 256)
+            2 -> rem(byte + above, 256)
+            3 -> rem(byte + div(before + above, 2), 256)
+            4 -> rem(byte + paeth(before, above, diagonal), 256)
+          end
+
+        png_pixel(remaining, up, left, up_left, filter, <<acc::binary, value>>)
     end
   end
 
   defp paeth(left, up, up_left) do
     prediction = left + up - up_left
+    left_distance = abs(prediction - left)
+    up_distance = abs(prediction - up)
+    diagonal_distance = abs(prediction - up_left)
 
-    distances = [
-      {abs(prediction - left), left},
-      {abs(prediction - up), up},
-      {abs(prediction - up_left), up_left}
-    ]
-
-    distances |> Enum.min_by(fn {distance, _} -> distance end) |> elem(1)
-  end
-
-  defp predictor_dimensions(parameters, ref) do
-    colors = parameters["Colors"]
-    bits = parameters["BitsPerComponent"]
-    columns = parameters["Columns"]
-    row_bytes = div(colors * columns * bits + 7, 8)
-
-    case row_bytes <= Limits.get(:max_pdf_decoded_stream_bytes) do
-      true ->
-        {:ok, row_bytes, max(1, div(colors * bits + 7, 8))}
-
-      false ->
-        error(
-          :limits,
-          :resource_limit_exceeded,
-          "predictor row exceeds the decoded-stream safety limit",
-          object: ref
-        )
-    end
-  end
-
-  defp validate_decoded_size(input, decoded) do
     cond do
-      byte_size(decoded) > Limits.get(:max_pdf_decoded_stream_bytes) ->
-        error(:limits, :resource_limit_exceeded, "decoded stream exceeds the byte limit")
-
-      byte_size(input) > 0 and
-          byte_size(decoded) > byte_size(input) * Limits.get(:max_pdf_decompression_ratio) ->
-        error(:limits, :resource_limit_exceeded, "stream decompression ratio exceeds the limit")
-
-      true ->
-        :ok
+      left_distance <= up_distance and left_distance <= diagonal_distance -> left
+      up_distance <= diagonal_distance -> up
+      true -> up_left
     end
   end
 

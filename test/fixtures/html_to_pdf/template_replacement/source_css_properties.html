@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size:A4; margin:18px }
+html,body { margin:0;padding:0 }
+body { font-family:"DejaVu Sans";font-size:14px;line-height:20px }
+.absent { accent-color:currentColor;border-color:red currentColor #abc transparent;border-top-color:currentColor;border-right-color:#abc;border-bottom-color:transparent;border-left-color:rgb(0, 0, 0);text-decoration-color:currentColor;letter-spacing:-1em;line-height:1.5;vertical-align:1em;font-weight:700;font-style:italic;text-decoration:underline dotted currentColor 0.1em;text-decoration-line:underline overline;text-decoration-style:dashed;text-decoration-thickness:10%;background-size:2em auto;background-repeat:repeat-x;border:1em solid currentColor;border-top:thin dotted #abc;border-right:medium dashed transparent;border-bottom:1rem solid currentColor;border-left:2em double blue;top:calc(25% + 1em);right:auto;bottom:-1em;left:25%;quotes:'[' ']';content:'prefix' attr(title) counter(chapter) open-quote;counter-reset:chapter 2;counter-increment:chapter -1;list-style:square inside url(missing.png);list-style-type:decimal;list-style-position:inside;grid-template-columns:repeat(2, minmax(1em, 1fr));grid-template-rows:2rem auto }
+@media screen { .paint { accent-color:currentColor;border-color:red currentColor #abc transparent;border-top-color:currentColor;border-right-color:#abc;border-bottom-color:transparent;border-left-color:rgb(0, 0, 0);text-decoration-color:currentColor;letter-spacing:-1em;line-height:1.5;vertical-align:1em;font-weight:700;font-style:italic;text-decoration:underline dotted currentColor 0.1em;text-decoration-line:underline overline;text-decoration-style:dashed;text-decoration-thickness:10%;background-size:2em auto;background-repeat:repeat-x;border:1em solid currentColor;border-top:thin dotted #abc;border-right:medium dashed transparent;border-bottom:1rem solid currentColor;border-left:2em double blue;top:calc(25% + 1em);right:auto;bottom:-1em;left:25%;quotes:'[' ']';content:'prefix' attr(title) counter(chapter) open-quote;counter-reset:chapter 2;counter-increment:chapter -1;list-style:square inside url(missing.png);list-style-type:decimal;list-style-position:inside;grid-template-columns:repeat(2, minmax(1em, 1fr));grid-template-rows:2rem auto } }
+.paint { color:blue; background:#eef; border:2px solid currentColor; border-left:3px dotted red; width:280px; padding:6px; margin:0; font-weight:700; font-style:italic; line-height:24px; letter-spacing:1px; text-decoration:underline dotted currentColor 1px; counter-reset:chapter 2; counter-increment:chapter }
+.paint::before { content:">" counter(chapter) " "; }
+.box { display:grid;grid-template-columns:60px 80px;grid-template-rows:30px;gap:4px;width:200px;background-size:20px auto;background-repeat:no-repeat }
+.box div { background-color:#ddd;border:1px solid black }
+</style></head><body>
+<?marker name="A">
+<template for="A"><p class="paint" title="actual attribute">Inserted styles</p><div class="box"><div>One</div><div>Two</div></div></template>
+</body></html>

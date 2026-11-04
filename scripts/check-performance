@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The same VM shape owns local and CI performance comparisons.
+set -euo pipefail
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repository_root"
+export ERL_FLAGS='+S 4:4 +SDcpu 4 +SDio 10'
+exec mix test.performance "$@"

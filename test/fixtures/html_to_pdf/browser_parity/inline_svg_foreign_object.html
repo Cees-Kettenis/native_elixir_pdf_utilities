@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 420pt 270pt; margin: 12pt; }
+body { margin: 0; font-family: 'DejaVu Sans'; font-size: 12pt; }
+p { margin: 0 0 8pt; }
+svg { display: block; }
+.card { font-size: 14px; color: #194f94; background-color: #e0c974; padding: 4px; }
+.card strong { color: #c52b40; }
+</style></head><body><p>Native foreignObject HTML Ω café</p>
+<svg width="480" height="210" viewBox="0 0 480 210">
+<defs><clipPath id="clip"><rect x="8" y="8" width="190" height="80"/></clipPath><mask id="half" maskUnits="userSpaceOnUse" x="235" y="100" width="150" height="90"><rect x="235" y="100" width="110" height="90" fill="white"/></mask></defs>
+<rect x="8" y="8" width="190" height="80" fill="#ccdae9"/>
+<foreignObject x="12" y="12" width="175" height="64" clip-path="url(#clip)"><div xmlns="http://www.w3.org/1999/xhtml" class="card">HTML <strong>selected café Ω</strong><br/>Two native lines</div></foreignObject>
+<rect x="140" y="57" width="58" height="15" fill="#287445"/>
+<g transform="translate(245 15) rotate(8)"><foreignObject width="145" height="68"><div xmlns="http://www.w3.org/1999/xhtml" class="card">Rotated HTML<br/><strong>Genuine glyphs</strong></div></foreignObject></g>
+<g opacity=".6"><foreignObject x="12" y="110" width="180" height="72"><div xmlns="http://www.w3.org/1999/xhtml" class="card">HTML group opacity<br/>Text and backgrounds</div></foreignObject><rect x="125" y="146" width="50" height="12" fill="#194f94"/></g>
+<g mask="url(#half)"><foreignObject x="235" y="105" width="150" height="65"><div xmlns="http://www.w3.org/1999/xhtml" class="card">Masked native HTML<br/><strong>Partial selection</strong></div></foreignObject></g>
+</svg><p>Paint order, transforms and vector effects retained.</p></body></html>

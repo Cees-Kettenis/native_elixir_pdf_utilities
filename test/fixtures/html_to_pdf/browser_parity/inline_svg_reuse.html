@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 420px 390px; margin: 12px; }
+html,body { margin:0; padding:0; font-family:"DejaVu Sans"; font-size:12px; line-height:16px; color:#174a86; }
+p { margin:0; }
+body > svg { display:block; width:360px; height:88px; }
+.fixed { fill:#dd8800; }
+.override { fill:#a03333; }
+</style></head><body>
+<p>Instance inheritance and authored fills Ω</p>
+<svg viewBox="0 0 360 88" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <defs fill="#dd8800"><g id="tile"><rect x="4" y="4" width="44" height="66" rx="5"/><circle class="fixed" cx="26" cy="34" r="12"/><path d="M12 60H40" stroke="currentColor" stroke-width="5"/></g></defs>
+ <use href="#tile" fill="#168250" color="#a03333"/>
+ <use href="#tile" x="64" fill="#174a86" color="#dd8800"/>
+ <use xlink:href="#tile" x="128" fill="#a03333" color="#174a86"/>
+ <use href="#tile" x="192" class="override" color="#168250"/>
+ <use href="#tile" x="256" fill="#168250" color="#a03333" transform="rotate(8 282 40)"/>
+</svg>
+<p>Symbol viewports, alignment and clipping</p>
+<svg viewBox="0 0 360 88">
+ <defs><symbol id="badge" viewBox="0 0 40 40"><rect x="-5" y="-5" width="50" height="50"/><circle cx="20" cy="20" r="13" fill="currentColor"/></symbol><symbol id="wide" viewBox="0 0 40 40" preserveAspectRatio="none"><path d="M0 0H40V40H0Z M8 8H32V32H8Z" fill-rule="evenodd"/></symbol></defs>
+ <use href="#badge" x="4" y="4" width="96" height="76" fill="#168250" color="#dd8800"/>
+ <use href="#badge" x="120" y="4" width="76" height="76" fill="#174a86" color="#a03333"/>
+ <use href="#wide" x="236" y="4" width="108" height="76" fill="#a03333"/>
+</svg>
+<p>Nested reuse, independent opacity and clipping café</p>
+<svg viewBox="0 0 360 88">
+ <defs><clipPath id="window"><circle cx="30" cy="40" r="28"/></clipPath><g id="clipped" clip-path="url(#window)"><rect width="64" height="80"/><circle cx="30" cy="40" r="20" fill="#dd8800"/></g><g id="pair"><use href="#clipped"/><use href="#clipped" x="70" opacity="0.5"/></g></defs>
+ <use href="#pair" x="4" fill="#168250"/>
+ <use href="#pair" x="176" fill="#174a86"/>
+</svg>
+<p>Reuse artwork survived</p>
+</body></html>

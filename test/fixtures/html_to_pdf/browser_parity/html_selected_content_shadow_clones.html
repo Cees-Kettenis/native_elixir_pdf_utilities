@@ -1,0 +1,13 @@
+<!doctype html>
+<html><head><style>
+@page {size:300pt 200pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+select {appearance:base-select;display:block;width:230pt;height:20pt;min-height:0;min-width:0;margin:0 0 6pt;padding:0;border:0;border-radius:0;background:white;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+select::picker-icon {display:none}
+select > button {display:block;width:auto;height:auto;padding:0;margin:0;border:0;background:white;color:black;font-family:"DejaVu Sans";font-size:10pt;font-weight:400;line-height:14pt;text-align:left}
+p {margin:0}
+</style></head><body>
+<select><button><selectedcontent></selectedcontent></button><option><span><template shadowrootmode="open"><strong>Unclonable shadow</strong></template><em>Unclonable light child</em></span></option></select>
+<select><button><selectedcontent></selectedcontent></button><option><span><template shadowrootmode="closed" shadowrootclonable><style>strong{color:#166534}::slotted(em){color:#1d4ed8}</style><strong>Cloned shadow</strong> <slot></slot></template><em>and light child</em></span></option></select>
+<p>After shadow host clones</p>
+</body></html>

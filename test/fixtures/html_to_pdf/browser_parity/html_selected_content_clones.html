@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><style>
+@page {size:300pt 200pt;margin:12pt}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+select {appearance:base-select;display:block;width:210pt;height:20pt;min-height:0;min-width:0;margin:0 0 6pt;padding:0;border:0;border-radius:0;background:white;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt}
+select::picker-icon {display:none}
+select > button {display:block;width:auto;height:auto;padding:0;margin:0;border:0;background:white;color:black;font-family:"DejaVu Sans";font-size:10pt;font-weight:400;line-height:14pt;text-align:left}
+selectedcontent strong {color:#166534}
+selectedcontent span {color:#1d4ed8}
+p {margin:0}
+</style></head><body>
+<select><button><selectedcontent></selectedcontent></button><option label="Plain hidden label"><strong>First rich</strong><span> choice</span></option><option selected disabled><strong>Selected rich</strong><span> child tree</span></option></select>
+<select><button><selectedcontent></selectedcontent></button><option disabled>Skipped</option><option><strong>Enabled default</strong><span> choice</span></option></select>
+<select size="2" style="display:none"><button><selectedcontent></selectedcontent></button><option>Unselected list</option></select>
+<p>After selected content</p>
+</body></html>

@@ -1,5 +1,5 @@
 %{
-  "castore": {:hex, :castore, "1.0.21", "0a0e8330dc267a40a3b7ad86d39302764bb71758172904e6a59d5ad6443ce307", [:mix], [], "hexpm", "e42e22723e25dbd46876d056a03f685513d6e98f6b5e555dc551321decd76c5c"},
+  "castore": {:hex, :castore, "1.0.22", "a01978e6a5d42fa3a34143630588f92036e7d90e2309ecdd466722d1279a2213", [:mix], [], "hexpm", "c2a4d42723b4affbc1c3e15d8f6df3f7d8f1f627c84de643383634cce58493d5"},
   "dialyxir": {:hex, :dialyxir, "1.4.7", "dda948fcee52962e4b6c5b4b16b2d8fa7d50d8645bbae8b8685c3f9ecb7f5f4d", [:mix], [{:erlex, ">= 0.2.8", [hex: :erlex, repo: "hexpm", optional: false]}], "hexpm", "b34527202e6eb8cee198efec110996c25c5898f43a4094df157f8d28f27d9efe"},
   "earmark_parser": {:hex, :earmark_parser, "1.4.44", "f20830dd6b5c77afe2b063777ddbbff09f9759396500cdbe7523efd58d7a339c", [:mix], [], "hexpm", "4778ac752b4701a5599215f7030989c989ffdc4f6df457c5f36938cc2d2a2750"},
   "elixir_font_discovery": {:hex, :elixir_font_discovery, "0.2.0", "e3f1c91763d3619c9ce39b41d01e74403fe7693582f779da534ccd41ad35b3e3", [:mix], [{:rustler, "~> 0.36.2", [hex: :rustler, repo: "hexpm", optional: true]}, {:rustler_precompiled, ">= 0.8.1 and < 1.0.0", [hex: :rustler_precompiled, repo: "hexpm", optional: false]}], "hexpm", "fb0b370b42ed8d0ea303d6197030ae55a232d87c273b3bd66d4a93f5655832ff"},

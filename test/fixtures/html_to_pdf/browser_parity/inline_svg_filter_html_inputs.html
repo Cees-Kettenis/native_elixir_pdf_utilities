@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page { size: 390pt 230pt; margin: 12pt; }
+html,body { margin: 0; padding: 0; font-family: 'DejaVu Sans'; font-size: 12pt; }
+p { margin: 0 0 8pt; } svg { display: block; }
+</style></head><body><p>Independent native HTML filter inputs</p>
+<svg width="480" height="190" viewBox="0 0 480 190"><defs>
+<foreignObject id="card" x="0" y="0" width="180" height="70"><div xmlns="http://www.w3.org/1999/xhtml" style="font-family:DejaVu Sans;font-size:18px;color:#235296;background:#eed582;padding:4px">Independent HTML Ω</div></foreignObject>
+<filter id="input" filterUnits="userSpaceOnUse" x="0" y="0" width="180" height="70"><feImage href="#card"/></filter>
+<filter id="blur" filterUnits="userSpaceOnUse" x="0" y="0" width="180" height="70"><feImage href="#card" result="image"/><feGaussianBlur in="image" stdDeviation=".5"/></filter>
+</defs><rect width="480" height="190" fill="#ececec"/>
+<g transform="translate(12 10)"><rect width="180" height="70" filter="url(#input)"/></g>
+<g transform="translate(240 10)"><rect width="180" height="70" filter="url(#blur)"/></g>
+<g transform="translate(12 100) rotate(4)"><rect width="180" height="70" filter="url(#input)"/></g>
+</svg></body></html>

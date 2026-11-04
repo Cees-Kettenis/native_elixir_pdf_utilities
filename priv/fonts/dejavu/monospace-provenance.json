@@ -1,0 +1,13 @@
+{
+  "family": "DejaVu Sans Mono",
+  "release": "2.37",
+  "source": "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip",
+  "modified": false,
+  "license": "LICENSE-2.37.txt",
+  "files": {
+    "DejaVuSansMono-Bold.ttf": "bce60f1b4421acd9ea51ba6623d7024ecbe6817a953e3654df62a5e6bdf8f769",
+    "DejaVuSansMono-BoldOblique.ttf": "91713a71d550bba22c2a6b2bb2a9ad8f9a159e12e4e9f0a5b2677998ba21213e",
+    "DejaVuSansMono-Oblique.ttf": "742097840c541870e8d6dc5c9b37bb1ceeea6c0dedd1d475faf903ef9df734b0",
+    "DejaVuSansMono.ttf": "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582"
+  }
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><style>
+@page { size:264pt 360pt; margin:0; }
+html, body { margin:0; padding:0; }
+body { padding:12pt; font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+input { display:block; width:180pt; box-sizing:border-box; border:1px solid #777777;
+  background:white; padding:1.5pt 3pt; margin:0 0 6pt;
+  font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+input[type="TEL"] { color:#21517b; }
+input[type="url"] { color:#993300; }
+input[type="email"] { color:#21517b; }
+[readonly] { background:#f7f7f7; }
+[disabled] { color:#666666; background:#f4f4f4; }
+[value^=" "] { color:#006600; }
+</style></head><body>
+<input type="tel" name="phone" value="+60 (12) 345-6789">
+<input type="TEL" name="upper-phone" value="A&#13;B&#10;C">
+<input type="tel" readonly name="locked-phone" value="  Phone spacing  ">
+<input type="tel" name="empty-phone">
+<input type="url" name="website" value=" &#9;https://example.com/ &#13;&#10; ">
+<input type="URL" readonly="false" name="locked-site" value="https://example.org/">
+<input type="url" name="invalid-site" value="not a valid URL">
+<input type="url" name="empty-site" value=" &#9;&#12;&#13;&#10; ">
+<input type="email" name="email" value=" &#9;test@example.com &#13;&#10; ">
+<input type="EmAiL" readonly disabled name="locked-email" value="A&#13;B&#10;C@example.com">
+<input type="email" name="invalid-email" value="Not an email">
+<input type="email" name="empty-email">
+</body></html>

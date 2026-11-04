@@ -42,7 +42,23 @@ defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
   end
 
   defp validate_relationships(limits) do
+    # BEAM receive timeouts have a fixed unsigned 32-bit millisecond range.
+    # This is a runtime invariant rather than a configurable resource limit.
+    invalid_timeout =
+      Enum.find(
+        [
+          :max_operation_timeout_ms,
+          :operation_memory_check_interval_ms,
+          :max_html_form_value_timeout_ms
+        ],
+        &(Map.fetch!(limits, &1) > 4_294_967_295)
+      )
+
     cond do
+      invalid_timeout ->
+        {:error,
+         "resource limit #{inspect(invalid_timeout)} exceeds the BEAM receive timeout range"}
+
       limits.max_aggregate_font_source_bytes < limits.max_font_source_bytes ->
         {:error,
          "resource limit :max_aggregate_font_source_bytes must be greater than or equal to :max_font_source_bytes"}

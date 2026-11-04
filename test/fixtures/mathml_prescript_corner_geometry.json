@@ -1,0 +1,628 @@
+{
+  "cases": [
+    {
+      "base": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "𝐴"
+      },
+      "expected": {
+        "glyph_ids": [
+          3300,
+          4274,
+          4275
+        ],
+        "lower_kern": {
+          "denominator": 250,
+          "numerator": 387
+        },
+        "offsets": [
+          [
+            {
+              "denominator": 5000,
+              "numerator": 43407
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 5000,
+              "numerator": 43407
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 25,
+              "numerator": 18
+            },
+            {
+              "denominator": 50,
+              "numerator": -189
+            }
+          ],
+          [
+            {
+              "denominator": 1000,
+              "numerator": 2079
+            },
+            {
+              "denominator": 500,
+              "numerator": 3879
+            }
+          ]
+        ],
+        "upper_kern": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "width": {
+          "denominator": 5000,
+          "numerator": 104697
+        }
+      },
+      "name": "left-𝐴-18",
+      "sub": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 63
+          },
+          "math_depth": 1,
+          "math_shift": "compact",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "1"
+      },
+      "sup": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 63
+          },
+          "math_depth": 1,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "2"
+      }
+    },
+    {
+      "base": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 18
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "𝑊"
+      },
+      "expected": {
+        "glyph_ids": [
+          3322,
+          4274,
+          4275
+        ],
+        "lower_kern": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "offsets": [
+          [
+            {
+              "denominator": 5000,
+              "numerator": 35667
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 5000,
+              "numerator": 35667
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 25,
+              "numerator": 18
+            },
+            {
+              "denominator": 50,
+              "numerator": -189
+            }
+          ],
+          [
+            {
+              "denominator": 1000,
+              "numerator": 729
+            },
+            {
+              "denominator": 500,
+              "numerator": 3843
+            }
+          ]
+        ],
+        "upper_kern": {
+          "denominator": 500,
+          "numerator": -99
+        },
+        "width": {
+          "denominator": 5000,
+          "numerator": 117837
+        }
+      },
+      "name": "left-𝑊-18",
+      "sub": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 63
+          },
+          "math_depth": 1,
+          "math_shift": "compact",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "1"
+      },
+      "sup": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 63
+          },
+          "math_depth": 1,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "2"
+      }
+    },
+    {
+      "base": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "𝐴"
+      },
+      "expected": {
+        "glyph_ids": [
+          3300,
+          4274,
+          4275
+        ],
+        "lower_kern": {
+          "denominator": 25,
+          "numerator": 43
+        },
+        "offsets": [
+          [
+            {
+              "denominator": 500,
+              "numerator": 4823
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 500,
+              "numerator": 4823
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 5,
+              "numerator": 4
+            },
+            {
+              "denominator": 5,
+              "numerator": -21
+            }
+          ],
+          [
+            {
+              "denominator": 100,
+              "numerator": 231
+            },
+            {
+              "denominator": 50,
+              "numerator": 431
+            }
+          ]
+        ],
+        "upper_kern": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "width": {
+          "denominator": 500,
+          "numerator": 11633
+        }
+      },
+      "name": "left-𝐴-20",
+      "sub": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 14
+          },
+          "math_depth": 1,
+          "math_shift": "compact",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "1"
+      },
+      "sup": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 14
+          },
+          "math_depth": 1,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "2"
+      }
+    },
+    {
+      "base": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 20
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "𝑊"
+      },
+      "expected": {
+        "glyph_ids": [
+          3322,
+          4274,
+          4275
+        ],
+        "lower_kern": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "offsets": [
+          [
+            {
+              "denominator": 500,
+              "numerator": 3963
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 500,
+              "numerator": 3963
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 5,
+              "numerator": 4
+            },
+            {
+              "denominator": 5,
+              "numerator": -21
+            }
+          ],
+          [
+            {
+              "denominator": 100,
+              "numerator": 81
+            },
+            {
+              "denominator": 50,
+              "numerator": 427
+            }
+          ]
+        ],
+        "upper_kern": {
+          "denominator": 50,
+          "numerator": -11
+        },
+        "width": {
+          "denominator": 500,
+          "numerator": 13093
+        }
+      },
+      "name": "left-𝑊-20",
+      "sub": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 14
+          },
+          "math_depth": 1,
+          "math_shift": "compact",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "1"
+      },
+      "sup": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 14
+          },
+          "math_depth": 1,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "2"
+      }
+    },
+    {
+      "base": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 24
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "𝐴"
+      },
+      "expected": {
+        "glyph_ids": [
+          3300,
+          4274,
+          4275
+        ],
+        "lower_kern": {
+          "denominator": 125,
+          "numerator": 258
+        },
+        "offsets": [
+          [
+            {
+              "denominator": 1250,
+              "numerator": 14469
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 1250,
+              "numerator": 14469
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 25,
+              "numerator": 24
+            },
+            {
+              "denominator": 25,
+              "numerator": -126
+            }
+          ],
+          [
+            {
+              "denominator": 250,
+              "numerator": 693
+            },
+            {
+              "denominator": 125,
+              "numerator": 1293
+            }
+          ]
+        ],
+        "upper_kern": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "width": {
+          "denominator": 1250,
+          "numerator": 34899
+        }
+      },
+      "name": "left-𝐴-24",
+      "sub": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 84
+          },
+          "math_depth": 1,
+          "math_shift": "compact",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "1"
+      },
+      "sup": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 84
+          },
+          "math_depth": 1,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "2"
+      }
+    },
+    {
+      "base": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 1,
+            "numerator": 24
+          },
+          "math_depth": 0,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "𝑊"
+      },
+      "expected": {
+        "glyph_ids": [
+          3322,
+          4274,
+          4275
+        ],
+        "lower_kern": {
+          "denominator": 1,
+          "numerator": 0
+        },
+        "offsets": [
+          [
+            {
+              "denominator": 1250,
+              "numerator": 11889
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 1250,
+              "numerator": 11889
+            },
+            0
+          ],
+          [
+            {
+              "denominator": 25,
+              "numerator": 24
+            },
+            {
+              "denominator": 25,
+              "numerator": -126
+            }
+          ],
+          [
+            {
+              "denominator": 250,
+              "numerator": 243
+            },
+            {
+              "denominator": 125,
+              "numerator": 1281
+            }
+          ]
+        ],
+        "upper_kern": {
+          "denominator": 125,
+          "numerator": -33
+        },
+        "width": {
+          "denominator": 1250,
+          "numerator": 39279
+        }
+      },
+      "name": "left-𝑊-24",
+      "sub": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 84
+          },
+          "math_depth": 1,
+          "math_shift": "compact",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "1"
+      },
+      "sup": {
+        "attributes": {},
+        "children": [],
+        "style": {
+          "font_size": {
+            "denominator": 5,
+            "numerator": 84
+          },
+          "math_depth": 1,
+          "math_shift": "normal",
+          "math_style": "compact"
+        },
+        "tag": "mn",
+        "text": "2"
+      }
+    }
+  ],
+  "core_sha256": "f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373",
+  "font_sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+  "fonttools": "4.60.1",
+  "opentype_source": "https://learn.microsoft.com/en-us/typography/opentype/spec/math#mathkerninfo-table",
+  "scope": "selected-font left-corner source geometry only; no browser reference",
+  "source_math_sha256": "0af4bf095e9d3a968b460b83d589b5c0a6dc58762fe1f3cb3dece03fd5344c4a"
+}

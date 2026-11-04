@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      @page { size: 330pt 225pt; margin: 12pt; }
+      html, body { margin: 0; padding: 0; }
+      body { font-family: "DejaVu Sans"; font-size: 9pt; line-height: 18pt; }
+      .row { display: flex; width: 300pt; height: 18pt; margin-bottom: 12pt; }
+      .item { flex: 1; min-width: 0; height: 18pt; }
+      .first { background-color: #93c5fd; }
+      .second { background-color: #fca5a5; }
+      #priority { flex: 1; }
+      .base { flex-basis: 80pt; flex-shrink: 0; }
+      .reset { flex: 1; }
+    </style>
+  </head>
+  <body>
+    <div class="row"><div class="item first" style="flex-basis:80pt;flex-shrink:0;flex:1">A1</div><div class="item second">B1</div></div>
+    <div class="row"><div class="item first" style="flex:0 0 80pt;flex:1">A2</div><div class="item second">B2</div></div>
+    <div class="row"><div class="item first" style="flex-basis:80pt;flex:1 1">A3</div><div class="item second">B3</div></div>
+    <div class="row"><div class="item first base reset">A4</div><div class="item second">B4</div></div>
+    <div class="row"><div class="item first base" id="priority">A5</div><div class="item second">B5</div></div>
+    <div class="row"><div class="item first" style="flex-shrink:0;flex:1;flex-basis:200pt">A6</div><div class="item second" style="flex:1 1 200pt">B6</div></div>
+  </body>
+</html>

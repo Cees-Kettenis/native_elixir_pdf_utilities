@@ -39,25 +39,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
                FontValidator.read_limit()
              ) do
           {:ok, data} ->
-            FontValidator.reserve_source(data)
             fingerprint = :crypto.hash(:sha256, data)
+            FontValidator.reserve_source(data, fingerprint)
 
             case cached(absolute_path, fingerprint) do
               {:hit, result} ->
                 result
 
               :miss ->
-                case Process.whereis(__MODULE__) do
-                  nil ->
-                    loader.(data)
-
-                  _pid ->
-                    GenServer.call(
-                      __MODULE__,
-                      {:fetch, absolute_path, fingerprint, data, loader},
-                      :infinity
-                    )
-                end
+                load(absolute_path, fingerprint, data, loader)
             end
 
           {:error, {_reason, _diagnostic}} = error ->
@@ -89,7 +79,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
             case :ets.lookup(@table, absolute_path) do
               [{^absolute_path, fingerprint, data, result, _sequence}] ->
                 FontValidator.reserve(:max_font_candidates, 1)
-                FontValidator.reserve_source_fingerprint(fingerprint, byte_size(data))
+                FontValidator.reserve_source(data, fingerprint)
                 result
 
               _ ->
@@ -98,6 +88,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
         end
       end)
     end)
+  end
+
+  @doc "Reuses the stable PDF identity of validated font bytes without rehashing them on every registry load."
+  @spec identity(String.t(), binary()) :: String.t()
+  def identity(family, data) do
+    key = {:identity, family, data}
+
+    loader = fn _ ->
+      identity =
+        :crypto.hash(:sha256, [family, data])
+        |> Base.encode16(case: :lower)
+        |> binary_part(0, 12)
+
+      {:ok, identity}
+    end
+
+    {:ok, identity} = fetch_value(key, loader)
+    identity
+  end
+
+  @doc "Reuses losslessly compressed, already validated source-font bytes within the existing bounded font cache."
+  @spec compressed(binary()) :: binary()
+  def compressed(data) do
+    {:ok, compressed} =
+      fetch_value({:compressed, data}, fn _ -> {:ok, :zlib.compress(data)} end)
+
+    compressed
+  end
+
+  defp fetch_value(key, loader) do
+    case cached(key, nil) do
+      {:hit, result} ->
+        result
+
+      :miss ->
+        load(key, nil, <<>>, loader)
+    end
   end
 
   @impl GenServer
@@ -115,32 +142,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   end
 
   @impl GenServer
-  def handle_call(request, _from, state) do
-    case request do
-      {:fetch, path, fingerprint, data, loader} ->
-        case cached(path, fingerprint) do
-          {:hit, result} ->
-            {:reply, result, state}
+  def handle_call({:store, path, fingerprint, data, result}, _from, state) do
+    sequence = state.sequence + 1
+    :ets.insert(state.table, {path, fingerprint, data, result, sequence})
 
-          :miss ->
-            result = loader.(data)
+    state.table
+    |> :ets.tab2list()
+    |> FontValidator.cache_evictions(state.maximum_entries, :max_font_cache_bytes)
+    |> Enum.each(&:ets.delete(state.table, &1))
 
-            case result do
-              {:ok, _value} ->
-                sequence = state.sequence + 1
-                :ets.insert(state.table, {path, fingerprint, data, result, sequence})
+    {:reply, result, %{state | sequence: sequence}}
+  end
 
-                state.table
-                |> :ets.tab2list()
-                |> FontValidator.cache_evictions(state.maximum_entries, :max_font_cache_bytes)
-                |> Enum.each(&:ets.delete(state.table, &1))
+  defp load(path, fingerprint, data, loader) do
+    case Process.whereis(__MODULE__) do
+      nil ->
+        loader.(data)
 
-                {:reply, result, %{state | sequence: sequence}}
+      cache ->
+        # Only this node owns the ETS cache. The requesting process owns the
+        # lock and the work, so termination releases both without orphaning a loader.
+        :global.trans(
+          {{__MODULE__, path}, self()},
+          fn ->
+            case cached(path, fingerprint) do
+              {:hit, result} ->
+                result
 
-              failure ->
-                {:reply, failure, state}
+              :miss ->
+                result =
+                  FontValidator.with_cache_budget(fn budget ->
+                    FontValidator.with_cache_budget(budget, fn -> loader.(data) end)
+                  end)
+
+                case result do
+                  {:ok, _value} ->
+                    GenServer.call(cache, {:store, path, fingerprint, data, result}, :infinity)
+
+                  failure ->
+                    failure
+                end
             end
-        end
+          end,
+          [node()]
+        )
     end
   end
 

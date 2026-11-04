@@ -1,4 +1,4 @@
-# PNG and SVG images
+# Images
 
 HTML-to-PDF rendering supports the following PNG formats, including interlaced
 images:
@@ -15,17 +15,37 @@ PNG color and transparency retain their full precision in the PDF, including
 16-bit samples. Animated PNGs render their default image only. Color-profile
 conversion is unsupported.
 
+## JPEG images
+
+The renderer embeds supported 8-bit baseline and progressive JPEGs. Grayscale,
+RGB, YCbCr, CMYK, Adobe CMYK and Adobe YCCK retain their supported color conventions.
+Malformed segments, inconsistent color metadata, empty scans and truncated streams
+return diagnostics. Structural validation does not fully decode JPEG pixels;
+PDF viewers decode the embedded image.
+
 ## SVG images
 
-SVGs appear as raster images in the PDF. Use self-contained SVGs with internal
-`#id` references. Embedded images, external resources, DTD/entity declarations,
-and escaped CSS resource syntax are rejected. Remove any `DOCTYPE` declaration
-from exported SVGs before using them.
+SVGs appear as PNG artwork in the PDF. SVG text is rasterized and links inside
+an SVG are inactive. Wrap the image in an HTML anchor to make it clickable.
+The renderer uses up to `svg_raster_scale` samples per CSS pixel, reducing that
+extra density when needed to fit the per-image raster and decoding limits.
+Density changes preserve natural image dimensions. Source, conversion and
+aggregate resource limits still apply.
 
-SVG rendering uses Resvg, which can ignore unsupported SVG features and still
-return an image. The binding does not report those omissions as conversion errors,
-so this library cannot return diagnostics for them. A successful conversion
-therefore does not guarantee that every SVG feature appears in the PDF.
+Provide images and fonts through the supported [asset sources](html-to-pdf-compatibility.md#assets-and-local-files).
+The converter cannot read arbitrary files or fetch network resources.
+DTD/entity declarations and escaped CSS resource syntax are rejected.
 
-See [image sources and supported styling](html-to-pdf-compatibility.md#images-and-backgrounds)
-and [diagnostics](diagnostics.md) for usage details.
+`foreignObject`, non-scaling strokes and SVG2 inline `textPath` path data return
+a diagnostic. Use a same-document path reference for supported text paths.
+
+Morphology and convolution filters have a configurable
+[work budget](resource-limits.md#html-images-and-layout). Expensive filters and filter
+combinations whose work cannot be bounded return `:resource_limit_exceeded`
+before conversion. Reduce raster dimensions, filter radius, kernel size or reuse.
+
+SVG conversion uses Resvg and can differ from browser rendering, particularly
+for gradients, filters, masks, markers and text paths. Check complex artwork
+against the output you need. See [diagnostics](diagnostics.md) for conversion
+failures and [HTML and CSS support](html-to-pdf-compatibility.md#images-and-backgrounds)
+for image sizing and styling.

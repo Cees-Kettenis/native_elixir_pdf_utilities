@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 420pt 210pt; margin: 12pt; }
+body { margin: 0; font-family: 'DejaVu Sans'; font-size: 12pt; }
+p { margin: 0 0 8pt; }
+svg { display: block; }
+</style></head><body><p>Independent selected filter text inputs</p>
+<svg width="480" height="155" viewBox="0 0 480 155">
+<defs>
+<text id="words" x="5" y="28" font-family="DejaVu Sans" font-size="20" fill="#235296">Independent café Ω</text>
+<filter id="words-only" filterUnits="userSpaceOnUse" x="0" y="0" width="230" height="55"><feImage href="#words"/></filter>
+<filter id="words-soft" filterUnits="userSpaceOnUse" x="0" y="0" width="230" height="55"><feImage href="#words" result="image"/><feGaussianBlur in="image" stdDeviation=".4"/></filter>
+</defs>
+<g transform="translate(8 8)"><rect width="220" height="40" fill="#e3c369" filter="url(#words-only)"/></g>
+<g transform="translate(8 78)"><rect width="220" height="40" fill="#e3c369" filter="url(#words-soft)"/></g>
+<rect x="255" y="15" width="150" height="95" fill="#d6e3ef"/>
+<text x="266" y="48" font-family="DejaVu Sans" font-size="16" fill="#235296">Ordinary selected text</text>
+</svg><p>Glyphs belong to the independently painted input.</p></body></html>

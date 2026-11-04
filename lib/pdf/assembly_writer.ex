@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
   alias NativeElixirPdfUtilities.Validators.AssemblyValidator
   alias NativeElixirPdfUtilities.Validators.MergeValidator
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @doc false
   @spec write([map()]) :: {:ok, binary()} | {:error, {atom(), map()}}
@@ -69,8 +70,10 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
     {pieces, offsets, position} =
       Enum.reduce(outline_objects.objects, {pieces, offsets, position}, fn
         {id, generation, value}, {pieces, offsets, position} ->
-          {:ok, body} = InfoCodec.serialize_value(value)
-          add_object(pieces, offsets, position, id, generation, body)
+          case InfoCodec.serialize_value(value) do
+            {:ok, body} -> add_object(pieces, offsets, position, id, generation, body)
+            {:error, _} = limit_error -> throw({:assembly_output_limit, limit_error})
+          end
       end)
 
     maximum_object_id = Enum.max([catalog_object_id, pages_object_id | Map.keys(offsets)])
@@ -105,6 +108,15 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   end
 
   defp add_object(pieces, offsets, position, id, generation, body) do
+    case PdfValidator.validate_output_containers(body,
+           operation: :merge,
+           module: __MODULE__,
+           source: "object #{id} #{generation}"
+         ) do
+      :ok -> :ok
+      {:error, _} = error -> throw({:assembly_output_limit, error})
+    end
+
     piece = [
       Integer.to_string(id),
       " ",

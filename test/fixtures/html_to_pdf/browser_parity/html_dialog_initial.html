@@ -1,0 +1,14 @@
+<!doctype html><html><head><style>
+@page {size:360pt 250pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;}
+p {margin:0;}
+section {position:relative;height:64pt;background:#eeeeee;}
+</style></head><body>
+<dialog><img src="never-fetch.png">Closed dialog</dialog>
+<p>Before authored dialog</p>
+<dialog open>Natural width</dialog>
+<p>After authored dialog</p>
+<section><dialog open style="width:110pt;top:20pt;left:12pt;right:auto;margin:0;padding:4pt;border:1pt solid black">Positioned dialog</dialog></section>
+<dialog style="display:block;position:static;width:130pt;margin:0;padding:3pt;border:1pt solid black">Closed display override</dialog>
+<dialog open hidden>Hidden dialog</dialog>
+</body></html>

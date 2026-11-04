@@ -1,0 +1,143 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:840pt 1260pt;margin:0}
+html,body{margin:0;padding:0;font-size:12pt}
+#sample_0,#sample_0{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:13pt}
+#sample_0{padding:12pt}
+#sample_0 p{margin:0 0 6pt}
+#sample_0 .panel{display:block;border:1px solid #777;padding:6pt;margin-bottom:6pt}
+#sample_0 input{display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;padding:1.5pt 3pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;margin-bottom:6pt}
+#sample_0 input:enabled{color:#164e63}
+#sample_0 a{color:#164e63;text-decoration:underline}
+#sample_1,#sample_1{margin:0;padding:0}
+#sample_1{padding:12pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt}
+#sample_1 p{margin:0}
+#sample_1 section{margin:0 0 6pt}
+#sample_1 img{display:block}
+#sample_2,#sample_2{margin:0;padding:0}
+#sample_2{padding:12pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt}
+#sample_2 input,#sample_2 button{display:block;width:180pt;box-sizing:border-box;border:1px solid #777777;background:#f0f0f0;padding:1.5pt 3pt;margin:0 0 6pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt;border-radius:0}
+#sample_2 input[type=submit]{color:#21517b}
+#sample_2 input[type=reset]{color:#993300}
+#sample_2 input[disabled]{color:#666666;background:#f4f4f4}
+#sample_2 button[value]{color:#21517b}
+#sample_2 .left{text-align:left}
+#sample_3,#sample_3{margin:0;padding:0}
+#sample_3{padding:12pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt}
+#sample_3 input{display:block;width:180pt;box-sizing:border-box;border:1px solid #777777;background:white;padding:1.5pt 3pt;margin:0 0 6pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt}
+#sample_3 input[type="TEL"]{color:#21517b}
+#sample_3 input[type="url"]{color:#993300}
+#sample_3 input[type="email"]{color:#21517b}
+#sample_3 [readonly]{background:#f7f7f7}
+#sample_3 [disabled]{color:#666666;background:#f4f4f4}
+#sample_3 [value^=" "]{color:#006600}
+#sample_4,#sample_4{margin:0;padding:0}
+#sample_4{padding:12pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt}
+#sample_4 input{display:block;width:180pt;box-sizing:border-box;border:1px solid #777777;background:white;padding:1.5pt 3pt;margin:0 0 6pt;font-family:'DejaVu Sans';font-size:10.5pt;line-height:13.5pt}
+#sample_4 [type="unknown"]{color:#21517b}
+#sample_4 [type="hidden "]{color:#993300}
+#sample_4 [type*="K"]{color:#21517b}
+#sample_4 [readonly]{background:#f7f7f7}
+#sample_4 [disabled]{color:#666666;background:#f4f4f4}
+#sample_5,#sample_5{margin: 0;padding: 0}
+#sample_5{padding: 12pt;font-family: "DejaVu Sans";font-size: 12pt;line-height: 18pt}
+#sample_5 p{margin: 0 0 6pt}
+#sample_5 input{display: block !important;width: 100pt;height: 40pt;background: red;border: 3pt solid blue}
+#sample_5 input::before{content: attr(value)}
+#sample_5 input::after{content: "Generated secret"}
+#sample_5 .positioned{position: absolute;left: 0;top: 0}
+#sample_5 table{width: 240pt;border-collapse: collapse}
+#sample_5 td{padding: 0;border: 1pt solid black}
+#sample_6,#sample_6{margin:0;padding:0}
+#sample_6 table{border-spacing:0;width:100pt;background:red}
+</style></head><body>
+<!-- html_inert_attribute.html; SHA256 c0364f23b10480dd93000b42cfc3528be879454e71e01f174f9ca37029f8727a; original 264 x 240 pt canvas -->
+<section id="sample_0" style="position:absolute;left:0.0pt;top:0.0pt;width:264.0pt;height:240.0pt;box-sizing:border-box">
+<p>Before inert content</p>
+<x-box inert=false class=panel>
+<p>Visible inert custom container</p>
+<input name=active value="Inert initial value">
+<a href="https://example.com/held">Visible inactive link</a>
+</x-box>
+<p inert="anything">Visible boolean presence</p>
+<p><a href="https://example.com/active">Active <span inert>inert span</span> active</a></p>
+<input name=active value="Active initial field">
+<p>After inert content</p>
+</section>
+
+<!-- html_image_dimensions.html; SHA256 568f318cf3c81481732a015ac93798805d7701d4e43c20d5b807ee8eccca11c0; original 264 x 420 pt canvas -->
+<section id="sample_1" style="position:absolute;left:420.0pt;top:0.0pt;width:264.0pt;height:420.0pt;box-sizing:border-box">
+<section><p>width only</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="32"></section>
+<section><p>height only</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" height="16"></section>
+<section><p>both dimensions</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="32" height="32"></section>
+<section><p>fraction prefix</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="32.5px" height="16"></section>
+<section><p>percent prefix</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="24.5%junk" height="16"></section>
+<section><p>invalid attributes</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="+32" height="bad"></section>
+<section><p>author override</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="32" height="48" style="width:30pt;height:auto"></section>
+<section><p>automatic width</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="32" height="16" style="width:auto"></section>
+<section><p>zero width</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="0" height="16"></section>
+<section><p>zero height</p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="32" height="0"></section>
+<div style="display:flex"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="0" height="16"><span>After zero flex image</span></div>
+<div style="display:grid;grid-template-columns:24pt 1fr"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" width="32" height="0"><span>After zero grid image</span></div>
+<p>End of dimension cases</p></section>
+
+<!-- html_input_buttons.html; SHA256 55203a732b542a51bc3da6c0557e54e7ce8498025a761ca747a25f5e5958301d; original 264 x 360 pt canvas -->
+<section id="sample_2" style="position:absolute;left:0.0pt;top:240.0pt;width:264.0pt;height:360.0pt;box-sizing:border-box">
+<input type="submit" name="submit">
+<input type="RESET" name="reset">
+<input type="button" value="Authored button label">
+<input type="SuBmIt" value="Authored submit label" class="left">
+<input type="reset" disabled="false" value="Disabled reset label">
+<input type="button" value="">
+<input type="submit" value="">
+<input type="reset" value="">
+<button value="Submission value">Child label</button>
+<button value="Unprinted value"></button>
+<input type="button" value=" A  B ">
+<input type="submit" value="Line&#10;Two">
+</section>
+
+<!-- html_contact_inputs.html; SHA256 06698a9a20002d32b9f793e06d46ac9069a5b8dacde519fdb5d330fe667f054e; original 264 x 360 pt canvas -->
+<section id="sample_3" style="position:absolute;left:0.0pt;top:600.0pt;width:264.0pt;height:360.0pt;box-sizing:border-box">
+<input type="tel" name="phone" value="+60 (12) 345-6789">
+<input type="TEL" name="upper-phone" value="A&#13;B&#10;C">
+<input type="tel" readonly name="locked-phone" value="  Phone spacing  ">
+<input type="tel" name="empty-phone">
+<input type="url" name="website" value=" &#9;https://example.com/ &#13;&#10; ">
+<input type="URL" readonly="false" name="locked-site" value="https://example.org/">
+<input type="url" name="invalid-site" value="not a valid URL">
+<input type="url" name="empty-site" value=" &#9;&#12;&#13;&#10; ">
+<input type="email" name="email" value=" &#9;test@example.com &#13;&#10; ">
+<input type="EmAiL" readonly disabled name="locked-email" value="A&#13;B&#10;C@example.com">
+<input type="email" name="invalid-email" value="Not an email">
+<input type="email" name="empty-email">
+</section>
+
+<!-- html_input_type_defaults.html; SHA256 317c4f5cd56ca7b29656eeff93bd6fe7b0da6bf70a49e620abb22bdff191adaa; original 264 x 300 pt canvas -->
+<section id="sample_4" style="position:absolute;left:420.0pt;top:780.0pt;width:264.0pt;height:300.0pt;box-sizing:border-box">
+<input name="missing" value="Missing type reference">
+<input type="text" name="text" value="Text reference">
+<input type="" name="empty-type" value="Empty type">
+<input type=" " name="space-type" value="Whitespace type">
+<input type="unknown" name="unknown" value="Unknown type">
+<input type="hidden " readonly name="not-hidden" value="Visible text default">
+<input type="checKbox" name="not-checkbox" value="Text default">
+<input type="ſearch" name="not-search" value="A&#13;B&#10;C">
+<input type="datetime" readonly disabled name="obsolete" value="Obsolete type default">
+<input type="unregistered" name="empty-value">
+</section>
+
+<!-- html_hidden_inputs.html; SHA256 928c6d9b8a079d2ecfd92f351e35a82c982836754dce00512c4e9f2e62a26c01; original 264 x 180 pt canvas -->
+<section id="sample_5" style="position:absolute;left:0.0pt;top:960.0pt;width:264.0pt;height:180.0pt;box-sizing:border-box">
+<input type="hidden" value="Before" name="reference">
+<p>Left<input type=HIDDEN value="Hidden inline" style="display:inline-block!important">Right</p>
+<input type="HiDdEn" class="positioned" value="Positioned secret" disabled>
+<p>Visible second paragraph.</p>
+<table><tbody><tr><td>A<input type="hidden" value="Cell secret">B</td></tr></tbody></table>
+<input type="hidden">
+</section>
+
+<!-- hidden_tables.html; SHA256 13171f011443236e5cc182d468ad6495330e39058061f634d3817941c673e699; original 240 x 180 pt canvas -->
+<section id="sample_6" style="position:absolute;left:420.0pt;top:1080.0pt;width:240.0pt;height:180.0pt;box-sizing:border-box"><table><tr style="display:none"><td>Hidden</td></tr></table><div style="height:10pt;background:blue"></div><table><tr><td style="display:none">Hidden</td></tr></table><div style="height:10pt;background:green"></div><table style="border-collapse:collapse"><tbody style="display:none"><tr><td>Hidden</td></tr></tbody></table><div style="height:10pt;background:blue"></div></section>
+
+</body></html>

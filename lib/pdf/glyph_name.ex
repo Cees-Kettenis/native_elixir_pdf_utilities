@@ -30,6 +30,8 @@
 defmodule NativeElixirPdfUtilities.Pdf.GlyphName do
   @moduledoc "Converts glyph names used by supported PDF simple-font encodings to Unicode."
 
+  alias NativeElixirPdfUtilities.Validators.GlyphNameValidator
+
   @glyphs %{
     "A" => "A",
     "AE" => "Æ",
@@ -760,79 +762,6 @@ defmodule NativeElixirPdfUtilities.Pdf.GlyphName do
   @doc "Converts a PDF glyph name to its Unicode text representation."
   @spec to_unicode(term()) :: {:ok, String.t()} | :error
   def to_unicode(name) do
-    case name do
-      name when is_binary(name) ->
-        if String.valid?(name) do
-          base = name |> String.split(".", parts: 2) |> hd()
-
-          case Map.get(@glyphs, base) do
-            text when is_binary(text) -> {:ok, text}
-            nil -> derived_glyph(base)
-          end
-        else
-          :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp derived_glyph(name) do
-    parts = String.split(name, "_")
-
-    cond do
-      length(parts) > 1 ->
-        parts
-        |> Enum.reduce_while({:ok, []}, fn part, {:ok, characters} ->
-          case to_unicode(part) do
-            {:ok, character} -> {:cont, {:ok, [character | characters]}}
-            :error -> {:halt, :error}
-          end
-        end)
-        |> case do
-          {:ok, characters} -> {:ok, characters |> Enum.reverse() |> Enum.join()}
-          :error -> :error
-        end
-
-      String.starts_with?(name, "uni") ->
-        name |> String.trim_leading("uni") |> unicode_chunks()
-
-      String.starts_with?(name, "u") ->
-        name |> String.trim_leading("u") |> unicode_scalar()
-
-      true ->
-        :error
-    end
-  end
-
-  defp unicode_chunks(hex) do
-    if byte_size(hex) > 0 and rem(byte_size(hex), 4) == 0 do
-      hex
-      |> String.codepoints()
-      |> Enum.chunk_every(4)
-      |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, characters} ->
-        case unicode_scalar(Enum.join(chunk)) do
-          {:ok, character} -> {:cont, {:ok, [character | characters]}}
-          :error -> {:halt, :error}
-        end
-      end)
-      |> case do
-        {:ok, characters} -> {:ok, characters |> Enum.reverse() |> Enum.join()}
-        :error -> :error
-      end
-    else
-      :error
-    end
-  end
-
-  defp unicode_scalar(hex) do
-    case Integer.parse(hex, 16) do
-      {value, ""} when value >= 0 and value <= 0x10FFFF and value not in 0xD800..0xDFFF ->
-        {:ok, <<value::utf8>>}
-
-      _ ->
-        :error
-    end
+    GlyphNameValidator.prepare(name, @glyphs)
   end
 end

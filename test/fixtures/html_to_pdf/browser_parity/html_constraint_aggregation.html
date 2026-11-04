@@ -1,0 +1,14 @@
+<!doctype html><html lang=en-US><head><style>
+@page{size:300pt 240pt;margin:0}html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:15pt}
+form,fieldset{margin:0;padding:3pt;border:3pt solid #888;width:120pt;box-sizing:border-box}
+form{position:absolute;left:12pt}input{display:block;font-family:"DejaVu Sans Mono";font-size:10.5pt;width:105pt;height:15pt;padding:0;border:1pt solid #888;box-sizing:border-box}
+:valid{border-color:green}:invalid{border-color:red}fieldset{position:absolute;left:156pt}
+</style></head><body>
+<form id=external style="top:12pt">External owner</form>
+<input form=external required style="position:absolute;top:42pt;left:12pt">
+<form id=barred style="top:78pt">Barred values<input type=email value=bad readonly></form>
+<form id=filled style="top:144pt">Valid initial<input value=Ready required pattern="R.*"></form>
+<fieldset style="top:12pt">Descendant<input required form=elsewhere></fieldset>
+<form id=elsewhere style="top:78pt;left:156pt">Other owner</form>
+<fieldset disabled style="top:144pt">Disabled<input required></fieldset>
+</body></html>

@@ -57,6 +57,10 @@ predictor 2 and PNG predictors 10 through 15 are supported.
 Unknown filters return `:unsupported_pdf_feature`. Malformed or truncated
 compressed streams return an error rather than partial decoded bytes.
 
+Standalone decoding uses the operation time and memory limits described in
+[Resource limits](resource-limits.md#operation-time-and-memory). Decoding inside
+another document operation shares that operation's allowance.
+
 ## Supported inputs
 
 The reader supports classic cross-reference tables, cross-reference streams,

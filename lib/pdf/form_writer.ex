@@ -7,39 +7,21 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
   @doc false
   @spec create(map(), [map()]) :: {:ok, binary()} | {:error, {atom(), map()}}
   def create(context, controls) do
-    pages =
-      Enum.flat_map(controls, fn control ->
-        if control.type in [:checkbox, :radio] do
-          for state <- [false, true] do
-            text =
-              case {control.type, state} do
-                {:checkbox, false} -> "☐"
-                {:checkbox, true} -> "☒"
-                {:radio, false} -> "○"
-                {:radio, true} -> "●"
-              end
-
-            %{
-              control.appearance
-              | boxes:
-                  Enum.map(control.appearance.boxes, fn box ->
-                    if box.type == :text, do: %{box | text: text}, else: box
-                  end)
-            }
-          end
-        else
-          [
-            control.appearance,
-            %{
-              control.appearance
-              | boxes: Enum.reject(control.appearance.boxes, &(&1.type == :text))
-            }
-          ]
-        end
-      end)
+    pages = Enum.flat_map(controls, &appearance_frames/1)
 
     with {:ok, objects, appearances, next} <-
-           render_appearances(context, pages, 2 * length(controls) + 1) do
+           render_appearances(context, pages, 0),
+         {:ok, controls, editor_objects, next} <-
+           NativeElixirPdfUtilities.Validators.FormAppearanceValidator.encode_controls(
+             controls,
+             next
+           ),
+         :ok <-
+           FormValidator.capacity(
+             context,
+             next - context.document.trailer["Size"] + length(controls) +
+               length(Enum.uniq_by(controls, & &1.name)) + 1
+           ) do
       {controls, _} =
         Enum.map_reduce(controls, appearances, fn control, appearances ->
           count = 2
@@ -47,13 +29,15 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           {Map.put(control, :ap, own), rest}
         end)
 
+      objects = objects ++ editor_objects
+
       groups = Enum.chunk_by(controls, & &1.name)
       # Radio groups may be separated by other controls in the document.
       order = groups |> Enum.map(&hd(&1).name) |> Enum.uniq()
       groups = Enum.group_by(controls, & &1.name)
 
-      {objects, roots, annots, next} =
-        Enum.reduce(order, {objects, [], %{}, next}, fn name, {objects, roots, annots, id} ->
+      {field_objects, roots, annots, next} =
+        Enum.reduce(order, {[], [], %{}, next}, fn name, {objects, roots, annots, id} ->
           controls = groups[name]
           first = hd(controls)
 
@@ -61,15 +45,26 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             first.flags +
               case first.type do
                 :radio -> 32768
-                :choice -> 131_072
                 _ -> 0
               end
 
           value =
             case first.type do
-              :checkbox -> {:name, if(first.value, do: "Yes", else: "Off")}
-              :radio -> {:name, Enum.find_value(controls, "Off", & &1.value)}
-              _ -> InfoCodec.encode_text(first.value)
+              :checkbox ->
+                {:name, if(first.value, do: "Yes", else: "Off")}
+
+              :radio ->
+                {:name, Enum.find_value(controls, "Off", & &1.value)}
+
+              :choice ->
+                case first.value do
+                  nil -> nil
+                  values when is_list(values) -> Enum.map(values, &InfoCodec.encode_text/1)
+                  value -> InfoCodec.encode_text(value)
+                end
+
+              _ ->
+                InfoCodec.encode_text(first.value)
             end
 
           ft =
@@ -91,6 +86,8 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
             "Kids" => kids
           }
 
+          dictionary = if is_nil(value), do: Map.delete(dictionary, "V"), else: dictionary
+
           dictionary =
             if first.type == :choice,
               do:
@@ -101,7 +98,13 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                     first.choices,
                     &[InfoCodec.encode_text(&1.value), InfoCodec.encode_text(&1.label)]
                   )
-                ),
+                )
+                |> Map.put("I", first.selected_indices),
+              else: dictionary
+
+          dictionary =
+            if first.type == :choice and first.choice_listbox,
+              do: Map.put(dictionary, "TI", first.top_index),
               else: dictionary
 
           {widgets, annots} =
@@ -117,6 +120,12 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                 "Rect" => control.rect,
                 "F" => 4
               }
+
+              widget =
+                case Map.get(control, :source_editor_pdf) do
+                  nil -> widget
+                  editor -> Map.put(widget, "NEPUSourceEditor", editor)
+                end
 
               widget =
                 case control.ap do
@@ -139,13 +148,16 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                  annots,
                  page.ref,
                  [{:ref, {widget_id, 0}}],
-                 &(&1 ++ [{:ref, {widget_id, 0}}])
+                 &[{:ref, {widget_id, 0}} | &1]
                )}
             end)
 
-          {objects ++ [{id, 0, {:value, dictionary}} | widgets], roots ++ [{:ref, {id, 0}}],
-           annots, id + 1 + length(controls)}
+          {Enum.reverse(widgets, [{id, 0, {:value, dictionary}} | objects]),
+           [{:ref, {id, 0}} | roots], annots, id + 1 + length(controls)}
         end)
+
+      objects = objects ++ Enum.reverse(field_objects)
+      roots = Enum.reverse(roots)
 
       page_objects =
         Enum.flat_map(context.pages, fn page ->
@@ -162,7 +174,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                   Map.put(
                     page.dictionary,
                     "Annots",
-                    Map.get(page.dictionary, "Annots", []) ++ widgets
+                    Map.get(page.dictionary, "Annots", []) ++ Enum.reverse(widgets)
                   )}}
               ]
           end
@@ -195,6 +207,77 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           ]
       )
     end
+  end
+
+  @doc "Builds the two genuine native appearance states, retaining already projected control backgrounds and button states."
+  @spec appearance_frames(map()) :: [map()]
+  def appearance_frames(control) do
+    case Map.get(control, :appearance_states) do
+      nil ->
+        if control.type in [:checkbox, :radio] do
+          for state <- [false, true] do
+            text =
+              case {control.type, state} do
+                {:checkbox, false} -> "☐"
+                {:checkbox, true} -> "☒"
+                {:radio, false} -> "○"
+                {:radio, true} -> "●"
+              end
+
+            %{
+              control.appearance
+              | boxes: appearance_state_boxes(control.appearance.boxes, {:button, text})
+            }
+          end
+        else
+          [
+            control.appearance,
+            %{
+              control.appearance
+              | boxes:
+                  if(control.type == :choice and control.choice_listbox,
+                    do: appearance_state_boxes(control.appearance.boxes, :list_box_background),
+                    else: appearance_state_boxes(control.appearance.boxes, :background)
+                  )
+            }
+          ]
+        end
+
+      states ->
+        states
+    end
+  end
+
+  defp appearance_state_boxes(boxes, state) do
+    Enum.flat_map(boxes, fn box ->
+      case {box.type, state} do
+        {:text, state} when state in [:background, :list_box_background] ->
+          []
+
+        {:glyph_group, state} when state in [:background, :list_box_background] ->
+          []
+
+        {:text, {:button, text}} ->
+          [%{box | text: text}]
+
+        {type, _state} when type in [:drawing_group, :glyph_group] ->
+          box = %{box | boxes: appearance_state_boxes(box.boxes, state)}
+
+          box =
+            case {type, state} do
+              {:glyph_group, {:button, text}} -> Map.put(box, :actual_text, text)
+              _ -> box
+            end
+
+          [box]
+
+        {_, :list_box_background} ->
+          if is_map(Map.get(box, :form_control)), do: [box], else: []
+
+        _ ->
+          [box]
+      end
+    end)
   end
 
   @doc false
@@ -250,21 +333,25 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
                 {:name, field.new_value}
 
               :checkbox ->
-                {:name,
-                 if(field.new_value,
-                   do: Enum.find(hd(field.widgets).states, &(&1 != "Off")),
-                   else: "Off"
-                 )}
+                {:name, hd(field.widgets).new_state}
             end
 
           dictionary = field.dictionary |> Map.put("V", value) |> Map.delete("I")
 
           dictionary =
+            case List.first(field.appearances) do
+              %{choice_top_index: index} -> Map.put(dictionary, "TI", index)
+              _ -> dictionary
+            end
+
+          dictionary =
             if field.type == :choice and is_list(field.new_value) do
+              selected = MapSet.new(field.new_value)
+
               indexes =
                 field.choices
                 |> Enum.with_index()
-                |> Enum.filter(fn {choice, _} -> choice.value in field.new_value end)
+                |> Enum.filter(fn {choice, _} -> MapSet.member?(selected, choice.value) end)
                 |> Enum.map(&elem(&1, 1))
 
               Map.put(dictionary, "I", indexes)
@@ -281,18 +368,7 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
 
               dictionary =
                 if field.type in [:checkbox, :radio] do
-                  state =
-                    case field.type do
-                      :checkbox ->
-                        if field.new_value,
-                          do: Enum.find(widget.states, &(&1 != "Off")),
-                          else: "Off"
-
-                      :radio ->
-                        if field.new_value in widget.states, do: field.new_value, else: "Off"
-                    end
-
-                  Map.put(dictionary, "AS", {:name, state})
+                  Map.put(dictionary, "AS", {:name, widget.new_state})
                 else
                   Map.put(dictionary, "AP", Map.put(widget.ap, "N", appearance))
                 end
@@ -312,7 +388,10 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
         context,
         objects ++
           entries ++
-          [{next, 0, {:value, form_dictionary}}, {catalog_id, catalog_gen, {:value, catalog}}]
+          [
+            {next, 0, {:value, form_dictionary}},
+            {catalog_id, catalog_gen, {:value, catalog}}
+          ]
       )
     end
   end
@@ -328,7 +407,8 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           Enum.flat_map(fields, fn field -> Enum.map(field.widgets, & &1.ref) end)
       )
 
-    {roots, tree_patches} = prune(form.roots, form.nodes, removed)
+    {roots, reversed_tree_patches} = prune(form.roots, form.nodes, removed)
+    tree_patches = Enum.reverse(reversed_tree_patches)
 
     {page_objects, next} =
       placements
@@ -371,11 +451,12 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
           |> Map.put("Annots", annots)
           |> Map.put("Contents", [{:ref, {id, 0}} | first.contents] ++ [{:ref, {id + 1, 0}}])
 
-        entries = [
-          {id, 0, {:stream, %{}, "q\n"}},
-          {id + 1, 0, {:stream, %{}, IO.iodata_to_binary(["Q\n", invocations])}},
-          {page_id, page_gen, {:value, dictionary}}
-        ]
+        entries =
+          [
+            {id, 0, {:stream, %{}, "q\n"}},
+            {id + 1, 0, {:stream, %{}, IO.iodata_to_binary(["Q\n", invocations])}},
+            {page_id, page_gen, {:value, dictionary}}
+          ]
 
         {entries ++ objects, id + 2}
       end)
@@ -458,23 +539,16 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
         end
 
       _ ->
-        with {:ok, pdf} <- PdfWriter.render(pages, forms: :static),
-             {:ok, source} <- Reader.read_validated(pdf),
-             :ok <-
-               FormValidator.capacity(
-                 context,
-                 map_size(source.document.objects) + length(pages) + extra_objects
-               ) do
-          {objects, appearances, next} =
-            import_appearances(source, context.document.trailer["Size"])
-
+        with {:ok, objects, appearances, next} <-
+               PdfWriter.appearance_objects(pages, context.document.trailer["Size"]),
+             :ok <- FormValidator.capacity(context, length(objects) + extra_objects) do
           {:ok, objects, appearances, next}
         end
     end
   end
 
-  defp prune(refs, nodes, removed) do
-    Enum.reduce(refs, {[], []}, fn ref, {kept, patches} ->
+  defp prune(refs, nodes, removed, patches \\ []) do
+    Enum.reduce(refs, {[], patches}, fn ref, {kept, patches} ->
       if MapSet.member?(removed, ref) do
         {kept, patches}
       else
@@ -482,23 +556,24 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
 
         case Map.get(dictionary, "Kids") do
           kids when is_list(kids) and kids != [] ->
-            {children, more} = prune(kids, nodes, removed)
+            {children, patches} = prune(kids, nodes, removed, patches)
 
             case children do
               [] ->
-                {kept, patches ++ more}
+                {kept, patches}
 
               _ ->
                 {:ref, {id, gen}} = ref
 
-                {kept ++ [ref],
-                 patches ++ more ++ [{id, gen, {:value, Map.put(dictionary, "Kids", children)}}]}
+                {[ref | kept],
+                 [{id, gen, {:value, Map.put(dictionary, "Kids", children)}} | patches]}
             end
 
           _ ->
-            {kept ++ [ref], patches}
+            {[ref | kept], patches}
         end
       end
     end)
+    |> then(fn {kept, patches} -> {Enum.reverse(kept), patches} end)
   end
 end

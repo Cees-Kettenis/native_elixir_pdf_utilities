@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:420px 300px;margin:12px;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:16px;color:#174a86;}
+body > svg {display:block;width:396px;height:270px;}
+</style></head><body><svg viewBox="0 0 396 270" font-size="20">
+<defs>
+<path id="curve" d="M20 80 Q195 -20 376 80"/>
+<path id="straight" d="M20 125 H376" transform="translate(0 5)"/>
+<path id="lower" d="M20 205 Q195 130 376 205"/>
+<clipPath id="window"><rect x="15" y="145" width="370" height="90"/></clipPath>
+<text id="label" y="255" fill="#237437">Reuse Ωé</text>
+</defs>
+<text><textPath href="#curve" startOffset="12%">Curve Ωé ABC</textPath></text>
+<text><textPath href="#straight" startOffset="1em">Start <tspan fill="#a03333" font-weight="bold">Ωé</tspan> End</textPath></text>
+<g opacity="0.7" transform="translate(0 4) skewX(4)" clip-path="url(#window)"><text fill-opacity="0.8"><textPath href="#lower" startOffset="15%">Affine path Ωé ABC</textPath></text></g>
+<use href="#label" x="25"/>
+</svg></body></html>

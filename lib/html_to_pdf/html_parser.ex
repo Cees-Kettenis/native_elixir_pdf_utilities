@@ -7,43 +7,122 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   containers, div containers for flex/grid layouts, lists, links, tables,
   images, static form controls, and CSS-targeting attributes, including
   `data-*` and `aria-*` metadata used by attribute selectors and generated
-  content. Unsupported or malformed markup returns an error instead of
-  guessing at browser behavior.
+  content. Unsupported or malformed markup returns an error by default.
+  `html_recovery: true` enables the documented end-tag and trailing-slash repairs.
+
+  Parsed elements retain accepted names in `:attribute_order`, normalized for
+  their namespace. Validators use this additive source fact for initial hints
+  whose result depends on original token order.
   """
 
+  alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlTree
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
+  alias NativeElixirPdfUtilities.Validators.ForeignContentValidator
+  alias NativeElixirPdfUtilities.Validators.TemplatePatchValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator
 
-  @type text_node :: %{type: :text, text: String.t()}
-  @type element_node :: %{
-          type: :element,
-          tag: String.t(),
-          attributes: map(),
-          children: [text_node() | element_node()]
+  alias NativeElixirPdfUtilities.Validators.TemplateCandidateValidator
+
+  @type parse_option :: {:html_recovery, boolean()}
+
+  # This fixed byte alphabet follows UTF-8 encoding, not a configurable ceiling.
+  @non_ascii_bytes for byte <- 128..255, do: <<byte>>
+
+  @type processing_instruction_node :: %{
+          type: :processing_instruction,
+          target: String.t(),
+          data: String.t(),
+          node_id: reference(),
+          document_id: reference(),
+          tree_scope_id: reference(),
+          parent_id: reference() | nil,
+          source: %{text: String.t(), line: pos_integer(), column: pos_integer()}
         }
-  @type dom_tree :: %{type: :document, children: [element_node()]}
-
-  @structural_tags ~w(html head body style title meta)
-  @block_tags ~w(article aside div footer header main nav p h1 h2 h3 h4 h5 h6 section ul ol table img)
-  @text_inline_tags ~w(strong b em i span a br)
-  @form_control_tags ~w(input select textarea button)
-  @inline_tags @text_inline_tags ++ @form_control_tags
-  @list_tags ~w(ul ol)
-  @table_structure_tags ~w(table colgroup thead tbody tfoot tr)
-  @table_content_tags ~w(caption th td)
-  @void_tags ~w(meta br img col input)
-  @raw_text_tags ~w(style)
-  @rcdata_tags ~w(title textarea)
+  @type text_node :: %{
+          type: :text,
+          text: String.t(),
+          node_id: reference(),
+          document_id: reference(),
+          tree_scope_id: reference(),
+          parent_id: reference() | nil,
+          source: %{text: String.t(), line: pos_integer(), column: pos_integer()}
+        }
+  @type element_node :: %{
+          required(:type) => :element,
+          required(:tag) => String.t(),
+          required(:attributes) => map(),
+          required(:children) => [text_node() | element_node() | processing_instruction_node()],
+          required(:node_id) => reference(),
+          required(:document_id) => reference(),
+          required(:tree_scope_id) => reference(),
+          required(:parent_id) => reference() | nil,
+          required(:source) => %{text: String.t(), line: pos_integer(), column: pos_integer()},
+          optional(:namespace) => :html | :svg | :mathml,
+          optional(:attribute_namespaces) => map(),
+          optional(:attribute_order) => [String.t()],
+          optional(:content) => %{
+            type: :document_fragment,
+            node_id: reference(),
+            document_id: reference(),
+            tree_scope_id: reference(),
+            parent_id: nil,
+            source: %{text: String.t(), line: pos_integer(), column: pos_integer()},
+            children: [text_node() | element_node() | processing_instruction_node()]
+          }
+        }
+  @type dom_tree :: %{
+          type: :document,
+          node_id: reference(),
+          document_id: reference(),
+          tree_scope_id: reference(),
+          parent_id: nil,
+          source: %{text: String.t(), line: pos_integer(), column: pos_integer()},
+          children: [text_node() | element_node() | processing_instruction_node()]
+        }
+  @type fragment_tree :: %{
+          type: :document_fragment,
+          node_id: reference(),
+          document_id: reference(),
+          tree_scope_id: reference(),
+          parent_id: nil,
+          source: %{text: String.t(), line: pos_integer(), column: pos_integer()},
+          children: [text_node() | element_node() | processing_instruction_node()]
+        }
 
   @doc """
   Parses an HTML binary into a renderer DOM tree.
+
+  Set `html_recovery: true` to accept optional end tags, close unclosed HTML
+  elements at end of input, and ignore nonvoid HTML trailing slashes. Recovery
+  defaults to false and leaves SVG/MathML and static input restrictions intact.
+
+  Processing instructions retain case-sensitive targets and literal data. They
+  occupy authored tree positions without painting or acting as element siblings.
+  Every node has a unique logical `node_id`, an authored `document_id`, a
+  `tree_scope_id` and `parent_id`. Document and fragment roots have no parent;
+  template fragments establish separate tree scopes in the same authored document.
+  These identities carry no resource permissions. `source` contains exactly
+  `text`, `line` and `column`, preserving original bytes before newline
+  preprocessing, with positive line numbers and Unicode grapheme columns.
+  Document source text is the complete input. Elements retain their opening
+  token, processing instructions their complete token, and text nodes their
+  tokenizer span before reference decoding or initial newline suppression.
+  Template fragments retain the owning template's opening token. Implied
+  elements have empty source text at line 1, column 1. Text tokens retain their
+  boundaries across comments; CDATA spans include the original delimiters.
   """
-  @spec parse(term()) ::
+  @spec parse(term(), [parse_option()]) ::
           {:ok, dom_tree()}
           | {:error,
-             :invalid_encoding | :invalid_html | :unsupported_html | :resource_limit_exceeded}
-  def parse(html) do
-    case parse_detailed(html) do
+             :invalid_encoding
+             | :invalid_html
+             | :invalid_options
+             | :unsupported_html
+             | :resource_limit_exceeded}
+  def parse(html, opts \\ []) do
+    case parse_detailed(html, opts) do
       {:ok, dom} -> {:ok, dom}
       {:error, {reason, _detail}} -> {:error, reason}
     end
@@ -52,248 +131,1085 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   @doc """
   Parses an HTML binary and returns source-location details when parsing fails.
   """
-  @spec parse_detailed(term()) ::
+  @spec parse_detailed(term(), [parse_option()]) ::
           {:ok, dom_tree()}
           | {:error,
-             {:invalid_encoding | :invalid_html | :unsupported_html | :resource_limit_exceeded,
-              map()}}
-  def parse_detailed(html) do
-    HtmlValidator.with_render_budget(fn ->
-      case HtmlValidator.validate_html_source(html) do
-        {:ok, html} ->
-          HtmlValidator.reserve_render_resource(
-            :max_aggregate_html_source_bytes,
-            byte_size(html),
-            :html
-          )
+             {:invalid_encoding
+              | :invalid_html
+              | :invalid_options
+              | :unsupported_html
+              | :resource_limit_exceeded, map()}}
+  def parse_detailed(html, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn -> parse_input(html, :document) end)
+  end
 
-          case parse_document(html) do
-            {:ok, dom} -> {:ok, dom}
-            {:error, reason} -> {:error, {reason, html_error_detail(reason, html)}}
+  @doc """
+  Parses a fragment in a supported HTML, SVG, or MathML context without adding a wrapper.
+
+  For example, the `"tr"` context accepts table cells, and `"select"` accepts
+  options. Context names are case-insensitive. Raw-text, RCDATA and plaintext contexts
+  consume the entire input as text. `"svg"` and `"math"` select foreign roots;
+  maps such as `%{namespace: :mathml, tag: "annotation-xml",
+  attributes: %{"encoding" => "text/html"}}` describe foreign integration contexts.
+  Foreign elements retain `:namespace` and qualified `:attribute_namespaces`.
+  Unsupported contexts return an error.
+  """
+  @spec parse_fragment(term(), term(), [parse_option()]) ::
+          {:ok, dom_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_fragment(html, context, opts \\ []),
+    do: parse_fragment_detailed(html, context, opts)
+
+  @doc """
+  Parses a fragment with the same source diagnostics and resource limits as `parse_detailed/1`.
+  """
+  @spec parse_fragment_detailed(term(), term(), [parse_option()]) ::
+          {:ok, dom_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_fragment_detailed(html, context, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, context} <- HtmlValidator.validate_html_fragment_context(context) do
+          parse_input(html, context)
+        end
+      end)
+    end)
+  end
+
+  @doc """
+  Parses a canonical fragment with live insertion parents in the supplied context.
+
+  The root is a `document_fragment` with its own tree scope. Omitted `tbody`
+  and `colgroup` parents exist before their authored children are parsed, both
+  in a table context and in nested tables. HTML, SVG and MathML contexts use
+  the same strict validation and tokenizer rules as `parse_fragment_detailed/2`.
+  Original source bytes and authored logical identities are retained. This
+  operation grants no resource permissions and does not enable template patches.
+  The existing fragment API retains its wrapper-free document projection.
+  """
+  @spec parse_fragment_tree_detailed(term(), term(), [parse_option()]) ::
+          {:ok, fragment_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_fragment_tree_detailed(html, context, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, context} <- HtmlValidator.validate_html_fragment_context(context) do
+          parse_input(html, {:fragment_tree, context})
+        end
+      end)
+    end)
+  end
+
+  @doc """
+  Parses a complete rendering document, constructing omitted document and table groups.
+
+  Returns an `html` element containing `head` and `body`, and constructs `tbody`
+  and `colgroup` elements before their authored children are parsed, so live
+  insertion locations include these implied parents. `parse_detailed/1`
+  retains its existing wrapper-free tree representation.
+  """
+  @spec parse_document_detailed(term(), [parse_option()]) ::
+          {:ok, dom_tree()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def parse_document_detailed(html, opts \\ []) do
+    HtmlRecoveryValidator.with_options(opts, fn ->
+      HtmlValidator.with_render_budget(fn ->
+        with {:ok, dom} <- parse_input(html, :render_document),
+             :ok <- HtmlValidator.validate_constructed_html_document(dom) do
+          {:ok, dom}
+        end
+      end)
+    end)
+  end
+
+  defp parse_input(html, context) do
+    HtmlValidator.with_render_budget(fn ->
+      TemplatePatchValidator.with_parser_invocation(html, fn html ->
+        HtmlValidator.reserve_render_resource(
+          :max_aggregate_html_source_bytes,
+          NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.source_charge(html),
+          :html
+        )
+
+        {input, source_context} = source_stream(html)
+
+        case parse_document(input, context, source_context) do
+          {:ok, dom} -> {:ok, dom}
+          error -> parse_error(error, source_context)
+        end
+      end)
+    end)
+  end
+
+  defp source_stream(html) do
+    # Normalize the input stream before tokenization, not decoded references.
+    # Keep the caller's bytes for diagnostics and resource accounting.
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(html), :html)
+    input = HtmlValidator.preprocess_html(html)
+    crlf = :binary.matches(html, "\r\n")
+
+    {column_positions, column_extras} =
+      unicode_columns(html, 0, 0, [], [], :binary.compile_pattern(@non_ascii_bytes))
+
+    source_context = %{
+      original: html,
+      input: input,
+      column_positions: column_positions,
+      column_extras: column_extras,
+      size: byte_size(input),
+      crlf:
+        crlf
+        |> Enum.with_index()
+        |> Enum.map(fn {{position, 2}, index} -> position - index end)
+        |> List.to_tuple(),
+      lines:
+        [
+          0
+          | Enum.map(:binary.matches(html, ["\r\n", "\r", "\n"]), fn {position, length} ->
+              position + length
+            end)
+        ]
+        |> List.to_tuple()
+    }
+
+    {input, source_context}
+  end
+
+  defp parse_error(error, source_context) do
+    case error do
+      {:error, {:html_source, source, remaining_bytes}} ->
+        offset = source_context.size - byte_size(source) - remaining_bytes
+
+        {source, line, column} =
+          original_source_span(source_context, offset, byte_size(source))
+
+        Diagnostics.error(
+          :html,
+          :unsupported_html,
+          html_error_message(line, source),
+          source: source,
+          line: line,
+          column: column
+        )
+
+      {:error, {:html_diagnostic, reason, diagnostic, remaining_bytes, token}} ->
+        offset = source_context.size - byte_size(token) - remaining_bytes
+
+        {source, line, column} =
+          original_source_span(source_context, offset, byte_size(token))
+
+        source = if diagnostic.source == token, do: source, else: diagnostic.source
+
+        Diagnostics.error(diagnostic.stage, reason, diagnostic.message,
+          source: source,
+          module: Map.get(diagnostic, :module),
+          operation: Map.get(diagnostic, :operation),
+          line: line,
+          column: column
+        )
+
+      {:error, {_reason, _diagnostic}} = error ->
+        error
+    end
+  end
+
+  defp parse_document(html, context, source_context) do
+    {context, root_type, ancestors} =
+      case context do
+        {:fragment_tree, context} -> {context, :document_fragment, [:fragment_tree]}
+        :render_document -> {:document, :document, [:render_document]}
+        context -> {context, :document, []}
+      end
+
+    tree =
+      NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.parser_tree(
+        %{text: source_context.original, line: 1, column: 1},
+        root_type
+      )
+
+    case HtmlValidator.html_text_mode(context) != :data do
+      true ->
+        HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+
+        text =
+          if HtmlValidator.html_text_mode(context) != :rcdata,
+            do: html,
+            else: HtmlEntities.decode(html, :text)
+
+        tree =
+          if text == "" do
+            tree
+          else
+            {tree, _id} =
+              HtmlTree.insert(tree, tree.root, %{
+                type: :text,
+                text: text,
+                source: token_source(source_context, html, {:source, ""})
+              })
+
+            tree
           end
 
-        {:error, {reason, diagnostic}} ->
-          {:error, {reason, diagnostic}}
+        {:ok, HtmlTree.fetch(tree, tree.root)}
+
+      false ->
+        html =
+          case html do
+            <<239, 187, 191, remaining::binary>> -> remaining
+            html -> html
+          end
+
+        with {:ok, tree, {:source, ""}} <-
+               parse_children(
+                 {:source, html},
+                 context,
+                 nil,
+                 ancestors,
+                 source_context,
+                 tree,
+                 tree.root
+               ) do
+          {:ok, HtmlTree.fetch(tree, tree.root)}
+        end
+    end
+  end
+
+  @doc false
+  @spec capture_template_candidate(term(), HtmlTree.t()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def capture_template_candidate(handle, tree) do
+    TemplatePatchValidator.with_candidate_input(handle, tree, fn capture ->
+      {input, source_context} = source_stream(capture.source)
+      plan = capture.plan
+
+      normalized_start =
+        capture.source
+        |> binary_part(0, plan.source_offset + byte_size(plan.source.text))
+        |> HtmlValidator.preprocess_html()
+        |> byte_size()
+
+      remaining =
+        {:source, binary_part(input, normalized_start, byte_size(input) - normalized_start)}
+
+      element = %{
+        type: :element,
+        tag: "template",
+        attributes: capture.opening.attributes,
+        attribute_order: capture.opening.attribute_order,
+        children: [],
+        source: plan.source
+      }
+
+      HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+      {original, host} = attach_node(tree, plan.original.parent, element, source_context)
+
+      {original, fragment} =
+        HtmlTree.open_fragment(
+          original,
+          host,
+          plan.source,
+          NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_fragment_id(
+            host
+          )
+        )
+
+      result =
+        element_children(
+          "template",
+          "template",
+          remaining,
+          false,
+          HtmlValidator.html_parent_stack(
+            plan.tokenizer_context,
+            "template",
+            plan.tokenizer_ancestors
+          ),
+          source_context,
+          original,
+          fragment
+        )
+
+      case result do
+        {:ok, original, {:source, rest}} ->
+          {original, _} = HtmlTree.close(original, fragment)
+          {original, _} = HtmlTree.close(original, host)
+          normalized_finish = source_context.size - byte_size(rest)
+
+          {crlf_offset, work} =
+            boundary_index(
+              source_context.crlf,
+              normalized_finish,
+              0,
+              tuple_size(source_context.crlf)
+            )
+
+          HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+          finish = normalized_finish + crlf_offset
+
+          with {:ok, provenance} <-
+                 TemplateCandidateValidator.prepare_original(original, finish, plan),
+               {:ok, transaction} <- HtmlTree.begin_content_patch(tree, plan.target) do
+            bounded = binary_part(input, normalized_start, normalized_finish - normalized_start)
+            prospective_context = %{source_context | size: normalized_finish}
+            prospective_context = Map.put(prospective_context, :insertion, plan.target)
+            ancestors = capture.prospective_ancestors
+
+            prospective =
+              parse_children(
+                {:source, bounded},
+                plan.insertion.context,
+                "template",
+                ancestors,
+                prospective_context,
+                transaction.tree,
+                plan.target.parent
+              )
+
+            case prospective do
+              {:ok, projected, {:source, ""}} ->
+                previous = MapSet.new(transaction.tree.nodes[plan.target.parent].children)
+
+                roots =
+                  projected.nodes[plan.target.parent].children
+                  |> Enum.reverse()
+                  |> Enum.reject(&MapSet.member?(previous, &1))
+
+                with :ok <-
+                       NativeElixirPdfUtilities.Validators.HtmlTreeValidator.validate_patch_adoption(
+                         projected,
+                         plan.target,
+                         roots
+                       ),
+                     {:ok, projected} <-
+                       HtmlTree.finish_content_patch(%{
+                         transaction
+                         | tree: projected,
+                           inserted: roots
+                       }) do
+                  {:ok,
+                   %{
+                     original: original,
+                     projected: projected,
+                     host: host,
+                     fragment: fragment,
+                     inserted_roots: roots,
+                     finish: finish,
+                     provenance: provenance
+                   }}
+                end
+
+              error ->
+                parse_error(error, prospective_context)
+            end
+          end
+
+        error ->
+          parse_error(error, source_context)
       end
     end)
   end
 
-  defp parse_document(html) do
-    with {:ok, tokens} <- tokenize(html),
-         true <- Enum.join(tokens) == html,
-         {:ok, children, []} <- parse_children(tokens, :document, nil, []),
-         true <- children != [] do
-      {:ok, %{type: :document, children: children}}
-    else
-      _ -> {:error, :unsupported_html}
+  @doc false
+  @spec read_source_token(String.t(), term(), [term()]) ::
+          {:ok, String.t(), String.t(), term()} | {:error, term()}
+  def read_source_token(html, context, ancestors) do
+    with {:ok, token, {:source, remaining}} <- read_token(html, context) do
+      classification =
+        cond do
+          HtmlValidator.html_text_mode(context) != :data and
+              HtmlValidator.html_text_token_action(context, token) == :text ->
+            {:ok, :text}
+
+          String.starts_with?(token, "</") ->
+            with {:ok, tag} <- parse_closing_tag(token, context, ancestors),
+                 do: {:ok, {:end, tag}}
+
+          is_tuple(context) and String.starts_with?(token, "<![CDATA[") ->
+            {:ok, :text}
+
+          String.starts_with?(token, "<!") or String.starts_with?(token, "<?") ->
+            {:ok, :other}
+
+          String.starts_with?(token, "<") ->
+            with {:ok, prepared} <- parse_opening_tag(token, context),
+                 do: {:ok, {:start, prepared}}
+
+          true ->
+            {:ok, :text}
+        end
+
+      with {:ok, kind} <- classification, do: {:ok, token, remaining, kind}
     end
   end
 
-  defp tokenize(html) do
-    scan_tokens(html, :data, [])
+  defp next_token(stream, context) do
+    case stream do
+      {:pending, token, remaining} ->
+        {:ok, token, remaining}
+
+      {:source, ""} ->
+        :eof
+
+      {:source, html} ->
+        HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+        read_token(html, context)
+    end
   end
 
-  defp scan_tokens(html, mode, tokens) do
-    HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+  defp read_token(html, context) do
+    cond do
+      HtmlValidator.html_text_mode(context) != :data ->
+        scan_text_content(html, context)
 
-    case {html, mode} do
-      {"", :data} ->
-        {:ok, Enum.reverse(tokens)}
+      String.starts_with?(html, "<?") ->
+        {token, remaining} =
+          case :binary.match(html, ">") do
+            {index, 1} ->
+              length = index + 1
+              <<token::binary-size(^length), remaining::binary>> = html
+              {token, remaining}
 
-      {"", {:text, _tag}} ->
-        {:error, :unsupported_html}
+            :nomatch ->
+              {html, ""}
+          end
 
-      {html, {:text, tag}} ->
-        scan_text_content(html, tag, tokens)
+        {:ok, token, {:source, remaining}}
 
-      {<<"<", _rest::binary>> = html, :data} ->
-        with {:ok, token, remaining} <- take_tag_token(html) do
-          next_mode =
-            case parse_opening_tag(token) do
-              {:ok, tag, _attributes, false}
-              when tag in @raw_text_tags or tag in @rcdata_tags ->
-                {:text, tag}
+      String.starts_with?(html, "<!--") ->
+        {token, remaining} =
+          case :binary.match(html, "-->", scope: {4, byte_size(html) - 4}) do
+            {index, 3} ->
+              length = index + 3
+              <<token::binary-size(^length), remaining::binary>> = html
+              {token, remaining}
 
-              _ ->
-                :data
-            end
+            :nomatch ->
+              {html, ""}
+          end
 
-          scan_tokens(remaining, next_mode, [token | tokens])
+        case HtmlValidator.validate_html_comment(token) do
+          :ok ->
+            {:ok, token, {:source, remaining}}
+
+          {:error, {reason, diagnostic}} ->
+            {:error, {:html_diagnostic, reason, diagnostic, byte_size(remaining), token}}
         end
 
-      {html, :data} ->
+      is_tuple(context) and String.starts_with?(html, "<![CDATA[") ->
+        case :binary.match(html, "]]>", scope: {9, byte_size(html) - 9}) do
+          {index, 3} ->
+            length = index + 3
+            <<token::binary-size(^length), remaining::binary>> = html
+            {:ok, token, {:source, remaining}}
+
+          :nomatch ->
+            {:error, {:html_source, html, 0}}
+        end
+
+      String.starts_with?(html, "<") ->
+        with {:ok, token, remaining} <- take_tag_token(html) do
+          {:ok, token, {:source, remaining}}
+        end
+
+      true ->
         case :binary.match(html, "<") do
           {index, 1} ->
             <<text::binary-size(^index), remaining::binary>> = html
-            scan_tokens(remaining, :data, [text | tokens])
+            {:ok, text, {:source, remaining}}
 
           :nomatch ->
-            scan_tokens("", :data, [html | tokens])
+            {:ok, html, {:source, ""}}
         end
     end
   end
 
   defp take_tag_token(html) do
-    case tag_token_length(html, nil, 0) do
+    case tag_token_length(html, nil, 0, :name) do
       {:ok, length} ->
         <<token::binary-size(^length), remaining::binary>> = html
         {:ok, token, remaining}
 
       :error ->
-        {:error, :unsupported_html}
+        {:error, {:html_source, html, 0}}
     end
   end
 
-  defp tag_token_length(html, quote, length) do
+  defp tag_token_length(html, quote, length, state) do
     case html do
       <<>> ->
         :error
 
       <<character, remaining::binary>> ->
         cond do
-          is_nil(quote) and character in [?", ?'] ->
-            tag_token_length(remaining, character, length + 1)
+          state == :attributes and is_nil(quote) and character in [?", ?'] ->
+            tag_token_length(remaining, character, length + 1, state)
 
           character == quote ->
-            tag_token_length(remaining, nil, length + 1)
+            tag_token_length(remaining, nil, length + 1, state)
 
           is_nil(quote) and character == ?> ->
             {:ok, length + 1}
 
           true ->
-            tag_token_length(remaining, quote, length + 1)
+            tag_token_length(
+              remaining,
+              quote,
+              length + 1,
+              if(state == :name and character in [32, 9, 10, 12, 13],
+                do: :attributes,
+                else: state
+              )
+            )
         end
     end
   end
 
-  defp scan_text_content(html, tag, tokens) do
-    closing_pattern =
-      case tag do
-        "style" -> ~r/<\/\s*style\s*>/iu
-        "title" -> ~r/<\/\s*title\s*>/iu
-        "textarea" -> ~r/<\/\s*textarea\s*>/iu
-      end
+  defp scan_text_content(html, tag) do
+    case HtmlValidator.html_text_end_match(html, tag) do
+      {0, _length} ->
+        with {:ok, closing, remaining} <- take_tag_token(html) do
+          {:ok, closing, {:source, remaining}}
+        end
 
-    case Regex.run(closing_pattern, html, return: :index) do
-      [{index, length}] ->
-        <<text::binary-size(^index), closing::binary-size(^length), remaining::binary>> = html
-        tokens = if text == "", do: [closing | tokens], else: [closing, text | tokens]
-        scan_tokens(remaining, :data, tokens)
+      {index, _length} ->
+        <<text::binary-size(^index), remaining::binary>> = html
+        {:ok, text, {:source, remaining}}
 
       nil ->
-        {:error, :unsupported_html}
+        {:ok, html, {:source, ""}}
     end
   end
 
-  defp parse_children(tokens, context, closing_tag, children) do
-    case tokens do
-      [] when is_nil(closing_tag) ->
-        {:ok, Enum.reverse(children), []}
+  defp parse_children(tokens, context, closing_tag, ancestors, source_context, tree, parent) do
+    next = next_token(tokens, context)
 
-      [] ->
-        {:error, :unsupported_html}
+    action =
+      if (context in [:document, :after_doctype, "html", "head", "table"] and
+            :render_document in ancestors) or
+           (context == "table" and :fragment_tree in ancestors) do
+        token =
+          case next do
+            {:ok, token, _remaining} -> token
+            _ -> :eof
+          end
 
-      [token | remaining] ->
-        parse_child(token, remaining, context, closing_tag, children)
+        previous =
+          if context in [:document, :after_doctype, "html"],
+            do: HtmlTree.last_element_tag(tree, parent),
+            else: nil
+
+        HtmlValidator.html_insertion_action(
+          context,
+          token,
+          previous,
+          tree.nodes[parent].source.text == ""
+        )
+      else
+        :process
+      end
+
+    case {action, next} do
+      {{:error, {reason, diagnostic}}, {:ok, token, remaining}} ->
+        {:error,
+         {:html_diagnostic, reason, diagnostic, byte_size(stream_source(remaining)), token}}
+
+      {{:imply, tag}, next} when next == :eof or elem(next, 0) == :ok ->
+        pending =
+          case next do
+            :eof -> {:source, ""}
+            {:ok, token, remaining} -> {:pending, token, remaining}
+          end
+
+        group =
+          HtmlValidator.construct_html_group(tag, [])
+          |> Map.put(:source, %{text: "", line: 1, column: 1})
+
+        {tree, id} = attach_node(tree, parent, group, source_context)
+
+        # The implied parent exists before reprocessing the authored token.
+        # Recursion tracks its insertion mode, while HtmlTree owns its address.
+        with {:ok, tree, rest} <-
+               HtmlValidator.within_html_element(fn ->
+                 parse_children(
+                   pending,
+                   tag,
+                   tag,
+                   [context | ancestors],
+                   source_context,
+                   tree,
+                   id
+                 )
+               end) do
+          {tree, _node} = HtmlTree.close(tree, id)
+          parse_children(rest, context, closing_tag, ancestors, source_context, tree, parent)
+        end
+
+      {:close, {:ok, token, remaining}} ->
+        {:ok, tree, {:pending, token, remaining}}
+
+      {_, :eof} when is_nil(closing_tag) ->
+        {:ok, tree, {:source, ""}}
+
+      {_, :eof} ->
+        case HtmlValidator.html_eof_end_tag_allowed?(
+               context,
+               closing_tag,
+               HtmlTree.children(tree, parent),
+               ancestors,
+               tree.nodes[parent].source.text == ""
+             ) do
+          true ->
+            {:ok, tree, {:source, ""}}
+
+          false ->
+            NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.missing_end_tag(
+              closing_tag,
+              HtmlTree.fetch(tree, parent).source,
+              context
+            )
+        end
+
+      {_, {:ok, token, remaining}} ->
+        parse_child(
+          token,
+          remaining,
+          context,
+          closing_tag,
+          ancestors,
+          source_context,
+          tree,
+          parent
+        )
+
+      {_, {:error, _reason} = error} ->
+        error
     end
   end
 
-  defp parse_child(token, remaining, context, closing_tag, children) do
+  defp stream_source({:source, source}), do: source
+
+  defp parse_child(
+         token,
+         remaining,
+         context,
+         closing_tag,
+         ancestors,
+         source_context,
+         tree,
+         parent
+       ) do
     cond do
-      context == :document and doctype_token?(token) ->
-        parse_children(remaining, context, closing_tag, children)
+      HtmlValidator.html_text_mode(context) != :data ->
+        case HtmlValidator.html_text_token_action(context, token) do
+          :end ->
+            {:ok, tree, remaining}
 
-      context in @raw_text_tags or context in @rcdata_tags ->
-        parse_text_content_child(token, remaining, context, closing_tag, children)
+          :invalid ->
+            {:error, {:html_source, token, byte_size(stream_source(remaining))}}
+
+          :text ->
+            text =
+              if HtmlValidator.html_text_mode(context) != :rcdata,
+                do: token,
+                else: HtmlEntities.decode(token, :text)
+
+            {tree, id} =
+              attach_node(
+                tree,
+                parent,
+                %{
+                  type: :text,
+                  text: text,
+                  source: token_source(source_context, token, remaining)
+                },
+                source_context
+              )
+
+            {tree, _node} = HtmlTree.close(tree, id)
+
+            parse_children(
+              remaining,
+              context,
+              closing_tag,
+              ancestors,
+              source_context,
+              tree,
+              parent
+            )
+        end
+
+      String.starts_with?(token, "<?") ->
+        case HtmlValidator.validate_html_processing_instruction(token) do
+          {:ok, node} ->
+            {tree, id} =
+              attach_node(
+                tree,
+                parent,
+                Map.put(node, :source, token_source(source_context, token, remaining)),
+                source_context
+              )
+
+            {tree, _node} = HtmlTree.close(tree, id)
+
+            parse_children(
+              remaining,
+              context,
+              closing_tag,
+              ancestors,
+              source_context,
+              tree,
+              parent
+            )
+
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {:html_diagnostic, reason, diagnostic, byte_size(stream_source(remaining)), token}}
+        end
+
+      String.starts_with?(token, "<!--") ->
+        parse_children(remaining, context, closing_tag, ancestors, source_context, tree, parent)
+
+      is_tuple(context) and String.starts_with?(token, "<![CDATA[") ->
+        text = binary_part(token, 9, byte_size(token) - 12)
+
+        {tree, id} =
+          attach_node(
+            tree,
+            parent,
+            %{
+              type: :text,
+              text: text,
+              source: token_source(source_context, token, remaining)
+            },
+            source_context
+          )
+
+        {tree, _node} = HtmlTree.close(tree, id)
+        parse_children(remaining, context, closing_tag, ancestors, source_context, tree, parent)
+
+      Regex.match?(~r/^<!doctype(?=[ \t\n\f\r>])/i, token) ->
+        case HtmlValidator.validate_html_doctype(
+               token,
+               context,
+               Enum.reverse(HtmlTree.children(tree, parent))
+             ) do
+          :ok ->
+            parse_children(
+              remaining,
+              :after_doctype,
+              closing_tag,
+              ancestors,
+              source_context,
+              tree,
+              parent
+            )
+
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {:html_diagnostic, reason, diagnostic, byte_size(stream_source(remaining)), token}}
+        end
 
       String.starts_with?(token, "</") ->
-        case parse_closing_tag(token) do
-          {:ok, tag} when tag == closing_tag -> {:ok, Enum.reverse(children), remaining}
-          _ -> {:error, :unsupported_html}
+        case parse_closing_tag(token, context, ancestors) do
+          {:ok, tag} ->
+            cond do
+              tag == closing_tag ->
+                {:ok, tree, remaining}
+
+              HtmlValidator.omitted_html_end_tag?(
+                closing_tag,
+                {:end, tag},
+                ancestors,
+                tree.nodes[parent].source.text == ""
+              ) ->
+                {:ok, tree, {:pending, token, remaining}}
+
+              true ->
+                case HtmlValidator.html_implied_start_closure(
+                       context,
+                       tag,
+                       Enum.reverse(HtmlTree.children(tree, parent))
+                     ) do
+                  nil ->
+                    {:error, {:html_source, token, byte_size(stream_source(remaining))}}
+
+                  {:group, kind, group_children, previous} ->
+                    group = HtmlValidator.construct_html_group(kind, group_children)
+
+                    tree =
+                      HtmlTree.replace_children(tree, parent, Enum.reverse(previous) ++ [group])
+
+                    parse_children(
+                      remaining,
+                      context,
+                      closing_tag,
+                      ancestors,
+                      source_context,
+                      tree,
+                      parent
+                    )
+
+                  next_context ->
+                    parse_children(
+                      remaining,
+                      next_context,
+                      closing_tag,
+                      ancestors,
+                      source_context,
+                      tree,
+                      parent
+                    )
+                end
+            end
+
+          _ ->
+            {:error, {:html_source, token, byte_size(stream_source(remaining))}}
         end
 
       String.starts_with?(token, "<") ->
-        with {:ok, tag, attributes, self_closing?} <- parse_opening_tag(token),
-             true <- allowed_child?(context, tag),
-             {:ok, element_children, rest} <- element_children(tag, remaining, self_closing?),
-             true <- valid_element?(tag, attributes, element_children) do
-          element = %{
-            type: :element,
-            tag: tag,
-            attributes: attributes,
-            children: element_children
-          }
+        with {:ok, prepared} <- parse_opening_tag(token, context),
+             tag <- prepared.tag,
+             attributes <- prepared.attributes,
+             :ok <-
+               NativeElixirPdfUtilities.Validators.HtmlMetadataValidator.validate_attributes(
+                 prepared,
+                 token
+               ),
+             source = token_source(source_context, token, remaining),
+             planning =
+               (if tag == "template" and prepared.namespace == :html do
+                  offset =
+                    source_context.size - byte_size(token) - byte_size(stream_source(remaining))
 
-          parse_children(rest, context, closing_tag, [element | children])
+                  {crlf_offset, work} =
+                    boundary_index(
+                      source_context.crlf,
+                      offset,
+                      0,
+                      tuple_size(source_context.crlf)
+                    )
+
+                  HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+
+                  {tree, parent,
+                   %{
+                     source: source,
+                     offset: offset + crlf_offset,
+                     tokenizer_context: context,
+                     ancestors: ancestors
+                   }}
+                else
+                  nil
+                end),
+             :ok <- HtmlValidator.validate_html_element_attributes(tag, attributes, planning),
+             false <-
+               HtmlValidator.omitted_html_end_tag?(
+                 closing_tag,
+                 {:start, tag},
+                 ancestors,
+                 tree.nodes[parent].source.text == ""
+               ),
+             true <- ForeignContentValidator.valid_child?(context, prepared, ancestors) do
+          case NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.take_action(
+                 tree,
+                 planning
+               ) do
+            {:replace, projected, finish} ->
+              HtmlValidator.reserve_render_resource(:max_html_tree_work, finish, :html)
+
+              normalized_finish =
+                byte_size(
+                  HtmlValidator.preprocess_html(binary_part(source_context.original, 0, finish))
+                )
+
+              rest =
+                {:source,
+                 binary_part(
+                   source_context.input,
+                   normalized_finish,
+                   source_context.size - normalized_finish
+                 )}
+
+              parse_children(
+                rest,
+                context,
+                closing_tag,
+                ancestors,
+                source_context,
+                projected,
+                parent
+              )
+
+            :keep ->
+              element = %{
+                type: :element,
+                tag: tag,
+                attributes: attributes,
+                attribute_order: prepared.attribute_order,
+                children: [],
+                source: source
+              }
+
+              element =
+                if prepared.namespace != :html or is_tuple(context),
+                  do:
+                    element
+                    |> Map.put(:namespace, prepared.namespace)
+                    |> Map.put(:attribute_namespaces, prepared.attribute_namespaces),
+                  else: element
+
+              # Attach the opening element now. Recursive calls only track tokenizer
+              # context; the canonical table owns open and closed tree relationships.
+              {tree, id} = attach_node(tree, parent, element, source_context)
+
+              {tree, child_parent} =
+                if tag == "template" and prepared.namespace == :html,
+                  do:
+                    HtmlTree.open_fragment(
+                      tree,
+                      id,
+                      element.source,
+                      NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_fragment_id(
+                        id
+                      )
+                    ),
+                  else: {tree, id}
+
+              with {:ok, tree, rest} <-
+                     element_children(
+                       ForeignContentValidator.child_context(prepared),
+                       if(prepared.namespace == :svg, do: String.downcase(tag), else: tag),
+                       remaining,
+                       prepared.self_closing?,
+                       HtmlValidator.html_parent_stack(context, tag, ancestors),
+                       source_context,
+                       tree,
+                       child_parent
+                     ),
+                   element_children <- HtmlTree.children(tree, child_parent),
+                   true <-
+                     ForeignContentValidator.valid_element?(
+                       prepared,
+                       element_children,
+                       context,
+                       ancestors
+                     ) do
+                normalized =
+                  HtmlValidator.normalize_html_element_children(
+                    tag,
+                    element_children,
+                    stream_source(remaining)
+                  )
+
+                tree =
+                  if normalized == element_children,
+                    do: tree,
+                    else: HtmlTree.replace_children(tree, child_parent, normalized)
+
+                {tree, _node} = HtmlTree.close(tree, child_parent)
+
+                {tree, _node} =
+                  if child_parent == id, do: {tree, nil}, else: HtmlTree.close(tree, id)
+
+                parse_children(
+                  rest,
+                  context,
+                  closing_tag,
+                  ancestors,
+                  source_context,
+                  tree,
+                  parent
+                )
+              else
+                false ->
+                  {:error, {:html_source, token, byte_size(stream_source(remaining))}}
+
+                error ->
+                  error
+              end
+          end
         else
-          _ -> {:error, :unsupported_html}
+          true ->
+            {:ok, tree, {:pending, token, remaining}}
+
+          {:error, {:html_source, source}} ->
+            {:error, {:html_source, source, byte_size(stream_source(remaining))}}
+
+          {:error, {reason, diagnostic}} when is_map(diagnostic) ->
+            diagnostic = Diagnostics.with_context(diagnostic, source: token)
+
+            if Map.has_key?(diagnostic, :line) and Map.has_key?(diagnostic, :column) do
+              # Nested validators already mapped their own original token. The
+              # enclosing template opening must not replace those coordinates.
+              {:error, {reason, diagnostic}}
+            else
+              {:error,
+               {:html_diagnostic, reason, diagnostic, byte_size(stream_source(remaining)), token}}
+            end
+
+          {:error, :unsupported_html} ->
+            {:error, {:html_source, token <> stream_source(remaining), 0}}
+
+          false ->
+            {:error, {:html_source, token, byte_size(stream_source(remaining))}}
         end
 
-      context == :document and String.trim(token) == "" ->
-        parse_children(remaining, context, closing_tag, children)
-
-      context in @list_tags and String.trim(token) == "" ->
-        parse_children(remaining, context, closing_tag, children)
-
-      context in @table_structure_tags and String.trim(token) == "" ->
-        parse_children(remaining, context, closing_tag, children)
-
-      context == "select" and String.trim(token) == "" ->
-        parse_children(remaining, context, closing_tag, children)
-
-      context in ~w(html head body) and String.trim(token) == "" ->
-        parse_children(remaining, context, closing_tag, children)
-
-      context == :document ->
-        {:error, :unsupported_html}
-
       true ->
-        parse_children(
-          remaining,
-          context,
-          closing_tag,
-          [%{type: :text, text: HtmlEntities.decode(token, :text)} | children]
-        )
+        case HtmlValidator.html_text_action(context, token) do
+          :ignore ->
+            parse_children(
+              remaining,
+              context,
+              closing_tag,
+              ancestors,
+              source_context,
+              tree,
+              parent
+            )
+
+          :invalid ->
+            {:error,
+             {:html_source, String.trim_leading(token), byte_size(stream_source(remaining))}}
+
+          :text ->
+            {tree, id} =
+              attach_node(
+                tree,
+                parent,
+                %{
+                  type: :text,
+                  text: HtmlEntities.decode(token, :text),
+                  source: token_source(source_context, token, remaining)
+                },
+                source_context
+              )
+
+            {tree, _node} = HtmlTree.close(tree, id)
+
+            parse_children(
+              remaining,
+              context,
+              closing_tag,
+              ancestors,
+              source_context,
+              tree,
+              parent
+            )
+        end
     end
   end
 
-  defp parse_text_content_child(token, remaining, context, closing_tag, children) do
-    case parse_closing_tag(token) do
-      {:ok, tag} when tag == closing_tag ->
-        {:ok, Enum.reverse(children), remaining}
-
-      _ ->
-        text =
-          case context in @raw_text_tags do
-            true -> token
-            false -> HtmlEntities.decode(token, :text)
-          end
-
-        parse_children(
-          remaining,
-          context,
-          closing_tag,
-          [%{type: :text, text: text} | children]
-        )
-    end
-  end
-
-  defp parse_opening_tag(token) do
+  defp parse_opening_tag(token, context \\ :document) do
     captures =
       Regex.named_captures(
-        ~r/^<\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*(?<attributes>(?:[^<>"']|"[^"<]*"|'[^'<]*')*?)(?<self_closing>\/?)\s*>$/u,
+        ~r/^<(?<tag>[a-zA-Z][^ \t\n\f\r\x00\/>]*)(?<attributes>[\s\S]*)>$/u,
         token
       )
 
     case captures do
-      %{"tag" => tag, "attributes" => attributes, "self_closing" => self_closing} ->
-        tag = String.downcase(tag)
+      %{"tag" => tag, "attributes" => attributes} ->
+        tag = String.downcase(tag, :ascii)
 
-        with true <- supported_tag?(tag),
-             {:ok, attributes} <- parse_attributes(attributes, tag) do
-          {:ok, tag, attributes, self_closing == "/" or tag in @void_tags}
-        else
-          _ -> {:error, :unsupported_html}
+        case ForeignContentValidator.prepare_start_tag(tag, attributes, context) do
+          {:ok, prepared} -> {:ok, prepared}
+          {:error, :unsupported_html} -> {:error, {:html_source, token}}
+          error -> error
         end
 
       _ ->
@@ -301,12 +1217,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     end
   end
 
-  defp parse_closing_tag(token) do
-    case Regex.named_captures(~r/^<\/\s*(?<tag>[a-zA-Z][a-zA-Z0-9]*)\s*>$/u, token) do
+  defp parse_closing_tag(token, context, ancestors) do
+    case Regex.named_captures(~r/^<\/(?<tag>[a-zA-Z][^ \t\n\f\r\x00\/>]*)[ \t\n\f\r]*>$/u, token) do
       %{"tag" => tag} ->
-        tag = String.downcase(tag)
+        tag = String.downcase(tag, :ascii)
 
-        case supported_tag?(tag) do
+        case ForeignContentValidator.supported_end_tag?(tag, context, ancestors) do
           true -> {:ok, tag}
           false -> {:error, :unsupported_html}
         end
@@ -316,329 +1232,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     end
   end
 
-  defp parse_attributes(attributes, tag) do
-    case String.trim(attributes) do
-      "" ->
-        {:ok, %{}}
-
-      attributes ->
-        captures =
-          Regex.scan(
-            ~r/\s*([a-zA-Z][a-zA-Z0-9_-]*)(?:\s*=\s*("[^"]*"|'[^']*'))?/u,
-            attributes
-          )
-
-        parsed_source = captures |> Enum.map_join("", &List.first/1) |> String.trim()
-
-        with true <- parsed_source == attributes,
-             {:ok, parsed} <- attributes_to_map(captures, tag) do
-          {:ok, parsed}
-        else
-          _ -> {:error, :unsupported_html}
-        end
-    end
-  end
-
-  defp attributes_to_map(captures, tag) do
-    Enum.reduce_while(captures, {:ok, %{}}, fn capture, {:ok, acc} ->
-      [_, name | quoted] = capture
-      quoted_value = List.first(quoted) || ""
-      name = String.downcase(name)
-
-      value =
-        case quoted_value do
-          "" ->
-            ""
-
-          quoted_value ->
-            quoted_value |> String.slice(1..-2//1) |> HtmlEntities.decode(:attribute)
-        end
-
-      case {quoted_value == "", name, tag, Map.has_key?(acc, name)} do
-        {true, name, tag, false} ->
-          case HtmlValidator.valid_boolean_form_attribute?(tag, name) do
-            true -> {:cont, {:ok, Map.put(acc, name, value)}}
-            false -> {:halt, {:error, :unsupported_html}}
-          end
-
-        {false, "style", _, false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "id", _, false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "class", _, false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "title", _, false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "role", _, false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, name, _, false}
-        when is_binary(name) and
-               (binary_part(name, 0, min(byte_size(name), 5)) == "data-" or
-                  binary_part(name, 0, min(byte_size(name), 5)) == "aria-") ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "lang", "html", false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "href", "a", false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "src", "img", false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "alt", "img", false} ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, name, "meta", false} when name in ~w(charset content http-equiv name property) ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, name, tag, false} when tag in ~w(td th) and name in ~w(colspan rowspan) ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, "scope", "th", false} ->
-          case HtmlValidator.valid_table_header_scope?(value) do
-            true -> {:cont, {:ok, Map.put(acc, name, value)}}
-            false -> {:halt, {:error, :unsupported_html}}
-          end
-
-        {false, "span", tag, false} when tag in ~w(colgroup col) ->
-          {:cont, {:ok, Map.put(acc, name, value)}}
-
-        {false, name, tag, false} when tag in @form_control_tags or tag == "option" ->
-          case HtmlValidator.valid_form_attribute?(tag, name, value) do
-            true -> {:cont, {:ok, Map.put(acc, name, value)}}
-            false -> {:halt, {:error, :unsupported_html}}
-          end
-
-        _ ->
-          {:halt, {:error, :unsupported_html}}
-      end
-    end)
-  end
-
-  defp element_children(tag, remaining, self_closing?) do
+  defp element_children(
+         context,
+         tag,
+         remaining,
+         self_closing?,
+         ancestors,
+         source_context,
+         tree,
+         parent
+       ) do
     case self_closing? do
       true ->
-        {:ok, [], remaining}
+        {:ok, tree, remaining}
 
       false ->
-        HtmlValidator.within_html_element(fn -> parse_children(remaining, tag, tag, []) end)
+        HtmlValidator.within_html_element(fn ->
+          parse_children(remaining, context, tag, ancestors, source_context, tree, parent)
+        end)
     end
   end
 
-  defp allowed_child?(context, tag) do
+  defp unsupported_tag_source(source) do
+    case Regex.run(~r/^<\/?[ \t\n\f\r]*([a-zA-Z][^ \t\n\f\r\x00\/>]*)/u, source) do
+      [_prefix, tag] ->
+        case HtmlValidator.supported_html_tag?(String.downcase(tag, :ascii)) do
+          true -> nil
+          false -> source
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  defp invalid_attribute_source(source) do
+    case Regex.run(~r/^<[a-zA-Z][a-zA-Z0-9]*(?:[^<>"']|"[^"]*"|'[^']*')*>/u, source) do
+      [token] ->
+        case parse_opening_tag(token) do
+          {:ok, _prepared} -> nil
+          _ -> token
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  defp html_error_message(line, source) do
     cond do
-      context == :document ->
-        tag in @block_tags or tag in ~w(html head body style meta title)
-
-      context == "html" ->
-        tag in @block_tags or tag in ~w(head body style meta title)
-
-      context == "head" ->
-        tag in ~w(style meta title)
-
-      context == "body" ->
-        tag in @block_tags or tag in ~w(style meta title)
-
-      context in @list_tags ->
-        tag == "li"
-
-      context == "style" ->
-        false
-
-      context == "title" ->
-        false
-
-      context == "table" ->
-        tag in ~w(caption colgroup thead tbody tfoot tr)
-
-      context == "colgroup" ->
-        tag == "col"
-
-      context in ~w(thead tbody tfoot) ->
-        tag == "tr"
-
-      context == "tr" ->
-        tag in ~w(th td)
-
-      context == "a" ->
-        tag in @text_inline_tags and tag != "a"
-
-      context == "select" ->
-        tag == "option"
-
-      context in ["option", "textarea"] ->
-        false
-
-      context == "button" ->
-        tag in ["strong", "b", "em", "i", "span"]
-
-      context in @table_content_tags ->
-        tag in @inline_tags or tag in @block_tags
-
-      context in ~w(article aside div footer header main nav section) ->
-        tag in @block_tags or tag in @inline_tags or tag == "style"
-
-      context == "li" or context in @block_tags or context in @inline_tags ->
-        tag in @inline_tags
-    end
-  end
-
-  defp supported_tag?(tag) do
-    tag in @structural_tags or tag in @block_tags or tag in @inline_tags or tag == "li" or
-      tag in ~w(caption colgroup col thead tbody tfoot tr th td option)
-  end
-
-  defp valid_element?(tag, attributes, children) do
-    case tag do
-      "head" ->
-        Enum.all?(children, &match?(%{tag: tag} when tag in ["style", "meta", "title"], &1))
-
-      "style" ->
-        Enum.all?(children, &match?(%{type: :text}, &1))
-
-      "title" ->
-        Enum.all?(children, &match?(%{type: :text}, &1))
-
-      tag when tag in @form_control_tags or tag == "option" ->
-        HtmlValidator.valid_form_element?(tag, attributes, children)
-
-      tag when tag in @void_tags ->
-        children == []
-
-      "table" ->
-        table_children_valid?(children)
-
-      "colgroup" ->
-        span? = Map.has_key?(attributes, "span")
-
-        (children != [] and not span? and Enum.all?(children, &match?(%{tag: "col"}, &1))) or
-          (children == [] and span?)
-
-      tag when tag in ~w(thead tbody tfoot) ->
-        children != [] and Enum.all?(children, &match?(%{tag: "tr"}, &1))
-
-      "tr" ->
-        children != [] and Enum.all?(children, &match?(%{tag: tag} when tag in ["th", "td"], &1))
-
-      _ ->
-        true
-    end
-  end
-
-  defp table_children_valid?(children) do
-    children =
-      case children do
-        [%{tag: "caption"} | remaining] -> remaining
-        children -> children
-      end
-
-    {_column_groups, row_children} =
-      Enum.split_while(children, &match?(%{tag: "colgroup"}, &1))
-
-    row_children != [] and Enum.all?(row_children, &table_row_container?/1)
-  end
-
-  defp table_row_container?(child) do
-    case child do
-      %{tag: tag} when tag in ~w(thead tbody tfoot tr) -> true
-      _ -> false
-    end
-  end
-
-  defp doctype_token?(token) do
-    Regex.match?(~r/^<!doctype\s+html\s*>$/iu, token)
-  end
-
-  defp html_error_detail(reason, html) do
-    source = html_error_source(html)
-    {line, column} = source_location(html, source)
-
-    %{
-      stage: :html,
-      reason: reason,
-      message: html_error_message(reason, line, source, html),
-      line: line,
-      column: column,
-      source: source
-    }
-  end
-
-  defp html_error_source(html) do
-    cond do
-      String.trim(html) == "" ->
-        ""
-
-      malformed_tag = malformed_tag_source(html) ->
-        malformed_tag
-
-      unsupported = unsupported_tag_source(html) ->
-        unsupported
-
-      invalid_attribute = invalid_attribute_source(html) ->
-        invalid_attribute
-
-      true ->
-        html |> String.split("\n") |> Enum.find(&(String.trim(&1) != "")) |> Kernel.||("")
-    end
-    |> String.trim()
-  end
-
-  defp malformed_tag_source(html) do
-    html
-    |> String.split("\n")
-    |> Enum.find(fn line ->
-      String.contains?(line, "<") and not Regex.match?(~r/<[^>]*>/u, line)
-    end)
-  end
-
-  defp unsupported_tag_source(html) do
-    Regex.scan(~r/<\/?\s*([a-zA-Z][a-zA-Z0-9]*)[^>]*>/u, html)
-    |> Enum.find_value(fn [source, tag] ->
-      case supported_tag?(String.downcase(tag)) do
-        true -> nil
-        false -> source
-      end
-    end)
-  end
-
-  defp invalid_attribute_source(html) do
-    Regex.scan(~r/<\s*([a-zA-Z][a-zA-Z0-9]*)\s*([^<>]*?)(?:\/?)\s*>/u, html)
-    |> Enum.find_value(fn [source, tag, attributes] ->
-      tag = String.downcase(tag)
-
-      case supported_tag?(tag) and String.trim(attributes) != "" and
-             parse_attributes(attributes, tag) != {:ok, attribute_map(source)} do
-        true -> source
-        false -> nil
-      end
-    end)
-  end
-
-  defp attribute_map(source) do
-    ~r/\s+([a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*("[^"]*"|'[^']*')/u
-    |> Regex.scan(source)
-    |> Enum.reduce(%{}, fn [_, name, quoted_value], acc ->
-      Map.put(
-        acc,
-        String.downcase(name),
-        quoted_value
-        |> String.slice(1..-2//1)
-        |> HtmlEntities.decode(:attribute)
-      )
-    end)
-  end
-
-  defp html_error_message(_reason, line, source, html) do
-    cond do
-      String.trim(html) == "" ->
-        "line 1: document is empty"
-
       unsupported_tag_source(source) ->
         ~s(line #{line}: HTML tag "#{source}" is unsupported)
 
@@ -650,18 +1292,120 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     end
   end
 
-  defp source_location(source, snippet) do
-    case snippet == "" do
-      true ->
-        {1, 1}
+  defp attach_node(tree, parent, node, source_context) do
+    before =
+      case Map.get(source_context, :insertion) do
+        %{parent: ^parent, end: finish} -> finish
+        _ -> nil
+      end
 
-      false ->
-        {index, _length} = :binary.match(source, snippet)
-        prefix = binary_part(source, 0, index)
-        lines = String.split(prefix, "\n", trim: false)
-        line = length(lines)
-        column = String.length(List.last(lines) || "") + 1
-        {line, column}
+    id =
+      NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_node_id(
+        node,
+        parent
+      )
+
+    if id,
+      do: HtmlTree.insert(tree, parent, node, before, id),
+      else: HtmlTree.insert(tree, parent, node, before)
+  end
+
+  defp token_source(context, token, remaining) do
+    offset = context.size - byte_size(token) - byte_size(stream_source(remaining))
+    {text, line, column} = original_source_span(context, offset, byte_size(token))
+    %{text: text, line: line, column: column}
+  end
+
+  # Precomputed newline and grapheme indexes preserve byte spans and columns
+  # without rescanning the document or line prefix for each captured token.
+  defp original_source_span(context, offset, length) do
+    {first, last, crlf_work} =
+      case context.crlf do
+        {} ->
+          # Each of the two empty-index searches charges one visit.
+          {offset, offset + length, 2}
+
+        positions ->
+          {first_index, first_work} = boundary_index(positions, offset, 0, tuple_size(positions))
+
+          {last_index, last_work} =
+            boundary_index(positions, offset + length, 0, tuple_size(positions))
+
+          {offset + first_index, offset + length + last_index, first_work + last_work}
+      end
+
+    {line, line_work} = boundary_index(context.lines, first + 1, 0, tuple_size(context.lines))
+    line_start = elem(context.lines, line - 1)
+
+    work = last - first + crlf_work + line_work
+
+    {column, work} =
+      case context.column_positions do
+        {} ->
+          # ASCII columns need no index; retain both empty-search reservations.
+          {first - line_start + 1, work + 2}
+
+        positions ->
+          {[first_extra, line_extra], work} =
+            Enum.map_reduce([first, line_start], work, fn position, work ->
+              {index, search_work} =
+                boundary_index(positions, position + 1, 0, tuple_size(positions))
+
+              {if(index == 0, do: 0, else: elem(context.column_extras, index - 1)),
+               work + search_work}
+            end)
+
+          {first - line_start - first_extra + line_extra + 1, work}
+      end
+
+    HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+
+    {binary_part(context.original, first, last - first), line, column}
+  end
+
+  # Grapheme byte-width differences let source columns use binary searches,
+  # including combining marks, without rescanning each token's full line prefix.
+  defp unicode_columns(html, offset, extra, positions, extras, pattern) do
+    case :binary.match(html, pattern) do
+      :nomatch ->
+        {positions |> Enum.reverse() |> List.to_tuple(),
+         extras |> Enum.reverse() |> List.to_tuple()}
+
+      {index, 1} ->
+        # Include the preceding ASCII character in case a combining mark belongs
+        # to it. All other ASCII bytes can be skipped in one binary scan.
+        skipped = max(index - 1, 0)
+        relevant = binary_part(html, skipped, byte_size(html) - skipped)
+        {grapheme, remaining} = String.next_grapheme(relevant)
+        size = byte_size(grapheme)
+        offset = offset + skipped + size
+
+        if size == 1 do
+          unicode_columns(remaining, offset, extra, positions, extras, pattern)
+        else
+          unicode_columns(
+            remaining,
+            offset,
+            extra + size - 1,
+            [offset | positions],
+            [extra + size - 1 | extras],
+            pattern
+          )
+        end
+    end
+  end
+
+  defp boundary_index(positions, boundary, first, last, work \\ 0) do
+    if first == last do
+      # The source-span caller reserves all searches together after the bounded
+      # indexes are resolved, preserving the complete comparison count.
+      {first, work + 1}
+    else
+      middle = div(first + last, 2)
+
+      if elem(positions, middle) < boundary,
+        do: boundary_index(positions, boundary, middle + 1, last, work + 1),
+        else: boundary_index(positions, boundary, first, middle, work + 1)
     end
   end
 end

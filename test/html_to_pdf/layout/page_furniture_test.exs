@@ -1,0 +1,759 @@
+defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
+  use ExUnit.Case
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
+  alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter, ResourceContext}
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  @page_size {200.0, 100.0}
+  @margin 20.0
+  @wide_image "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiIGZpbGw9IiMxZDRlZDgiLz48L3N2Zz4="
+
+  test "decorate leaves pages unchanged when page furniture is disabled" do
+    pages = pages(1)
+    layout_tree = layout_tree()
+
+    assert PageFurniture.decorate(pages, layout_tree, []) == {:ok, pages}
+
+    assert PageFurniture.decorate(pages, layout_tree, page_furniture: nil) ==
+             {:ok, pages}
+
+    assert PageFurniture.decorate(pages, layout_tree, page_furniture: false) ==
+             {:ok, pages}
+  end
+
+  test "decorate substitutes page tokens and applies first odd and even variants" do
+    assert {:ok, decorated} =
+             PageFurniture.decorate(pages(4), layout_tree(),
+               page_furniture: [
+                 header: [
+                   default: furniture_html("Default"),
+                   first: furniture_html("First"),
+                   odd: furniture_html("Odd"),
+                   even: furniture_html("Even")
+                 ],
+                 footer: furniture_html("Page {{page}} of {{pages}}")
+               ]
+             )
+
+    assert Enum.map(decorated, &furniture_texts/1) == [
+             ["Body 1", "First", "Page 1 of 4"],
+             ["Body 2", "Even", "Page 2 of 4"],
+             ["Body 3", "Odd", "Page 3 of 4"],
+             ["Body 4", "Even", "Page 4 of 4"]
+           ]
+
+    Enum.each(decorated, fn page ->
+      [body, header, footer] = Enum.filter(page.boxes, &(&1.type == :text))
+      assert header.y > body.y
+      assert footer.y < body.y
+      assert footer.y >= 0
+    end)
+  end
+
+  test "decorate supports first-page-only and except-first-page furniture" do
+    assert {:ok, first_only} =
+             PageFurniture.decorate(pages(3), layout_tree(),
+               page_furniture: [
+                 header: [default: false, first: furniture_html("First only")]
+               ]
+             )
+
+    assert Enum.map(first_only, &furniture_texts/1) == [
+             ["Body 1", "First only"],
+             ["Body 2"],
+             ["Body 3"]
+           ]
+
+    assert {:ok, except_first} =
+             PageFurniture.decorate(pages(3), layout_tree(),
+               page_furniture: %{
+                 footer: %{default: furniture_html("Later"), first: nil}
+               }
+             )
+
+    assert Enum.map(except_first, &furniture_texts/1) == [
+             ["Body 1"],
+             ["Body 2", "Later"],
+             ["Body 3", "Later"]
+           ]
+  end
+
+  test "decorate accepts plain-text templates and configured stylesheet rules" do
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               stylesheets: [{:css, ".accent { color: red; font-size: 8pt; }"}],
+               page_furniture: [
+                 header: "<span class=\"accent\">Plain {{page}}</span>"
+               ]
+             )
+
+    header = Enum.find(page.boxes, &(&1.type == :text and &1.text == "Plain 1"))
+    assert header.color == {1.0, 0.0, 0.0}
+    assert header.font_size == 8.0
+  end
+
+  test "decorate applies bundled font fallback to Unicode furniture text" do
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: furniture_html("Résumé α")]
+             )
+
+    header_boxes = Enum.drop(page.boxes, 1)
+    header_text = Enum.filter(header_boxes, &(&1.type == :text))
+
+    assert Enum.map_join(header_text, & &1.text) == "Résumé α"
+
+    assert Enum.all?(
+             header_text,
+             &(&1.font_face.type == :embedded and &1.font_face.family == "DejaVu Sans")
+           )
+
+    assert [
+             %{type: :flow_marker, role: :explicit_block_start} = start,
+             %{type: :flow_marker, role: :explicit_block_space, height: 2.0} = space
+           ] =
+             Enum.reject(header_boxes, &(&1.type == :text))
+
+    assert start.clip == space.clip
+    assert start.height == 0.0
+    assert start.y == space.clip.y + space.clip.height
+
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render([page])
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert text =~ "Résumé α"
+  end
+
+  test "decorate applies the unsupported glyph policy to furniture text" do
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: furniture_html("can\u0092t")]
+             )
+
+    assert page
+           |> furniture_texts()
+           |> Enum.drop(1)
+           |> Enum.join() == "can\uFFFDt"
+
+    assert {:error, {:unsupported_glyph, %{source: "\u0092"}}} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: furniture_html("can\u0092t")],
+               unsupported_glyphs: :error
+             )
+  end
+
+  test "decorate returns actionable diagnostics for invalid options and oversized furniture" do
+    invalid_options = [
+      :invalid,
+      [:not_a_keyword],
+      [unknown: "value"],
+      [header: 123],
+      [header: [[:not_a_keyword]]],
+      [header: [unknown: "value"]],
+      [footer: [default: 123]]
+    ]
+
+    Enum.each(invalid_options, fn furniture ->
+      assert {:error,
+              {:invalid_options,
+               %{
+                 stage: :options,
+                 reason: :invalid_options,
+                 operation: :decorate_pages,
+                 module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture,
+                 message: message
+               }}} =
+               PageFurniture.decorate(pages(1), layout_tree(), page_furniture: furniture)
+
+      assert is_binary(message)
+    end)
+
+    assert {:error,
+            {:invalid_layout,
+             %{
+               stage: :layout,
+               reason: :invalid_layout,
+               operation: :decorate_pages,
+               message: "header page furniture height 30.0pt exceeds the 20.0pt page margin"
+             }}} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [
+                 header:
+                   "<div style=\"height: 30pt; background: #eeeeee; font-size: 8pt\">Too tall</div>"
+               ]
+             )
+  end
+
+  test "decorate uses text line height when checking furniture margins" do
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [
+                 header: "<div style=\"font-size: 8pt; line-height: 18pt\">Tall line</div>"
+               ]
+             )
+
+    header = Enum.find(page.boxes, &(&1.type == :text and &1.text == "Tall line"))
+    {top, bottom} = PageGeometry.box_vertical_bounds(header)
+    assert_in_delta top - bottom, 18.0, 0.0001
+    assert bottom >= 80.0
+
+    for position <- [:header, :footer] do
+      assert {:error,
+              {:invalid_layout,
+               %{
+                 stage: :layout,
+                 message: message
+               }}} =
+               PageFurniture.decorate(pages(1), layout_tree(),
+                 page_furniture: [
+                   {position, "<div style=\"font-size: 8pt; line-height: 24pt\">Too tall</div>"}
+                 ]
+               )
+
+      assert message ==
+               "#{position} page furniture height 24.0pt exceeds the 20.0pt page margin"
+    end
+  end
+
+  test "decorate validates its public layout inputs and template failures" do
+    assert {:error, {:invalid_layout, %{stage: :layout}}} =
+             PageFurniture.decorate([], :not_a_layout, [])
+
+    assert {:error,
+            {:invalid_layout,
+             %{
+               stage: :layout,
+               reason: :invalid_layout,
+               operation: :decorate_pages,
+               module: NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
+             }}} = PageFurniture.decorate([%{}], layout_tree(), [])
+
+    assert {:error, {:invalid_layout, %{stage: :layout}}} =
+             PageFurniture.decorate(:not_pages, layout_tree(), [])
+
+    assert {:error, {:invalid_layout, %{stage: :layout}}} =
+             PageFurniture.decorate(pages(1), %{layout_tree() | margin: :invalid}, [])
+
+    invalid_page_size_layout = %{layout_tree() | page_size: :a4}
+
+    assert {:error, {:invalid_layout, %{stage: :layout}}} =
+             PageFurniture.decorate(
+               [%{size: :a4, boxes: []}],
+               invalid_page_size_layout,
+               []
+             )
+
+    assert {:error, {:invalid_options, %{stage: :options}}} =
+             PageFurniture.decorate(pages(1), layout_tree(), [:not_options])
+
+    assert {:error,
+            {:unsupported_html,
+             %{
+               stage: :html,
+               reason: :unsupported_html,
+               source: "<video>"
+             }}} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: "<video></video>"]
+             )
+  end
+
+  test "decorate supports full HTML documents and empty visual templates" do
+    full_document = """
+    <!doctype html>
+    <html>
+      <body><div style="font-size: 8pt">Full document</div></body>
+    </html>
+    """
+
+    assert {:ok, [full_page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: full_document]
+             )
+
+    assert furniture_texts(full_page) == ["Body 1", "Full document"]
+
+    assert {:ok, [empty_page]} =
+             PageFurniture.decorate(pages(1), layout_tree(),
+               page_furniture: [header: "<div style=\"display: none\">Hidden</div>"]
+             )
+
+    assert furniture_texts(empty_page) == ["Body 1"]
+  end
+
+  test "decorate places furniture inside asymmetric page margins" do
+    margins = %{top: 20.0, right: 10.0, bottom: 10.0, left: 30.0}
+
+    asymmetric_layout =
+      layout_tree()
+      |> Map.put(:margin, margins)
+      |> Map.put(:margins, margins)
+
+    assert {:ok, [page]} =
+             PageFurniture.decorate(pages(1), asymmetric_layout,
+               page_furniture: [
+                 header: furniture_html("Header", 12),
+                 footer: furniture_html("Footer", 8)
+               ]
+             )
+
+    header = Enum.find(page.boxes, &(&1.type == :text and &1.text == "Header"))
+    footer = Enum.find(page.boxes, &(&1.type == :text and &1.text == "Footer"))
+    assert_in_delta header.x, 30.0, 0.0001
+    assert_in_delta footer.x, 30.0, 0.0001
+    assert header.y > 80.0
+    assert footer.y >= 0.0
+
+    assert {:error,
+            {:invalid_layout,
+             %{message: "footer page furniture height 12.0pt exceeds the 10.0pt page margin"}}} =
+             PageFurniture.decorate(pages(1), asymmetric_layout,
+               page_furniture: [
+                 footer:
+                   "<div style=\"height: 12pt; background: #eeeeee; font-size: 8pt\">Too tall</div>"
+               ]
+             )
+  end
+
+  test "decorate moves clipped images with header and footer furniture" do
+    cases = [
+      {:header, :cover,
+       "<img src=\"#{@wide_image}\" style=\"width: 10pt; height: 10pt; object-fit: cover\">"},
+      {:footer, :contain,
+       "<img src=\"#{@wide_image}\" style=\"width: 10pt; height: 10pt; object-fit: contain\">"},
+      {:header, :background,
+       "<div style=\"width: 20pt; height: 10pt; background-image: url('#{@wide_image}'); background-repeat: no-repeat; background-position: left top; background-size: 20pt 10pt\"></div>"},
+      {:footer, :background,
+       "<div style=\"width: 20pt; height: 10pt; background-image: url('#{@wide_image}'); background-repeat: no-repeat; background-position: left top; background-size: 20pt 10pt\"></div>"}
+    ]
+
+    for {position, kind, template} <- cases do
+      assert {:ok, [page]} =
+               PageFurniture.decorate(pages(1), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      images = Enum.filter(page.boxes, &(&1.type == :image))
+      assert images != [], "#{kind} #{position} fixture did not produce an image"
+
+      Enum.each(images, fn image ->
+        clip = Map.fetch!(image, :clip)
+        assert clip.y < image.y + image.height
+        assert clip.y + clip.height > image.y
+
+        case position do
+          :header -> assert clip.y >= elem(@page_size, 1) - @margin
+          :footer -> assert clip.y < @margin
+        end
+      end)
+    end
+  end
+
+  test "fractions radicals and clipped glyphs paint together inside each furniture margin" do
+    fraction = "<math><mfrac><mn>1</mn><mn>2</mn></mfrac></math>"
+
+    for template <- [
+          fraction,
+          "<math><msqrt><mn>2</mn></msqrt></math>",
+          "<div style='height:20pt;overflow:hidden'>#{fraction}</div>"
+        ],
+        position <- [:header, :footer] do
+      assert {:ok, decorated} =
+               PageFurniture.decorate(pages(2), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      {bottom, top} = if position == :header, do: {80.0, 100.0}, else: {0.0, 20.0}
+
+      for page <- decorated do
+        groups = Enum.filter(page.boxes, &(&1.type == :glyph_group))
+        assert groups != []
+        glyphs = Enum.flat_map(groups, & &1.boxes)
+
+        for glyph <- glyphs do
+          {ink_top, ink_bottom} = glyph_vertical_ink_bounds(glyph)
+          assert ink_bottom >= bottom - 0.0001
+          assert ink_top <= top + 0.0001
+        end
+
+        for group <- groups, Map.has_key?(group, :clip) do
+          assert group.clip.y >= bottom - 0.0001
+          assert group.clip.y + group.clip.height <= top + 0.0001
+          assert Enum.all?(group.boxes, &(&1.clip == group.clip))
+        end
+
+        [bar] = Enum.filter(page.boxes, &(&1[:role] == :math_bar))
+        assert bar.y >= bottom and bar.y + bar.height <= top
+
+        if String.contains?(template, "mfrac") do
+          numerator = Enum.find(glyphs, &(&1.text == "1"))
+          denominator = Enum.find(glyphs, &(&1.text == "2"))
+          {_top, numerator_bottom} = glyph_vertical_ink_bounds(numerator)
+          {denominator_top, _bottom} = glyph_vertical_ink_bounds(denominator)
+          assert numerator_bottom > bar.y + bar.height
+          assert denominator_top < bar.y
+        end
+      end
+
+      assert {:ok, _pdf} = PdfWriter.render(decorated)
+    end
+  end
+
+  test "lazy automatic images resolve their final candidates in both running margins" do
+    callback_owner = self()
+
+    image =
+      NativeElixirPdfUtilities.TestSupport.PngFixture.build(120, 40, 2, 8, 0, fn _x, _y ->
+        [0, 128, 64]
+      end)
+
+    template = """
+    <div style="height:18pt"><img loading="lazy" sizes="auto" width="40" height="20"
+      src="unused.png" srcset="selected.png 120w" style="display:block;width:40pt;height:18pt"></div>
+    """
+
+    for position <- [:header, :footer] do
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+        assert {:ok, decorated} =
+                 PageFurniture.decorate(pages(2), layout_tree(),
+                   page_furniture: [{position, template}],
+                   asset_resolver: fn request ->
+                     assert request.reference == "selected.png"
+                     send(callback_owner, :selected_furniture_image)
+                     {:ok, image}
+                   end
+                 )
+
+        for page <- decorated do
+          assert [%{type: :image, image: %{width_px: 120, height_px: 40}}] =
+                   Enum.filter(page.boxes, &(&1.type == :image))
+
+          refute Enum.any?(page.boxes, &(&1[:role] == :responsive_image))
+        end
+
+        assert_received :selected_furniture_image
+        assert {:ok, _pdf} = PdfWriter.render(decorated)
+      end)
+
+      assert {:ok, _pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [{position, template}],
+                 assets: %{"selected.png" => {:bytes, image}}
+               )
+    end
+  end
+
+  test "placed transforms preserve horizontal and vertical offsets in headers and footers" do
+    for position <- [:header, :footer] do
+      template = """
+      <div style="height:16pt;font-size:8pt;line-height:10pt;transform:translate(40pt,2pt)">
+        <a href="https://example.com">Shifted</a>
+      </div>
+      """
+
+      assert {:ok, decorated} =
+               PageFurniture.decorate(pages(2), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      for page <- decorated do
+        [group] = Enum.filter(page.boxes, &(&1.type == :drawing_group))
+        assert group.role == :css_transform_plane
+        {a, b, c, d, dx, dy} = group.transform
+        assert {a, b, c, d} == {1, 0, 0, 1}
+        assert_in_delta dx, 40, 0.0001
+        assert_in_delta dy, -2, 0.0001
+        assert Enum.any?(group.boxes, &(&1[:text] == "Shifted"))
+      end
+
+      assert {:ok, pdf} = PdfWriter.render(decorated, compress_streams: false)
+      assert pdf =~ "/Subtype /Link"
+      assert pdf =~ "1 0 0 1 40 -2 cm"
+    end
+  end
+
+  test "fragment destinations stay in each template and use the current final page" do
+    template = fn label ->
+      """
+      <div style="font-size:8pt;line-height:10pt;height:18pt">
+        <a href="#same">#{label} jump</a><span id="same">#{label} target</span>
+        <a href="#">#{label} start</a><a href="#missing">Missing</a>
+      </div>
+      """
+    end
+
+    assert {:ok, decorated} =
+             PageFurniture.decorate(pages(2), layout_tree(),
+               page_furniture: [header: template.("H"), footer: template.("F")]
+             )
+
+    for {page, number} <- Enum.with_index(decorated, 1),
+        {label, top} <- [{"H", 100.0}, {"F", 20.0}] do
+      jump = Enum.find(page.boxes, &(&1[:text] == "#{label} jump"))
+      target = Enum.find(page.boxes, &(&1[:text] == "#{label} target"))
+      {:xyz, ^number, x, y} = jump.link_destination
+      assert_in_delta x, target.x, 0.0001
+      assert y <= top and y >= top - 18
+
+      assert Enum.find(page.boxes, &(&1[:text] == "#{label} start")).link_destination ==
+               {:xyz, number, 20.0, top}
+
+      assert Enum.all?(Enum.filter(page.boxes, &(&1[:text] == "Missing")), fn box ->
+               not Map.has_key?(box, :link_destination)
+             end)
+    end
+
+    assert {:ok, pdf} = PdfWriter.render(decorated)
+    assert pdf =~ "/Dest ["
+  end
+
+  test "transformed fragment targets resolve after placement and preserve validation failures" do
+    for position <- [:header, :footer] do
+      template = """
+      <div style="font-size:8pt;line-height:10pt;height:16pt;transform:translateX(30pt)">
+        <a href="#here">Jump</a><span id="here">Here</span>
+      </div>
+      """
+
+      assert {:ok, decorated} =
+               PageFurniture.decorate(pages(2), layout_tree(),
+                 page_furniture: [{position, template}]
+               )
+
+      for {page, number} <- Enum.with_index(decorated, 1) do
+        [group] = Enum.filter(page.boxes, &(&1.type == :drawing_group))
+        target = Enum.find(group.boxes, &(&1[:text] == "Here"))
+        jump = Enum.find(group.boxes, &(&1[:text] == "Jump"))
+        {:xyz, ^number, x, _y} = jump.link_destination
+        assert_in_delta x, target.x + 30, 0.0001
+      end
+
+      assert {:ok, _pdf} = PdfWriter.render(decorated)
+
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [
+                   {position, String.replace(template, "translateX(30pt)", "translateX(500pt)")}
+                 ]
+               )
+
+      assert diagnostic.stage == :pagination
+      assert diagnostic.reason == :unsupported_html
+      assert diagnostic.source == "here"
+      assert diagnostic.message =~ "no representable destination"
+    end
+  end
+
+  test "document-root and nested child links retain the page of each running copy" do
+    templates = [
+      """
+      <html id="root"><body style="margin:0;font-size:8pt;line-height:10pt">
+      <div style="height:18pt"><a href="#root">Root</a><a href="#top">Start</a></div>
+      </body></html>
+      """,
+      """
+      <iframe style="display:block;width:150pt;height:18pt;border:0"
+        srcdoc='<body style="margin:0;font-size:8pt;line-height:10pt"><a href="#here">Jump</a><span id="here">Here</span><a href="#">Start</a></body>'></iframe>
+      """
+    ]
+
+    for template <- templates, position <- [:header, :footer] do
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+        assert {:ok, decorated} =
+                 PageFurniture.decorate(pages(2), layout_tree(),
+                   page_furniture: [{position, template}]
+                 )
+
+        assert {:ok, pdf} = PdfWriter.render(decorated)
+        assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+
+        destinations =
+          for {_ref, %{value: %{"Subtype" => {:name, "Link"}, "Dest" => destination}}} <-
+                context.document.objects,
+              do: destination
+
+        for page <- context.pages do
+          own = Enum.filter(destinations, &(hd(&1) == {:ref, page.ref}))
+          assert length(own) == 2
+          {bottom, top} = if position == :header, do: {80.0, 100.0}, else: {0.0, 20.0}
+
+          for [_, {:name, "XYZ"}, _x, y, nil] <- own do
+            assert y >= bottom and y <= top
+          end
+        end
+      end)
+    end
+  end
+
+  test "lazy furniture image failures retain the canonical resource diagnostic" do
+    template = """
+    <img loading="lazy" sizes="auto" width="40" height="20"
+      src="unused.png" srcset="selected.png 120w" style="display:block;width:40pt;height:18pt">
+    """
+
+    for position <- [:header, :footer] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [{position, template}],
+                 asset_resolver: fn request ->
+                   assert request.reference == "selected.png"
+                   {:error, :enoent}
+                 end
+               )
+
+      assert diagnostic.stage == :asset
+      assert diagnostic.reason == :invalid_document
+      assert diagnostic.operation == :decorate_pages
+      assert diagnostic.source == "selected.png"
+      assert diagnostic.message =~ "asset resolver could not resolve"
+    end
+  end
+
+  test "body and running-template targets with the same ID retain independent destinations" do
+    body = """
+    <style>html,body{margin:0;font-size:8pt;line-height:10pt}section{height:30pt;break-after:page}section:last-child{break-after:auto}</style>
+    <section><a href="#same">Body jump</a><span id="same">Body target</span></section>
+    <section><a href="#same">Later body jump</a></section>
+    """
+
+    template = """
+    <div style="font-size:8pt;line-height:10pt;height:18pt">
+      <a href="#same">Jump</a><span id="same">Target</span>
+    </div>
+    """
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(body,
+               page_size: @page_size,
+               margin: @margin,
+               page_furniture: [header: template, footer: template]
+             )
+
+    assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+    assert [first, second] = context.pages
+
+    destinations =
+      for {_ref, %{value: %{"Subtype" => {:name, "Link"}, "Dest" => destination}}} <-
+            context.document.objects,
+          do: destination
+
+    assert length(destinations) == 6
+
+    for page <- [first, second], {bottom, top} <- [{80, 100}, {0, 20}] do
+      assert Enum.any?(destinations, fn [{:ref, ref}, {:name, "XYZ"}, _x, y, nil] ->
+               # Public rendering snaps page geometry to the CSS pixel grid.
+               ref == page.ref and y >= bottom - 0.375 and y <= top + 0.375
+             end)
+    end
+
+    assert Enum.count(destinations, fn [{:ref, ref}, {:name, "XYZ"}, _x, y, nil] ->
+             ref == first.ref and y > 20.375 and y < 80
+           end) == 2
+  end
+
+  test "embedded viewport transforms and clips move into headers and footers on every page" do
+    template = """
+    <iframe style="display:block;width:99pt;height:18pt;border:0"
+      srcdoc='<body style="margin:0;font-size:8pt;line-height:10pt">hello</body>'></iframe>
+    """
+
+    for position <- [:header, :footer] do
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
+        assert {:ok, decorated} =
+                 PageFurniture.decorate(pages(2), layout_tree(),
+                   page_furniture: [{position, template}]
+                 )
+
+        {bottom, top} = if position == :header, do: {80.0, 100.0}, else: {0.0, 20.0}
+
+        for page <- decorated do
+          [group] = Enum.filter(page.boxes, &(&1.type == :drawing_group))
+          assert group.role == :overflow_clip
+          assert group.clip.y >= bottom
+          assert group.clip.y + group.clip.height <= top
+          [host] = group.boxes
+          assert host.role == :embedded_viewport_host
+          {1, 0, 0, 1, tx, ty} = host.transform
+          assert_in_delta tx, host.x, 0.0001
+          assert_in_delta ty, group.y, 0.0001
+          assert_in_delta host.y, group.y, 0.0001
+          assert host.clip.y == 0.0
+          assert host.clip.height == 18.0
+          [text] = Enum.filter(host.boxes, &(&1[:text] == "hello"))
+          {text_top, text_bottom} = PageGeometry.box_vertical_bounds(text)
+          assert text_bottom + ty >= bottom
+          assert text_top + ty <= top
+        end
+
+        assert {:ok, _pdf} = PdfWriter.render(decorated)
+      end)
+
+      assert {:ok, _pdf} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Body</p>",
+                 page_size: @page_size,
+                 margin: @margin,
+                 page_furniture: [{position, template}]
+               )
+    end
+  end
+
+  defp glyph_vertical_ink_bounds(glyph) do
+    [id] = glyph.glyph_ids
+    {:ok, bounds} = Font.glyph_bounds(glyph.font_face)
+    {_left, bottom, _right, top} = elem(bounds, id)
+    scale = glyph.font_size / glyph.font_face.units_per_em
+    {glyph.y + top * scale, glyph.y + bottom * scale}
+  end
+
+  defp pages(count) do
+    Enum.map(1..count, fn page_number ->
+      %{
+        size: @page_size,
+        boxes: [text_box("Body #{page_number}", 44.0)]
+      }
+    end)
+  end
+
+  defp layout_tree do
+    %{
+      type: :layout,
+      page_size: @page_size,
+      margin: @margin,
+      boxes: [],
+      content_width: 160.0,
+      content_height: 60.0
+    }
+  end
+
+  defp furniture_html(text, height \\ 12) do
+    "<div style=\"height: #{height}pt; font-size: 8pt; line-height: 10pt\">#{text}</div>"
+  end
+
+  defp furniture_texts(page) do
+    page.boxes
+    |> Enum.filter(&(&1.type == :text))
+    |> Enum.map(& &1.text)
+  end
+
+  defp text_box(text, y) do
+    %{
+      type: :text,
+      text: text,
+      x: 20.0,
+      y: y,
+      width: 160.0,
+      annotation_width: 40.0,
+      font: "Helvetica",
+      font_size: 10.0,
+      line_height: 12.0,
+      color: {0, 0, 0}
+    }
+  end
+end

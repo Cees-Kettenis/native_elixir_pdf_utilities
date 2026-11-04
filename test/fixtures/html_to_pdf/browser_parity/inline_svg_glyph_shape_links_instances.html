@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:420px 300px;margin:12px;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:16px;color:#174a86;}
+body > svg {display:block;width:396px;height:270px;}
+</style></head><body><svg viewBox="0 0 396 270" font-size="22">
+<defs><clipPath id="clip"><rect x="8" y="8" width="320" height="235"/></clipPath><g id="art"><rect width="30" height="18" fill="#b75332"/><text x="35" y="17" font-size="18">Reuse Ωé</text></g><path id="curve" d="M10 145 Q180 75 365 145"/></defs>
+<a href="https://example.test/shape"><g transform="translate(15 15) rotate(5)"><rect width="90" height="30" fill="#245ca0"/><circle cx="120" cy="15" r="16" fill="#c99524"/></g></a>
+<g opacity=".7" clip-path="url(#clip)"><a href="https://example.test/selected"><text x="18" y="85">ffi Ωé selected ABC</text></a><a href="#target"><text fill="#a03333"><textPath href="#curve" startOffset="12%">Curved destination Ωé</textPath></text></a></g>
+<a href="https://example.test/instances"><use href="#art" x="18" y="172"/><use href="#art" x="180" y="202"/></a>
+<text id="target" x="18" y="252" font-size="18">Target</text>
+</svg></body></html>

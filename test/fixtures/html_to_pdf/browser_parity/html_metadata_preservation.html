@@ -1,0 +1,28 @@
+<!doctype html><html><head><style>
+@page {size:264pt 252pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;}
+p {margin:0 0 5pt;}
+[itemscope] {border:1px solid #666;padding:5pt;margin:0 0 6pt;}
+[itemtype="https://schema.org/Person"] {background-color:#f0f4f8;}
+[itemid=" ./people/42 "] {color:#164e63;}
+[itemref~="extra"] {border-color:#164e63;}
+[itemprop~="name"] {font-weight:700;}
+[itemprop="https://example.org/note"] {color:#9a3412;}
+[translate="NO"] {font-style:italic;}
+[translate="no"] {font-style:normal;}
+[translate=" yes "] {background-color:#fff0d0;}
+x-record {display:block;}
+input {display:block;width:180pt;box-sizing:border-box;border:1px solid #777;background:white;color:#222;padding:1.5pt 3pt;font-family:"DejaVu Sans";font-size:10.5pt;line-height:13.5pt;}
+</style></head><body translate=no>
+<div itemscope itemtype="https://schema.org/Person" itemid=" ./people/42 " itemref=extra>
+<p itemprop="name Name">Authored record</p>
+<p id=inherited>Inherited translation metadata</p>
+<p id=enabled translate>Empty enables translation</p>
+<p id=padded translate=" yes ">Padded keyword inherits</p>
+<p id=disabled translate=NO>Case folded keyword</p>
+<input itemprop=identifier name=record value="Initial identifier">
+</div>
+<p id=extra itemprop="https://example.org/note">Referenced authored prose</p>
+<x-record id=custom translate=yes arbitrary=unchanged><p>Custom authored prose</p></x-record>
+<template translate=yes><p>Unused metadata content</p></template>
+</body></html>

@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:360pt 720pt;margin:0}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+body {padding:12pt}
+p {margin:0 0 4pt;line-height:44pt}
+math {font-family:"STIX Two Math";font-size:18pt}
+math.gone {display:contents}
+math#shown {display:inline math!important}
+</style></head><body>
+<p>Root before <math style="display:contents"><mn>9</mn></math> after.</p>
+<p>Row before <math><mrow style="display:contents"><mn>9</mn></mrow><mn>1</mn></math> after.</p>
+<p>Token before <math><mn style="display:contents">9</mn><mn>2</mn></math> after.</p>
+<p>Fraction before <math><mfrac style="display:contents"><mn>9</mn><mn>8</mn></mfrac><mn>3</mn></math> after.</p>
+<p>Operand before <math><mfrac><mn style="display:contents">9</mn><mn>4</mn></mfrac></math> after.</p>
+<p>Script before <math><msub><mn style="display:contents">9</mn><mn>5</mn></msub></math> after.</p>
+<p>Error before <math><merror style="display:contents"><mtext>Hidden</mtext></merror><mn>6</mn></math> after.</p>
+<p>Padded before <math><mpadded style="display:contents" width="100pt" height="50pt" lspace="20pt"><mn>9</mn></mpadded><mn>7</mn></math> after.</p>
+<p>Unknown before <math><equation-data style="display:contents"><mn>9</mn></equation-data><mn>8</mn></math> after.</p>
+<p>Selected before <math><semantics><mrow style="display:contents"><mn>Hidden</mn></mrow><annotation>Alternate</annotation></semantics><mn>9</mn></math> after.</p>
+<p>Table before <math><mtable><mtr style="display:contents"><mtd><mn>9</mn></mtd></mtr><mtr><mtd><mn>1</mn></mtd></mtr></mtable></math> after.</p>
+<p>HTML before <math><mtext><span style="display:contents">Live</span></mtext><mn>2</mn></math> after.</p>
+<p>Override before <math class="gone" id="shown"><mn>3</mn></math><math class="gone"><mn>Hidden</mn></math> after.</p>
+<p>Resource before <math style="display:contents;background-image:url(missing-math-contents.svg)"><mtext>אב</mtext></math> after.</p>
+</body></html>

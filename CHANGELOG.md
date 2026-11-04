@@ -1,5 +1,128 @@
 # Changelog
 
+## 1.1.0 - 2026-11-05
+
+Expanded static HTML-to-PDF rendering. See the [compatibility guide](docs/html-to-pdf-compatibility.md)
+for supported behavior and remaining limits.
+
+### Added
+
+#### HTML parsing and documents
+
+- Empty documents, root-level text/inline content, implied document/table groups,
+  and context-aware fragments.
+- Comments, empty/unquoted attributes, newline normalization, and expanded raw-text parsing.
+- Optional closing tags and nonvoid trailing slashes through `html_recovery: true`.
+- SVG/MathML namespaces, foreign-content integration, CDATA, and XML processing instructions.
+- `<base>` URL resolution, author/description/keywords metadata, language inheritance,
+  `Content-Language`, and preferred stylesheet selection.
+- Initial `hidden`, `hidden="until-found"`, and `inert` behavior; `noscript` and canvas
+  fallback; inert templates and non-executable script data blocks.
+- Custom HTML containers and preserved translation, editability, microdata, and
+  global interaction metadata. These attributes do not enable browser interactions.
+
+#### Text, lists, and tables
+
+- Description lists, figures/captions, address/grouping elements, and semantic inline text.
+- Locale-aware `<q>` quotations, abbreviation styling, and mark/insert/delete/strike defaults.
+- Preformatted and legacy raw-text elements, bundled monospace fonts, subscript/superscript,
+  and ruby base/reading annotations.
+- Ordered-list starts, reversed numbering, per-item values, marker images/types/placement,
+  and shared HTML/CSS list counters.
+- Legacy font, body, centering, horizontal-rule, image, and table presentation hints
+  below author CSS; obsolete inactive elements remain harmless.
+- HTML table slot formation, `rowspan="0"`, implied rows, `headers`/`scope` associations,
+  anonymous CSS rows/cells, and expanded caption placement.
+
+#### Forms and initial state
+
+- Search, telephone, URL, email, password, and number inputs; multiple email values;
+  read-only and required PDF flags.
+- Form/label ownership, owner-scoped radio groups, fieldset disabling, and legend exceptions.
+- Placeholders, character-based sizing, textarea rows/columns, and HTML initial-value sanitation.
+- Multiple selects, option groups, disabled choices, separate labels/export values,
+  and rich selected-content cloning for supported customizable selects.
+- Static range, color, image-button, file, date, month, week, time, and `datetime-local`
+  artwork. Mutable specialized controls retain documented restrictions.
+- Progress/meter artwork, output elements, datalist associations, and range tick marks.
+- Initial required/type/pattern/range/step constraint states and control-state selectors,
+  including `:valid`, `:invalid`, `:indeterminate`, `:read-only`, and `:read-write`.
+- `appearance: :source` to preserve original field styling when filling forms.
+
+#### Composition, links, and images
+
+- Details/summary disclosures with fallback summaries and named groups; initial dialog
+  states and author-exposed static popovers.
+- Declarative shadow roots, named/default slots, fallback content, `:host`/`::slotted`,
+  and scoped styles/fonts/resources.
+- Named template replacement with source validation and preserved source ownership.
+- Authorized embedded HTML, plaintext, and images through iframe/object/embed,
+  including `srcdoc`, blank documents, nested viewports, scrollbars, and static framesets.
+- Supported editable fields inside child documents, with independent field names and clipping.
+- Document-root, named-anchor, and fragment destinations scoped across child documents,
+  shadow trees, and running headers/footers; heading offsets/resets for bookmarks.
+- Responsive `picture`/`srcset`/`sizes`, lazy automatic sizing, image dimension hints,
+  expanded object positioning, and rectangle/circle/polygon image maps.
+- Inline SVG and expanded SVG images, filters, masks, markers, and text paths through
+  Resvg. SVG text is rasterized; internal links are inactive.
+
+#### CSS, mathematics, and fonts
+
+- Forward/reverse positional selectors, attribute operators/case flags, Unicode CSS
+  identifiers/escapes, and `:lang()` matching.
+- All 148 CSS named colors, font-metric text decorations, generated quotations,
+  and `counter-set`.
+- CSS `calc()`/`max()`/`clamp()` sizing, font/viewport-relative units, 2D transforms,
+  expanded clipping, and paragraph orphan/widow controls.
+- Nested print media feature queries and explicit `print_viewport`/`image_selection_density`
+  options for stylesheet and image selection.
+- Preserved whitespace, discretionary breaks, CJK line breaking, and distinct
+  `word-break`/`overflow-wrap` behavior across styled text.
+- Native MathML fractions, radicals, scripts/prescripts, limits, accents, stretched
+  operators, and matrices with bundled STIX Two Math or caller-provided math fonts.
+- MathML grouping, phantom/padding boxes, error styling, semantics/annotations,
+  and mixed HTML/CSS composition.
+- Supplementary Unicode font mappings and selected-font OpenType MATH metrics,
+  substitutions, glyph bounds, and multi-part glyph groups.
+- PDF `ActualText` extraction; use `actual_text: true` for replacement spans in
+  positioned output. Equation glyph groups retain their original text.
+
+### Changed
+
+- Document operations use workers with configurable deadlines and observed memory
+  limits, defaulting to five minutes and 1 GiB. Expanded budgets cover PDF, HTML/CSS,
+  font, form, layout, and SVG processing.
+- Asset resolvers run in workers. Capture caller-local data before rendering;
+  see [migration guidance](docs/html-to-pdf-compatibility.md#resolver-process-context).
+- Automatic tables preserve minimum content widths, changing wrapping or causing
+  page overflow in narrow layouts. See [table sizing](docs/html-to-pdf-compatibility.md#tables).
+- Reused fonts, styles, measurements, and PDF resources; form appearances no longer
+  require temporary pages.
+- Removed Python/C generation tools and fixture notes; retained generated assets,
+  licenses, manifests, and historical sources in Git.
+
+### Fixed
+
+- Corrected inline baselines/fragmentation, table spans/borders/sizing, flex wrapping
+  and alignment, grid tracks, margin collapse, clipping, and stacking.
+- Preserved positioned/decorated content, explicit space, links, and form artwork
+  across page breaks; corrected headers, footers, bookmarks, and stamp placement.
+- Fixed dropdown labels/empty selections, radio exclusivity, password masks,
+  and list-box appearances when filling or clearing forms.
+- Resolved indirect PDF names/metadata/appearances and optional null entries;
+  corrected CMaps, glyph names, text decoding, and PDF dates.
+- Honored selected-font Latin ligature settings while preserving older prepared
+  font encodings; corrected language-sensitive text casing.
+- Improved malformed-input/geometry/resource diagnostics, rejected active script
+  references in hidden content, and cancelled form evaluators/font loaders with callers.
+
+### Documentation
+
+- Reorganized user/contributor guides and expanded examples, compatibility guidance,
+  resource-limit documentation, and license notices.
+- Expanded Chromium comparisons and parallel checks across supported Elixir runtimes,
+  with performance guards against v1.0.0 baselines.
+
 ## 1.0.0 - 2026-10-05
 
 First stable release. The documented public API and supported workflows are

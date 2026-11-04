@@ -1,0 +1,1142 @@
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
+  use ExUnit.Case
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+
+  test "editability selectors decode escapes and preserve compound negation specificity" do
+    for {token, state} <- [
+          {":read-only", :read_only},
+          {":READ-WRITE", :read_write},
+          {~S|:\72 ead-only|, :read_only},
+          {~S|:read\2d write|, :read_write}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse("input#{token}{color:red}")
+      assert [%{parts: [%{pseudo_classes: [^state]}], specificity: {0, 1, 1}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} =
+             CssParser.parse("p:read-write:not(.locked:read-only):nth-child(2n){color:red}")
+
+    assert [
+             %{
+               parts: [
+                 %{
+                   pseudo_classes: [:read_write, {:nth_child, {2, 0}}],
+                   negations: [%{classes: ["locked"], pseudo_classes: [:read_only]}]
+                 }
+               ],
+               specificity: {0, 4, 1}
+             }
+           ] = rule.selectors
+
+    for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
+      assert {:error, :invalid_css} = CssParser.parse("p#{selector}{color:red}")
+    end
+  end
+
+  test "requirement selectors retain escaped names negations and specificity" do
+    for {source, state} <- [
+          {":required", :required},
+          {":OPTIONAL", :optional},
+          {~S|:\72 equired|, :required},
+          {~S|:\6f ptional|, :optional}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse("input#{source}{color:red}")
+      assert [%{parts: [%{pseudo_classes: [^state]}], specificity: {0, 1, 1}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} =
+             CssParser.parse("input:required:not(:optional):nth-child(2n){color:red}")
+
+    assert [
+             %{
+               parts: [
+                 %{
+                   pseudo_classes: [:required, {:nth_child, {2, 0}}],
+                   negations: [%{pseudo_classes: [:optional]}]
+                 }
+               ],
+               specificity: {0, 3, 1}
+             }
+           ] = rule.selectors
+  end
+
+  test "initial popover selectors share CSS identifier decoding and negation" do
+    for token <- [":popover-open", ":POPOVER-OPEN", ~S|:\70 opover-open|] do
+      assert {:ok, [rule]} = CssParser.parse("[popover]#{token}{color:red}")
+      [selector] = rule.selectors
+      [part] = selector.parts
+      assert part.pseudo_classes == [:popover_open]
+      assert selector.specificity == {0, 2, 0}
+    end
+
+    assert {:ok, _} = CssParser.parse("[popover]:not(:popover-open){color:blue}")
+  end
+
+  test "checked selectors share identifier decoding, negation and specificity" do
+    for selector <- ["input:checked", "input:CHECKED", ~S|input:\63 hecked|] do
+      assert {:ok, [rule]} = CssParser.parse(selector <> "{color:red}")
+      assert [%{parts: [%{pseudo_classes: [:checked]}], specificity: {0, 1, 1}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} = CssParser.parse("input:not(:checked){color:blue}")
+    assert [%{parts: [input]}] = rule.selectors
+    assert [%{pseudo_classes: [:checked]}] = input.negations
+    assert {:error, :invalid_css} = CssParser.parse("input:checked(){color:red}")
+  end
+
+  test "language ranges preserve CSS strings, escapes and negated function boundaries" do
+    for {source, expected} <- [
+          {":lang(en, 'de-DE', \"\")", [["en"], ["de", "de"], [""]]},
+          {~S|:l\61ng(\65 n, "*-Latn", "a,b(c)")|, [["en"], ["*", "latn"], ["a,b(c)"]]},
+          {":lang(\"a\\\nb\")", [["ab"]]},
+          {":lang(iw, cmn-Hans)", [["he"], ["zh", "cmn", "hans"]]}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse("p" <> source <> "{color:red}"), source
+
+      assert [%{parts: [%{pseudo_classes: [{:lang, ^expected}]}], specificity: {0, 1, 1}}] =
+               rule.selectors
+    end
+
+    assert {:ok, [rule]} = CssParser.parse(~S|p:not(:lang("a(b),c", en)):lang("*-US"){color:red}|)
+
+    assert [%{parts: [%{negations: [%{pseudo_classes: [{:lang, [["a(b),c"], ["en"]]}]}]}]}] =
+             rule.selectors
+
+    for source <- [
+          ":not",
+          ~S|:not("unfinished)|,
+          ":lang()",
+          ":lang(,en)",
+          ":lang(en,)",
+          ":lang(en,,de)",
+          ":lang(*)",
+          ":lang(en de)",
+          ":lang(\"en\nUS\")",
+          ":lang(en",
+          ":not(:lang(en)"
+        ] do
+      assert {:error, :invalid_css} = CssParser.parse("p" <> source <> "{color:red}")
+    end
+  end
+
+  test "Unicode and escaped identifiers retain decoded selector names and specificity" do
+    for {source, expected} <- [
+          {".café", "café"},
+          {".e\u0301", "e\u0301"},
+          {".\u00A0", "\u00A0"},
+          {~S|.\63 afé|, "café"},
+          {~S|.\000063afé|, "café"},
+          {~S|.\31 item|, "1item"},
+          {~S|.\-1|, "-1"},
+          {~S|.a\,b|, "a,b"},
+          {~S|.a\>b|, "a>b"},
+          {~S|.a\{b|, "a{b"},
+          {~S|.a\@media|, "a@media"},
+          {~S|.a\@page|, "a@page"},
+          {~S|.a\@font-face|, "a@font-face"},
+          {~S|.a\"b|, ~S|a"b|},
+          {~S|.a\'b|, "a'b"},
+          {~S|.a\:\:before|, "a::before"},
+          {~S|.a\ b|, "a b"},
+          {".a\\ ", "a "},
+          {".--1", "--1"},
+          {~S|.\0|, "\uFFFD"},
+          {~S|.\d800|, "\uFFFD"},
+          {~S|.\110000|, "\uFFFD"},
+          {~S|.\1f600|, "😀"}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse(source <> " {color:red}")
+      assert [%{parts: [%{classes: [^expected]}], specificity: {0, 1, 0}}] = rule.selectors
+    end
+
+    assert {:ok, [rule]} = CssParser.parse(~S|\70  .\63 afé#\31 23 {color:red}|)
+
+    assert [%{parts: [%{tag: "p"}, %{id: "123", classes: ["café"]}], specificity: {1, 1, 1}}] =
+             rule.selectors
+
+    assert {:ok, [rule]} = CssParser.parse("X-Élément {color:red}")
+    assert [%{parts: [%{tag: "x-Élément"}]}] = rule.selectors
+  end
+
+  test "attribute selectors share identifier and string escape decoding" do
+    for {source, expected} <- [
+          {~S|[data-\6b ind=\41 ctive]|, {:equals, "data-kind", "Active"}},
+          {~S|[data-kind="\41 ctive"]|, {:equals, "data-kind", "Active"}},
+          {~S|[data-kind='a\,b\"c']|, {:equals, "data-kind", "a,b\"c"}},
+          {~S|[data-kind="\0"]|, {:equals, "data-kind", "\uFFFD"}},
+          {"[data-kind=\"a\\\n@media print {literal}\"]",
+           {:equals, "data-kind", "a@media print {literal}"}},
+          {"[data-kind=\"a\\\nb\"]", {:equals, "data-kind", "ab"}},
+          {~S|[data-\6b ind]|, {:present, "data-kind"}},
+          {~S|[data-kind=\41 ctive i]|, {:equals, "data-kind", "Active", :insensitive}},
+          {~S|[data-kind=\41 ctive \69]|, {:equals, "data-kind", "Active", :insensitive}},
+          {~S|[data-kind=\41 ctive \53]|, {:equals, "data-kind", "Active", :sensitive}}
+        ] do
+      assert {:ok, [rule]} = CssParser.parse(source <> " {color:red}")
+      assert [%{parts: [%{attributes: [^expected]}]}] = rule.selectors
+    end
+  end
+
+  test "escaped supported pseudo names and negated punctuation preserve semantics" do
+    assert {:ok, [rule]} =
+             CssParser.parse(
+               ~S|p:\66 irst-child:n\74 h-child(2n+1):n\6f t(.a\(b)::\62 efore {content:'Prefix'}|
+             )
+
+    assert [%{parts: [part], specificity: {0, 3, 2}}] = rule.selectors
+    assert part.pseudo_classes == [:first_child, {:nth_child, {2, 1}}]
+
+    assert part.negations == [
+             %{
+               tag: nil,
+               id: nil,
+               classes: ["a(b"],
+               attributes: [],
+               pseudo_classes: [],
+               negations: [],
+               pseudo_element: nil,
+               combinator: nil
+             }
+           ]
+
+    assert part.pseudo_element == :before
+    assert {:ok, [_]} = CssParser.parse("p::BEFORE {content:'Prefix'}")
+  end
+
+  test "invalid identifier starts and malformed escapes return detailed CSS failures" do
+    for source <- [
+          ".1item",
+          ".-1",
+          ".-",
+          ".",
+          "#",
+          ".a\\\nb",
+          "[data-kind=1item]",
+          "[data-kind=Active other]",
+          ".a::missing",
+          "p:not(.a\\)",
+          "p::before.extra"
+        ] do
+      assert {:error, {:invalid_css, diagnostic}} =
+               CssParser.parse_detailed(source <> " {color:red}")
+
+      assert diagnostic.stage == :css
+      assert diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.source)
+      assert diagnostic.line == 1
+      assert diagnostic.column >= 1
+      assert diagnostic.message =~ "invalid"
+    end
+  end
+
+  test "positional selectors parse integer An+B arguments and retain specificity" do
+    for {expression, expected} <- [
+          {"odd", :odd},
+          {"EVEN", :even},
+          {"2", 2},
+          {"+6", 6},
+          {"0", 0},
+          {"-3", -3},
+          {"n", {1, 0}},
+          {"N", {1, 0}},
+          {"+n", {1, 0}},
+          {"-n", {-1, 0}},
+          {"2n", {2, 0}},
+          {"2n+1", {2, 1}},
+          {"-n + 3", {-1, 3}},
+          {"3n - 6", {3, -6}},
+          {"0n+5", {0, 5}},
+          {"0n", {0, 0}},
+          {"\t+3N -\n2\f", {3, -2}},
+          {"n- 2", {1, -2}}
+        ],
+        {name, kind} <- [
+          {"nth-child", :nth_child},
+          {"nth-last-child", :nth_last_child},
+          {"nth-of-type", :nth_of_type},
+          {"nth-last-of-type", :nth_last_of_type}
+        ] do
+      assert {:ok, [rule]} =
+               CssParser.parse(
+                 "p:" <> String.upcase(name) <> "(" <> expression <> ").selected {color:red}"
+               )
+
+      assert [selector] = rule.selectors
+      assert selector.specificity == {0, 2, 1}
+      assert [part] = selector.parts
+      assert part.pseudo_classes == [{kind, expected}]
+      assert part.classes == ["selected"]
+    end
+
+    assert {:ok, [rule]} = CssParser.parse("p:not(:nth-of-type(-n+3)) {color:red}")
+    assert [selector] = rule.selectors
+    assert selector.specificity == {0, 1, 1}
+    assert {:ok, [_]} = CssParser.parse("p:only-child, p:only-of-type {color:red}")
+  end
+
+  test "positional selector arguments diagnose invalid grammar and excessive integers" do
+    for expression <- [
+          "",
+          "3 n",
+          "+ 2n",
+          "+ 2",
+          "+ n",
+          "3n + -6",
+          "1.0n",
+          "1e2",
+          "٢n",
+          "2n of p",
+          "n 2",
+          "odd+1",
+          "\u00A02n",
+          "n+1\u00A0"
+        ] do
+      assert {:error, {:invalid_css, diagnostic}} =
+               CssParser.parse_detailed("p:nth-child(" <> expression <> "){color:red}")
+
+      assert diagnostic.stage == :css
+      assert diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.message)
+    end
+
+    for expression <- ["1000000001n", "-1000000001", "n+1000000001"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               CssParser.parse_detailed("p:nth-of-type(" <> expression <> "){color:red}")
+
+      assert diagnostic.stage == :css
+      assert diagnostic.message =~ "max_css_numeric_magnitude"
+      assert diagnostic.source == expression
+      assert diagnostic.operation == :parse
+    end
+
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_html_numeric_token_bytes: 3})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssParser.parse_detailed("p:nth-last-child(1234){color:red}")
+
+    assert diagnostic.stage == :css
+    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.source == "1234"
+    assert diagnostic.operation == :parse
+  end
+
+  test "prepared stylesheets retain page options, font faces and ordered rules" do
+    css = """
+    @page { size: letter; margin: 12pt }
+    @font-face { font-family: Custom; src: url(font.ttf) }
+    @media print { p { color:red } }
+    p { color:blue }
+    """
+
+    assert {:ok, prepared} = CssParser.prepare_stylesheet(css)
+    assert {:ok, prepared.rules} == CssParser.parse(css)
+    assert {:ok, prepared.font_faces} == CssParser.font_faces(css)
+    assert {:ok, prepared.page_options} == CssParser.page_options(css)
+    assert Enum.map(prepared.rules, & &1.order) == [0, 1]
+
+    NativeElixirPdfUtilities.HtmlToPdf.RenderCache.with_stylesheets(fn ->
+      for _ <- 1..2 do
+        assert {:error, {:invalid_css, diagnostic}} = CssParser.prepare_stylesheet("p { nope }")
+        assert diagnostic.stage == :css
+        assert diagnostic.line == 1
+      end
+    end)
+  end
+
+  test "at-rule preprocessing preserves quoted strings and braces" do
+    for literal <- [
+          ~S|"@media print {BOGUS}"|,
+          ~S|"@font-face {src: broken}"|,
+          ~S|"@page {size: broken}"|,
+          ~S|"escaped \" @media print {BOGUS}"|
+        ] do
+      css = "p::before {content:" <> literal <> "}"
+      assert {:ok, [rule]} = CssParser.parse(css)
+      assert rule.declarations == [{"content", literal}]
+      assert {:ok, []} = CssParser.font_faces(css)
+      assert {:ok, []} = CssParser.page_options(css)
+      assert {:ok, [rule]} = CssParser.parse("@media print {" <> css <> "}")
+      assert rule.declarations == [{"content", literal}]
+    end
+
+    assert {:ok, [%{sources: ["brace{font}.ttf"]}]} =
+             CssParser.font_faces(~S|@font-face {font-family:X;src:url("brace{font}.ttf")} |)
+  end
+
+  test "parse accepts strict selector groups and declarations" do
+    assert {:ok, [rule]} =
+             CssParser.parse("p, .copy, #intro, p.lead { color: red; margin-bottom: 4pt }")
+
+    assert rule.declarations == [{"color", "red"}, {"margin-bottom", "4pt"}]
+    assert rule.order == 0
+
+    assert Enum.map(rule.selectors, & &1.specificity) == [
+             {0, 0, 1},
+             {0, 1, 0},
+             {1, 0, 0},
+             {0, 1, 1}
+           ]
+  end
+
+  test "parse accepts descendant and child selectors" do
+    assert {:ok, [rule]} = CssParser.parse("table > tbody td.note { color: blue; }")
+    [selector] = rule.selectors
+
+    assert Enum.map(selector.parts, &{&1.tag, &1.classes, &1.combinator}) == [
+             {"table", [], nil},
+             {"tbody", [], :child},
+             {"td", ["note"], :descendant}
+           ]
+  end
+
+  test "parse accepts first-child pseudo selectors" do
+    assert {:ok, [rule]} =
+             CssParser.parse(".address-section > .section p:first-child { margin-top: 0; }")
+
+    [selector] = rule.selectors
+
+    assert selector.specificity == {0, 3, 1}
+
+    assert Enum.map(selector.parts, &{&1.tag, &1.classes, &1.pseudo_classes, &1.combinator}) == [
+             {nil, ["address-section"], [], nil},
+             {nil, ["section"], [], :child},
+             {"p", [], [:first_child], :descendant}
+           ]
+  end
+
+  test "parse accepts print template universal and child pseudo selectors" do
+    assert {:ok, [universal_rule, last_rule, nth_rule]} =
+             CssParser.parse("""
+             * { box-sizing: border-box; }
+             .sheet:last-child { page-break-after: auto; }
+             .left-side div:nth-child(2) { display: flex; }
+             """)
+
+    [universal_selector] = universal_rule.selectors
+    assert universal_selector.specificity == {0, 0, 0}
+    assert hd(universal_selector.parts).tag == nil
+
+    [last_selector] = last_rule.selectors
+    assert hd(last_selector.parts).pseudo_classes == [:last_child]
+
+    [nth_selector] = nth_rule.selectors
+    assert List.last(nth_selector.parts).pseudo_classes == [{:nth_child, 2}]
+  end
+
+  test "parse accepts document attribute, negation, positional, and generated-content selectors" do
+    assert {:ok, [attribute_rule, positional_rule, type_rule, generated_rule]} =
+             CssParser.parse("""
+             [data-kind][role='note']:not(.muted) { color: red; }
+             tbody > tr:nth-child(odd), tbody > tr:nth-child(even) { color: blue; }
+             section:first-of-type, section:last-of-type { margin-bottom: 0; }
+             figure[data-label]::before { content: attr(data-label); }
+             """)
+
+    [attribute_selector] = attribute_rule.selectors
+    [attribute_part] = attribute_selector.parts
+
+    assert attribute_part.attributes == [
+             {:present, "data-kind"},
+             {:equals, "role", "note"}
+           ]
+
+    assert [%{classes: ["muted"]}] = attribute_part.negations
+    assert attribute_selector.specificity == {0, 3, 0}
+
+    assert Enum.map(positional_rule.selectors, fn selector ->
+             List.last(selector.parts).pseudo_classes
+           end) == [[{:nth_child, :odd}], [{:nth_child, :even}]]
+
+    assert Enum.map(type_rule.selectors, fn selector ->
+             List.last(selector.parts).pseudo_classes
+           end) == [[:first_of_type], [:last_of_type]]
+
+    [generated_selector] = generated_rule.selectors
+    assert List.last(generated_selector.parts).pseudo_element == :before
+    assert generated_selector.specificity == {0, 1, 2}
+  end
+
+  test "parse keeps CSS syntax characters inside quoted strings" do
+    css =
+      ~S|/* outside */ [title="a b,c\"d"], .fallback { content: "A/*B*/C } { , \"quoted\"; tail"; } /* outside */|
+
+    assert {:ok, [rule]} = CssParser.parse(css)
+    assert rule.declarations == [{"content", ~S|"A/*B*/C } { , \"quoted\"; tail"|}]
+
+    [attribute_selector, fallback_selector] = rule.selectors
+    [attribute_part] = attribute_selector.parts
+
+    assert attribute_part.attributes == [{:equals, "title", ~S|a b,c"d|}]
+    assert hd(fallback_selector.parts).classes == ["fallback"]
+  end
+
+  test "parse accepts all attribute operators and explicit ASCII case flags" do
+    operators = [
+      {"=", :equals},
+      {"~=", :includes},
+      {"|=", :dash_match},
+      {"^=", :prefix},
+      {"$=", :suffix},
+      {"*=", :substring}
+    ]
+
+    for {token, operator} <- operators,
+        {flag, mode} <- [
+          {"i", :insensitive},
+          {"I", :insensitive},
+          {"s", :sensitive},
+          {"S", :sensitive}
+        ] do
+      assert {:ok, [rule]} =
+               CssParser.parse(
+                 ~s|p[DATA-KIND #{token} "AbC" #{flag}]:not([title='Skip' i]) { color:red; }|
+               )
+
+      [selector] = rule.selectors
+      [part] = selector.parts
+      assert part.attributes == [{operator, "data-kind", "AbC", mode}]
+      assert hd(part.negations).attributes == [{:equals, "title", "Skip", :insensitive}]
+      assert selector.specificity == {0, 2, 1}
+
+      assert {:ok, [rule]} = CssParser.parse("[data-kind#{token}note] { color:blue; }")
+      assert hd(hd(rule.selectors).parts).attributes == [{operator, "data-kind", "note"}]
+    end
+
+    assert {:ok, [rule]} = CssParser.parse(~s([lang="" s][title=αβ I] { color:red; }))
+
+    assert hd(hd(rule.selectors).parts).attributes == [
+             {:equals, "lang", "", :sensitive},
+             {:equals, "title", "αβ", :insensitive}
+           ]
+  end
+
+  test "parse rejects malformed attribute operators, values and flags" do
+    for selector <- [
+          "[title i]",
+          "[title=abc q]",
+          "[title=abc is]",
+          "[title=abc i s]",
+          "[title=\"abc\"i]",
+          "[title!=abc]",
+          "[title==abc]",
+          "[title^abc]",
+          "[title=]",
+          "[title=42]",
+          "[title=a/b]",
+          "[title='a\nb']",
+          "[title=abc\vI]"
+        ] do
+      assert CssParser.parse(selector <> " { color:red; }") == {:error, :invalid_css}
+    end
+  end
+
+  test "parse keeps unsupported selector diagnostics strict" do
+    for css <- [
+          "p:not(div span) { color: red; }",
+          "p:not() { color: red; }",
+          "p::before span { color: red; }",
+          "p:nth-child(2n of .selected) { color: red; }",
+          "p::marker { color: red; }"
+        ] do
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
+  end
+
+  test "parse accepts root custom properties and important declarations" do
+    assert {:ok, [root_rule, hidden_rule]} =
+             CssParser.parse("""
+             :root { --Row-Height: 8rem; --row-height: 9rem; }
+             .none { display: none !important; }
+             """)
+
+    [root_selector] = root_rule.selectors
+    assert root_rule.declarations == [{"--Row-Height", "8rem"}, {"--row-height", "9rem"}]
+    assert hd(root_selector.parts).pseudo_classes == [:root]
+
+    assert hidden_rule.declarations == [{"display", "none", :important}]
+  end
+
+  test "parse accepts simple page rules outside the style cascade" do
+    assert {:ok, [rule]} =
+             CssParser.parse("""
+             @page { size: A4 landscape; margin: 7mm; }
+             .sheet { height: 196mm; }
+             """)
+
+    assert rule.declarations == [{"height", "196mm"}]
+    [selector] = rule.selectors
+    assert hd(selector.parts).classes == ["sheet"]
+  end
+
+  test "parse activates print media rules and skips non-print rules" do
+    assert {:ok, [base_rule, print_rule]} =
+             CssParser.parse("""
+             p { color: black; }
+             @media screen { p { color: blue; } }
+             @media only print { p { color: red; } }
+             """)
+
+    assert base_rule.declarations == [{"color", "black"}]
+    assert print_rule.declarations == [{"color", "red"}]
+
+    assert {:ok, [all_rule]} = CssParser.parse("@media all { p { color: green; } }")
+    assert all_rule.declarations == [{"color", "green"}]
+
+    assert CssParser.parse("@media print and (color) { p { color: red; } }") ==
+             {:ok, []}
+
+    assert {:ok, [nested_rule]} =
+             CssParser.parse("@media print { @media print { p { color: red; } } }")
+
+    assert nested_rule.declarations == [{"color", "red"}]
+  end
+
+  test "font_faces extracts supported local TrueType and OpenType sources" do
+    assert {:ok, [regular, italic]} =
+             CssParser.font_faces("""
+             @font-face {
+               font-family: "Report Sans";
+               src: local("Report Sans"), url('../fonts/report.woff2') format('woff2'), url("../fonts/report.ttf") format("truetype");
+               font-display: swap;
+             }
+             @media print {
+               @font-face {
+                 font-family: 'Report Sans';
+               src: url(../fonts/report.otf) format(opentype);
+                 font-weight: 500;
+                 font-style: italic;
+               }
+             }
+             """)
+
+    assert regular == %{
+             family: "Report Sans",
+             sources: ["../fonts/report.ttf"],
+             weight: 400,
+             style: :normal
+           }
+
+    assert italic == %{
+             family: "Report Sans",
+             sources: ["../fonts/report.otf"],
+             weight: 500,
+             style: :italic
+           }
+
+    assert {:ok, [fallback]} =
+             CssParser.font_faces(
+               "@font-face { font-family: Fallback; src: url(missing.ttf), url(valid.otf) format(opentype); }"
+             )
+
+    assert fallback.sources == ["missing.ttf", "valid.otf"]
+
+    assert {:ok, [comma_path]} =
+             CssParser.font_faces(
+               "@font-face { font-family: CommaPath; src: url(\"report,sans.ttf\") format(\"truetype\"); }"
+             )
+
+    assert comma_path.sources == ["report,sans.ttf"]
+
+    assert {:ok, [normal]} =
+             CssParser.font_faces(
+               "@font-face { font-family: Normal; src: url(normal.ttf); font-weight: normal; font-style: normal; }"
+             )
+
+    assert normal.weight == 400
+    assert normal.style == :normal
+
+    assert {:ok, [bold]} =
+             CssParser.font_faces(
+               "@font-face { font-family: Bold; src: url(bold.ttf); font-weight: bold; }"
+             )
+
+    assert bold.weight == 700
+
+    assert {:ok, []} = CssParser.parse("@font-face { font-family: X; src: url(x.ttf); }")
+  end
+
+  test "font_faces retains remote references for caller resolution and rejects unsupported declarations" do
+    assert {:ok, [remote]} =
+             CssParser.font_faces(
+               "@font-face { font-family: X; src: url(https://example.com/x.ttf); }"
+             )
+
+    assert remote.sources == ["https://example.com/x.ttf"]
+
+    for css <- [
+          "@font-face { font-family: X; src: url(x.woff2) format(woff2); }",
+          "@font-face { font-family: X; src: url(x.png) format(truetype); }",
+          "@font-face { font-family: X; font-weight: bold; }",
+          "@font-face { font-family: ''; src: url(x.ttf); }",
+          "@font-face { src: url(x.ttf); }",
+          "@font-face { font-family: X; src: url(x.ttf); font-style: oblique; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-style: italic !important; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-weight: 950; }",
+          "@font-face { font-family: X; src: url(x.ttf); unicode-range: U+0-FF; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-display: eager; }"
+        ] do
+      assert CssParser.font_faces(css) == {:error, :invalid_css}
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
+
+    assert CssParser.font_faces(:not_css) == {:error, :invalid_css}
+
+    assert CssParser.font_faces("@media print { @media print { p { color: red; } } }") ==
+             {:ok, []}
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               source: "src: url(x.woff2) format(woff2)",
+               message:
+                 "line 1: @font-face declaration \"src: url(x.woff2) format(woff2)\" is invalid or unsupported"
+             }}} =
+             CssParser.parse_detailed(
+               "@font-face { font-family: X; src: url(x.woff2) format(woff2); }"
+             )
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               source: "font-family X",
+               message:
+                 "line 1: @font-face declaration \"font-family X\" is invalid or unsupported"
+             }}} =
+             CssParser.parse_detailed("@font-face { font-family X; src: url(valid.ttf); }")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               source: "@font-face",
+               message: "line 1: @font-face is missing required \"src\" descriptor"
+             }}} =
+             CssParser.parse_detailed("@font-face { font-family: X; }")
+  end
+
+  test "page_options extracts supported page size and margin defaults" do
+    assert {:ok, options} =
+             CssParser.page_options("""
+             @page { size: A4 landscape; margin: 7mm; }
+             @page { size: letter portrait; margin: 0; }
+             """)
+
+    assert Keyword.fetch!(options, :page_size) == :letter
+    assert Keyword.fetch!(options, :margin) == 0.0
+
+    assert {:ok, landscape_options} =
+             CssParser.page_options("@page { size: landscape A4; margin: 10px; }")
+
+    assert Keyword.fetch!(landscape_options, :page_size) == {841.89, 595.28}
+    assert Keyword.fetch!(landscape_options, :margin) == "10px"
+
+    for {size, expected} <- [
+          {"A4", :a4},
+          {"A4 portrait", :a4},
+          {"portrait A4", :a4},
+          {"letter", :letter},
+          {"portrait letter", :letter},
+          {"letter landscape", {792.0, 612.0}},
+          {"landscape letter", {792.0, 612.0}}
+        ] do
+      assert {:ok, options} = CssParser.page_options("@page { size: #{size}; }")
+      assert Keyword.fetch!(options, :page_size) == expected
+    end
+
+    for css <- [
+          "@page { size: tabloid; }",
+          "@page { margin: 1pt 2pt 3pt 4pt 5pt; }",
+          "@page { margin-top: bananas; }",
+          "@page { page-orientation: sideways; }",
+          "@page { marks: crop crop; }",
+          "@page { marks: crop cross crop; }",
+          "@page { bleed: bananas; }",
+          "@page { size: A4 landscape portrait; }",
+          "@page { nonsense: value; }",
+          "@page { color }"
+        ] do
+      assert CssParser.page_options(css) == {:error, :invalid_css}
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
+
+    assert CssParser.page_options(:not_css) == {:error, :invalid_css}
+
+    assert {:ok, print_page_options} =
+             CssParser.page_options("@media print { @page { size: letter; margin: 0; } }")
+
+    assert Keyword.fetch!(print_page_options, :page_size) == :letter
+    assert Keyword.fetch!(print_page_options, :margin) == 0.0
+
+    assert CssParser.page_options("@media screen { @page { nonsense: value; margin: bananas; } }") ==
+             {:ok, []}
+  end
+
+  test "page rules reject selectors, named pages, and misspelled at-rules" do
+    for css <- [
+          "@page :first { size: A5; margin: 1pt; }",
+          "@page rotated { size: letter; }",
+          "@pagefoo { size: A3; }",
+          "@page;"
+        ] do
+      assert CssParser.page_options(css) == {:error, :invalid_css}
+      assert CssParser.parse(css) == {:error, :invalid_css}
+    end
+
+    css = """
+    p { color: black; }
+    @page :first { size: A5; margin: 1pt; }
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 2,
+               column: 1,
+               source: "@page :first",
+               message: ~s(line 2: page rule "@page :first" is invalid or unsupported)
+             }}} = CssParser.parse_detailed(css)
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               line: 1,
+               column: 1,
+               source: "@pagefoo",
+               message: ~s(line 1: page rule "@pagefoo" is invalid or unsupported)
+             }}} = CssParser.parse_detailed("@pagefoo { size: A3; }")
+
+    custom_property_css = ~s(:root { --page-rule-label: "@pagefoo"; })
+    assert {:ok, [_rule]} = CssParser.parse(custom_property_css)
+    assert CssParser.page_options(custom_property_css) == {:ok, []}
+  end
+
+  test "page_options applies resolvable geometry and accepts remaining page-context properties" do
+    css = """
+    @page {
+      size: 210mm 297mm !important;
+      margin: auto 20px 10% -5mm;
+      margin-top: 100px;
+      margin-right: auto;
+      margin-bottom: -2pt;
+      margin-left: 5%;
+      page-orientation: rotate-left;
+      marks: crop cross;
+      bleed: -3mm;
+      background: red;
+      border: 1px solid black;
+      padding: 10px;
+      color: navy;
+      counter-reset: page 1;
+      font-size: 12pt;
+      text-align: center;
+      width: 100px;
+    }
+    """
+
+    assert CssParser.page_options(css) ==
+             {:ok, [margin: %{top: "100px"}, page_size: "210mm 297mm"]}
+
+    assert CssParser.parse(css) == {:ok, []}
+
+    for size <- [
+          "auto",
+          "portrait",
+          "landscape",
+          "A5",
+          "A3 landscape",
+          "portrait B4",
+          "JIS-B5",
+          "legal",
+          "ledger portrait",
+          "8.5in",
+          "8.5in 11in"
+        ] do
+      assert {:ok, _options} = CssParser.page_options("@page { size: #{size}; }")
+    end
+
+    for margin <- [
+          "initial",
+          "inherit",
+          "unset",
+          "revert",
+          "revert-layer",
+          ".5in",
+          "+1e2px",
+          "calc(10px + 2%)",
+          "var(--page-margin)"
+        ] do
+      assert {:ok, _options} = CssParser.page_options("@page { margin-top: #{margin}; }")
+    end
+
+    for marks <- ["none", "crop", "cross", "cross crop", "initial", "var(--marks)"] do
+      assert CssParser.page_options("@page { marks: #{marks}; }") == {:ok, []}
+    end
+
+    assert CssParser.page_options("@page { bleed: auto; }") == {:ok, []}
+    assert CssParser.page_options("@page { bleed: initial; }") == {:ok, []}
+    assert CssParser.page_options("@page { bleed: var(--bleed); }") == {:ok, []}
+    assert CssParser.page_options("@page { page-orientation: initial; }") == {:ok, []}
+    assert CssParser.page_options("@page { page-orientation: var(--orientation); }") == {:ok, []}
+    assert CssParser.page_options("@page { size: initial; }") == {:ok, []}
+    assert CssParser.page_options("@page { size: var(--page-size); }") == {:ok, []}
+    assert CssParser.page_options("@page { size: A4 !important; }") == {:ok, page_size: :a4}
+  end
+
+  test "page_options cascades margin shorthands and longhands across page rules" do
+    css = """
+    @page {
+      margin: 1pt 2pt 3pt;
+      margin-left: 4pt;
+    }
+    @page {
+      margin-top: 5pt;
+      margin-right: auto;
+      margin-right: 6pt;
+    }
+    """
+
+    assert CssParser.page_options(css) ==
+             {:ok,
+              [
+                margin: %{top: "5pt", right: "6pt", bottom: 3.0, left: "4pt"}
+              ]}
+  end
+
+  test "page_options recognizes CSS Paged Media page-context properties" do
+    declarations = [
+      {"background", "white"},
+      {"background-attachment", "scroll"},
+      {"background-color", "white"},
+      {"background-image", "none"},
+      {"background-position", "center"},
+      {"background-repeat", "no-repeat"},
+      {"border", "1px solid black"},
+      {"border-bottom", "1px solid black"},
+      {"border-bottom-color", "black"},
+      {"border-bottom-style", "solid"},
+      {"border-bottom-width", "1px"},
+      {"border-color", "black"},
+      {"border-left", "1px solid black"},
+      {"border-left-color", "black"},
+      {"border-left-style", "solid"},
+      {"border-left-width", "1px"},
+      {"border-right", "1px solid black"},
+      {"border-right-color", "black"},
+      {"border-right-style", "solid"},
+      {"border-right-width", "1px"},
+      {"border-style", "solid"},
+      {"border-top", "1px solid black"},
+      {"border-top-color", "black"},
+      {"border-top-style", "solid"},
+      {"border-top-width", "1px"},
+      {"border-width", "1px"},
+      {"color", "black"},
+      {"counter-increment", "page 1"},
+      {"counter-reset", "page 0"},
+      {"direction", "ltr"},
+      {"font", "12pt sans-serif"},
+      {"font-family", "sans-serif"},
+      {"font-size", "12pt"},
+      {"font-style", "normal"},
+      {"font-variant", "normal"},
+      {"font-weight", "400"},
+      {"height", "100px"},
+      {"letter-spacing", "normal"},
+      {"line-height", "normal"},
+      {"max-height", "none"},
+      {"max-width", "none"},
+      {"min-height", "0"},
+      {"min-width", "0"},
+      {"outline", "1px solid black"},
+      {"outline-color", "black"},
+      {"outline-style", "solid"},
+      {"outline-width", "1px"},
+      {"padding", "1px"},
+      {"padding-bottom", "1px"},
+      {"padding-left", "1px"},
+      {"padding-right", "1px"},
+      {"padding-top", "1px"},
+      {"quotes", "auto"},
+      {"text-align", "center"},
+      {"text-decoration", "none"},
+      {"text-indent", "0"},
+      {"text-transform", "none"},
+      {"visibility", "visible"},
+      {"white-space", "normal"},
+      {"width", "100px"},
+      {"word-spacing", "normal"}
+    ]
+
+    Enum.each(declarations, fn {property, value} ->
+      css = "@page { #{property}: #{value}; }"
+      assert CssParser.page_options(css) == {:ok, []}
+      assert CssParser.parse(css) == {:ok, []}
+    end)
+  end
+
+  test "parse_detailed locates invalid page declarations" do
+    css = """
+    @page {
+      size: A4;
+      nonsense: value;
+      margin: 7mm;
+    }
+    """
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 3,
+               column: 3,
+               source: "nonsense: value",
+               message: ~s(line 3: declaration "nonsense: value" is invalid or unsupported)
+             }}} = CssParser.parse_detailed(css)
+  end
+
+  test "parse_declarations normalizes inline declaration blocks" do
+    assert {:ok, [{"color", "\u00a0red\u00a0"}]} =
+             CssParser.parse_declarations("color: \u00a0red\u00a0 ")
+
+    assert {:ok, [{"color", "red\u00a0", :important}]} =
+             CssParser.parse_declarations("color:red\u00a0!important")
+
+    assert {:ok, [{"--Accent", "red\\!important"}]} =
+             CssParser.parse_declarations(~S|--Accent:red\!important|)
+
+    assert {:ok, [{"content", ~S|"!important"|}]} =
+             CssParser.parse_declarations(~S|content:"!important"|)
+
+    for marker <- ["!important", "! ImPoRtAnT", "!\tIMPORTANT", ~S|!\69mportant|] do
+      assert {:ok, [{"color", "red", :important}]} =
+               CssParser.parse_declarations(" \tCoLoR : red #{marker}\r\n")
+    end
+
+    for source <- ["\u00a0color:red", "color\u00a0:red", "color:"] do
+      assert {:error, {:invalid_css, diagnostic}} = CssParser.parse_declarations_detailed(source)
+      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.source) and is_binary(diagnostic.message)
+    end
+
+    assert CssParser.parse_declarations(
+             " COLOR : var(--Accent) ; --Accent: #336699; --accent: #663399 "
+           ) ==
+             {:ok,
+              [
+                {"color", "var(--Accent)"},
+                {"--Accent", "#336699"},
+                {"--accent", "#663399"}
+              ]}
+
+    assert CssParser.parse_declarations("display: none !important") ==
+             {:ok, [{"display", "none", :important}]}
+  end
+
+  test "parse rejects malformed CSS" do
+    assert CssParser.parse("p color: red;") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: red; } dangling") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: red;") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: red; } /* unterminated") == {:error, :invalid_css}
+    assert CssParser.parse(~S|[title="open" { color: red; }|) == {:error, :invalid_css}
+    assert CssParser.parse("p] { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("{}") == {:error, :invalid_css}
+    assert CssParser.parse("p, { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("> p { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p > { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p > span > { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p > { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("123 { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p#one#two { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p:active { color: red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p { : red; }") == {:error, :invalid_css}
+    assert CssParser.parse("p { color: ; }") == {:error, :invalid_css}
+    assert CssParser.parse("p { color }") == {:error, :invalid_css}
+    assert CssParser.parse("") == {:ok, []}
+    assert CssParser.parse(:not_css) == {:error, :invalid_css}
+    assert CssParser.parse_declarations(:not_css) == {:error, :invalid_css}
+  end
+
+  test "parse_detailed returns source details for malformed CSS" do
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               column: 1,
+               source: "",
+               message: ~s(line 1: declaration "" is invalid or unsupported)
+             }}} = CssParser.parse_detailed("p {}")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               source: "",
+               message: ~s(line 1: declaration "" is invalid or unsupported)
+             }}} = CssParser.parse_detailed("p { color: red; } div {}")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               line: 1,
+               column: 5,
+               source: "1/* hidden */bad: value"
+             }}} = CssParser.parse_detailed("p { 1/* hidden */bad: value; }")
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               message: "CSS input must be a string"
+             }}} = CssParser.parse_detailed(:not_css)
+
+    assert {:error,
+            {:invalid_css,
+             %{
+               stage: :css,
+               reason: :invalid_css,
+               message: "CSS declaration input must be a string"
+             }}} = CssParser.parse_declarations_detailed(:not_css)
+  end
+
+  test "enabled and disabled selectors compose with negation and existing selectors" do
+    for selector <- [
+          "input:enabled",
+          "input:DISABLED",
+          "input:enabled:not([readonly])",
+          "button:not(:disabled)",
+          "div > input:disabled[type=submit]",
+          "input:disabled::before",
+          ":First-Child",
+          "p:LAST-OF-TYPE"
+        ] do
+      assert {:ok, [_]} = CssParser.parse(selector <> " { color:blue; }")
+    end
+
+    for selector <- [
+          "input:enabledness",
+          "input:disabled()",
+          "input:diſabled",
+          "input:enabled(x)",
+          "input:unknown"
+        ] do
+      assert {:error, :invalid_css} = CssParser.parse(selector <> " { color:blue; }")
+    end
+
+    assert {:ok, [rule]} = CssParser.parse("input:enabled { color:blue; }")
+    assert hd(rule.selectors).specificity == {0, 1, 1}
+    assert hd(hd(rule.selectors).parts).pseudo_classes == [:enabled]
+  end
+end

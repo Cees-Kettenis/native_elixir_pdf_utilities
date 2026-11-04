@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 420px 490px; margin: 12px; }
+html, body { margin: 0; padding: 0; font-family: "DejaVu Sans"; font-size: 12px; line-height: 16px; }
+p { margin: 0; }
+body > svg { display: block; width: 360px; height: 88px; }
+.hole { clip-rule: evenodd; }
+.clipped { clip-path: url(#hole); }
+#winner { clip-path: url(#round); }
+</style></head><body>
+<p>Compound path clips and host cascade Ω</p>
+<svg viewBox="0 0 360 88">
+ <defs>
+  <clipPath id="hole" class="hole"><path d="M4 4H108V80H4Z M28 22H84V62H28Z" /></clipPath>
+  <clipPath id="round" clipPathUnits="userSpaceOnUse"><circle cx="174" cy="42" r="35" /></clipPath>
+ </defs>
+ <rect class="clipped" x="0" y="0" width="120" height="88" fill="#174a86" />
+ <rect id="winner" x="124" y="0" width="100" height="88" clip-path="url(#hole)" fill="#168250" />
+ <g transform="translate(236 0)" clip-path="url(#hole)"><rect width="120" height="88" fill="#a03333" /><path d="M0 44H120" stroke="#dd8800" stroke-width="12" /></g>
+</svg>
+<p>Clip and geometry transforms, reused definitions</p>
+<svg viewBox="0 0 360 88">
+ <defs><clipPath id="tilted" transform="translate(12 8) rotate(8)"><rect x="0" y="0" width="70" height="58" rx="8" transform="skewX(12)" /></clipPath></defs>
+ <g clip-path="url(#tilted)"><rect width="110" height="88" fill="#168250" /><circle cx="42" cy="38" r="27" fill="#dd8800" /></g>
+ <g transform="translate(120 0)" clip-path="url(#tilted)" opacity="0.5"><rect width="110" height="88" fill="#174a86" /><circle cx="42" cy="38" r="27" fill="#a03333" /></g>
+ <g transform="translate(240 0) scale(-1 1) translate(-100 0)" clip-path="url(#tilted)"><rect width="110" height="88" fill="#a03333" /></g>
+</svg>
+<p>Ancestor clip intersections and nested viewports café</p>
+<svg viewBox="0 0 360 88">
+ <defs><clipPath id="disk"><ellipse cx="60" cy="44" rx="53" ry="34" /></clipPath><clipPath id="stripe"><path d="M18 0H92V88H18Z" /></clipPath></defs>
+ <g clip-path="url('#disk')"><g clip-path="url(#stripe)"><rect width="120" height="88" fill="#174a86" /><path d="M0 44H120" stroke="#dd8800" stroke-width="12" /></g></g>
+ <g transform="translate(120 0)" clip-path="url(#disk)"><svg x="20" y="12" width="90" height="64" viewBox="0 0 90 64"><rect width="90" height="64" fill="#168250" /><circle cx="45" cy="32" r="40" fill="#dd8800" /></svg></g>
+ <g transform="translate(240 0)" clip-path="url(#disk)"><rect width="120" height="88" fill="#a03333" /></g>
+</svg>
+<p>Invisible clip geometry with visible siblings</p>
+<svg viewBox="0 0 360 88">
+ <defs>
+  <clipPath id="hidden"><rect width="100" height="88" visibility="hidden" /></clipPath>
+  <clipPath id="inherited-hidden" visibility="hidden"><rect width="100" height="88" /></clipPath>
+  <clipPath id="display-none"><rect width="100" height="88" style="display:none" /></clipPath>
+ </defs>
+ <rect width="100" height="88" fill="red" clip-path="url(#hidden)" />
+ <rect x="120" width="100" height="88" fill="red" clip-path="url(#inherited-hidden)" />
+ <rect x="240" width="100" height="88" fill="red" clip-path="url(#display-none)" />
+ <rect x="4" y="4" width="40" height="20" fill="#168250" />
+ <rect x="124" y="4" width="40" height="20" fill="#174a86" />
+ <rect x="244" y="4" width="40" height="20" fill="#dd8800" />
+</svg>
+<p>Clip artwork survived</p>
+</body></html>

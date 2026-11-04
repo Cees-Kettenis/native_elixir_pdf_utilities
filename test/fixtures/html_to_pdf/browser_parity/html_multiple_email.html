@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><style>
+@page { size:264pt 264pt; margin:0; }
+html,body { margin:0; padding:0; }
+body { padding:12pt; font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+input { display:block; width:240pt; box-sizing:border-box; border:1px solid #777777;
+ background:white; padding:1.5pt 3pt; margin:0 0 6pt;
+ font-family:'DejaVu Sans'; font-size:10.5pt; line-height:13.5pt; }
+[multiple] { color:#21517b; }
+[multiple="false"] { color:#993300; }
+[readonly] { background:#f7f7f7; }
+[disabled] { color:#666666; background:#f4f4f4; }
+[value^=" "] { color:#006600; }
+</style></head><body>
+<input type="email" name="single" value="one@example.com">
+<input type="email" multiple name="pair" value=" one@example.com , two@example.com ">
+<input type="EMAIL" MULTIPLE="false" name="boolean" value="A@example.com,B@example.com">
+<input type="email" multiple readonly name="locked" value=" A@example.com ,&#10; B@example.com ">
+<input type="email" multiple readonly disabled name="both" value="  Confirmed  ">
+<input type="email" multiple name="empty">
+<input type="email" multiple name="empty-value" value=" &#9;&#12;&#13;&#10; ">
+<input type="email" multiple name="empty-tokens" value=" , , ">
+<input type="email" multiple name="trailing" value=" A,, B, ">
+</body></html>

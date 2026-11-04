@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page {size:300pt 330pt;margin:0;}
+html,body {margin:0;padding:0;}
+body {padding:12pt;font-family:"DejaVu Sans";font-size:9pt;line-height:12pt;}
+p {margin:0 0 6pt;}
+script.print {display:block;white-space:pre;border:1px solid #777777;padding:3pt;margin:0 0 6pt;}
+script[type="TEXT/PLAIN"] {color:#164e63;}
+</style><script type="application/json">{"head":"<style>body{color:red}</style>"}</script></head><body>
+<p>Visible before data blocks</p>
+<script type="application/json" src="https://invalid.test/data.json">{"markup":"<img src='denied.png'>","entity":"&amp;","broken":</script>
+<p>Hidden data does not alter this line</p>
+<script type="text/plain" class="print">Literal &amp; &lt; stays raw</script>
+<script type="text/plain" class="print"><!--<script>inner</script>tail--></script>
+<script type="text/plain" class="print"><!--><script>ordinary</script>
+<script type="text/plain" class="print"><!---><script>ordinary</script>
+<script type="text/javascript;charset=utf-8" class="print">MIME parameters select data</script>
+<script type="   " class="print">Whitespace type selects data</script>
+<script language="json" class="print">Legacy non-JS language data</script>
+<script type="text/plain" class="print"></script>
+<p>Visible after every boundary case</p>
+</body></html>

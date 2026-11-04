@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><style>
+@page { size:300pt 720pt; margin:0; }
+html,body { margin:0; padding:0; }
+body { padding:12pt; font-family:'DejaVu Sans'; font-size:10.5pt; line-height:14pt; }
+p { margin:0 0 3pt; }
+.case:read-only { color:#993300; background:#fff4dc; }
+.case:read-write { color:#21517b; background:#eef6ff; }
+.case:not(:read-write) { border-color:#993300; }
+.case:not(:read-only) { border-color:#21517b; }
+.escape:\72 ead-write:not(:read-only) { color:#205020; }
+.escape { color:#993300; }
+input,textarea,button,select { display:block; width:240pt; box-sizing:border-box; border:1px solid #777777;
+ background:white; padding:1.5pt 3pt; margin:0 0 6pt; font-family:'DejaVu Sans'; font-size:10.5pt;
+ line-height:13.5pt; border-radius:0; }
+input,button,select { height:18pt; }
+textarea { height:36pt; }
+button { text-align:left; }
+</style></head><body>
+<p class=case>Outside editing region</p>
+<div contenteditable="TRUE">
+<p class=case>Inherited true region</p>
+<p class=case contenteditable="inherit">Invalid keyword inherits</p>
+<p class=case contenteditable=" false ">Untrimmed false inherits</p>
+<div contenteditable=false>
+<p class=case>Nested false region</p>
+<p class=case contenteditable=" true ">Untrimmed true stays locked</p>
+<div contenteditable><p class=case>Empty keyword starts host</p></div>
+<p class=case contenteditable=plaintext-only>Plaintext starts nested host</p>
+</div>
+<p class="case escape">Escapes and negation</p>
+<input class=case name=editable contenteditable=false value="Input uses own mutability">
+<input class=case name=readonly readonly=false contenteditable=true value="Readonly by boolean presence">
+<input class=case name=disabled disabled=false contenteditable=true value="Disabled by boolean presence">
+<textarea class=case name=notes contenteditable=false>Textarea stays writable</textarea>
+<textarea class=case name=locked readonly contenteditable=true>Textarea stays readonly</textarea>
+<button class=case disabled>Disabled button in editing host</button>
+</div>
+<div contenteditable=false>
+<input class=case name=unknown type=unknown value="Unknown type uses text default">
+<input class=case name=search type=search value="Search remains writable">
+<input class=case name=email type=email value="mail@example.test">
+<textarea class=case name=disabled_notes disabled>Disabled textarea outside host</textarea>
+<button class=case>Button outside editing host</button>
+<select class=case name=choice><option>Dropdown is readonly</option></select>
+</div>
+<p class=case contenteditable=plaintext-only>Plaintext host outside region</p>
+<p class=case contenteditable="truſ">Non-ASCII keyword stays locked</p>
+<input type=hidden contenteditable value="Hidden editability value">
+<p class=case>After editability cases</p>
+</body></html>

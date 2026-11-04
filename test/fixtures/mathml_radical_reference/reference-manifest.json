@@ -1,0 +1,958 @@
+{
+  "activation": false,
+  "inputs": {
+    "priv/fonts/stix/STIXTwoMath-Regular.ttf": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
+    "priv/fonts/stix/OFL.txt": "0c8825913b60d858aacdb33c4ca6660a7d64b0d6464702efbb19313f5765861a",
+    "test/fixtures/html_to_pdf/browser_parity/mathml_radicals.html": "cc76de79b7b35335a26c78ffe0efa09a5832b31cc5f6798d72365602ce042666",
+    "tmp/references/mathml-core.html": "f61ebea74ba54c489646e6969983ef977f448c26602edff75ec4e3ba77216373"
+  },
+  "fonttools_version": "4.60.1",
+  "core_url": "https://www.w3.org/TR/2025/CR-mathml-core-20250624/#radicals-msqrt-mroot",
+  "native_or_browser_geometry_inputs": false,
+  "empirical_offsets": [],
+  "unchanged_thresholds": {
+    "max_changed_ratio": 0.01,
+    "max_average_delta": 0.01,
+    "dpi": 72,
+    "pixel_channel_tolerance": 12
+  },
+  "new_outer_radical_display_overrides": 4,
+  "reference_font_sha256": "57c71736ad6f2fffbb9cd1d4c4ca23dd8f5a90b0aed048246ba981a89379439f",
+  "selected_source_pair_advances": [
+    {
+      "left": 1138,
+      "right": 1143,
+      "script": "latn",
+      "design_advance": 0
+    },
+    {
+      "left": 1138,
+      "right": 1139,
+      "script": "latn",
+      "design_advance": 0
+    }
+  ],
+  "aliases": [
+    {
+      "name": "uni221A",
+      "cp": 58624,
+      "source_gid": 1657
+    },
+    {
+      "name": "two",
+      "cp": 58625,
+      "source_gid": 1139
+    },
+    {
+      "name": "one",
+      "cp": 58626,
+      "source_gid": 1138
+    },
+    {
+      "name": "six",
+      "cp": 58627,
+      "source_gid": 1143
+    },
+    {
+      "name": "three.ssty2",
+      "cp": 58628,
+      "source_gid": 4525
+    },
+    {
+      "name": "seven",
+      "cp": 58629,
+      "source_gid": 1144
+    },
+    {
+      "name": "plus",
+      "cp": 58630,
+      "source_gid": 1196
+    },
+    {
+      "name": "nine",
+      "cp": 58631,
+      "source_gid": 1146
+    },
+    {
+      "name": "uni221A.s3",
+      "cp": 58632,
+      "source_gid": 1660
+    },
+    {
+      "name": "uni221A.s2",
+      "cp": 58633,
+      "source_gid": 1659
+    },
+    {
+      "name": "three",
+      "cp": 58634,
+      "source_gid": 1140
+    },
+    {
+      "name": "five.ssty2",
+      "cp": 58635,
+      "source_gid": 4527
+    }
+  ],
+  "font_stylesheet": "<style data-m4-source-font=\"proposal\">@font-face{font-family:\"Math Radical Core Reference\";src:url(data:font/ttf;base64,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) format(\"truetype\")}</style>",
+  "records": [
+    {
+      "original_fragment": "<msqrt><mn>2</mn></msqrt>",
+      "original_sha256": "8e71aab5bf6b78f133d863c2da731aadf97dfd7396bb5a61ba255642c5cc43c1",
+      "reference_fragment": "<msqrt style=\"display:inline-block;width:15.468pt;height:15.18pt;line-height:0;font-size:0\"><mtext style=\"display:inline-block;line-height:0;font-size:0\"><span style=\"display:inline-block;position:relative;width:15.468pt;height:15.18pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:10.5pt;line-height:0;font-size:0\"></span><span data-m4-text=\"\" style=\"position:absolute;left:0pt;top:3pt;font-family:'Math Radical Core Reference';font-size:12pt;line-height:12pt;color:black;white-space:nowrap\">\ue500</span><span data-m4-text=\"2\" style=\"position:absolute;left:9.528pt;top:1.5pt;font-family:'Math Radical Core Reference';font-size:12pt;line-height:12pt;color:black;white-space:nowrap\">\ue501</span><span style=\"position:absolute;left:9.528pt;top:0.936pt;width:5.94pt;height:0.816pt;background:black\"></span></span></mtext></msqrt>",
+      "geometry": {
+        "width": {
+          "numerator": 3867,
+          "denominator": 250,
+          "points": 15.468
+        },
+        "ascent": {
+          "numerator": 21,
+          "denominator": 2,
+          "points": 10.5
+        },
+        "descent": {
+          "numerator": 117,
+          "denominator": 25,
+          "points": 4.68
+        },
+        "ink_ascent": {
+          "numerator": 2391,
+          "denominator": 250,
+          "points": 9.564
+        },
+        "ink_descent": {
+          "numerator": 117,
+          "denominator": 25,
+          "points": 4.68
+        },
+        "glyphs": [
+          {
+            "name": "uni221A",
+            "gid": 1657,
+            "size": {
+              "numerator": 12,
+              "denominator": 1,
+              "points": 12.0
+            },
+            "text": "",
+            "color": "black",
+            "x": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "y": {
+              "numerator": -3,
+              "denominator": 2,
+              "points": -1.5
+            },
+            "width": {
+              "numerator": 1191,
+              "denominator": 125,
+              "points": 9.528
+            },
+            "ascent": {
+              "numerator": 1383,
+              "denominator": 125,
+              "points": 11.064
+            },
+            "descent": {
+              "numerator": 159,
+              "denominator": 50,
+              "points": 3.18
+            }
+          },
+          {
+            "name": "two",
+            "gid": 1139,
+            "size": {
+              "numerator": 12,
+              "denominator": 1,
+              "points": 12.0
+            },
+            "text": "2",
+            "color": "black",
+            "x": {
+              "numerator": 1191,
+              "denominator": 125,
+              "points": 9.528
+            },
+            "y": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 50,
+              "points": 5.94
+            },
+            "ascent": {
+              "numerator": 966,
+              "denominator": 125,
+              "points": 7.728
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 1191,
+              "denominator": 125,
+              "points": 9.528
+            },
+            "y": {
+              "numerator": 2187,
+              "denominator": 250,
+              "points": 8.748
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 50,
+              "points": 5.94
+            },
+            "height": {
+              "numerator": 102,
+              "denominator": 125,
+              "points": 0.816
+            },
+            "color": "black"
+          }
+        ]
+      }
+    },
+    {
+      "original_fragment": "<mroot><mn>16</mn><mn>3</mn></mroot>",
+      "original_sha256": "2f6f450c904c0016bfe92243478668cc2837ea30ea032178680ba3366420167b",
+      "reference_fragment": "<mroot style=\"display:inline-block;width:33.282pt;height:22.77pt;line-height:0;font-size:0\"><mtext style=\"display:inline-block;line-height:0;font-size:0\"><span style=\"display:inline-block;position:relative;width:33.282pt;height:22.77pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:15.786pt;line-height:0;font-size:0\"></span><span data-m4-text=\"\" style=\"position:absolute;left:1.17pt;top:4.5pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue500</span><span data-m4-text=\"1\" style=\"position:absolute;left:15.462pt;top:2.286pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue502</span><span data-m4-text=\"6\" style=\"position:absolute;left:24.372pt;top:2.286pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue503</span><span data-m4-text=\"3\" style=\"position:absolute;left:1.17pt;top:2.6178pt;font-family:'Math Radical Core Reference';font-size:9.9pt;line-height:9.9pt;color:black;white-space:nowrap\">\ue504</span><span style=\"position:absolute;left:15.462pt;top:1.404pt;width:17.82pt;height:1.224pt;background:black\"></span></span></mtext></mroot>",
+      "geometry": {
+        "width": {
+          "numerator": 16641,
+          "denominator": 500,
+          "points": 33.282
+        },
+        "ascent": {
+          "numerator": 7893,
+          "denominator": 500,
+          "points": 15.786
+        },
+        "descent": {
+          "numerator": 873,
+          "denominator": 125,
+          "points": 6.984
+        },
+        "ink_ascent": {
+          "numerator": 7191,
+          "denominator": 500,
+          "points": 14.382
+        },
+        "ink_descent": {
+          "numerator": 873,
+          "denominator": 125,
+          "points": 6.984
+        },
+        "glyphs": [
+          {
+            "name": "uni221A",
+            "gid": 1657,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "",
+            "color": "black",
+            "x": {
+              "numerator": 117,
+              "denominator": 100,
+              "points": 1.17
+            },
+            "y": {
+              "numerator": -1107,
+              "denominator": 500,
+              "points": -2.214
+            },
+            "width": {
+              "numerator": 3573,
+              "denominator": 250,
+              "points": 14.292
+            },
+            "ascent": {
+              "numerator": 4149,
+              "denominator": 250,
+              "points": 16.596
+            },
+            "descent": {
+              "numerator": 477,
+              "denominator": 100,
+              "points": 4.77
+            }
+          },
+          {
+            "name": "one",
+            "gid": 1138,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "1",
+            "color": "black",
+            "x": {
+              "numerator": 7731,
+              "denominator": 500,
+              "points": 15.462
+            },
+            "y": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "width": {
+              "numerator": 891,
+              "denominator": 100,
+              "points": 8.91
+            },
+            "ascent": {
+              "numerator": 5751,
+              "denominator": 500,
+              "points": 11.502
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            }
+          },
+          {
+            "name": "six",
+            "gid": 1143,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "6",
+            "color": "black",
+            "x": {
+              "numerator": 6093,
+              "denominator": 250,
+              "points": 24.372
+            },
+            "y": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "width": {
+              "numerator": 891,
+              "denominator": 100,
+              "points": 8.91
+            },
+            "ascent": {
+              "numerator": 2907,
+              "denominator": 250,
+              "points": 11.628
+            },
+            "descent": {
+              "numerator": 27,
+              "denominator": 125,
+              "points": 0.216
+            }
+          },
+          {
+            "name": "three.ssty2",
+            "gid": 4525,
+            "size": {
+              "numerator": 99,
+              "denominator": 10,
+              "points": 9.9
+            },
+            "text": "3",
+            "color": "black",
+            "x": {
+              "numerator": 117,
+              "denominator": 100,
+              "points": 1.17
+            },
+            "y": {
+              "numerator": 28341,
+              "denominator": 5000,
+              "points": 5.6682
+            },
+            "width": {
+              "numerator": 55539,
+              "denominator": 10000,
+              "points": 5.5539
+            },
+            "ascent": {
+              "numerator": 68607,
+              "denominator": 10000,
+              "points": 6.8607
+            },
+            "descent": {
+              "numerator": 1287,
+              "denominator": 10000,
+              "points": 0.1287
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 7731,
+              "denominator": 500,
+              "points": 15.462
+            },
+            "y": {
+              "numerator": 6579,
+              "denominator": 500,
+              "points": 13.158
+            },
+            "width": {
+              "numerator": 891,
+              "denominator": 50,
+              "points": 17.82
+            },
+            "height": {
+              "numerator": 153,
+              "denominator": 125,
+              "points": 1.224
+            },
+            "color": "black"
+          }
+        ]
+      }
+    },
+    {
+      "original_fragment": "<msqrt mathcolor=\"blue\"><mn>7</mn><mo>+</mo><mn>9</mn></msqrt>",
+      "original_sha256": "a053ad90b377349191d77feef3814a5d214ab491fb9558f049dd760b9bbdcb77",
+      "reference_fragment": "<msqrt mathcolor=\"blue\" style=\"display:inline-block;width:70.762666666667pt;height:30.36pt;line-height:0;font-size:0\"><mtext style=\"display:inline-block;line-height:0;font-size:0\"><span style=\"display:inline-block;position:relative;width:70.762666666667pt;height:30.36pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:21.048pt;line-height:0;font-size:0\"></span><span data-m4-text=\"\" style=\"position:absolute;left:0pt;top:6pt;font-family:'Math Radical Core Reference';font-size:24pt;line-height:24pt;color:blue;white-space:nowrap\">\ue500</span><span data-m4-text=\"7\" style=\"position:absolute;left:19.056pt;top:3.048pt;font-family:'Math Radical Core Reference';font-size:24pt;line-height:24pt;color:blue;white-space:nowrap\">\ue505</span><span data-m4-text=\"+\" style=\"position:absolute;left:36.269333333333pt;top:3.048pt;font-family:'Math Radical Core Reference';font-size:24pt;line-height:24pt;color:blue;white-space:nowrap\">\ue506</span><span data-m4-text=\"9\" style=\"position:absolute;left:58.882666666667pt;top:3.048pt;font-family:'Math Radical Core Reference';font-size:24pt;line-height:24pt;color:blue;white-space:nowrap\">\ue507</span><span style=\"position:absolute;left:19.056pt;top:1.872pt;width:51.706666666667pt;height:1.632pt;background:blue\"></span></span></mtext></msqrt>",
+      "geometry": {
+        "width": {
+          "numerator": 26536,
+          "denominator": 375,
+          "points": 70.76266666666666
+        },
+        "ascent": {
+          "numerator": 2631,
+          "denominator": 125,
+          "points": 21.048
+        },
+        "descent": {
+          "numerator": 1164,
+          "denominator": 125,
+          "points": 9.312
+        },
+        "ink_ascent": {
+          "numerator": 2397,
+          "denominator": 125,
+          "points": 19.176
+        },
+        "ink_descent": {
+          "numerator": 1164,
+          "denominator": 125,
+          "points": 9.312
+        },
+        "glyphs": [
+          {
+            "name": "uni221A",
+            "gid": 1657,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "text": "",
+            "color": "blue",
+            "x": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "y": {
+              "numerator": -369,
+              "denominator": 125,
+              "points": -2.952
+            },
+            "width": {
+              "numerator": 2382,
+              "denominator": 125,
+              "points": 19.056
+            },
+            "ascent": {
+              "numerator": 2766,
+              "denominator": 125,
+              "points": 22.128
+            },
+            "descent": {
+              "numerator": 159,
+              "denominator": 25,
+              "points": 6.36
+            }
+          },
+          {
+            "name": "seven",
+            "gid": 1144,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "text": "7",
+            "color": "blue",
+            "x": {
+              "numerator": 2382,
+              "denominator": 125,
+              "points": 19.056
+            },
+            "y": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 378,
+              "denominator": 25,
+              "points": 15.12
+            },
+            "descent": {
+              "numerator": 24,
+              "denominator": 125,
+              "points": 0.192
+            }
+          },
+          {
+            "name": "plus",
+            "gid": 1196,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "text": "+",
+            "color": "blue",
+            "x": {
+              "numerator": 13601,
+              "denominator": 375,
+              "points": 36.269333333333336
+            },
+            "y": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "width": {
+              "numerator": 432,
+              "denominator": 25,
+              "points": 17.28
+            },
+            "ascent": {
+              "numerator": 1674,
+              "denominator": 125,
+              "points": 13.392
+            },
+            "descent": {
+              "numerator": 24,
+              "denominator": 25,
+              "points": 0.96
+            }
+          },
+          {
+            "name": "nine",
+            "gid": 1146,
+            "size": {
+              "numerator": 24,
+              "denominator": 1,
+              "points": 24.0
+            },
+            "text": "9",
+            "color": "blue",
+            "x": {
+              "numerator": 22081,
+              "denominator": 375,
+              "points": 58.882666666666665
+            },
+            "y": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            },
+            "width": {
+              "numerator": 297,
+              "denominator": 25,
+              "points": 11.88
+            },
+            "ascent": {
+              "numerator": 1938,
+              "denominator": 125,
+              "points": 15.504
+            },
+            "descent": {
+              "numerator": 39,
+              "denominator": 125,
+              "points": 0.312
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 2382,
+              "denominator": 125,
+              "points": 19.056
+            },
+            "y": {
+              "numerator": 2193,
+              "denominator": 125,
+              "points": 17.544
+            },
+            "width": {
+              "numerator": 3878,
+              "denominator": 75,
+              "points": 51.70666666666666
+            },
+            "height": {
+              "numerator": 204,
+              "denominator": 125,
+              "points": 1.632
+            },
+            "color": "blue"
+          }
+        ]
+      }
+    },
+    {
+      "original_fragment": "<mroot><msqrt><mfrac displaystyle=\"true\"><mn>12</mn><mn>3</mn></mfrac></msqrt><mn>5</mn></mroot>",
+      "original_sha256": "ffff9348cf2128063c5686b1562ef6e7314d78764b2697f243d3bd4d77b800c9",
+      "reference_fragment": "<mroot style=\"display:inline-block;width:62.736pt;height:53.442pt;line-height:0;font-size:0\"><mtext style=\"display:inline-block;line-height:0;font-size:0\"><span style=\"display:inline-block;position:relative;width:62.736pt;height:53.442pt;line-height:0;font-size:0\"><span style=\"display:inline-block;width:0;height:30.024pt;line-height:0;font-size:0\"></span><span data-m4-text=\"\" style=\"position:absolute;left:1.17pt;top:35.172pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue508</span><span data-m4-text=\"\" style=\"position:absolute;left:22.23pt;top:28.548pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue509</span><span data-m4-text=\"1\" style=\"position:absolute;left:44.166pt;top:5.004pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue502</span><span data-m4-text=\"2\" style=\"position:absolute;left:53.076pt;top:5.004pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue501</span><span data-m4-text=\"3\" style=\"position:absolute;left:48.621pt;top:28.044pt;font-family:'Math Radical Core Reference';font-size:18pt;line-height:18pt;color:black;white-space:nowrap\">\ue50a</span><span data-m4-text=\"5\" style=\"position:absolute;left:1.17pt;top:16.4202pt;font-family:'Math Radical Core Reference';font-size:9.9pt;line-height:9.9pt;color:black;white-space:nowrap\">\ue50b</span><span style=\"position:absolute;left:22.23pt;top:1.404pt;width:40.506pt;height:1.224pt;background:black\"></span><span style=\"position:absolute;left:43.416pt;top:4.158pt;width:19.32pt;height:1.224pt;background:black\"></span><span style=\"position:absolute;left:44.166pt;top:24.768pt;width:17.82pt;height:1.224pt;background:black\"></span></span></mtext></mroot>",
+      "geometry": {
+        "width": {
+          "numerator": 7842,
+          "denominator": 125,
+          "points": 62.736
+        },
+        "ascent": {
+          "numerator": 3753,
+          "denominator": 125,
+          "points": 30.024
+        },
+        "descent": {
+          "numerator": 11709,
+          "denominator": 500,
+          "points": 23.418
+        },
+        "ink_ascent": {
+          "numerator": 1431,
+          "denominator": 50,
+          "points": 28.62
+        },
+        "ink_descent": {
+          "numerator": 11709,
+          "denominator": 500,
+          "points": 23.418
+        },
+        "glyphs": [
+          {
+            "name": "uni221A.s3",
+            "gid": 1660,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "",
+            "color": "black",
+            "x": {
+              "numerator": 117,
+              "denominator": 100,
+              "points": 1.17
+            },
+            "y": {
+              "numerator": -2331,
+              "denominator": 125,
+              "points": -18.648
+            },
+            "width": {
+              "numerator": 1053,
+              "denominator": 50,
+              "points": 21.06
+            },
+            "ascent": {
+              "numerator": 11817,
+              "denominator": 250,
+              "points": 47.268
+            },
+            "descent": {
+              "numerator": 477,
+              "denominator": 100,
+              "points": 4.77
+            }
+          },
+          {
+            "name": "uni221A.s2",
+            "gid": 1659,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "",
+            "color": "black",
+            "x": {
+              "numerator": 2223,
+              "denominator": 100,
+              "points": 22.23
+            },
+            "y": {
+              "numerator": -1503,
+              "denominator": 125,
+              "points": -12.024
+            },
+            "width": {
+              "numerator": 10593,
+              "denominator": 500,
+              "points": 21.186
+            },
+            "ascent": {
+              "numerator": 3789,
+              "denominator": 100,
+              "points": 37.89
+            },
+            "descent": {
+              "numerator": 477,
+              "denominator": 100,
+              "points": 4.77
+            }
+          },
+          {
+            "name": "one",
+            "gid": 1138,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "1",
+            "color": "black",
+            "x": {
+              "numerator": 22083,
+              "denominator": 500,
+              "points": 44.166
+            },
+            "y": {
+              "numerator": 288,
+              "denominator": 25,
+              "points": 11.52
+            },
+            "width": {
+              "numerator": 891,
+              "denominator": 100,
+              "points": 8.91
+            },
+            "ascent": {
+              "numerator": 5751,
+              "denominator": 500,
+              "points": 11.502
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            }
+          },
+          {
+            "name": "two",
+            "gid": 1139,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "2",
+            "color": "black",
+            "x": {
+              "numerator": 13269,
+              "denominator": 250,
+              "points": 53.076
+            },
+            "y": {
+              "numerator": 288,
+              "denominator": 25,
+              "points": 11.52
+            },
+            "width": {
+              "numerator": 891,
+              "denominator": 100,
+              "points": 8.91
+            },
+            "ascent": {
+              "numerator": 1449,
+              "denominator": 125,
+              "points": 11.592
+            },
+            "descent": {
+              "numerator": 0,
+              "denominator": 1,
+              "points": 0.0
+            }
+          },
+          {
+            "name": "three",
+            "gid": 1140,
+            "size": {
+              "numerator": 18,
+              "denominator": 1,
+              "points": 18.0
+            },
+            "text": "3",
+            "color": "black",
+            "x": {
+              "numerator": 48621,
+              "denominator": 1000,
+              "points": 48.621
+            },
+            "y": {
+              "numerator": -288,
+              "denominator": 25,
+              "points": -11.52
+            },
+            "width": {
+              "numerator": 891,
+              "denominator": 100,
+              "points": 8.91
+            },
+            "ascent": {
+              "numerator": 1449,
+              "denominator": 125,
+              "points": 11.592
+            },
+            "descent": {
+              "numerator": 117,
+              "denominator": 500,
+              "points": 0.234
+            }
+          },
+          {
+            "name": "five.ssty2",
+            "gid": 4527,
+            "size": {
+              "numerator": 99,
+              "denominator": 10,
+              "points": 9.9
+            },
+            "text": "5",
+            "color": "black",
+            "x": {
+              "numerator": 117,
+              "denominator": 100,
+              "points": 1.17
+            },
+            "y": {
+              "numerator": 30519,
+              "denominator": 5000,
+              "points": 6.1038
+            },
+            "width": {
+              "numerator": 26631,
+              "denominator": 5000,
+              "points": 5.3262
+            },
+            "ascent": {
+              "numerator": 2673,
+              "denominator": 400,
+              "points": 6.6825
+            },
+            "descent": {
+              "numerator": 1287,
+              "denominator": 10000,
+              "points": 0.1287
+            }
+          }
+        ],
+        "rules": [
+          {
+            "x": {
+              "numerator": 2223,
+              "denominator": 100,
+              "points": 22.23
+            },
+            "y": {
+              "numerator": 6849,
+              "denominator": 250,
+              "points": 27.396
+            },
+            "width": {
+              "numerator": 20253,
+              "denominator": 500,
+              "points": 40.506
+            },
+            "height": {
+              "numerator": 153,
+              "denominator": 125,
+              "points": 1.224
+            },
+            "color": "black"
+          },
+          {
+            "x": {
+              "numerator": 5427,
+              "denominator": 125,
+              "points": 43.416
+            },
+            "y": {
+              "numerator": 12321,
+              "denominator": 500,
+              "points": 24.642
+            },
+            "width": {
+              "numerator": 483,
+              "denominator": 25,
+              "points": 19.32
+            },
+            "height": {
+              "numerator": 153,
+              "denominator": 125,
+              "points": 1.224
+            },
+            "color": "black"
+          },
+          {
+            "x": {
+              "numerator": 22083,
+              "denominator": 500,
+              "points": 44.166
+            },
+            "y": {
+              "numerator": 504,
+              "denominator": 125,
+              "points": 4.032
+            },
+            "width": {
+              "numerator": 891,
+              "denominator": 50,
+              "points": 17.82
+            },
+            "height": {
+              "numerator": 153,
+              "denominator": 125,
+              "points": 1.224
+            },
+            "color": "black"
+          }
+        ]
+      }
+    }
+  ]
+}

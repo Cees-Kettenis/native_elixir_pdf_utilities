@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:360pt 420pt;margin:0}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+body {padding:12pt}
+p {margin:0 0 6pt;line-height:36pt}
+math {font-family:"STIX Two Math";font-size:18pt}
+.alternative > :first-child {display:none}
+.alternative > annotation {display:inline}
+.alternative > annotation-xml {display:inline-block}
+</style></head><body>
+<p>Selected <math><semantics><mrow><mn>12</mn><mo>+</mo><mn>α</mn></mrow><annotation encoding="application/x-tex">Hidden</annotation><annotation-xml encoding="application/mathml-content+xml"><apply><divide/><cn>1</cn><cn>2</cn></apply></annotation-xml></semantics></math> end.</p>
+<p>Hidden <math><semantics><mn style="display:none">1</mn><mn>2</mn></semantics><mn>3</mn></math> end.</p>
+<p>Text <math><annotation encoding="text/plain">α + β</annotation><mn>4</mn></math> end.</p>
+<p>Alternative <math><semantics class="alternative"><mn>Hidden</mn><annotation>α</annotation><annotation>β</annotation></semantics><mn>5</mn></math> end.</p>
+<p>HTML <math><semantics class="alternative"><mn>Hidden</mn><annotation-xml encoding="TEXT/HTML"><span>12</span></annotation-xml></semantics><mn>6</mn></math> end.</p>
+<p>SVG <math><semantics class="alternative"><mn>Hidden</mn><annotation-xml><svg width="24" height="18"><rect width="24" height="18" fill="blue"/></svg></annotation-xml></semantics><mn>7</mn></math> end.</p>
+<p>Action <math><maction actiontype="toggle" selection="2"><mn>12</mn><mn>Hidden</mn></maction><mn>8</mn></math> end.</p>
+<p>Nested <math><semantics><maction><annotation-xml encoding="application/xhtml+xml"><span>α</span></annotation-xml><mn>Hidden</mn></maction><annotation>Hidden</annotation></semantics><mn>9</mn></math> end.</p>
+</body></html>

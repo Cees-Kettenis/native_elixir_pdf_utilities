@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page {size:360pt 240pt;margin:0}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:12pt;line-height:18pt}
+body {padding:12pt}
+p {margin:0 0 8pt;line-height:36pt}
+math {font-family:"STIX Two Math"}
+</style></head><body>
+<p>Default <math><mi>x</mi></math> token.</p>
+<p>Small <math style="font-size:12pt"><mi mathvariant="normal">a</mi><mn>123</mn><mspace width="0.5em"/><mtext>units</mtext><mi/></math> end.</p>
+<p>Medium <math style="font-size:20pt"><mrow><mi mathvariant="normal">y</mi><mn>42</mn><ms>word</ms><mtext>&nbsp;OK</mtext></mrow></math> end.</p>
+<p>Large <math style="font-size:30pt"><mi mathvariant="normal">z</mi><mi>exp</mi><mn>8</mn></math> end.</p>
+<math display="block" style="font-size:20pt"><mrow><mn>19</mn><mspace width="1em" height="3pt" depth="2pt"/><ms>plain</ms></mrow></math>
+<p>Flow <math style="font-size:16pt"><mtext style="display:inline-block">a <span style="color:red">b</span> c</mtext></math> end.</p>
+<p>After direct tokens. <math><mi> x </mi><mtext style="white-space:pre">a  b</mtext><mi style="display:inline-block;white-space:nowrap">f<span style="white-space:nowrap">i</span></mi></math></p>
+</body></html>

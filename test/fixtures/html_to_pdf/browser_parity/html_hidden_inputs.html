@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><style>
+@page { size: 264pt 180pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { padding: 12pt; font-family: "DejaVu Sans"; font-size: 12pt; line-height: 18pt; }
+p { margin: 0 0 6pt; }
+input { display: block !important; width: 100pt; height: 40pt; background: red; border: 3pt solid blue; }
+input::before { content: attr(value); }
+input::after { content: "Generated secret"; }
+.positioned { position: absolute; left: 0; top: 0; }
+table { width: 240pt; border-collapse: collapse; }
+td { padding: 0; border: 1pt solid black; }
+</style></head><body>
+<input type="hidden" value="Before" name="reference">
+<p>Left<input type=HIDDEN value="Hidden inline" style="display:inline-block!important">Right</p>
+<input type="HiDdEn" class="positioned" value="Positioned secret" disabled>
+<p>Visible second paragraph.</p>
+<table><tbody><tr><td>A<input type="hidden" value="Cell secret">B</td></tr></tbody></table>
+<input type="hidden">
+</body></html>

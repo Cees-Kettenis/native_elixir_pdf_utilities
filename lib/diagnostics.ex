@@ -13,13 +13,14 @@ defmodule NativeElixirPdfUtilities.Diagnostics do
   context for logs and investigation.
   """
 
-  @type diagnostic_option ::
+  @type context_option ::
           {:operation, atom()}
           | {:module, module()}
+          | {:source, String.t() | nil}
+  @type diagnostic_option ::
+          context_option()
           | {:line, pos_integer()}
           | {:column, pos_integer()}
-          | {:source, String.t()}
-          | {:source, nil}
   @type diagnostic :: %{
           required(:stage) => atom(),
           required(:reason) => atom(),
@@ -52,7 +53,7 @@ defmodule NativeElixirPdfUtilities.Diagnostics do
   @doc """
   Adds operation, module, or source context to an existing diagnostic map.
   """
-  @spec with_context(diagnostic(), [diagnostic_option()]) :: diagnostic()
+  @spec with_context(diagnostic(), [context_option()]) :: diagnostic()
   def with_context(diagnostic, opts \\ []) do
     case diagnostic do
       diagnostic when is_map(diagnostic) ->

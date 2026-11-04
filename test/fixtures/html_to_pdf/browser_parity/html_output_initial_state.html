@@ -1,0 +1,17 @@
+<!doctype html><html lang=en-US><head><style>
+@page {size:300pt 330pt;margin:0;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10.5pt;line-height:15pt;}
+body {padding:12pt;}p {margin:0 0 12pt;}form {margin:0;}fieldset {border:none;margin:0;padding:0;}
+output:read-only {color:blue;}output:disabled {color:red;}
+.decorated::before {content:"[";}.decorated::after {content:"]";}
+</style></head><body>
+<p>Initial calculation: <output id=sum name=sum for="left right left">14</output>.</p>
+<p>Descendant formatting: <output id=formatted>First <span style="color:green;font-size:13pt;">colored</span> value<span hidden> hidden source text</span>.</output></p>
+<form id=main><fieldset disabled><p><label for=owned>Associated output:</label> <output id=owned name=owned for="later missing">7</output></p></fieldset></form>
+<p>External form: <output form=main name=external>18</output>.</p>
+<p>Nested results: <output id=outer>Outer <output id=inner>inner</output> result</output>.</p>
+<p>Generated brackets: <output class=decorated for=left>20</output></p>
+<output hidden>Hidden output</output>
+<span id=left hidden>6</span><span id=right hidden>8</span><span id=later hidden>7</span>
+<p>After initial output</p>
+</body></html>

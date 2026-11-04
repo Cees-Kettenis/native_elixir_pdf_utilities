@@ -15,27 +15,28 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.runtimes.outputs.matrix }}
+      jobs: ${{ steps.runtimes.outputs.jobs }}
     steps:
       - uses: actions/checkout@v6
+
+      - name: Test quality matrix orchestration
+        run: ./scripts/test-quality-matrix
 
       - name: Load supported runtimes
         id: runtimes
         run: |
-          jq -e '
-            .include as $runtimes |
-            ($runtimes | type == "array" and length > 0) and
-            (($runtimes | map(select(.canonical == true)) | length) == 1) and
-            (($runtimes | map(.elixir) | unique | length) == ($runtimes | length))
-          ' ci/runtime-matrix.json >/dev/null
-          echo "matrix=$(jq -c . ci/runtime-matrix.json)" >> "${GITHUB_OUTPUT}"
+          matrix="$(./scripts/quality-matrix --matrix-json)"
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          jobs="$(printf '%s' "${matrix}" | jq -c '{include: [.include[] as $runtime | $runtime + {suite: "checks", partition: 0}, (range(1; 4) as $partition | $runtime + {suite: "parity", partition: $partition})]}')"
+          echo "jobs=${jobs}" >> "${GITHUB_OUTPUT}"
 
-  supported-elixir:
-    name: Elixir ${{ matrix.elixir }}
+  runtime-checks:
+    name: Elixir ${{ matrix.elixir }} ${{ matrix.suite }} ${{ matrix.partition }}
     needs: runtime-matrix
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.runtime-matrix.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.runtime-matrix.outputs.jobs) }}
     container:
       image: ${{ matrix.image }}
     env:
@@ -52,11 +53,11 @@ jobs:
           runtime_id="$(elixir -e 'IO.write("#{System.version()}-erts-#{:erlang.system_info(:version)}")')"
           echo "cache-key=${runtime_id}" >> "${GITHUB_OUTPUT}"
 
-      - name: Install test and browser comparison tools
+      - name: Verify browser comparison tools
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends chromium fonts-dejavu-core fonts-liberation libfreetype6 poppler-utils
-          rm -rf /var/lib/apt/lists/*
+          for tool in chromium pdftoppm pdftotext pdffonts fc-match; do
+            command -v "$tool"
+          done
 
       - name: Restore Mix and Dialyzer caches
         uses: actions/cache@v5
@@ -70,7 +71,23 @@ jobs:
             mix-elixir-${{ steps.runtime.outputs.cache-key }}-
 
       - name: Install dependencies
-        run: mix deps.get
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          # Hex bootstrap and package downloads can fail transiently. Retry only
+          # dependency acquisition; compilation and tests must pass on one run.
+          for attempt in 1 2 3; do
+            if mix deps.get; then
+              exit 0
+            else
+              status=$?
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit "$status"
+            fi
+            echo "Dependency acquisition failed on attempt $attempt; retrying." >&2
+            sleep "$((attempt * 5))"
+          done
 
       - name: Compile dependencies
         run: mix deps.compile
@@ -78,29 +95,50 @@ jobs:
       - name: Compile project with warnings as errors
         run: mix compile --warnings-as-errors
 
-      # Formatting is checked on one canonical runtime because formatter output
-      # may intentionally change between Elixir releases.
+      # Ordinary checks and each parity partition have independent runners.
+      # The newest supported minor owns coverage, Dialyzer and performance.
       - name: Check formatting and dependencies
-        if: matrix.canonical
+        if: matrix.suite == 'checks' && matrix.canonical
         run: |
           mix format --check-formatted
           mix deps.unlock --check-unused
 
+      - name: Run tests on compatibility runtimes
+        if: matrix.suite == 'checks' && !matrix.canonical
+        run: mix test --warnings-as-errors
+
       - name: Run tests and enforce 100% coverage
+        if: matrix.suite == 'checks' && matrix.canonical
         run: mix test --cover --warnings-as-errors
 
-      - name: Check performance against recorded baselines
-        run: mix test.performance
-
       - name: Run Dialyzer
+        if: matrix.suite == 'checks' && matrix.canonical
         run: mix dialyzer --no-compile
 
       - name: Run Chromium browser parity tests
         id: browser-parity
-        run: mix test.browser_parity --warnings-as-errors
+        if: matrix.suite == 'parity'
+        env:
+          MIX_TEST_PARTITION: ${{ matrix.partition }}
+        run: mix test.browser_parity --partitions 3 --warnings-as-errors
+
+      - name: Check performance against recorded baselines
+        if: matrix.suite == 'checks' && matrix.canonical
+        env:
+          PERFORMANCE_REPORT: .quality/performance/ci.json
+          PERFORMANCE_REVISION: ${{ github.sha }}
+        run: ./scripts/check-performance
+
+      - name: Upload performance report
+        if: always() && matrix.suite == 'checks' && matrix.canonical
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-report-elixir-${{ matrix.elixir }}
+          path: .quality/performance/ci.json
+          retention-days: 7
 
       - name: Upload coverage report
-        if: always()
+        if: always() && matrix.suite == 'checks' && matrix.canonical
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report-elixir-${{ matrix.elixir }}
@@ -111,6 +149,21 @@ jobs:
         if: failure() && steps.browser-parity.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
-          name: browser-parity-artifacts-elixir-${{ matrix.elixir }}
+          name: browser-parity-artifacts-elixir-${{ matrix.elixir }}-partition-${{ matrix.partition }}
           path: tmp/browser_parity
           retention-days: 7
+
+  # Keep the existing required check names, and never report success if a
+  # partition failed, was cancelled or did not run.
+  supported-elixir:
+    name: Elixir ${{ matrix.elixir }}
+    needs: [runtime-matrix, runtime-checks]
+    if: always() && needs.runtime-matrix.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJSON(needs.runtime-matrix.outputs.matrix) }}
+    steps:
+      - name: Require all runtime checks and browser partitions
+        env:
+          RESULT: ${{ needs.runtime-checks.result }}
+        run: test "${RESULT}" = success

@@ -52,52 +52,51 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   @spec validate_inputs(term()) ::
           {:ok, [binary()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_inputs(inputs) do
-    case inputs do
-      [] ->
-        Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
-          operation: :merge,
-          module: __MODULE__
-        )
+    result =
+      case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+             inputs,
+             Limits.get(:max_merge_inputs)
+           ) do
+        {:ok, 0} ->
+          Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
+            operation: :merge,
+            module: __MODULE__
+          )
 
-      inputs when is_list(inputs) ->
-        inputs
-        |> Enum.reduce_while({:ok, 0, 0}, fn input, {:ok, count, aggregate_bytes} ->
-          cond do
-            not is_binary(input) ->
-              {:halt, :invalid}
+        {:ok, _count} ->
+          Enum.reduce_while(inputs, {:ok, 0}, fn input, {:ok, aggregate_bytes} ->
+            cond do
+              not is_binary(input) ->
+                {:halt, :invalid}
 
-            count >= Limits.get(:max_merge_inputs) ->
-              {:halt, resource_limit_error("merge input count exceeds the limit")}
+              aggregate_bytes + byte_size(input) > Limits.get(:max_aggregate_merge_input_bytes) ->
+                {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
 
-            aggregate_bytes + byte_size(input) > Limits.get(:max_aggregate_merge_input_bytes) ->
-              {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
-
-            true ->
-              {:cont, {:ok, count + 1, aggregate_bytes + byte_size(input)}}
+              true ->
+                {:cont, {:ok, aggregate_bytes + byte_size(input)}}
+            end
+          end)
+          |> case do
+            {:ok, _bytes} -> {:ok, inputs}
+            result -> result
           end
-        end)
-        |> case do
-          {:ok, _count, _aggregate_bytes} ->
-            {:ok, inputs}
 
-          :invalid ->
-            Diagnostics.error(
-              :merge,
-              :invalid_pdf_input,
-              "merge/1 expects a list of PDF binaries",
-              operation: :merge,
-              module: __MODULE__
-            )
+        :limit_exceeded ->
+          resource_limit_error("merge input count exceeds the limit")
 
-          {:error, _} = limit_error ->
-            limit_error
-        end
+        :invalid ->
+          :invalid
+      end
 
-      _ ->
+    case result do
+      :invalid ->
         Diagnostics.error(:merge, :invalid_pdf_input, "merge/1 expects a list of PDF binaries",
           operation: :merge,
           module: __MODULE__
         )
+
+      result ->
+        result
     end
   end
 
@@ -181,17 +180,18 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp named_link_destination?(document, value) do
     case value do
-      %{"Subtype" => {:name, "Link"}} = dictionary ->
-        case link_destination(document, dictionary) do
-          {:ok, {_location, destination}} -> named_destination?(document, destination)
-          :none -> false
-        end
-
       values when is_list(values) ->
         Enum.any?(values, &named_link_destination?(document, &1))
 
       dictionary when is_map(dictionary) ->
-        Enum.any?(dictionary, fn {_key, value} -> named_link_destination?(document, value) end)
+        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link") do
+          case link_destination(document, dictionary) do
+            {:ok, {_location, destination}} -> named_destination?(document, destination)
+            :none -> false
+          end
+        else
+          Enum.any?(dictionary, fn {_key, value} -> named_link_destination?(document, value) end)
+        end
 
       _ ->
         false
@@ -210,8 +210,10 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
           action ->
             case PdfValidator.resolve(document, action) do
-              {:ok, %{"S" => {:name, "GoTo"}} = action} ->
-                {:ok, {{:action, action}, Map.get(action, "D")}}
+              {:ok, action} when is_map(action) ->
+                if PdfValidator.named?(document, Map.get(action, "S"), "GoTo"),
+                  do: {:ok, {{:action, action}, Map.get(action, "D")}},
+                  else: :none
 
               _ ->
                 :none
@@ -238,16 +240,17 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp normalize_named_link_value(document, named_destinations, value) do
     case value do
-      %{"Subtype" => {:name, "Link"}} = dictionary ->
-        normalize_named_link_dictionary(document, named_destinations, dictionary)
-
       dictionary when is_map(dictionary) ->
-        Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
-          case normalize_named_link_value(document, named_destinations, value) do
-            {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
-            {:error, _} = error -> {:halt, error}
-          end
-        end)
+        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link") do
+          normalize_named_link_dictionary(document, named_destinations, dictionary)
+        else
+          Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
+            case normalize_named_link_value(document, named_destinations, value) do
+              {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
+              {:error, _} = error -> {:halt, error}
+            end
+          end)
+        end
 
       values when is_list(values) ->
         values
@@ -311,6 +314,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     case is_list(inputs) and is_integer(start_id) and start_id > 0 do
       true ->
         with :ok <- validate_generated_entry_count(start_id) do
+          page_limit = min(Limits.get(:max_pdf_pages), Limits.get(:max_merged_pages))
+
           inputs
           |> Enum.reduce_while({:ok, [], start_id, 0}, fn input,
                                                           {:ok, prepared, next_id, page_count} ->
@@ -319,15 +324,22 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
                 page_count = page_count + length(pages)
 
                 cond do
-                  page_count > Limits.get(:max_merged_pages) ->
-                    {:halt, resource_limit_error("merged page count exceeds the limit")}
+                  page_count > page_limit ->
+                    {:halt,
+                     resource_limit_error(
+                       "merged output requires #{page_count} pages, exceeding min(max_pdf_pages, max_merged_pages) (#{page_limit})"
+                     )}
 
                   true ->
-                    case allocate_dense_ids(objects, next_id) do
-                      {:ok, id_map, next_id} ->
-                        {:cont,
-                         {:ok, [Map.put(input, :map, id_map) | prepared], next_id, page_count}}
-
+                    with :ok <-
+                           PdfValidator.validate_container_entries(page_count,
+                             operation: :merge,
+                             module: __MODULE__
+                           ),
+                         {:ok, id_map, next_id} <- allocate_dense_ids(objects, next_id) do
+                      {:cont,
+                       {:ok, [Map.put(input, :map, id_map) | prepared], next_id, page_count}}
+                    else
                       {:error, _} = limit_error ->
                         {:halt, limit_error}
                     end
@@ -468,7 +480,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
            {:ok, rotate} <- resolved_rotation(document, page.rotate, page_number),
            :ok <- validate_resources(document, page.resources, page_number),
            {:ok, resources} <- inherited_tokens(page, "Resources", object_by_ref),
-           :ok <- validate_page_rewrite_target(object_by_ref, page.ref) do
+           :ok <- validate_page_rewrite_target(document, object_by_ref, page.ref) do
         prepared = %{
           resources: resources,
           mediabox: number_tokens(media_box),
@@ -583,15 +595,14 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     end
   end
 
-  defp validate_page_rewrite_target(object_by_ref, ref) do
-    with {:ok, object} <- fetch_object(object_by_ref, ref) do
-      case object do
-        %{value: %{"Type" => {:name, "Page"}}, tokens: [:dict_start | _rest]} ->
-          :ok
-
-        _ ->
-          error(:serialization, "validated page object is not a dictionary ready for rewriting")
-      end
+  defp validate_page_rewrite_target(document, object_by_ref, ref) do
+    with {:ok, object} <- fetch_object(object_by_ref, ref),
+         %{value: %{"Type" => type}, tokens: [:dict_start | _rest]} <- object,
+         true <- PdfValidator.named?(document, type, "Page") do
+      :ok
+    else
+      {:error, _} = object_error -> object_error
+      _ -> error(:serialization, "validated page object is not a dictionary ready for rewriting")
     end
   end
 
@@ -720,24 +731,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
   defp object_references(object) do
     case Map.fetch(object, :value_override) do
-      {:ok, value} -> value_references(value)
+      {:ok, value} -> NativeElixirPdfUtilities.Pdf.ObjectMapping.references(value)
       :error -> token_references(object.tokens)
-    end
-  end
-
-  defp value_references(value) do
-    case value do
-      {:ref, ref} ->
-        [ref]
-
-      values when is_list(values) ->
-        Enum.flat_map(values, &value_references/1)
-
-      dictionary when is_map(dictionary) ->
-        dictionary |> Map.values() |> Enum.flat_map(&value_references/1)
-
-      _ ->
-        []
     end
   end
 

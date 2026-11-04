@@ -67,25 +67,13 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   end
 
   defp validate_range_list(ranges) do
-    case ranges do
-      [] ->
-        error(:page_range, :invalid_page_range, "split ranges must be a non-empty list")
-
-      ranges when is_list(ranges) ->
-        ranges
-        |> Enum.reduce_while(0, fn _range, output_count ->
-          case output_count < Limits.get(:max_split_outputs) do
-            true -> {:cont, output_count + 1}
-            false -> {:halt, :limit_exceeded}
-          end
-        end)
-        |> case do
-          :limit_exceeded -> limit_error("split output count exceeds the limit")
-          _output_count -> :ok
-        end
-
-      _ ->
-        error(:page_range, :invalid_page_range, "split ranges must be a non-empty list")
+    case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+           ranges,
+           Limits.get(:max_split_outputs)
+         ) do
+      {:ok, count} when count > 0 -> :ok
+      :limit_exceeded -> limit_error("split output count exceeds the limit")
+      _ -> error(:page_range, :invalid_page_range, "split ranges must be a non-empty list")
     end
   end
 

@@ -1,0 +1,21 @@
+<!doctype html><html><head><style>
+@page{size:260pt 220pt;margin:12pt}
+html,body{margin:0;padding:0;font-size:12px;font-family:"DejaVu Sans"}
+p{margin:0 0 6px}
+.row{display:flex;gap:8px;margin-bottom:8px;height:48px}
+.art{display:block;width:72px;height:48px;border:0;background-color:#eee}
+.back{background-image:url(assets/svg-xml-canonical.svg);background-size:72px 48px;background-repeat:no-repeat}
+ul{margin:0 0 8px;padding-left:60px;list-style-image:url(assets/svg-xml-canonical.svg)}
+table{border-collapse:collapse;width:100%;table-layout:fixed}td{border:1px solid #777;padding:4px}
+</style></head><body>
+<p>SVG XML through images and child documents</p>
+<div class="row"><a href="https://example.test/svg"><img class="art" src="assets/svg-xml-canonical.svg"></a><object class="art" type="image/svg+xml" data="assets/svg-xml-canonical.svg"></object><embed class="art" type="image/svg+xml" src="assets/svg-xml-canonical.svg"></div>
+<div class="row"><iframe class="art" src="assets/svg-xml-canonical.svg"></iframe><picture><source srcset="assets/svg-xml-canonical.svg 2x"><img class="art" src="assets/missing.svg"></picture><div class="art back"></div></div>
+<ul><li>XML marker</li></ul>
+<p>Inline annotation <math><annotation-xml encoding="text/html" style="display:inline-block"><svg width="48" height="24"><rect x="4" y="3" width="12" height="12" fill="#174a86"/><rect x="24" y="3" width="20" height="16" fill="#e8b63d"/></svg></annotation-xml><mn>1</mn></math></p>
+<div style="break-before:page">
+<p>SVG XML on the second page</p>
+<table><tr><td>Artwork</td><td><img class="art" style="object-fit:contain" src="assets/svg-xml-canonical.svg"></td></tr><tr><td>Selected</td><td><object class="art" data="assets/svg-xml-canonical.svg" type="image/svg+xml"></object></td></tr></table>
+<p><a href="https://example.test/second">Second page link</a></p>
+<input name="svg-note" value="Approved SVG"><img class="art" src="assets/svg-xml-no-viewbox.svg">
+</div></body></html>

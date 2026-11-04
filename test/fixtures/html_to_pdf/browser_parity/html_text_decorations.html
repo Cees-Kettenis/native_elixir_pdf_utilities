@@ -1,0 +1,28 @@
+<!doctype html>
+<html><head><title>Decorated text and metadata</title>
+<meta name="author" content="Finance"><meta name="description" content="Decoration fixture">
+<meta name="keywords" content="text, decoration"><meta charset="utf-8">
+<style>
+@page { size: 612pt 792pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { padding: 24pt; font-family: "DejaVu Sans"; font-size: 12pt; line-height: 18pt; }
+p { margin: 0 0 12pt; }
+</style></head><body>
+<p>Default <u>underlined words</u> and <s>struck words</s>.</p>
+<p style="text-decoration:underline;color:#336699">An originating blue line <span style="color:red;font-size:16pt">retains its color</span> through descendants.</p>
+<p style="width:210pt;text-decoration-line:underline overline">A wrapped paragraph retains both of its decorations across several separate lines of text.</p>
+<p><u style="text-decoration-line:none">Author CSS removes the default.</u></p>
+<p><u style="text-decoration-thickness:from-font">Selected font thickness</u> and <u style="text-decoration:underline 2pt #cc3333">an explicit thick red line</u>.</p>
+<p><s style="font-size:18pt">A larger strike</s> and <u style="font-style:italic;font-weight:700">bold italic decoration</u>.</p>
+<p style="text-decoration:underline"><span style="display:inline-block;border:1pt solid #336699;padding:3pt">An atomic inline</span> leaves the ancestor line outside its content.</p>
+<p><u style="position:relative;top:3pt;left:4pt">A shifted inline</u> moves the decoration with its text.</p>
+<div style="break-before:page">
+<p style="text-decoration:line-through">A strike propagates <span style="text-decoration:none;color:red">through a cleared child</span>.</p>
+<p><u style="text-decoration-color:transparent">Transparent decoration retains the text.</u></p>
+<p><u style="text-decoration-thickness:0">A zero-thickness decoration retains the text.</u></p>
+<p><u style="font-size:20pt;text-decoration-thickness:0.1em">Font relative thickness</u></p>
+<p><s style="text-decoration-color:#336699">A colored strike</s> and ordinary text.</p>
+<p style="width:210pt"><u>This underlined content crosses line boundaries and continues on the next lines.</u></p>
+<p>Visible text after metadata.</p>
+</div>
+</body></html>

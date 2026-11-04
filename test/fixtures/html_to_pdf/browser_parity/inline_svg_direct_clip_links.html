@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:400px 240px;margin:12px} html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:12px;line-height:18px}p{margin:0}svg{display:block;width:360px;height:96px}
+</style></head><body><p>Native shape and selected-font links follow exact clips</p>
+<svg viewBox="0 0 360 96"><defs>
+<clipPath id="ring"><path d="M4 4H112V88H4Z M36 32H80V62H36Z" clip-rule="evenodd"/></clipPath>
+<clipPath id="triangle"><polygon points="4,88 58,4 112,88"/></clipPath>
+<clipPath id="round" clipPathUnits="objectBoundingBox"><circle cx=".5" cy=".5" r=".48"/></clipPath>
+<clipPath id="band"><rect x="12" y="12" width="94" height="68"/></clipPath><clipPath id="disk" clip-path="url(#band)"><circle cx="58" cy="46" r="44"/></clipPath>
+</defs><a href="https://example.test/ring"><rect width="116" height="92" fill="#174a86" clip-path="url(#ring)"/></a>
+<g transform="translate(120 0)"><a href="https://example.test/triangle"><rect width="116" height="92" fill="#168250" clip-path="url(#triangle)"/></a></g>
+<g transform="translate(240 0)"><a href="https://example.test/curve"><rect width="116" height="92" fill="#a03333" clip-path="url(#round)"/></a></g>
+</svg><svg viewBox="0 0 360 96"><defs>
+<clipPath id="band2"><rect x="12" y="12" width="94" height="68"/></clipPath><clipPath id="disk2" clip-path="url(#band2)"><circle cx="58" cy="46" r="44"/></clipPath><clipPath id="text-window"><polygon points="230,0 358,0 294,96"/></clipPath>
+</defs><a href="https://example.test/intersection"><rect width="116" height="92" fill="#174a86" clip-path="url(#disk2)"/></a>
+<g transform="translate(128 0) rotate(8 58 46)"><a href="https://example.test/rotate"><rect width="116" height="92" fill="#168250" clip-path="url(#disk2)"/></a></g>
+<a href="https://example.test/text"><text x="240" y="42" font-size="24" clip-path="url(#text-window)">café Ω</text></a></svg></body></html>

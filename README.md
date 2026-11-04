@@ -20,10 +20,16 @@ Beyond rendering, it merges, transforms, splits, and stamps PDFs, fills forms,
 embeds attachments, extracts embedded text, and reads and updates metadata and
 bookmarks.
 
+Document operations have configurable limits for untrusted inputs, including a
+five-minute deadline and a 1 GiB observed BEAM worker-memory allowance by default.
+See [resource limits](docs/resource-limits.md) for configuration and the boundaries
+of memory accounting and native cancellation. Applications control concurrency.
+
 ## Package and docs
 
 - Package: https://hex.pm/packages/native_elixir_pdf_utilities
 - API docs: https://native-elixir-pdf-utilities.hexdocs.pm/api-reference.html
+- Contributing: [Setup, architecture and testing](CONTRIBUTING.md)
 
 ## What it does
 
@@ -34,10 +40,13 @@ bookmarks.
 5. [Outlines and bookmarks](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-outlines.md) - read or replace bookmarks, detect headings in existing PDFs, and generate bookmarks from HTML headings. Merging, transforms, and splitting preserve supported outlines.
 6. [Stamping and page numbers](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md) - adds text stamps, translucent watermarks, page numbers, and PDF artwork overlays to existing PDFs through incremental updates.
 7. [Reader](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-reader.md) and [text extraction](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/text-extraction.md) - strictly resolve embedded Unicode text from classic and modern PDFs.
-8. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports configured fonts and cross-platform discovery of installed system fonts. Rendering does not require Chromium, wkhtmltopdf, Node, SaaS calls, or a Rust toolchain. Local asset loading works on Windows, macOS, and Linux.
+8. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports configured fonts and cross-platform discovery of installed system fonts. Rendering after compilation does not require Chromium, wkhtmltopdf, Node, SaaS calls, or a Rust toolchain. First-party runtime code is Elixir, including CSS colors, Unicode line breaking and HTML form-value validation. SVG images use the existing Resvg converter. Local asset loading works on Windows, macOS, and Linux.
 
 9. [PDF forms](docs/pdf-forms.md) - generates named AcroForm fields from HTML by default, inspects and fills existing fields, and flattens selected fields.
 10. [Attachments](docs/pdf-attachments.md) - embeds caller-approved file bytes with MIME detection and lists embedded metadata.
+
+HTML rendering includes native [MathML equations](docs/html-to-pdf-compatibility.md#mathml-in-html),
+with the bundled STIX Two Math font, matrices and equation fragment links.
 
 See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/tree/main/docs) for feature guides, configurable resource limits, and quick reference.
 
@@ -46,24 +55,10 @@ See the [documentation](https://github.com/Cees-Kettenis/native_elixir_pdf_utili
 ```elixir
 def deps do
   [
-    {:native_elixir_pdf_utilities, "~> 1.0"}
+    {:native_elixir_pdf_utilities, "~> 1.1"}
   ]
 end
 ```
-
-## Development
-
-Run the complete supported-version quality matrix before contributing:
-
-```bash
-./scripts/quality-matrix
-```
-
-The matrix compiles and tests the supported Elixir versions, enforces formatting
-and 100% coverage, runs Dialyzer, and compares HTML-to-PDF fixtures with
-Chromium. See the
-[contribution guide](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/CONTRIBUTING.md)
-for prerequisites, quicker installed-version checks, and result interpretation.
 
 ## License
 

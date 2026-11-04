@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><style>
+@page { size: 264pt 240pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { padding: 12pt; font-family: "DejaVu Sans"; font-size: 10.5pt; line-height: 13.5pt; }
+input {
+  display: block; width: 180pt; box-sizing: border-box;
+  border: 1px solid #777777; background: white; padding: 1.5pt 3pt;
+  margin: 0 0 6pt; font-family: "DejaVu Sans"; font-size: 10.5pt; line-height: 13.5pt;
+}
+input[value="AB"] { color: red; }
+input[disabled] { color: #666666; background: #f4f4f4; }
+table { width: 240pt; border-collapse: collapse; }
+td { padding: 0; }
+</style></head><body>
+<input value="A&#13;B&#10;C&#13;&#10;D" name="default">
+<input type="TEXT" value="&#13;&#10;Hello&#10;World&#13;" name="uppercase">
+<input type="text" value="A&#10;B" name="raw-attribute">
+<input type="text" value="AB" name="sanitized-attribute">
+<input value="&#10;&#13;" name="empty">
+<table><tbody><tr><td><input type="text" value="Cell&#13;&#10;value" name="cell" disabled></td></tr></tbody></table>
+<input type="text" value="No&#10;wrap" name="white-space" style="white-space:pre">
+</body></html>

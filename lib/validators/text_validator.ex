@@ -16,7 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
 
-  @validated_operators ~w(q Q cm gs BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do)
+  @validated_operators ~w(q Q cm gs BT ET Tf Tm Td TD T* TL Tc Tw Tz Tr Ts Tj TJ ' " Do BMC BDC EMC)
   @text_showing_operators ~w(Tj TJ ' ")
   @typedoc "A validated content instruction with operands in source order."
   @type instruction :: %{required(:operator) => binary(), required(:operands) => [term()]}
@@ -41,6 +41,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
             optional(instruction_cache_key()) => [instruction()]
           },
           required(:prepared_fonts) => map(),
+          required(:font_encodings) => map(),
+          required(:cid_metrics) => map(),
+          required(:font_work) => non_neg_integer(),
+          required(:parsed_tokens) => non_neg_integer(),
+          required(:parsed_values) => non_neg_integer(),
           required(:extracted_bytes) => non_neg_integer(),
           required(:cmap_work) => non_neg_integer(),
           required(:cmap_bytes) => non_neg_integer(),
@@ -71,7 +76,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @typedoc "A validated public text-extraction request."
   @type request :: %{
           required(:pdf) => binary(),
-          required(:options) => %{optional(:layout) => boolean(), optional(:order) => atom()}
+          required(:options) => %{
+            optional(:layout) => boolean(),
+            optional(:order) => atom(),
+            optional(:actual_text) => boolean()
+          }
         }
 
   @doc """
@@ -114,8 +123,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       {pdf, opts, :extract_spans} when is_binary(pdf) and is_list(opts) ->
         case Keyword.keyword?(opts) do
           true ->
-            unknown = opts |> Keyword.keys() |> Enum.reject(&(&1 == :order)) |> Enum.uniq()
+            unknown =
+              opts
+              |> Keyword.keys()
+              |> Enum.reject(&(&1 in [:order, :actual_text]))
+              |> Enum.uniq()
+
             order = Keyword.get(opts, :order, :source)
+            actual_text = Keyword.get(opts, :actual_text, false)
 
             cond do
               unknown != [] ->
@@ -131,8 +146,13 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
                   operation: operation
                 )
 
+              not is_boolean(actual_text) ->
+                error(:options, :invalid_options, "actual_text option must be a boolean",
+                  operation: operation
+                )
+
               true ->
-                {:ok, %{pdf: pdf, options: %{order: order}}}
+                {:ok, %{pdf: pdf, options: %{order: order, actual_text: actual_text}}}
             end
 
           false ->
@@ -264,6 +284,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       decoded_streams: %{},
       instructions: %{},
       prepared_fonts: %{},
+      font_encodings: %{},
+      cid_metrics: %{},
+      font_work: 0,
+      parsed_tokens: 0,
+      parsed_values: 0,
       extracted_bytes: 0,
       cmap_bytes: 0,
       cmap_work: 0,
@@ -351,91 +376,198 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @spec instructions(binary() | [binary()], pos_integer()) ::
           {:ok, [instruction()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def instructions(content, page_number) do
-    valid_content? =
-      is_binary(content) or (is_list(content) and Enum.all?(content, &is_binary/1))
-
-    case valid_content? and is_integer(page_number) and page_number > 0 do
-      true ->
-        contents = if is_binary(content), do: [content], else: content
-
-        contents
-        |> Enum.reduce_while({:ok, [], []}, fn content, instruction_state ->
-          with {:ok, tokens} <- content_tokens(Tokenizer.new(content), [], page_number),
-               {:ok, _operations, _operands} = next_state <-
-                 reduce_instruction_tokens(tokens, instruction_state, page_number) do
-            {:cont, next_state}
-          else
-            {:error, _} = instruction_error -> {:halt, instruction_error}
-          end
-        end)
-        |> case do
-          {:ok, operations, []} ->
-            {:ok, Enum.reverse(operations)}
-
-          {:ok, _operations, _operands} ->
-            content_error("content stream has dangling operands", page_number)
-
-          {:error, _} = content_error ->
-            content_error
-        end
-
-      false ->
-        error(:content, :invalid_pdf_input, "content stream input is malformed")
+    case instructions(content, page_number, new_preparation_context()) do
+      {:ok, operations, _preparation} -> {:ok, operations}
+      error -> error
     end
   end
 
-  defp content_tokens(tokenizer, tokens, page_number) do
-    case Tokenizer.next(tokenizer) do
-      {{:eof, nil}, _tokenizer} ->
-        {:ok, Enum.reverse(tokens)}
+  @doc false
+  @spec instructions(binary() | [binary()], pos_integer(), preparation_context()) ::
+          {:ok, [instruction()], preparation_context()}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def instructions(content, page_number, preparation) do
+    valid_content? = is_binary(content) or (is_list(content) and Enum.all?(content, &is_binary/1))
 
-      {{:op, "BI"}, _tokenizer} ->
+    if valid_content? and is_integer(page_number) and page_number > 0 do
+      contents = if is_binary(content), do: [content], else: content
+      limits = Limits.effective()
+
+      initial =
+        {:ok, [], [], {0, []}, 0, preparation.parsed_tokens, preparation.parsed_values,
+         preparation.parsed_instructions}
+
+      Enum.reduce_while(contents, initial, fn content, state ->
+        case content_instructions(Tokenizer.new(content), state, limits, page_number) do
+          {:ok, _, _, _, _, _, _, _} = next -> {:cont, next}
+          error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, operations, [], {0, []}, 0, tokens, values, count} ->
+          {:ok, Enum.reverse(operations),
+           %{
+             preparation
+             | parsed_tokens: tokens,
+               parsed_values: values,
+               parsed_instructions: count
+           }}
+
+        {:ok, _operations, _operands, _nesting, _dictionaries, _, _, _} ->
+          content_error("content stream has dangling operands", page_number)
+
+        error ->
+          error
+      end
+    else
+      error(:content, :invalid_pdf_input, "content stream input is malformed")
+    end
+  end
+
+  defp content_instructions(tokenizer, state, limits, page) do
+    {:ok, operations, operands, nesting, dictionaries, tokens, values, count} = state
+
+    case Tokenizer.next(tokenizer) do
+      {{:eof, nil}, _} ->
+        state
+
+      {{:op, "BI"}, _} ->
         error(
           :content,
           :unsupported_pdf_feature,
           "inline images are not supported by text extraction; use an image XObject instead",
-          page: page_number
+          page: page
         )
 
-      {:error, {_reason, diagnostic}} ->
+      {:error, {reason, diagnostic}} ->
+        reason = if reason == :resource_limit_exceeded, do: reason, else: :invalid_pdf_input
+
         {:error,
-         {:invalid_pdf_input,
+         {reason,
           %{
             diagnostic
-            | reason: :invalid_pdf_input,
+            | reason: reason,
               stage: :content,
-              message: diagnostic.message <> "; page #{page_number}",
+              message: diagnostic.message <> "; page #{page}",
               operation: :extract,
               module: __MODULE__
           }}}
 
       {token, tokenizer} ->
-        content_tokens(tokenizer, [token | tokens], page_number)
+        tokens = tokens + 1
+        count = count + if(match?({:op, _}, token), do: 1, else: 0)
+
+        values =
+          values + if(match?({:op, _}, token) or token in [:dict_end, :rbracket], do: 0, else: 1)
+
+        admission =
+          cond do
+            tokens > limits.max_text_parsed_tokens ->
+              resource_limit_error("parsed content token count exceeds the limit", page)
+
+            values > limits.max_text_parsed_values ->
+              resource_limit_error("parsed content value count exceeds the limit", page)
+
+            count > limits.max_text_parsed_instructions ->
+              resource_limit_error("parsed content instruction count exceeds the limit", page)
+
+            true ->
+              :ok
+          end
+
+        with :ok <- admission,
+             {:ok, operations, operands, nesting, dictionaries} <-
+               instruction_token(token, operations, operands, nesting, dictionaries, page, limits) do
+          content_instructions(
+            tokenizer,
+            {:ok, operations, operands, nesting, dictionaries, tokens, values, count},
+            limits,
+            page
+          )
+        end
     end
   end
 
-  defp reduce_instruction_tokens(tokens, instruction_state, page_number) do
-    Enum.reduce_while(tokens, instruction_state, fn token, {:ok, operations, operands} ->
-      case token do
-        :lbracket ->
-          {:cont, {:ok, operations, [:array_start | operands]}}
+  @compile {:inline, instruction_token: 7}
+  defp instruction_token(
+         token,
+         operations,
+         operands,
+         {depth, containers} = nesting,
+         dictionaries,
+         page,
+         limits
+       ) do
+    case token do
+      token when token in [:dict_start, :lbracket] ->
+        with :ok <-
+               PdfValidator.validate_value_depth(depth + 1,
+                 operation: :extract,
+                 module: __MODULE__
+               ),
+             {:ok, containers} <- admit_content_value(containers, page, limits) do
+          marker = if token == :dict_start, do: :dictionary_start, else: :array_start
+          dictionaries = dictionaries + if(token == :dict_start, do: 1, else: 0)
 
-        :rbracket ->
-          case close_array(operands) do
-            {:ok, operands} -> {:cont, {:ok, operations, operands}}
-            :error -> {:halt, content_error("content array is unbalanced", page_number)}
+          {:ok, operations, [marker | operands], {depth + 1, [{token, 0} | containers]},
+           dictionaries}
+        end
+
+      :dict_end ->
+        case close_dictionary(operands) do
+          {:ok, operands} ->
+            {:ok, operations, operands, {depth - 1, tl(containers)}, dictionaries - 1}
+
+          :error ->
+            content_error("content dictionary is malformed", page)
+        end
+
+      :rbracket ->
+        case close_array(operands) do
+          {:ok, operands} ->
+            {:ok, operations, operands, {depth - 1, tl(containers)}, dictionaries}
+
+          :error ->
+            content_error("content array is unbalanced", page)
+        end
+
+      {:op, operator} ->
+        if dictionaries > 0 do
+          content_error("content dictionary contains an operator or is unbalanced", page)
+        else
+          with {:ok, operation} <- prepare_instruction(operator, Enum.reverse(operands), page) do
+            {:ok, [operation | operations], [], nesting, dictionaries}
           end
+        end
 
-        {:op, operator} ->
-          case prepare_instruction(operator, Enum.reverse(operands), page_number) do
-            {:ok, operation} -> {:cont, {:ok, [operation | operations], []}}
-            {:error, _} = instruction_error -> {:halt, instruction_error}
-          end
+      token ->
+        case containers do
+          [] ->
+            {:ok, operations, [token | operands], nesting, dictionaries}
 
-        token ->
-          {:cont, {:ok, operations, [token | operands]}}
-      end
-    end)
+          _ ->
+            with {:ok, containers} <- admit_content_value(containers, page, limits) do
+              {:ok, operations, [token | operands], {depth, containers}, dictionaries}
+            end
+        end
+    end
+  end
+
+  # Each nested container occupies one parent value. Dictionary keys and values
+  # share an entry, including duplicate keys that Map.new/1 would collapse.
+  defp admit_content_value(containers, page, limits) do
+    case containers do
+      [] ->
+        {:ok, []}
+
+      [{kind, values} | rest] ->
+        entries = if kind == :dict_start, do: div(values, 2) + 1, else: values + 1
+
+        case PdfValidator.validate_container_entries(entries, [], limits) do
+          :ok -> {:ok, [{kind, values + 1} | rest]}
+          {:error, {_reason, diagnostic}} -> resource_limit_error(diagnostic.message, page)
+        end
+    end
   end
 
   @doc """
@@ -452,21 +584,24 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
            page_number > 0 do
       true ->
         contents
-        |> Enum.reduce_while({:ok, {0, false}}, fn instructions, {:ok, scope} ->
+        |> Enum.reduce_while({:ok, {0, false, 0}}, fn instructions, {:ok, scope} ->
           case validate_scope_instructions(instructions, scope, page_number) do
             {:ok, scope} -> {:cont, {:ok, scope}}
             {:error, _} = scope_error -> {:halt, scope_error}
           end
         end)
         |> case do
-          {:ok, {0, false}} ->
+          {:ok, {0, false, 0}} ->
             :ok
 
-          {:ok, {_graphics_depth, true}} ->
+          {:ok, {_graphics_depth, true, _marked_depth}} ->
             content_error("BT has no matching ET", page_number)
 
-          {:ok, {_graphics_depth, false}} ->
+          {:ok, {graphics_depth, false, _marked_depth}} when graphics_depth > 0 ->
             content_error("q has no matching Q", page_number)
+
+          {:ok, {0, false, _marked_depth}} ->
+            content_error("BMC or BDC has no matching EMC", page_number)
 
           {:error, _} = scope_error ->
             scope_error
@@ -541,6 +676,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     )
   end
 
+  @doc "Checks whether another shown text or image replacement span fits the shared limit."
+  @spec validate_next_span(non_neg_integer(), pos_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_next_span(count, page) do
+    if count >= Limits.get(:max_text_spans) do
+      resource_limit_error("text span count exceeds the limit", page)
+    else
+      :ok
+    end
+  end
+
   @doc false
   @spec span_geometry(map(), map(), pos_integer()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -563,6 +709,37 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       page,
       "text positioning"
     )
+  end
+
+  @doc false
+  @spec image_span_geometry(map(), map(), pos_integer()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def image_span_geometry(state, image, page) do
+    if is_integer(image.width) and image.width > 0 and is_integer(image.height) and
+         image.height > 0 do
+      geometry_result(
+        fn ->
+          [_, _, _, _, x, y] = multiply([1.0, 0.0, 0.0, 1.0, 0.0, 0.0], state.ctm)
+          [_, _, _, _, end_x, end_y] = multiply([1.0, 0.0, 0.0, 1.0, 1.0, 0.0], state.ctm)
+          {x, y} = display_position(x, y, state.page)
+          {end_x, end_y} = display_position(end_x, end_y, state.page)
+          [a, b, c, d, _, _] = state.ctm
+
+          %{
+            x: x,
+            y: y,
+            end_x: end_x,
+            end_y: end_y,
+            height: :math.sqrt(c * c + d * d),
+            paints?: a * d - b * c != 0
+          }
+        end,
+        page,
+        "Do Image positioning"
+      )
+    else
+      content_error("ActualText image requires positive integer Width and Height", page)
+    end
   end
 
   defp geometry_result(calculate, page, operator) do
@@ -610,7 +787,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  defp translate(matrix, x, y), do: multiply([1.0, 0.0, 0.0, 1.0, x, y], matrix)
+  defp translate([a, b, c, d, e, f], x, y),
+    do: [a, b, c, d, x * a + y * c + e, x * b + y * d + f]
 
   defp multiply([a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]),
     do: [
@@ -625,7 +803,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp prepare_instruction(operator, operands, page_number) do
     normalized =
       case {operator, operands} do
-        {operator, []} when operator in ["q", "Q", "BT", "ET", "T*"] ->
+        {operator, []} when operator in ["q", "Q", "BT", "ET", "T*", "EMC"] ->
           {:ok, []}
 
         {operator, operands} when operator in ["cm", "Tm"] ->
@@ -676,6 +854,16 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
         {operator, [{:name, name}]} when operator in ["gs", "Do"] ->
           {:ok, [{:name, name}]}
+
+        {"BMC", [{:name, tag}]} ->
+          {:ok, [{:name, tag}]}
+
+        {"BDC", [{:name, tag}, properties]} ->
+          case properties do
+            {:name, _name} -> {:ok, [{:name, tag}, properties]}
+            properties when is_map(properties) -> {:ok, [{:name, tag}, properties]}
+            _ -> :error
+          end
 
         {operator, _operands} ->
           if operator in @validated_operators, do: :error, else: {:ok, operands}
@@ -870,30 +1058,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         end
 
       :error ->
-        with {:ok, operations} <- instructions(content, page_number),
-             {:ok, preparation_context} <-
-               cache_instructions(preparation_context, cache_key, operations, page_number),
+        with {:ok, operations, preparation_context} <-
+               instructions(content, page_number, preparation_context),
              {:ok, preparation_context} <-
                charge_instruction_uses(preparation_context, length(operations), page_number) do
+          preparation_context = %{
+            preparation_context
+            | instructions: Map.put(preparation_context.instructions, cache_key, operations)
+          }
+
           {:ok, operations, preparation_context}
         end
-    end
-  end
-
-  defp cache_instructions(preparation_context, cache_key, operations, page_number) do
-    parsed_instructions = preparation_context.parsed_instructions + length(operations)
-
-    case parsed_instructions <= Limits.get(:max_text_parsed_instructions) do
-      true ->
-        {:ok,
-         %{
-           preparation_context
-           | instructions: Map.put(preparation_context.instructions, cache_key, operations),
-             parsed_instructions: parsed_instructions
-         }}
-
-      false ->
-        resource_limit_error("parsed content instruction count exceeds the limit", page_number)
     end
   end
 
@@ -924,32 +1099,49 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp validate_scope_instructions(instructions, scope, page_number) do
     Enum.reduce_while(instructions, {:ok, scope}, fn instruction, {:ok, scope} ->
       case {instruction, scope} do
-        {%{operator: "q"}, {graphics_depth, in_text?}} ->
-          {:cont, {:ok, {graphics_depth + 1, in_text?}}}
+        {%{operator: operator}, {graphics_depth, in_text?, marked_depth}}
+        when operator in ["BMC", "BDC"] ->
+          case marked_depth < Limits.get(:max_text_marked_content_depth) do
+            true ->
+              {:cont, {:ok, {graphics_depth, in_text?, marked_depth + 1}}}
 
-        {%{operator: "Q"}, {graphics_depth, in_text?}} when graphics_depth > 0 ->
-          {:cont, {:ok, {graphics_depth - 1, in_text?}}}
+            false ->
+              {:halt,
+               resource_limit_error("marked-content nesting depth exceeds the limit", page_number)}
+          end
 
-        {%{operator: "Q"}, {0, _in_text?}} ->
+        {%{operator: "EMC"}, {graphics_depth, in_text?, marked_depth}} when marked_depth > 0 ->
+          {:cont, {:ok, {graphics_depth, in_text?, marked_depth - 1}}}
+
+        {%{operator: "EMC"}, {_graphics_depth, _in_text?, 0}} ->
+          {:halt, content_error("EMC has no matching BMC or BDC", page_number)}
+
+        {%{operator: "q"}, {graphics_depth, in_text?, marked_depth}} ->
+          {:cont, {:ok, {graphics_depth + 1, in_text?, marked_depth}}}
+
+        {%{operator: "Q"}, {graphics_depth, in_text?, marked_depth}} when graphics_depth > 0 ->
+          {:cont, {:ok, {graphics_depth - 1, in_text?, marked_depth}}}
+
+        {%{operator: "Q"}, {0, _in_text?, _marked_depth}} ->
           {:halt, content_error("Q has no matching q", page_number)}
 
-        {%{operator: "BT"}, {graphics_depth, false}} ->
-          {:cont, {:ok, {graphics_depth, true}}}
+        {%{operator: "BT"}, {graphics_depth, false, marked_depth}} ->
+          {:cont, {:ok, {graphics_depth, true, marked_depth}}}
 
-        {%{operator: "BT"}, {_graphics_depth, true}} ->
+        {%{operator: "BT"}, {_graphics_depth, true, _marked_depth}} ->
           {:halt, content_error("BT appears inside a text object", page_number)}
 
-        {%{operator: "ET"}, {graphics_depth, true}} ->
-          {:cont, {:ok, {graphics_depth, false}}}
+        {%{operator: "ET"}, {graphics_depth, true, marked_depth}} ->
+          {:cont, {:ok, {graphics_depth, false, marked_depth}}}
 
-        {%{operator: "ET"}, {_graphics_depth, false}} ->
+        {%{operator: "ET"}, {_graphics_depth, false, _marked_depth}} ->
           {:halt, content_error("ET has no matching BT", page_number)}
 
-        {%{operator: operator}, {graphics_depth, in_text?}}
+        {%{operator: operator}, {graphics_depth, in_text?, marked_depth}}
         when operator in @text_showing_operators and in_text? ->
-          {:cont, {:ok, {graphics_depth, in_text?}}}
+          {:cont, {:ok, {graphics_depth, in_text?, marked_depth}}}
 
-        {%{operator: operator}, {_graphics_depth, false}}
+        {%{operator: operator}, {_graphics_depth, false, _marked_depth}}
         when operator in @text_showing_operators ->
           {:halt, content_error("#{operator} appears outside a text object", page_number)}
 
@@ -968,6 +1160,40 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     case rest do
       [] -> :error
       [_array_start | rest] -> {:ok, [{:array, Enum.reverse(values)} | rest]}
+    end
+  end
+
+  defp close_dictionary(operands) do
+    {values, rest} = Enum.split_while(operands, &(&1 != :dictionary_start))
+
+    case rest do
+      [:dictionary_start | rest] ->
+        pairs = values |> Enum.reverse() |> Enum.chunk_every(2)
+
+        if Enum.all?(pairs, fn pair ->
+             case pair do
+               [{:name, _key}, value] -> content_value?(value)
+               _ -> false
+             end
+           end) do
+          dictionary = Map.new(pairs, fn [{:name, key}, value] -> {key, value} end)
+          {:ok, [dictionary | rest]}
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp content_value?(value) do
+    case value do
+      {kind, value} when kind in [:int, :real] -> is_number(value)
+      {kind, value} when kind in [:name, :string, :hex_string] -> is_binary(value)
+      {:array, values} -> Enum.all?(values, &content_value?/1)
+      value when is_map(value) -> true
+      value -> value in [true, false, :null]
     end
   end
 

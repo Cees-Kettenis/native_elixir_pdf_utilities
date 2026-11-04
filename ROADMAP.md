@@ -13,18 +13,6 @@ Version 1.x will preserve the documented public API and supported workflows.
 Minor releases add compatible features, patch releases fix bugs, and intentional
 breaking changes require a new major version.
 
-## 1.1.0: Near-complete HTML compatibility
-
-Support nearly all HTML features that have a useful representation in a PDF.
-Follow the HTML specification's parsing rules, including optional closing tags,
-valid attribute formats, character references, and document structure. Expand
-support for document elements, links, images, embedded content, and forms.
-
-The goal is to render existing static HTML documents with little need to rewrite
-them for this library. Publish a coverage guide so users can see which parts of
-the HTML specification work and which still need attention. Applications will
-continue to control remote asset fetching through the existing asset interfaces.
-
 ## 1.2.0: Near-complete CSS compatibility
 
 Support nearly all CSS features relevant to printed documents. This includes
@@ -34,6 +22,9 @@ with page rules, headers and footers, counters, and predictable page breaks.
 
 Typography should work across languages, including right-to-left text, scripts
 that require shaping, Unicode line breaking, hyphenation, and emoji sequences.
+Implement the HTML elements `bdi` and `bdo` and the `dir` attribute as part of
+this work, including direction isolation, overrides, inheritance, and automatic
+direction selection. These HTML features are deferred from 1.1.0 to 1.2.0.
 The goal is to reuse ordinary stylesheets and produce consistent PDFs for
 complex documents. Document coverage and compare supported rendering against
 Chromium as these capabilities grow.

@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size: 80pt 60pt; margin: 0; }
+html, body { margin: 0; padding: 0; }
+svg { display: block; width: 80pt; height: 60pt; }
+text { font-family: 'DejaVu Sans'; fill: black; }
+</style></head><body>
+<!-- Independent fitted-appearance reference for two 66pt by 19.5pt widgets.
+     The long value's v1.0.0 fitted size is 3.7293pt, with a 2pt inset.
+     The second value uses bundled fallback instead of the original STIX Two Math.
+     SVG fixes the baselines without relying on HTML input vertical alignment.
+     The root uses PDF coordinates; each text flips its glyphs back upright. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 60">
+  <g transform="translate(0 60) scale(1 -1)">
+    <text transform="scale(1 -1)" x="2" y="-54.2707" font-size="3.7293">This longer text was fitted before</text>
+    <text transform="scale(1 -1)" x="2" y="-16" font-size="12">Ա</text>
+  </g>
+</svg>
+</body></html>

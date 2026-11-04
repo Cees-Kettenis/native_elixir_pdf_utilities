@@ -2,23 +2,209 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @moduledoc """
   Shared semantic validation for parsed PDF documents.
 
-  The validator consumes the object model produced by the PDF reader. It does
-  not tokenize or load PDF bytes again. Successful validation returns a
+  Document validation consumes the object model produced by the PDF reader.
+  Successful validation returns a
   prepared context containing the resolved catalog, page-tree root, semantic
   page traversal, inherited page values, and the reader-compatible document.
 
   Operation validators should consume this context instead of walking the raw
   page tree or resolving document structure independently.
+
+  Shared output admission also checks newly generated object containers against
+  the same limits, using the reader's value grammar when their size requires it.
   """
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.CollectionValidator
+
+  @doc "Checks the shared entry ceiling for one PDF array or dictionary."
+  @spec validate_container_entries(non_neg_integer(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_container_entries(count, opts) do
+    validate_container_entries(count, opts, Limits.effective())
+  end
+
+  @doc "Checks an entry count using the owning parser's snapshot of the shared limits."
+  @spec validate_container_entries(non_neg_integer(), [diagnostic_option()], Limits.t()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_container_entries(count, opts, limits) do
+    maximum = limits.max_pdf_container_entries
+
+    if count <= maximum do
+      :ok
+    else
+      error(
+        :limits,
+        :resource_limit_exceeded,
+        "PDF container entry count exceeds max_pdf_container_entries (#{maximum})",
+        opts
+      )
+    end
+  end
+
+  @doc "Admits an array or dictionary before its entries are traversed or copied."
+  @spec validate_container(list() | map(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_container(value, opts \\ []) do
+    maximum = Limits.get(:max_pdf_container_entries)
+
+    case value do
+      dictionary when is_map(dictionary) ->
+        validate_container_entries(map_size(dictionary), opts)
+
+      values when is_list(values) ->
+        case CollectionValidator.bounded_length(values, maximum) do
+          {:ok, _count} -> :ok
+          :limit_exceeded -> validate_container_entries(maximum + 1, opts)
+          :invalid -> error(:object, :invalid_pdf_input, "PDF array is not a proper list", opts)
+        end
+    end
+  end
+
+  @doc "Checks generated object containers with the reader's value grammar, leaving stream bytes opaque."
+  @spec validate_output_containers(iodata(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_output_containers(body, opts \\ []) do
+    # Every entry occupies at least one byte. Small generated bodies therefore
+    # cannot exceed the entry ceiling, even when all bytes belong to one array.
+    if IO.iodata_length(body) <= Limits.get(:max_pdf_container_entries) do
+      :ok
+    else
+      with tokens when is_list(tokens) <-
+             body |> IO.iodata_to_binary() |> Tokenizer.new() |> output_value_tokens([]),
+           {:ok, _value, _rest} <- Reader.parse_value_tokens(tokens) do
+        :ok
+      else
+        {:error, {reason, diagnostic}} ->
+          {:error, {reason, Map.merge(diagnostic, Map.new(opts))}}
+
+        :error ->
+          error(:object, :invalid_pdf_input, "generated PDF object is malformed", opts)
+      end
+    end
+  end
+
+  # An indirect /Length cannot be resolved from one generated object body.
+  # Stop at the stream keyword so embedded endstream text and arbitrary binary
+  # payloads can never be interpreted as dictionary or array syntax.
+  defp output_value_tokens(tokenizer, tokens) do
+    case Tokenizer.next(tokenizer) do
+      {token, _tokenizer} when token in [:stream, {:eof, nil}] -> Enum.reverse(tokens)
+      {:error, _} = error -> error
+      {token, tokenizer} -> output_value_tokens(tokenizer, [token | tokens])
+    end
+  end
+
+  @doc "Checks cross-reference capacity, including the free object-zero entry and the allocated ID range."
+  @spec validate_object_capacity(non_neg_integer(), pos_integer(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_object_capacity(entries, size, opts \\ []) do
+    cond do
+      not is_integer(size) or size <= 0 ->
+        error(:xref, :invalid_pdf_input, "xref Size is malformed", opts)
+
+      entries > Limits.get(:max_pdf_objects) ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "PDF object count including object zero exceeds max_pdf_objects",
+          opts
+        )
+
+      size - 1 > Limits.get(:max_pdf_objects) ->
+        error(:limits, :resource_limit_exceeded, "PDF object IDs exceed max_pdf_objects", opts)
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc "Admits a cross-reference revision, rejecting cycles before checking the revision limit."
+  @spec validate_xref_revision(integer(), map(), non_neg_integer(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_xref_revision(offset, seen, depth, opts) do
+    cond do
+      Map.has_key?(seen, offset) ->
+        error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle", opts)
+
+      depth >= Limits.get(:max_pdf_xref_revisions) ->
+        error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit", opts)
+
+      true ->
+        :ok
+    end
+  end
+
+  @doc "Checks a numeric output value against the shared magnitude and serialized-token limits."
+  @spec validate_serialized_number(number()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_serialized_number(value) do
+    if valid_number?(value) do
+      {:ok, encoded} = InfoCodec.serialize_value(value)
+
+      case validate_reader_size(IO.iodata_length(encoded), :max_pdf_numeric_token_bytes) do
+        :ok ->
+          :ok
+
+        {:error, {reason, _diagnostic}} ->
+          Diagnostics.error(
+            :limits,
+            reason,
+            "PDF output number exceeds max_pdf_numeric_token_bytes",
+            module: __MODULE__
+          )
+      end
+    else
+      Diagnostics.error(
+        :limits,
+        :resource_limit_exceeded,
+        "PDF output number exceeds max_pdf_numeric_magnitude",
+        module: __MODULE__
+      )
+    end
+  end
 
   # Reader work is synchronous. The scope is local to its process and shared by
   # nested probes and stream decoders. An exhausted budget aborts candidate
   # recovery too, and the outer scope always deletes it, including on exceptions.
   @reader_budget_key {__MODULE__, :reader_budget}
+
+  @doc "Parses a bounded PDF numeric token, rejecting exponent notation and unrepresentable reals."
+  @spec parse_numeric_token(binary()) ::
+          {:ok, {:int, integer()} | {:real, float()}} | :error | {:error, {atom(), map()}}
+  def parse_numeric_token(word) do
+    with :ok <- validate_reader_size(byte_size(word), :max_pdf_numeric_token_bytes) do
+      if :binary.match(word, ".") == :nomatch do
+        try do
+          {:ok, {:int, :erlang.binary_to_integer(word)}}
+        rescue
+          ArgumentError -> :error
+        end
+      else
+        if :binary.match(word, ["e", "E"]) == :nomatch do
+          normalized =
+            case word do
+              "." <> rest -> "0." <> rest
+              "+." <> rest -> "+0." <> rest
+              "-." <> rest -> "-0." <> rest
+              _ -> if String.ends_with?(word, "."), do: word <> "0", else: word
+            end
+
+          try do
+            {:ok, {:real, :erlang.binary_to_float(normalized)}}
+          rescue
+            ArgumentError -> :error
+          end
+        else
+          :error
+        end
+      end
+    end
+  end
 
   @doc false
   @spec with_reader_budget((-> result)) :: result | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -60,11 +246,147 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc "Charges one token and its scanned bytes together, preserving both reader budgets."
+  @spec charge_reader_token(non_neg_integer()) :: :ok
+  def charge_reader_token(bytes) do
+    case Process.get(@reader_budget_key) do
+      nil ->
+        :ok
+
+      budget ->
+        work = Map.get(budget, :max_pdf_reader_work, 0) + bytes
+        tokens = Map.get(budget, :max_pdf_reader_tokens, 0) + 1
+
+        with :ok <- validate_reader_size(work, :max_pdf_reader_work),
+             :ok <- validate_reader_size(tokens, :max_pdf_reader_tokens) do
+          Process.put(
+            @reader_budget_key,
+            budget
+            |> Map.put(:max_pdf_reader_work, work)
+            |> Map.put(:max_pdf_reader_tokens, tokens)
+          )
+
+          :ok
+        else
+          error -> abort_reader_budget(error)
+        end
+    end
+  end
+
   @doc false
   @spec remaining_reader_decoded_bytes() :: non_neg_integer()
   def remaining_reader_decoded_bytes do
     budget = Process.get(@reader_budget_key, %{})
     Limits.get(:max_pdf_reader_decoded_bytes) - Map.get(budget, :max_pdf_reader_decoded_bytes, 0)
+  end
+
+  @doc false
+  @spec charge_stream_work(non_neg_integer(), ref()) :: :ok
+  def charge_stream_work(amount, ref) do
+    charge_reader_budget(:max_pdf_reader_work, amount)
+  catch
+    {:pdf_reader_budget, {:error, {reason, diagnostic}}} ->
+      abort_reader_budget(
+        {:error,
+         {reason,
+          Diagnostics.with_context(diagnostic,
+            source: "object #{elem(ref, 0)} #{elem(ref, 1)}"
+          )}}
+      )
+  end
+
+  @doc false
+  @spec prepare_predictor(binary(), map(), ref()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_predictor(data, parameters, ref) do
+    predictor = parameters["Predictor"]
+    colors = parameters["Colors"]
+    bits = parameters["BitsPerComponent"]
+    columns = parameters["Columns"]
+    pixel_bits = colors * bits
+    sample_count = colors * columns
+    row_bytes = div(sample_count * bits + 7, 8)
+    pixel_bytes = div(pixel_bits + 7, 8)
+    encoded_row_bytes = row_bytes + if(predictor == 2, do: 0, else: 1)
+    rows = div(byte_size(data), encoded_row_bytes)
+    output_bytes = rows * row_bytes
+
+    # Admission covers packed input/output, row construction and predecessor
+    # buffers. It is a buffer allowance, not an exact BEAM heap measurement.
+    working_bytes =
+      if rows == 0,
+        do: 0,
+        else: byte_size(data) + 2 * output_bytes + 2 * row_bytes + 2 * pixel_bytes
+
+    opts = [operation: :read, module: Reader, source: "object #{elem(ref, 0)} #{elem(ref, 1)}"]
+
+    cond do
+      row_bytes > Limits.get(:max_pdf_decoded_stream_bytes) ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "predictor row exceeds the decoded-stream safety limit",
+          opts,
+          object: ref
+        )
+
+      rem(byte_size(data), encoded_row_bytes) != 0 ->
+        kind = if predictor == 2, do: "TIFF", else: "PNG"
+
+        error(:filter, :invalid_pdf_input, "#{kind} predictor rows are truncated", opts,
+          object: ref
+        )
+
+      working_bytes > Limits.get(:max_pdf_predictor_working_bytes) ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "predictor buffers exceed max_pdf_predictor_working_bytes",
+          opts,
+          object: ref
+        )
+
+      true ->
+        work =
+          if predictor == 2,
+            do: rows * (sample_count + columns),
+            else: rows * (row_bytes + 1 + div(row_bytes + pixel_bytes - 1, pixel_bytes))
+
+        charge_stream_work(work, ref)
+
+        with :ok <-
+               if(predictor == 2,
+                 do: :ok,
+                 else: validate_predictor_filters(data, row_bytes, opts, ref)
+               ) do
+          {:ok,
+           %{
+             predictor: predictor,
+             bits: bits,
+             columns: columns,
+             pixel_bits: pixel_bits,
+             pixel_bytes: pixel_bytes,
+             row_bytes: row_bytes,
+             rows: rows
+           }}
+        end
+    end
+  end
+
+  defp validate_predictor_filters(data, row_bytes, opts, ref) do
+    case data do
+      <<>> ->
+        :ok
+
+      <<filter, _row::binary-size(^row_bytes), remaining::binary>> ->
+        if filter in 0..4 do
+          validate_predictor_filters(remaining, row_bytes, opts, ref)
+        else
+          error(:filter, :invalid_pdf_input, "PNG predictor row has an invalid filter", opts,
+            object: ref
+          )
+        end
+    end
   end
 
   @doc false
@@ -82,6 +404,47 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       size > remaining_reader_decoded_bytes() -> reader_limit_error(:max_pdf_reader_decoded_bytes)
       true -> validate_reader_size(size, :max_pdf_decoded_stream_bytes)
     end
+  end
+
+  @doc "Prepares a decoder's output allowance from byte, ratio and remaining operation limits."
+  @spec reader_decode_limit(non_neg_integer()) :: non_neg_integer()
+  def reader_decode_limit(encoded_size) do
+    min(
+      min(Limits.get(:max_pdf_decoded_stream_bytes), remaining_reader_decoded_bytes()),
+      decompression_allowance(encoded_size)
+    )
+  end
+
+  @doc "Checks an incremental decoder's output before retaining or expanding the next chunk."
+  @spec validate_decoding_progress(non_neg_integer(), non_neg_integer(), ref()) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_decoding_progress(decoded_size, allowance, ref) do
+    if decoded_size <= allowance do
+      :ok
+    else
+      error(
+        :limits,
+        :resource_limit_exceeded,
+        "decoded stream exceeds its safety limit",
+        [operation: :read, module: Reader],
+        object: ref
+      )
+    end
+  end
+
+  @doc "Checks final stream size and ratio after its stages have already charged aggregate bytes."
+  @spec validate_decoded_stream_size(non_neg_integer(), non_neg_integer()) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def validate_decoded_stream_size(encoded_size, decoded_size) do
+    with :ok <- validate_reader_size(decoded_size, :max_pdf_decoded_stream_bytes) do
+      if encoded_size > 0 and decoded_size > decompression_allowance(encoded_size),
+        do: reader_limit_error(:max_pdf_decompression_ratio),
+        else: :ok
+    end
+  end
+
+  defp decompression_allowance(encoded_size) do
+    max(encoded_size * Limits.get(:max_pdf_decompression_ratio), 1)
   end
 
   @doc false
@@ -214,6 +577,125 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc false
+  @spec prepare_object_bodies(term(), [diagnostic_option()]) ::
+          {:ok, [{pos_integer(), binary()}]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_object_bodies(objects, opts) do
+    case objects do
+      objects when is_list(objects) ->
+        with :ok <- validate_reader_size(length(objects), :max_pdf_objects) do
+          Enum.reduce_while(objects, {:ok, MapSet.new(), 0}, fn entry, {:ok, seen, bytes} ->
+            case entry do
+              {id, body} when is_integer(id) and id > 0 and is_binary(body) ->
+                cond do
+                  MapSet.member?(seen, id) ->
+                    {:halt,
+                     error(
+                       :object,
+                       :invalid_pdf_input,
+                       "serialized object IDs must be unique",
+                       opts
+                     )}
+
+                  id > Limits.get(:max_pdf_objects) ->
+                    {:halt, reader_limit_error(:max_pdf_objects)}
+
+                  true ->
+                    case validate_reader_size(bytes + byte_size(body), :max_pdf_input_bytes) do
+                      :ok -> {:cont, {:ok, MapSet.put(seen, id), bytes + byte_size(body)}}
+                      failure -> {:halt, failure}
+                    end
+                end
+
+              _ ->
+                {:halt,
+                 error(
+                   :object,
+                   :invalid_pdf_input,
+                   "serialized objects require positive IDs and binary bodies",
+                   opts
+                 )}
+            end
+          end)
+          |> case do
+            {:ok, _seen, _bytes} -> {:ok, objects}
+            failure -> failure
+          end
+        end
+
+      _ ->
+        error(:object, :invalid_pdf_input, "serialized objects must be a list", opts)
+    end
+  end
+
+  @doc false
+  @spec validate_object_body(term(), binary() | nil, term(), [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_object_body(value, stream, remaining_tokens, opts \\ []) do
+    cond do
+      remaining_tokens != [] ->
+        error(:object, :invalid_pdf_input, "serialized object body has trailing data", opts)
+
+      not is_map(value) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized resource objects must contain a dictionary",
+          opts
+        )
+
+      not (is_nil(stream) or is_binary(stream)) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized object streams must be binary or absent",
+          opts
+        )
+
+      is_binary(stream) and Map.get(value, "Length") != byte_size(stream) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized streams require their exact direct Length",
+          opts
+        )
+
+      not valid_object_value?(value) ->
+        error(
+          :object,
+          :invalid_pdf_input,
+          "serialized objects require PDF values and references with positive IDs and 16-bit generations",
+          opts
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_object_value?(value) do
+    case value do
+      {:ref, {id, generation} = ref} ->
+        # PDF generations are fixed unsigned 16-bit values, not a tunable limit.
+        valid_ref?(ref) and id > 0 and generation <= 65_535
+
+      dictionary when is_map(dictionary) ->
+        Enum.all?(dictionary, fn {key, value} -> is_binary(key) and valid_object_value?(value) end)
+
+      values when is_list(values) ->
+        Enum.all?(values, &valid_object_value?/1)
+
+      {kind, bytes} when kind in [:name, :string, :hex] and is_binary(bytes) ->
+        true
+
+      value when is_number(value) or is_boolean(value) or is_nil(value) ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
   @doc """
   Parses and validates a PDF binary into the reusable shared context.
 
@@ -268,37 +750,33 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       {entries, trailer, pdf} when is_map(entries) and is_map(trailer) and is_binary(pdf) ->
         size = Map.get(trailer, "Size")
 
-        cond do
-          not is_integer(size) or size <= 0 or size > Limits.get(:max_pdf_objects) + 1 ->
-            error(:xref, :invalid_pdf_input, "xref Size is malformed", opts)
+        with :ok <- validate_object_capacity(map_size(entries), size, opts) do
+          cond do
+            not match?({:ref, _}, Map.get(trailer, "Root")) ->
+              error(
+                :trailer,
+                :invalid_pdf_input,
+                "trailer does not contain a catalog reference",
+                opts
+              )
 
-          map_size(entries) > Limits.get(:max_pdf_objects) ->
-            error(:limits, :resource_limit_exceeded, "PDF object count exceeds the limit", opts)
+            not valid_object_zero_entry?(Map.get(entries, 0), size) ->
+              error(
+                :xref,
+                :invalid_pdf_input,
+                "xref object 0 must be a free entry with generation 65535",
+                opts
+              )
 
-          not match?({:ref, _}, Map.get(trailer, "Root")) ->
-            error(
-              :trailer,
-              :invalid_pdf_input,
-              "trailer does not contain a catalog reference",
-              opts
-            )
+            Enum.any?(entries, fn {object, entry} ->
+              not is_integer(object) or object < 0 or object >= size or
+                  not valid_xref_entry?(entry, pdf, size)
+            end) ->
+              error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
 
-          not valid_object_zero_entry?(Map.get(entries, 0), size) ->
-            error(
-              :xref,
-              :invalid_pdf_input,
-              "xref object 0 must be a free entry with generation 65535",
-              opts
-            )
-
-          Enum.any?(entries, fn {object, entry} ->
-            not is_integer(object) or object < 0 or object >= size or
-                not valid_xref_entry?(entry, pdf, size)
-          end) ->
-            error(:xref, :invalid_pdf_input, "xref entry is outside its declared bounds", opts)
-
-          true ->
-            :ok
+            true ->
+              :ok
+          end
         end
 
       _ ->
@@ -415,7 +893,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         }
 
         with {:ok, catalog} <- dictionary(document, root, opts),
-             true <- named?(Map.get(catalog, "Type"), "Catalog"),
+             {:ok, type} <- resolve(document, Map.get(catalog, "Type"), opts),
+             true <- named?(type, "Catalog"),
              {:ok, page_tree_ref} <- required_reference(catalog, "Pages", opts),
              {:ok, traversal, _descendant_count} <-
                walk_page_tree(
@@ -476,6 +955,33 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           {:ok, value}
       end
     end)
+  end
+
+  @doc "Checks whether a direct or indirect value resolves to the expected PDF name."
+  @spec named?(document(), value(), binary()) :: boolean()
+  def named?(document, value, expected) do
+    case value do
+      {:ref, _ref} ->
+        case resolve(document, value) do
+          {:ok, value} -> named?(value, expected)
+          {:error, _} -> false
+        end
+
+      value ->
+        named?(value, expected)
+    end
+  end
+
+  @doc """
+  Resolves an optional dictionary entry, applying its default after resolving PDF null.
+  Null operands inside arrays and required values retain their original semantics.
+  """
+  @spec optional_entry(document(), map(), binary(), value(), [diagnostic_option()]) ::
+          {:ok, value()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def optional_entry(document, dictionary, key, default, opts \\ []) do
+    with {:ok, value} <- resolve(document, Map.get(dictionary, key), opts) do
+      {:ok, if(is_nil(value), do: default, else: value)}
+    end
   end
 
   @doc """
@@ -625,6 +1131,46 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       end
     else
       :error
+    end
+  end
+
+  @doc "Checks derived PDF geometry for representable operands and shared output number bounds."
+  @spec validate_geometry_numbers([number()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_geometry_numbers(values) do
+    Enum.reduce_while(values, :ok, fn value, :ok ->
+      case float_number(value) do
+        {:ok, _} ->
+          case validate_serialized_number(value) do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+
+        :error ->
+          {:halt,
+           Diagnostics.error(
+             :geometry,
+             :invalid_pdf_input,
+             "PDF geometry must be representable within max_pdf_numeric_magnitude",
+             module: __MODULE__
+           )}
+      end
+    end)
+  end
+
+  @doc "Composes validator-admitted six-value PDF matrices without rounding their operands."
+  @spec multiply_matrices([number()], [number()]) :: [number()]
+  def multiply_matrices(left, right) do
+    case {left, right} do
+      {[a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]} ->
+        [
+          a * a2 + c * b2,
+          b * a2 + d * b2,
+          a * c2 + c * d2,
+          b * c2 + d * d2,
+          a * e2 + c * f2 + e,
+          b * e2 + d * f2 + f
+        ]
     end
   end
 
@@ -824,12 +1370,13 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                    expected_parent,
                    traversal,
                    opts
-                 ) do
+                 ),
+               {:ok, type} <- resolve(document, Map.get(dictionary, "Type"), opts) do
             inherited = inherit_page_values(dictionary, ref, inherited)
             ancestors = Map.put(ancestors, ref, true)
             traversal = %{traversal | seen: Map.put(traversal.seen, ref, true)}
 
-            case Map.get(dictionary, "Type") do
+            case type do
               {:name, "Page"} ->
                 page = %{
                   ref: ref,
@@ -1069,7 +1616,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp with_reference_resolution(opts, operation) do
+  @doc false
+  @spec with_reference_resolution(keyword(), (keyword() -> result)) :: result when result: var
+  def with_reference_resolution(opts, operation) do
     case Keyword.fetch(opts, @reference_resolution_option) do
       {:ok, _resolution} ->
         operation.(opts)
@@ -1088,9 +1637,24 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   defp reserve_reference_work(ref, opts) do
-    %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
+    total =
+      case Process.get(@reader_budget_key) do
+        nil ->
+          %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
+          :atomics.add_get(work, 1, 1)
 
-    case :atomics.add_get(work, 1, 1) <= Limits.get(:max_pdf_reference_resolution_work) do
+        budget ->
+          total = Map.get(budget, :max_pdf_reference_resolution_work, 0) + 1
+
+          Process.put(
+            @reader_budget_key,
+            Map.put(budget, :max_pdf_reference_resolution_work, total)
+          )
+
+          total
+      end
+
+    case total <= Limits.get(:max_pdf_reference_resolution_work) do
       true ->
         :ok
 
@@ -1105,11 +1669,12 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp cached_reference(ref, opts) do
+  defp cached_reference(document, ref, opts) do
     %{cache: cache} = Keyword.fetch!(opts, @reference_resolution_option)
 
     case :ets.lookup(cache, ref) do
-      [{^ref, value, terminal_ref, chain_depth}] ->
+      [{^ref, terminal_ref, chain_depth}] ->
+        {:ok, %{value: value}} = fetch_object_record(document, terminal_ref)
         {:ok, value, terminal_ref, chain_depth}
 
       [] ->
@@ -1117,9 +1682,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
-  defp cache_reference(ref, value, terminal_ref, chain_depth, opts) do
+  defp cache_reference(ref, terminal_ref, chain_depth, opts) do
     %{cache: cache} = Keyword.fetch!(opts, @reference_resolution_option)
-    true = :ets.insert(cache, {ref, value, terminal_ref, chain_depth})
+    true = :ets.insert(cache, {ref, terminal_ref, chain_depth})
     :ok
   end
 
@@ -1144,7 +1709,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
 
       true ->
         with :ok <- reserve_reference_work(ref, opts) do
-          case cached_reference(ref, opts) do
+          case cached_reference(document, ref, opts) do
             {:ok, value, terminal_ref, chain_depth} ->
               case depth + chain_depth < Limits.get(:max_pdf_reference_chain_depth) do
                 true ->
@@ -1172,7 +1737,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                        ) do
                     {:ok, value, terminal_ref, chain_depth} ->
                       chain_depth = chain_depth + 1
-                      cache_reference(ref, value, terminal_ref, chain_depth, opts)
+                      cache_reference(ref, terminal_ref, chain_depth, opts)
                       {:ok, value, terminal_ref, chain_depth}
 
                     {:error, _} = resolution_error ->
@@ -1180,7 +1745,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                   end
 
                 {:ok, %{value: value}} ->
-                  cache_reference(ref, value, ref, 0, opts)
+                  cache_reference(ref, ref, 0, opts)
                   {:ok, value, ref, 0}
 
                 {:ok, _object} ->

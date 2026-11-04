@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page {size:360pt 760pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:14pt;}
+.compact h2 {margin:0;font-size:14pt;line-height:18pt;}
+.compact p {margin:0;}
+hgroup {background:#edf4f7;}
+details {margin:0 0 10pt;}
+fieldset {width:230pt;min-width:0;margin:0 0 10pt;padding:4pt;border:2pt solid #28516a;}
+fieldset.narrow {width:90pt;}
+</style></head><body>
+<div class="compact">
+<details><summary><hgroup><h2>Closed heading</h2><p>Closed subtitle</p></hgroup></summary><p>Hidden closed body</p></details>
+<details open><summary><hgroup><h2>Open heading</h2><p>Open subtitle</p></hgroup></summary><p>Visible open body</p></details>
+<details open><summary style="display:block"><hgroup><h2>Block heading</h2><p>Block subtitle</p></hgroup></summary><p>Visible block body</p></details>
+<fieldset><legend><hgroup><h2>Group heading</h2><p>Group subtitle</p></hgroup></legend><p>Group body</p></fieldset>
+<fieldset class="narrow"><legend><hgroup><h2>Narrow heading</h2><p>Long subtitle wraps inside the caption</p></hgroup></legend><p>Narrow body</p></fieldset>
+<p>After captions</p>
+</div>
+<details open><summary><hgroup><h2>Default heading</h2><p>Default subtitle</p></hgroup></summary><p>Default open body</p></details>
+<fieldset><legend><hgroup><h2>Default group</h2><p>Default group subtitle</p></hgroup></legend><p>Default group body</p></fieldset>
+</body></html>

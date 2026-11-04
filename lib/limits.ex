@@ -3,6 +3,12 @@ defmodule NativeElixirPdfUtilities.Limits do
   Runtime resource limits used by PDF parsing, information access, text
   extraction, merging, page transforms, splitting, and HTML-to-PDF rendering.
 
+  HTML/PDF link clipping uses `:max_clip_projection_work` for contour
+  subdivision and planar arrangement work. `:clip_curve_precision` is
+  the reciprocal of the maximum curve-to-chord deviation in PDF points.
+  `:max_clip_expression_depth` bounds nested geometric clip intersections
+  independently of drawing-group nesting.
+
   Applications can override individual defaults in `config/config.exs` or
   `config/runtime.exs`:
 
@@ -13,24 +19,57 @@ defmodule NativeElixirPdfUtilities.Limits do
         ]
 
   Configuration is validated when the library application starts. Values are
-  process-wide, and changing them requires restarting the application.
+  application-wide, and changing them requires restarting the application.
+  Document operations default to a five-minute deadline and a 1 GiB observed
+  BEAM worker-memory allowance. Native allocations are outside that allowance;
+  see the resource limits guide for enforcement boundaries.
   """
 
   @defaults %{
+    max_operation_timeout_ms: 300_000,
+    max_operation_memory_bytes: 1_073_741_824,
+    operation_memory_check_interval_ms: 25,
     max_aggregate_html_source_bytes: 10_000_000,
     max_aggregate_css_source_bytes: 20_000_000,
     max_html_source_bytes: 2_000_000,
     max_css_source_bytes: 1_000_000,
     max_html_nodes: 25_000,
+    max_responsive_image_candidates: 1_000,
+    max_image_map_coordinates: 65_536,
+    max_image_map_geometry_work: 2_000_000,
     max_html_depth: 128,
+    max_embedded_documents: 256,
+    max_embedded_document_depth: 16,
+    max_frameset_tracks: 1_024,
+    max_frameset_cells: 65_536,
+    max_html_tree_work: 20_000_000,
+    max_html_pattern_bytes: 65_536,
+    max_html_form_value_bytes: 1_000_000,
+    max_html_pattern_values: 10_000,
+    max_html_pattern_compile_work: 2_000_000,
+    max_html_pattern_match_work: 5_000_000,
+    max_html_form_value_memory_bytes: 32_000_000,
+    max_html_pattern_depth: 128,
+    max_html_form_value_timeout_ms: 5_000,
+    max_text_decoration_layers: 128,
+    max_html_numeric_token_bytes: 1_024,
     max_css_rules: 10_000,
     max_css_work: 5_000_000,
+    max_css_calculation_depth: 64,
+    max_media_query_depth: 32,
     max_layout_boxes: 100_000,
+    max_drawing_group_depth: 128,
     max_rendered_text_bytes: 10_000_000,
     max_layout_text_work: 20_000_000,
+    max_layout_line_work: 1_000_000,
+    max_grid_occupied_cells: 1_000_000,
+    max_grid_tracks: 100_000,
+    max_grid_placement_work: 2_000_000,
     max_layout_measurement_cache_bytes: 2_000_000,
     max_layout_measurement_cache_entries: 10_000,
     max_table_grid_work: 1_000_000,
+    max_table_model_work: 1_000_000,
+    max_table_header_work: 1_000_000,
     max_rendered_pages: 1_000,
     max_rendered_pdf_bytes: 50_000_000,
     max_font_source_bytes: 10_000_000,
@@ -50,15 +89,38 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_form_fields: 10_000,
     max_pdf_form_depth: 64,
     max_pdf_form_text_bytes: 1_000_000,
+    max_pdf_form_metadata_bytes: 10_000_000,
+    max_pdf_form_preparation_entries: 100_000,
+    max_pdf_form_font_uses: 100_000,
+    max_pdf_form_font_work_bytes: 1_000_000_000,
+    max_aggregate_svg_source_bytes: 10_000_000,
+    max_aggregate_svg_nodes: 50_000,
+    max_aggregate_svg_path_bytes: 2_000_000,
+    max_aggregate_svg_filter_primitives: 512,
+    max_aggregate_svg_references: 2_000,
+    max_svg_expansion_work: 100_000,
+    max_svg_expanded_path_bytes: 10_000_000,
+    max_svg_font_work_bytes: 80_000_000,
+    max_svg_resource_bytes: 10_000_000,
+    max_aggregate_svg_resource_bytes: 50_000_000,
     max_svg_nodes: 25_000,
+    max_css_transform_operations: 1_000,
+    max_clip_projection_work: 2_000_000,
+    max_clip_expression_depth: 256,
+    clip_curve_precision: 1_024,
+    svg_raster_scale: 2,
     max_svg_depth: 128,
     max_svg_path_bytes: 1_000_000,
     max_svg_filter_primitives: 256,
+    max_svg_turbulence_octaves: 16,
+    max_svg_filter_work: 250_000_000_000,
     max_svg_references: 1_000,
     max_svg_output_bytes: 10_000_000,
     max_svg_bytes: 5_000_000,
     max_svg_raster_dimension: 8_192,
     max_svg_raster_pixels: 16_777_216,
+    max_aggregate_svg_raster_pixels: 33_554_432,
+    max_aggregate_svg_surface_pixels: 134_217_728,
     max_png_working_bytes: 160_000_000,
     max_image_count: 1_000,
     max_image_source_bytes: 10_000_000,
@@ -76,6 +138,7 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_pdf_reader_tokens: 1_000_000,
     max_pdf_reader_values: 500_000,
     max_pdf_reader_work: 250_000_000,
+    max_pdf_predictor_working_bytes: 160_000_000,
     max_pdf_container_entries: 100_000,
     max_pdf_numeric_token_bytes: 1_024,
     max_pdf_input_bytes: 50_000_000,
@@ -113,10 +176,14 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_cmap_expanded_bytes: 10_000_000,
     max_text_decoded_content_bytes: 50_000_000,
     max_text_parsed_instructions: 100_000,
+    max_text_parsed_tokens: 1_000_000,
+    max_text_parsed_values: 500_000,
+    max_text_font_work: 1_000_000,
     max_text_stream_uses: 100_000,
     max_text_instruction_uses: 1_000_000,
     max_text_form_expansions: 10_000,
     max_text_spans: 25_000,
+    max_text_marked_content_depth: 128,
     max_text_layout_whitespace_bytes: 1_000_000,
     max_cmap_work: 1_000_000,
     max_cmap_bytes: 1_000_000,
@@ -125,7 +192,11 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_form_xobject_depth: 20,
     max_font_kerning_pairs: 100_000,
     max_font_cmap_work: 1_000_000,
+    max_font_math_work: 1_000_000,
+    max_font_name_bytes: 1_000_000,
     max_font_subset_work: 100_000,
+    max_font_subset_bytes: 40_000_000,
+    max_font_subset_checksum_work: 10_000_000,
     max_font_cache_entries: 64,
     max_system_font_cache_entries: 64
   }
@@ -134,21 +205,41 @@ defmodule NativeElixirPdfUtilities.Limits do
 
   @typedoc "A configurable resource-limit name."
   @type key ::
-          :max_pdf_attachments
+          :max_operation_timeout_ms
+          | :max_operation_memory_bytes
+          | :operation_memory_check_interval_ms
+          | :max_pdf_attachments
           | :max_aggregate_html_source_bytes
           | :max_aggregate_css_source_bytes
           | :max_html_source_bytes
           | :max_css_source_bytes
+          | :max_responsive_image_candidates
           | :max_html_nodes
           | :max_html_depth
+          | :max_embedded_documents
+          | :max_embedded_document_depth
+          | :max_frameset_tracks
+          | :max_frameset_cells
+          | :max_html_tree_work
+          | :max_text_decoration_layers
+          | :max_html_numeric_token_bytes
           | :max_css_rules
+          | :max_media_query_depth
+          | :max_css_calculation_depth
           | :max_css_work
           | :max_layout_boxes
+          | :max_drawing_group_depth
           | :max_rendered_text_bytes
           | :max_layout_text_work
           | :max_layout_measurement_cache_bytes
           | :max_layout_measurement_cache_entries
           | :max_table_grid_work
+          | :max_layout_line_work
+          | :max_grid_occupied_cells
+          | :max_grid_tracks
+          | :max_grid_placement_work
+          | :max_table_model_work
+          | :max_table_header_work
           | :max_rendered_pages
           | :max_rendered_pdf_bytes
           | :max_font_source_bytes
@@ -167,14 +258,37 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_form_fields
           | :max_pdf_form_depth
           | :max_pdf_form_text_bytes
+          | :max_pdf_form_metadata_bytes
+          | :max_pdf_form_preparation_entries
+          | :max_pdf_form_font_uses
+          | :max_pdf_form_font_work_bytes
+          | :max_aggregate_svg_source_bytes
+          | :max_aggregate_svg_nodes
+          | :max_aggregate_svg_path_bytes
+          | :max_aggregate_svg_filter_primitives
+          | :max_aggregate_svg_references
+          | :max_svg_expansion_work
+          | :max_svg_expanded_path_bytes
+          | :max_svg_font_work_bytes
+          | :max_svg_resource_bytes
+          | :max_aggregate_svg_resource_bytes
           | :max_svg_nodes
+          | :max_css_transform_operations
+          | :max_clip_projection_work
+          | :max_clip_expression_depth
+          | :clip_curve_precision
+          | :svg_raster_scale
           | :max_svg_depth
           | :max_svg_path_bytes
           | :max_svg_filter_primitives
+          | :max_svg_turbulence_octaves
+          | :max_svg_filter_work
           | :max_svg_references
           | :max_svg_output_bytes
           | :max_svg_bytes
           | :max_svg_raster_dimension
+          | :max_aggregate_svg_raster_pixels
+          | :max_aggregate_svg_surface_pixels
           | :max_svg_raster_pixels
           | :max_png_working_bytes
           | :max_image_count
@@ -193,6 +307,7 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_pdf_reader_tokens
           | :max_pdf_reader_values
           | :max_pdf_reader_work
+          | :max_pdf_predictor_working_bytes
           | :max_pdf_container_entries
           | :max_pdf_numeric_token_bytes
           | :max_pdf_input_bytes
@@ -230,10 +345,14 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_cmap_expanded_bytes
           | :max_text_decoded_content_bytes
           | :max_text_parsed_instructions
+          | :max_text_parsed_tokens
+          | :max_text_parsed_values
+          | :max_text_font_work
           | :max_text_stream_uses
           | :max_text_instruction_uses
           | :max_text_form_expansions
           | :max_text_spans
+          | :max_text_marked_content_depth
           | :max_text_layout_whitespace_bytes
           | :max_cmap_work
           | :max_cmap_bytes
@@ -242,10 +361,23 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_form_xobject_depth
           | :max_font_kerning_pairs
           | :max_font_cmap_work
+          | :max_font_math_work
+          | :max_font_name_bytes
           | :max_font_subset_work
+          | :max_font_subset_bytes
+          | :max_font_subset_checksum_work
           | :max_font_cache_entries
           | :max_system_font_cache_entries
-
+          | :max_html_form_value_bytes
+          | :max_html_form_value_memory_bytes
+          | :max_html_form_value_timeout_ms
+          | :max_html_pattern_bytes
+          | :max_html_pattern_compile_work
+          | :max_html_pattern_depth
+          | :max_html_pattern_match_work
+          | :max_html_pattern_values
+          | :max_image_map_coordinates
+          | :max_image_map_geometry_work
   @typedoc "The complete validated resource-limit configuration."
   @type t :: %{required(key()) => pos_integer()}
 
@@ -257,6 +389,7 @@ defmodule NativeElixirPdfUtilities.Limits do
 
   @doc "Returns the effective resource limits loaded for this application instance."
   @spec effective() :: t()
+  @compile {:inline, effective: 0}
   def effective do
     :persistent_term.get(@persistent_key, @defaults)
   end

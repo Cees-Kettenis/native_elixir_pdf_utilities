@@ -1,0 +1,29 @@
+<!doctype html><html><head><style>
+@page {size:420pt 300pt;margin:12pt;}
+html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-height:16pt;}
+p {margin:0;}
+progress,meter {width:72pt;}
+</style></head><body>
+<p>Absent progress <progress></progress> after</p>
+<p>Empty progress <progress value=""></progress> after</p>
+<p>Numeric prefix <progress max="+2suffix" value=" .5tail"></progress> after</p>
+<p>Invalid maximum <progress max=-1 value=2></progress> after</p>
+<p>Exponent suffix <progress max="1.e3" value="5e2tail"></progress> after</p>
+<p>Finite extremes <meter min=-1e308 max=1e308 value=0></meter> after</p>
+<p>Missing meter <meter></meter> after</p>
+<p>Bad meter points <meter value=bad min=bad max=bad low=bad high=bad optimum=bad></meter> after</p>
+<!-- Numeric recovery and author box composition have separate print pages. -->
+<p style="break-before:page">High optimum <meter max=10 low=3 high=7 optimum=9 value=8></meter> after</p>
+<p>Boundary low <meter max=10 low=3 high=7 optimum=1 value=3></meter> after</p>
+<p>Boundary high <meter max=10 low=3 high=7 optimum=9 value=7></meter> after</p>
+<p>Author accent <progress value=.5 style="accent-color:purple"></progress> after</p>
+<p>Inherited accent <span style="accent-color:green"><progress value=.5></progress></span> after</p>
+<p>Author box <progress value=.5 style="background:red;border:2pt solid blue;padding:2pt;height:18pt;box-sizing:border-box"></progress> after</p>
+<p>Author inline <meter value=.5 style="display:inline;vertical-align:1pt"></meter> after</p>
+<div style="display:flex;gap:5pt"><span>Flex caption</span><progress value=.5></progress><meter value=.75></meter></div>
+<div style="display:grid;grid-template-columns:100pt 80pt 80pt"><span>Grid caption</span><progress value=.25></progress><meter value=.5></meter></div>
+<p style="break-before:page">Second page caption</p>
+<label for=p>Explicit label</label><progress id=p value=.3></progress><label>Implicit label <meter value=.6></meter></label>
+<p style="font-size:12pt;line-height:18pt">Automatic sizes <progress value=.5 style="width:auto;height:auto"></progress><meter value=.5 style="width:auto;height:auto"></meter> after</p>
+<p>After box cases</p>
+</body></html>

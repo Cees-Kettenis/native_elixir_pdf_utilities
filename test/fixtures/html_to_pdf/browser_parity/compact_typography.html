@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page {size:600pt 540pt;margin:0}
+html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
+#zero_font_size,#zero_font_size{margin:0;padding:0}
+#zero_font_size{font-family:'DejaVu Sans';font-size:12pt}
+#zero_font_size p{margin:0}
+#weight_inheritance,#weight_inheritance{margin:0;padding:0}
+#weight_inheritance{font-family:'DejaVu Sans';font-size:14pt;line-height:20pt}
+#weight_inheritance p{margin:0}
+#leading_decimal_lengths{ margin: 0; padding: .25in; font-family: "DejaVu Sans"; font-size: .25in; line-height: .375in; }
+#leading_decimal_lengths .sample{ width: 2in; padding: .125in; margin-bottom: .125in; border: .5px solid #223344; letter-spacing: .05em; }
+#leading_decimal_lengths .block{ width: .5in; height: .5in; margin-left: -.125in; background: #223344; }
+#whitespace_nowrap{ margin: 0; padding: 12pt; font-family: "DejaVu Sans"; font-size: 10pt; line-height: 15pt; }
+#whitespace_nowrap .sample{ width: 45pt; border: 0.75pt solid #334455; margin-bottom: 12pt; white-space: nowrap; }
+#ligature_letter_spacing{ margin: 0; font-family: 'DejaVu Sans'; font-size: 20pt; line-height: 28pt; }
+#ligature_letter_spacing div{ margin: 10pt; }
+#ligature_letter_spacing p{ margin: 0; letter-spacing: 4pt; }
+#ligature_letter_spacing .negative{ letter-spacing: -1pt; }
+#ligature_letter_spacing .normal{ letter-spacing: normal; }
+#quoted_variables,#quoted_variables{margin:0;padding:0}
+#quoted_variables{font-family:'DejaVu Sans';font-size:12pt}
+#quoted_variables p{margin:0}
+#quoted_variables p::before{content:"var(--missing)"}
+</style></head><body>
+<!-- zero_font_size.html, original canvas 240 x 160 pt -->
+<section id="zero_font_size" style="position:absolute;left:0pt;top:0pt;width:240pt;height:160pt;box-sizing:border-box"><p style="font-size:0">Hidden</p><p>Visible paragraph</p><p>Before <span style="font-size:0">hidden inline</span> after</p></section>
+<!-- weight_inheritance.html, original canvas 300 x 180 pt -->
+<section id="weight_inheritance" style="position:absolute;left:300pt;top:0pt;width:300pt;height:180pt;box-sizing:border-box"><div style="font-weight:700"><p>Inherited bold paragraph</p><section><p>Nested bold paragraph</p></section><p style="font-weight:400">Explicit normal paragraph</p></div></section>
+<!-- leading_decimal_lengths.html, original canvas 300 x 180 pt -->
+<section id="leading_decimal_lengths" style="position:absolute;left:0pt;top:180pt;width:300pt;height:180pt;box-sizing:border-box"><div class="sample">Decimal sizes</div><div class="block"></div></section>
+<!-- whitespace_nowrap.html, original canvas 300 x 180 pt -->
+<section id="whitespace_nowrap" style="position:absolute;left:300pt;top:180pt;width:300pt;height:180pt;box-sizing:border-box">
+<div class="sample">one <strong>two</strong> three four</div>
+<div class="sample" style="overflow-wrap: anywhere">long text stays on this line<br>explicit break remains</div>
+<div style="width: 90pt">ordinary words <span style="white-space: nowrap">unbroken phrase here</span></div>
+</section>
+<!-- ligature_letter_spacing.html, original canvas 240 x 180 pt -->
+<section id="ligature_letter_spacing" style="position:absolute;left:0pt;top:360pt;width:240pt;height:180pt;box-sizing:border-box"><div>
+  <p>ffi ffi ffi</p>
+  <p>office file</p>
+  <p>fluff afflict</p>
+  <p class="negative">office file</p>
+  <p class="normal">office file</p>
+</div></section>
+<!-- quoted_variables.html, original canvas 300 x 160 pt -->
+<section id="quoted_variables" style="position:absolute;left:300pt;top:360pt;width:300pt;height:160pt;box-sizing:border-box"><p></p></section>
+</body></html>

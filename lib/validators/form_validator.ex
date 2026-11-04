@@ -6,45 +6,96 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Validators.IncrementalValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
+  alias NativeElixirPdfUtilities.Validators.FormInspectionValidator
+  alias NativeElixirPdfUtilities.Validators.CollectionValidator
 
   @inherited ~w(FT Ff V DV DA Q Opt MaxLen)
   @typep walk_state :: %{fields: [map()], nodes: map(), seen: map(), widgets: map()}
 
   @doc false
+  @spec initial_choice_field(map()) :: %{
+          flags: non_neg_integer(),
+          value: binary() | [binary()] | nil,
+          indices: [non_neg_integer()],
+          listbox: boolean()
+        }
+  def initial_choice_field(selection) do
+    # PDF Combo and MultiSelect bits are fixed format invariants.
+    %{
+      flags:
+        if(selection.listbox, do: 0, else: 131_072) +
+          if(selection.multiple, do: 2_097_152, else: 0),
+      value:
+        cond do
+          selection.multiple -> selection.values
+          selection.selected_ids == [] -> nil
+          true -> selection.value
+        end,
+      indices: selection.selected_indices,
+      listbox: selection.listbox
+    }
+  end
+
+  @doc false
+  @spec password_display_text(String.t(), :style | :forms) ::
+          {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def password_display_text(value, stage \\ :forms) do
+    count = String.length(value)
+    # Bound the rendered bytes before allocating the grapheme masks. Form writes
+    # also reserve aggregate appearance bytes before reaching this helper.
+    if count * byte_size("•") <= Limits.get(:max_rendered_text_bytes) do
+      {:ok, String.duplicate("•", count)}
+    else
+      Diagnostics.error(
+        stage,
+        :resource_limit_exceeded,
+        "password display exceeds max_rendered_text_bytes; reduce the value",
+        module: __MODULE__
+      )
+    end
+  end
+
+  @doc false
   @spec inspect_document(PdfValidator.context()) :: {:ok, map()} | {:error, {atom(), map()}}
   def inspect_document(context) do
-    with {:ok, form} <-
-           PdfValidator.dictionary(context.document, Map.get(context.catalog, "AcroForm", %{})),
-         false <- Map.has_key?(form, "XFA"),
-         {:ok, roots} <- PdfValidator.resolve(context.document, Map.get(form, "Fields", [])),
-         true <- is_list(roots),
-         {:ok, widgets} <- page_widgets(context),
-         {:ok, state} <-
-           walk(context.document, roots, Map.take(form, @inherited), "", 0, %{
-             fields: [],
-             nodes: %{},
-             seen: %{},
-             widgets: widgets
-           }),
-         fields <- Enum.reverse(state.fields),
-         true <- length(Enum.uniq_by(fields, & &1.name)) == length(fields) do
-      {:ok, %{form: form, roots: roots, fields: fields, nodes: state.nodes}}
-    else
-      true ->
-        error(:unsupported_form, "XFA forms are unsupported; supply an AcroForm PDF")
+    FormInspectionValidator.with_scope(context.document, fn ->
+      with {:ok, form_value} <-
+             PdfValidator.optional_entry(context.document, context.catalog, "AcroForm", %{}),
+           {:ok, form} <- PdfValidator.dictionary(context.document, form_value),
+           false <- Map.has_key?(form, "XFA"),
+           {:ok, roots} <- PdfValidator.resolve(context.document, Map.get(form, "Fields", [])),
+           true <- is_list(roots),
+           {:ok, widgets} <- page_widgets(context),
+           {:ok, state} <-
+             walk(context.document, roots, Map.take(form, @inherited), "", 0, %{
+               fields: [],
+               nodes: %{},
+               seen: %{},
+               widgets: widgets
+             }),
+           fields <- Enum.reverse(state.fields),
+           true <- length(Enum.uniq_by(fields, & &1.name)) == length(fields) do
+        {:ok, %{form: form, roots: roots, fields: fields, nodes: state.nodes}}
+      else
+        true ->
+          error(:unsupported_form, "XFA forms are unsupported; supply an AcroForm PDF")
 
-      false ->
-        error(:invalid_form, "AcroForm Fields must be an array with unique fully qualified names")
+        false ->
+          error(
+            :invalid_form,
+            "AcroForm Fields must be an array with unique fully qualified names"
+          )
 
-      {:error, _} = failure ->
-        failure
-    end
+        {:error, _} = failure ->
+          failure
+      end
+    end)
   end
 
   @doc false
   @spec options(term(), :fill | :flatten) :: {:ok, map()} | {:error, {atom(), map()}}
   def options(opts, operation) do
-    allowed = if operation == :fill, do: [:flatten], else: [:fields]
+    allowed = if operation == :fill, do: [:flatten, :appearance], else: [:fields]
 
     cond do
       not Keyword.keyword?(opts) ->
@@ -57,11 +108,22 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       operation == :fill and not is_boolean(Keyword.get(opts, :flatten, false)) ->
         error(:invalid_options, "flatten must be a boolean")
 
-      operation == :flatten and
-          not (Keyword.get(opts, :fields, :all) == :all or
-                   (is_list(opts[:fields]) and Enum.all?(opts[:fields], &is_binary/1) and
-                      length(Enum.uniq(opts[:fields])) == length(opts[:fields]))) ->
-        error(:invalid_options, "fields must be :all or a list of unique field names")
+      operation == :fill and Keyword.get(opts, :appearance, :fit) not in [:fit, :source] ->
+        error(:invalid_options, "appearance must be :fit or :source")
+
+      operation == :flatten and Keyword.get(opts, :fields, :all) != :all ->
+        with {:ok, count} <-
+               CollectionValidator.bounded_length(opts[:fields], Limits.get(:max_pdf_form_fields)),
+             true <- Enum.all?(opts[:fields], &is_binary/1),
+             true <- length(Enum.uniq(opts[:fields])) == count do
+          {:ok, Map.new(opts)}
+        else
+          :limit_exceeded ->
+            error(:resource_limit_exceeded, "field selection exceeds max_pdf_form_fields")
+
+          _ ->
+            error(:invalid_options, "fields must be :all or a list of unique field names")
+        end
 
       true ->
         {:ok, Map.new(opts)}
@@ -84,62 +146,97 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   @spec prepare_write(map(), map(), map(), map(), :fill | :flatten) ::
           {:ok, [map()]} | {:error, {atom(), map()}}
   def prepare_write(context, form, values, opts, operation) do
-    selected =
-      case operation do
-        :fill ->
-          Map.keys(values)
+    FormInspectionValidator.with_scope(context.document, fn ->
+      selected =
+        case operation do
+          :fill ->
+            Map.keys(values)
 
-        :flatten ->
-          case Map.get(opts, :fields, :all) do
-            :all -> Enum.map(form.fields, & &1.name)
-            fields -> fields
-          end
-      end
-
-    names = MapSet.new(Enum.map(form.fields, & &1.name))
-
-    with :ok <- NativeElixirPdfUtilities.Validators.ModificationValidator.validate(context) do
-      cond do
-        Enum.any?(selected, &(not MapSet.member?(names, &1))) ->
-          error(
-            :unknown_form_field,
-            "unknown field name; inspect Forms.fields/1 for available names"
-          )
-
-        true ->
-          additional = if operation == :fill and Map.get(opts, :flatten, false), do: 2, else: 1
-
-          with :ok <-
-                 if(selected == [],
-                   do: :ok,
-                   else: IncrementalValidator.validate_revision_capacity(context, additional)
-                 ) do
-            Enum.filter(form.fields, &(&1.name in selected))
-            |> Enum.reduce_while({:ok, [], 0, 0}, fn field, {:ok, acc, count, bytes} ->
-              value = Map.get(values, field.name, field.value)
-
-              with :ok <- writable(field, operation),
-                   {:ok, value} <-
-                     if(operation == :flatten, do: {:ok, value}, else: field_value(field, value)),
-                   {:ok, count, bytes} <-
-                     reserve_appearances(field, value, operation, count, bytes),
-                   {:ok, appearances} <- prepare_appearances(field, value, operation),
-                   :ok <- button_appearances(context.document, field) do
-                {:cont,
-                 {:ok, [Map.merge(field, %{new_value: value, appearances: appearances}) | acc],
-                  count, bytes}}
-              else
-                {:error, {reason, diagnostic}} ->
-                  {:halt, {:error, {reason, Map.put(diagnostic, :source, field.name)}}}
-              end
-            end)
-            |> case do
-              {:ok, fields, _count, _bytes} -> {:ok, Enum.reverse(fields)}
-              failure -> failure
+          :flatten ->
+            case Map.get(opts, :fields, :all) do
+              :all -> Enum.map(form.fields, & &1.name)
+              fields -> fields
             end
-          end
+        end
+
+      selected = MapSet.new(selected)
+      names = MapSet.new(Enum.map(form.fields, & &1.name))
+
+      legacy_svg? =
+        Enum.any?(context.document.objects, fn {_ref, object} ->
+          is_map(object.value) and
+            Enum.any?(
+              ~w(NEPUEffectProgram NEPUEffectRegion NEPUSvgEditLeaf),
+              &Map.has_key?(object.value, &1)
+            )
+        end) or
+          Enum.any?(form.fields, fn field ->
+            Enum.any?(field.widgets, &Map.has_key?(&1.dictionary, "NEPUEffectKey"))
+          end)
+
+      with :ok <- NativeElixirPdfUtilities.Validators.ModificationValidator.validate(context) do
+        cond do
+          Enum.any?(selected, &(not MapSet.member?(names, &1))) ->
+            error(
+              :unknown_form_field,
+              "unknown field name; inspect Forms.fields/1 for available names"
+            )
+
+          true ->
+            additional = if operation == :fill and Map.get(opts, :flatten, false), do: 2, else: 1
+
+            with :ok <-
+                   if(MapSet.size(selected) == 0,
+                     do: :ok,
+                     else: IncrementalValidator.validate_revision_capacity(context, additional)
+                   ) do
+              Enum.filter(form.fields, &MapSet.member?(selected, &1.name))
+              |> Enum.reduce_while({:ok, [], 0, 0}, fn field, {:ok, acc, count, bytes} ->
+                value = Map.get(values, field.name, field.value)
+
+                with :ok <- writable(field, operation, legacy_svg?),
+                     {:ok, value} <-
+                       if(operation == :flatten,
+                         do: {:ok, value},
+                         else: field_value(field, value)
+                       ),
+                     {:ok, count, bytes} <-
+                       reserve_appearances(field, value, operation, count, bytes),
+                     {:ok, appearances} <-
+                       prepare_appearances(
+                         field,
+                         value,
+                         operation,
+                         Map.get(opts, :appearance, :fit)
+                       ),
+                     :ok <- button_appearances(context.document, field) do
+                  {:cont,
+                   {:ok,
+                    [
+                      Map.merge(field, %{
+                        new_value: value,
+                        widgets:
+                          if(operation == :fill,
+                            do: prepare_fill_widgets(field, value),
+                            else: field.widgets
+                          ),
+                        appearances: appearances
+                      })
+                      | acc
+                    ], count, bytes}}
+                else
+                  {:error, {reason, diagnostic}} ->
+                    {:halt, {:error, {reason, Map.put(diagnostic, :source, field.name)}}}
+                end
+              end)
+              |> case do
+                {:ok, fields, _count, _bytes} -> {:ok, Enum.reverse(fields)}
+                failure -> failure
+              end
+            end
+        end
       end
-    end
+    end)
   end
 
   @doc false
@@ -166,8 +263,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   end
 
   @doc false
-  @spec prepare_flatten(map(), [map()]) :: {:ok, [map()]} | {:error, {atom(), map()}}
-  def prepare_flatten(context, fields) do
+  @spec prepare_flatten(map(), [map()], map() | nil) :: {:ok, [map()]} | {:error, {atom(), map()}}
+  def prepare_flatten(context, fields, _form \\ nil) do
     Enum.flat_map(fields, & &1.widgets)
     |> Enum.reduce_while({:ok, []}, fn widget, {:ok, acc} ->
       page = Enum.at(context.pages, widget.page - 1)
@@ -177,7 +274,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
              PdfValidator.dictionary(context.document, Map.get(resources, "XObject", %{})),
            {:ok, contents} <- PdfValidator.content_references(context.document, page.dictionary),
            {:ok, annots} <-
-             PdfValidator.resolve(context.document, Map.get(page.dictionary, "Annots", [])),
+             PdfValidator.optional_entry(context.document, page.dictionary, "Annots", []),
            {:ok, placement} <-
              flatten_placement(context.document, widget, %{
                widget: widget,
@@ -209,6 +306,36 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   end
 
+  @doc "Prepares a canonically validated ordered static native appearance using the shared AP placement rule."
+  @spec prepare_static_placement(map(), map()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_static_placement(context, static) do
+    with {:ok, resources} <-
+           PdfValidator.dictionary(context.document, static.page.resources || %{}),
+         {:ok, xobjects} <-
+           PdfValidator.dictionary(context.document, Map.get(resources, "XObject", %{})),
+         {:ok, contents} <-
+           PdfValidator.content_references(context.document, static.page.dictionary) do
+      widget = %{
+        ref: static.ref,
+        dictionary: static.dictionary,
+        page: static.page_index,
+        rect: static.rect,
+        ap: static.ap,
+        normal: static.normal,
+        states: [],
+        hidden: hidden_flags(static.flags)
+      }
+
+      flatten_placement(context.document, widget, %{
+        widget: widget,
+        page: static.page,
+        resources: Map.put(resources, "XObject", xobjects),
+        contents: contents,
+        annots: static.annots
+      })
+    end
+  end
+
   # Hidden and NoView suppress screen artwork. Print does not affect this policy.
   defp flatten_placement(document, widget, placement) do
     if widget.hidden do
@@ -219,13 +346,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       normal =
         if widget.states == [],
           do: normal,
-          else:
-            widget.normal[
-              case widget.dictionary["AS"] do
-                {:name, name} -> name
-                _ -> "Off"
-              end
-            ]
+          else: widget.normal[widget.appearance_state]
 
       with {:ok, stream} <- PdfValidator.validate_stream(document, normal),
            {:ok, bbox} <- PdfValidator.number_array(document, stream.dictionary["BBox"], 4),
@@ -249,17 +370,51 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         if width > 0 and height > 0 do
           sx = (right - left) / width
           sy = (top - bottom) / height
+          placement_matrix = [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
+          composed = PdfValidator.multiply_matrices(placement_matrix, matrix)
+          [combined_a, combined_b, combined_c, combined_d, _, _] = composed
 
-          {:ok,
-           Map.merge(placement, %{
-             stream: stream.ref,
-             matrix: [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
-           })}
+          if sx > 0 and sy > 0 and (combined_a != 0 or combined_b != 0) and
+               (combined_c != 0 or combined_d != 0) do
+            case PdfValidator.validate_geometry_numbers(placement_matrix ++ composed) do
+              :ok ->
+                {:ok,
+                 Map.merge(placement, %{
+                   stream: stream.ref,
+                   matrix: placement_matrix
+                 })}
+
+              failure ->
+                appearance_geometry_error(widget, failure)
+            end
+          else
+            appearance_geometry_error(widget)
+          end
         else
           error(:unsupported_form, "appearance has a degenerate BBox or Matrix")
         end
       end
     end
+  rescue
+    ArithmeticError -> appearance_geometry_error(widget)
+  end
+
+  defp appearance_geometry_error(widget, failure \\ nil) do
+    {reason, detail} =
+      case failure do
+        {:error, {:resource_limit_exceeded, diagnostic}} ->
+          {:resource_limit_exceeded, diagnostic.message}
+
+        _ ->
+          {:invalid_form, "values must remain representable within max_pdf_numeric_magnitude"}
+      end
+
+    source = "widget #{inspect(widget.ref)} on page #{widget.page}"
+
+    Diagnostics.error(:forms, reason, "appearance geometry for #{source}: #{detail}",
+      source: source,
+      module: __MODULE__
+    )
   end
 
   defp page_widgets(context) do
@@ -267,13 +422,22 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, %{}}, fn {page, number}, {:ok, acc} ->
       with {:ok, annots} <-
-             PdfValidator.resolve(context.document, Map.get(page.dictionary, "Annots", [])),
+             PdfValidator.optional_entry(context.document, page.dictionary, "Annots", []),
            true <- is_list(annots) do
-        {:cont,
-         {:ok,
-          Enum.reduce(annots, acc, fn value, acc ->
-            Map.update(acc, value, [number], &[number | &1])
-          end)}}
+        with :ok <-
+               FormInspectionValidator.reserve(
+                 :max_pdf_form_preparation_entries,
+                 length(annots),
+                 "Annots"
+               ) do
+          {:cont,
+           {:ok,
+            Enum.reduce(annots, acc, fn value, acc ->
+              Map.update(acc, value, [number], &[number | &1])
+            end)}}
+        else
+          error -> {:halt, error}
+        end
       else
         false -> {:halt, error(:invalid_form, "page Annots must be an array")}
         {:error, _} = failure -> {:halt, failure}
@@ -303,14 +467,17 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
             true ->
               with {:ok, dictionary} <- PdfValidator.dictionary(document, ref),
-                   {:ok, partial} <- text(Map.get(dictionary, "T", {:string, ""})),
+                   {:ok, partial_value} <-
+                     PdfValidator.optional_entry(document, dictionary, "T", {:string, ""}),
+                   {:ok, partial} <- text(partial_value),
                    {:ok, kids} <- PdfValidator.resolve(document, Map.get(dictionary, "Kids", [])),
                    true <-
                      is_list(kids) and
                        length(kids) + 1 + map_size(state.seen) <=
                          Limits.get(:max_pdf_form_fields),
-                   {:ok, child_dicts} <- resolve_children(document, kids) do
-                name = Enum.reject([prefix, partial], &(&1 == "")) |> Enum.join(".")
+                   {:ok, child_dicts, terminals} <- resolve_children(document, kids),
+                   {:ok, subtype} <- PdfValidator.resolve(document, dictionary["Subtype"]),
+                   {:ok, name} <- prepare_field_name(prefix, partial) do
                 effective = Map.merge(inherited, Map.take(dictionary, @inherited))
 
                 state = %{
@@ -319,17 +486,12 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                     nodes: Map.put(state.nodes, ref, Map.put(dictionary, "Kids", kids))
                 }
 
-                terminals =
-                  Enum.all?(child_dicts, fn {_ref, child} ->
-                    child["Subtype"] == {:name, "Widget"} and not Map.has_key?(child, "T")
-                  end)
-
                 result =
                   if kids != [] and not terminals do
                     walk(document, kids, effective, name, depth + 1, state)
                   else
                     widgets =
-                      if dictionary["Subtype"] == {:name, "Widget"},
+                      if subtype == {:name, "Widget"},
                         do: [{ref, dictionary}],
                         else: child_dicts
 
@@ -378,24 +540,50 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   end
 
+  defp prepare_field_name(prefix, partial) do
+    bytes =
+      byte_size(prefix) + byte_size(partial) + if(prefix != "" and partial != "", do: 1, else: 0)
+
+    if bytes > Limits.get(:max_pdf_form_text_bytes) do
+      error(:resource_limit_exceeded, "field name exceeds max_pdf_form_text_bytes")
+    else
+      with :ok <- FormInspectionValidator.reserve(:max_pdf_form_metadata_bytes, bytes, partial) do
+        {:ok, Enum.reject([prefix, partial], &(&1 == "")) |> Enum.join(".")}
+      end
+    end
+  end
+
   defp resolve_children(document, refs) do
-    Enum.reduce_while(refs, {:ok, []}, fn ref, {:ok, children} ->
-      case PdfValidator.dictionary(document, ref) do
-        {:ok, dictionary} -> {:cont, {:ok, [{ref, dictionary} | children]}}
+    Enum.reduce_while(refs, {:ok, [], true}, fn ref, {:ok, children, terminals} ->
+      with {:ok, dictionary} <- PdfValidator.dictionary(document, ref),
+           {:ok, subtype} <- PdfValidator.resolve(document, dictionary["Subtype"]) do
+        terminal = subtype == {:name, "Widget"} and not Map.has_key?(dictionary, "T")
+        {:cont, {:ok, [{ref, dictionary} | children], terminals and terminal}}
+      else
         failure -> {:halt, failure}
       end
     end)
     |> case do
-      {:ok, children} -> {:ok, Enum.reverse(children)}
+      {:ok, children, terminals} -> {:ok, Enum.reverse(children), terminals}
       failure -> failure
     end
   end
 
   defp prepare_field(document, ref, dictionary, effective, name, widget_dicts, page_widgets) do
-    flags = Map.get(effective, "Ff", 0)
+    resolved_metadata =
+      effective
+      |> Map.take(~w(FT Ff Q MaxLen))
+      |> Enum.reduce_while({:ok, effective}, fn {key, value}, {:ok, metadata} ->
+        case PdfValidator.resolve(document, value) do
+          {:ok, resolved} -> {:cont, {:ok, Map.put(metadata, key, resolved)}}
+          {:error, _} = failure -> {:halt, failure}
+        end
+      end)
 
-    with true <- name != "" and is_integer(flags) and flags >= 0,
-         :ok <- field_metadata(name, effective),
+    with {:ok, effective} <- resolved_metadata,
+         flags = Map.get(effective, "Ff", 0),
+         true <- name != "" and is_integer(flags) and flags >= 0,
+         :ok <- field_metadata(effective),
          {:ok, choices} <- choices(document, Map.get(effective, "Opt", [])),
          {:ok, widgets} <- widgets(document, widget_dicts, page_widgets),
          type <-
@@ -419,7 +607,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
               _ ->
                 :unsupported
             end),
-         {:ok, value} <- read_value(document, Map.get(effective, "V"), type) do
+         {:ok, value} <- read_value(document, Map.get(effective, "V"), type),
+         :ok <-
+           FormInspectionValidator.reserve(
+             :max_pdf_form_metadata_bytes,
+             if(is_binary(value), do: byte_size(value), else: 0),
+             name
+           ) do
       value = if type == :checkbox, do: value not in [nil, "Off"], else: value
 
       {:ok,
@@ -444,15 +638,37 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   end
 
-  defp field_metadata(name, effective) do
+  defp field_metadata(effective) do
     cond do
-      byte_size(name) > Limits.get(:max_pdf_form_text_bytes) ->
-        error(:resource_limit_exceeded, "field name exceeds max_pdf_form_text_bytes")
-
       Map.get(effective, "Q", 0) not in [0, 1, 2] ->
         error(:invalid_form, "field Q alignment must be 0, 1 or 2")
 
       true ->
+        :ok
+    end
+  end
+
+  defp reserve_state_metadata(normal) do
+    case normal do
+      %{"Subtype" => {:name, "Form"}} ->
+        :ok
+
+      states when is_map(states) ->
+        with :ok <-
+               FormInspectionValidator.reserve(
+                 :max_pdf_form_preparation_entries,
+                 map_size(states),
+                 "AP"
+               ),
+             :ok <-
+               FormInspectionValidator.reserve(
+                 :max_pdf_form_metadata_bytes,
+                 Enum.reduce(states, 0, fn {name, _}, bytes -> bytes + byte_size(name) end),
+                 "AP"
+               ),
+             do: :ok
+
+      _ ->
         :ok
     end
   end
@@ -467,9 +683,17 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
            {:ok, rect} <- PdfValidator.number_array(document, dictionary["Rect"], 4),
            [left, bottom, right, top] <- rect,
            true <- right > left and top > bottom,
+           {:ok, {:name, appearance_state}} <-
+             PdfValidator.optional_entry(document, dictionary, "AS", {:name, "Off"}),
            {:ok, ap} <- PdfValidator.dictionary(document, Map.get(dictionary, "AP", %{})),
            {:ok, normal} <- PdfValidator.resolve(document, Map.get(ap, "N")),
-           {:ok, mk} <- PdfValidator.dictionary(document, Map.get(dictionary, "MK", %{})) do
+           :ok <- reserve_state_metadata(normal),
+           {:ok, mk} <- PdfValidator.dictionary(document, Map.get(dictionary, "MK", %{})),
+           {:ok, source_editor} <-
+             NativeElixirPdfUtilities.Validators.FormAppearanceValidator.prepare(
+               document,
+               Map.get(dictionary, "NEPUSourceEditor")
+             ) do
         states =
           case normal do
             normal when is_map(normal) ->
@@ -482,19 +706,24 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         widget = %{
           ref: ref,
           dictionary: dictionary,
-          hidden: (flags &&& (2 ||| 32)) != 0,
+          hidden: hidden_flags(flags),
           page: page,
           rect: rect,
           ap: ap,
+          appearance_state: appearance_state,
           states: states,
           normal: normal,
-          mk: mk
+          mk: mk,
+          source_editor: source_editor
         }
 
         {:cont, {:ok, [widget | acc]}}
       else
         {:error, _} = failure ->
           {:halt, failure}
+
+        {:ok, _} ->
+          {:halt, error(:invalid_form, "widget AS appearance state must be a PDF name")}
 
         _ ->
           {:halt,
@@ -513,18 +742,32 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   defp choices(document, value) do
     with {:ok, values} <- PdfValidator.resolve(document, value), true <- is_list(values) do
       Enum.reduce_while(values, {:ok, []}, fn value, {:ok, choices} ->
-        pair =
-          case value do
-            [export, display] -> {export, display}
-            text -> {text, text}
-          end
-
-        with {:ok, export} <- text(elem(pair, 0)), {:ok, display} <- text(elem(pair, 1)) do
-          {:cont, {:ok, choices ++ [%{value: export, label: display}]}}
+        with :ok <- FormInspectionValidator.reserve(:max_pdf_form_preparation_entries, 1, "Opt"),
+             {:ok, value} <- PdfValidator.resolve(document, value),
+             {export, display} =
+               (case value do
+                  [export, display] -> {export, display}
+                  text -> {text, text}
+                end),
+             {:ok, export} <- PdfValidator.resolve(document, export),
+             {:ok, export} <- text(export),
+             {:ok, display} <- PdfValidator.resolve(document, display),
+             {:ok, display} <- text(display),
+             :ok <-
+               FormInspectionValidator.reserve(
+                 :max_pdf_form_metadata_bytes,
+                 byte_size(export) + byte_size(display),
+                 "Opt"
+               ) do
+          {:cont, {:ok, [%{value: export, label: display} | choices]}}
         else
           failure -> {:halt, failure}
         end
       end)
+      |> case do
+        {:ok, choices} -> {:ok, Enum.reverse(choices)}
+        failure -> failure
+      end
     else
       false -> error(:invalid_form, "choice Opt must be an array")
       {:error, _} = failure -> failure
@@ -551,13 +794,25 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
             {:choice, values} when is_list(values) ->
               Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
-                with {:ok, value} <- PdfValidator.resolve(document, value),
-                     {:ok, value} <- text(value) do
-                  {:cont, {:ok, acc ++ [value]}}
+                with :ok <-
+                       FormInspectionValidator.reserve(:max_pdf_form_preparation_entries, 1, "V"),
+                     {:ok, value} <- PdfValidator.resolve(document, value),
+                     {:ok, value} <- text(value),
+                     :ok <-
+                       FormInspectionValidator.reserve(
+                         :max_pdf_form_metadata_bytes,
+                         byte_size(value),
+                         "V"
+                       ) do
+                  {:cont, {:ok, [value | acc]}}
                 else
                   failure -> {:halt, failure}
                 end
               end)
+              |> case do
+                {:ok, values} -> {:ok, Enum.reverse(values)}
+                failure -> failure
+              end
 
             {:unsupported, value} when is_map(value) ->
               {:ok, value}
@@ -585,7 +840,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   end
 
-  defp writable(field, operation) do
+  defp writable(field, operation, legacy_svg?) do
     cond do
       field.type not in [:text, :checkbox, :radio, :choice] ->
         error(:unsupported_form, "this field type is unsupported")
@@ -593,8 +848,14 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       operation == :fill and field.read_only ->
         error(:read_only_form_field, "read-only fields cannot be filled")
 
-      field.type == :text and (field.flags &&& (8192 ||| 16_777_216 ||| 33_554_432)) != 0 ->
-        error(:unsupported_form, "password, comb and rich-text fields are unsupported")
+      legacy_svg? ->
+        error(
+          :unsupported_form,
+          "this PDF contains legacy custom SVG appearance programs that are no longer executed; recreate its fields using ordinary HTML or a supported SVG converter output"
+        )
+
+      field.type == :text and (field.flags &&& (16_777_216 ||| 33_554_432)) != 0 ->
+        error(:unsupported_form, "comb and rich-text fields are unsupported")
 
       field.type == :choice and (field.flags &&& 262_144) != 0 ->
         error(:unsupported_form, "editable combo boxes are unsupported")
@@ -679,7 +940,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
       :choice ->
         values = if is_list(value), do: value, else: [value]
-        allowed = Enum.map(field.choices, & &1.value)
+        allowed = MapSet.new(field.choices, & &1.value)
 
         cond do
           value == nil ->
@@ -688,12 +949,42 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           is_list(value) and (field.flags &&& 2_097_152) == 0 ->
             error(:invalid_form_value, "choice permits only one selection")
 
-          length(values) != length(Enum.uniq(values)) or not Enum.all?(values, &(&1 in allowed)) ->
+          not match?({:ok, _}, CollectionValidator.bounded_length(values, MapSet.size(allowed))) or
+            length(values) != length(Enum.uniq(values)) or
+              not Enum.all?(values, &MapSet.member?(allowed, &1)) ->
             error(:invalid_form_value, "choice values must match distinct declared export values")
 
           true ->
             {:ok, value}
         end
+    end
+  end
+
+  defp prepare_fill_widgets(field, value) do
+    case field.type do
+      :checkbox ->
+        Enum.map(field.widgets, fn widget ->
+          state = if value, do: Enum.find(widget.states, &(&1 != "Off")), else: "Off"
+          Map.put(widget, :new_state, state)
+        end)
+
+      :radio ->
+        in_unison? = (field.flags &&& 33_554_432) != 0
+
+        # Preserve an existing matching selection; otherwise choose the first
+        # matching widget in field order. RadiosInUnison permits all matches.
+        selected =
+          Enum.find(field.widgets, fn widget ->
+            value in widget.states and widget.appearance_state == value
+          end) || Enum.find(field.widgets, &(value in &1.states))
+
+        Enum.map(field.widgets, fn widget ->
+          on? = value in widget.states and (in_unison? or widget.ref == selected.ref)
+          Map.put(widget, :new_state, if(on?, do: value, else: "Off"))
+        end)
+
+      _ ->
+        field.widgets
     end
   end
 
@@ -703,11 +994,15 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     text_bytes =
       case {operation, field.type} do
         {:fill, :text} ->
-          byte_size(value)
+          if (field.flags &&& 8192) != 0,
+            do: String.length(value) * byte_size("•"),
+            else: byte_size(value)
 
         {:fill, :choice} ->
+          selected = MapSet.new(List.wrap(value))
+
           Enum.reduce(field.choices, 0, fn choice, total ->
-            if choice.value in List.wrap(value),
+            if (field.flags &&& 131_072) == 0 or MapSet.member?(selected, choice.value),
               do: total + byte_size(choice.label) + 1,
               else: total
           end)
@@ -728,84 +1023,155 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
          )
   end
 
-  defp prepare_appearances(field, value, operation) do
+  defp prepare_appearances(field, value, operation, appearance) do
     if operation == :flatten or field.type in [:checkbox, :radio] do
       {:ok, []}
     else
-      with {:ok, registry} <- Font.load_registry(system_font_discovery: false),
-           {:ok, _, font} <- Font.resolve("DejaVu Sans", 400, :normal, registry) do
-        field.widgets
-        |> Enum.reduce_while({:ok, []}, fn widget, {:ok, pages} ->
-          [left, bottom, right, top] = widget.rect
-          width = right - left
-          height = top - bottom
-
-          text =
-            case field.type do
-              :text ->
-                value
-
-              :choice ->
-                field.choices
-                |> Enum.filter(&(&1.value in List.wrap(value)))
-                |> Enum.map_join("\n", & &1.label)
-            end
-
-          lines = String.split(String.replace(text, "\r\n", "\n"), "\n")
-          max_width = Enum.map(lines, &Font.text_width(&1, font, 1.0)) |> Enum.max(fn -> 0 end)
-
-          size =
-            min(
-              12.0,
-              min((height - 4) / max(length(lines) * 1.2, 1), (width - 4) / max(max_width, 0.001))
-            )
-
-          cond do
-            size <= 0 ->
-              {:halt, error(:unsupported_form, "widget is too small to draw an appearance")}
-
-            not Enum.all?(lines, &Font.supports_text?(font, &1)) ->
-              {:halt,
-               error(
-                 :unsupported_form,
-                 "value contains glyphs unsupported by the bundled appearance font"
-               )}
-
-            true ->
-              boxes =
-                lines
-                |> Enum.with_index()
-                |> Enum.reject(fn {line, _index} -> line == "" end)
-                |> Enum.map(fn {line, index} ->
-                  %{
-                    type: :text,
-                    text: line,
-                    x:
-                      case Map.get(field.effective, "Q", 0) do
-                        0 -> 2.0
-                        1 -> (width - Font.text_width(line, font, size)) / 2
-                        2 -> width - 2.0 - Font.text_width(line, font, size)
-                      end,
-                    y: height - 2 - size - index * size * 1.2,
-                    font_size: size,
-                    font: Font.pdf_name(font),
-                    font_face: font,
-                    color: {0, 0, 0}
-                  }
-                end)
-
-              {:cont, {:ok, [%{size: {width, height}, boxes: boxes} | pages]}}
-          end
-        end)
-        |> case do
-          {:ok, pages} -> {:ok, Enum.reverse(pages)}
-          failure -> failure
-        end
+      if field.type == :choice and (field.flags &&& 131_072) == 0 do
+        prepare_list_box_appearances(field, value, appearance)
       else
-        _ -> error(:unsupported_form, "bundled appearance font could not be loaded")
+        if appearance == :source and
+             Enum.all?(
+               field.widgets,
+               &(not is_nil(&1.source_editor))
+             ) do
+          Enum.reduce_while(field.widgets, {:ok, []}, fn widget, {:ok, frames} ->
+            case NativeElixirPdfUtilities.Validators.FormAppearanceValidator.appearance(
+                   field,
+                   widget.source_editor,
+                   value
+                 ) do
+              {:ok, frame} -> {:cont, {:ok, [frame | frames]}}
+              error -> {:halt, error}
+            end
+          end)
+          |> case do
+            {:ok, frames} -> {:ok, Enum.reverse(frames)}
+            error -> error
+          end
+        else
+          with {:ok, registry} <- Font.load_registry(system_font_discovery: false),
+               {:ok, _, font} <- Font.resolve("DejaVu Sans", 400, :normal, registry) do
+            field.widgets
+            |> Enum.reduce_while({:ok, []}, fn widget, {:ok, pages} ->
+              [left, bottom, right, top] = widget.rect
+              width = right - left
+              height = top - bottom
+
+              text =
+                case field.type do
+                  :text ->
+                    if (field.flags &&& 8192) != 0,
+                      do: password_display_text(value),
+                      else: {:ok, value}
+
+                  :choice ->
+                    field.choices
+                    |> Enum.filter(&(&1.value in List.wrap(value)))
+                    |> Enum.map_join("\n", & &1.label)
+                    |> then(&{:ok, &1})
+                end
+
+              with {:ok, text} <- text do
+                lines = String.split(String.replace(text, "\r\n", "\n"), "\n")
+
+                max_width =
+                  Enum.map(lines, &Font.text_width(&1, font, 1.0)) |> Enum.max(fn -> 0 end)
+
+                size =
+                  min(
+                    12.0,
+                    min(
+                      (height - 4) / max(length(lines) * 1.2, 1),
+                      (width - 4) / max(max_width, 0.001)
+                    )
+                  )
+
+                cond do
+                  size <= 0 ->
+                    {:halt, error(:unsupported_form, "widget is too small to draw an appearance")}
+
+                  not Enum.all?(lines, &Font.supports_text?(font, &1)) ->
+                    {:halt,
+                     error(
+                       :unsupported_form,
+                       "value contains glyphs unsupported by the bundled appearance font"
+                     )}
+
+                  true ->
+                    boxes =
+                      lines
+                      |> Enum.with_index()
+                      |> Enum.reject(fn {line, _index} -> line == "" end)
+                      |> Enum.map(fn {line, index} ->
+                        %{
+                          type: :text,
+                          text: line,
+                          x:
+                            case Map.get(field.effective, "Q", 0) do
+                              0 -> 2.0
+                              1 -> (width - Font.text_width(line, font, size)) / 2
+                              2 -> width - 2.0 - Font.text_width(line, font, size)
+                            end,
+                          y: height - 2 - size - index * size * 1.2,
+                          font_size: size,
+                          font: Font.pdf_name(font),
+                          font_face: font,
+                          color: {0, 0, 0}
+                        }
+                      end)
+
+                    {:cont, {:ok, [%{size: {width, height}, boxes: boxes} | pages]}}
+                end
+              else
+                {:error, _} = error -> {:halt, error}
+              end
+            end)
+            |> case do
+              {:ok, pages} -> {:ok, Enum.reverse(pages)}
+              failure -> failure
+            end
+          else
+            _ -> error(:unsupported_form, "bundled appearance font could not be loaded")
+          end
+        end
       end
     end
   end
+
+  defp prepare_list_box_appearances(field, value, appearance) do
+    with {:ok, registry} <- Font.load_registry(system_font_discovery: false),
+         {:ok, _, font} <- Font.resolve("DejaVu Sans", 400, :normal, registry) do
+      Enum.reduce_while(field.widgets, {:ok, []}, fn widget, {:ok, frames} ->
+        source? = appearance == :source and not is_nil(widget.source_editor)
+
+        with {:ok, editor} <-
+               NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidator.prepare_editor(
+                 field,
+                 widget,
+                 font,
+                 source?
+               ),
+             {:ok, frame} <-
+               NativeElixirPdfUtilities.Validators.FormAppearanceValidator.appearance(
+                 field,
+                 editor,
+                 value
+               ) do
+          {:cont, {:ok, [frame | frames]}}
+        else
+          error -> {:halt, error}
+        end
+      end)
+      |> case do
+        {:ok, frames} -> {:ok, Enum.reverse(frames)}
+        error -> error
+      end
+    end
+  end
+
+  # The same screen policy governs widgets and ordered static native appearances.
+  defp hidden_flags(flags), do: (flags &&& (2 ||| 32)) != 0
 
   defp error(reason, message), do: Diagnostics.error(:forms, reason, message)
 end

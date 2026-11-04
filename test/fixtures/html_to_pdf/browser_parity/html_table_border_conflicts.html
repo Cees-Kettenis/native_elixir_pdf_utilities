@@ -1,0 +1,8 @@
+<!doctype html><html><head><style>
+@page{size:280pt 340pt;margin:12pt}html,body{margin:0;padding:0}body{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}p{margin:0 0 6pt}table{width:240pt;table-layout:fixed;border-collapse:collapse;margin:0 0 10pt}td{height:24pt;padding:0;border:1px solid #888}col{width:50%}
+</style></head><body>
+<p>Width then style then left tie</p><table><colgroup><col><col></colgroup><tr><td style="border-right:2pt double red">Narrow double</td><td style="border-left:4pt dotted blue">Wider dotted</td></tr><tr><td style="border-right:3pt solid red">Equal solid</td><td style="border-left:3pt double blue">Equal double</td></tr><tr><td style="border-right:3pt solid red">Left red wins</td><td style="border-left:3pt solid blue">Right blue loses</td></tr></table>
+<p>Hidden suppresses shared and outer borders</p><table style="border:6pt solid red"><colgroup><col><col></colgroup><tr><td style="border-left:hidden;border-right:12pt double red">Hidden outside</td><td style="border-left:hidden">Hidden shared</td></tr><tr><td>Visible outside</td><td>Visible outside</td></tr></table>
+<p>Row and column origin colors</p><table style="border:2pt solid black"><colgroup style="border:2pt solid blue"><col style="border:2pt solid green"><col></colgroup><tbody style="border:2pt solid blue"><tr style="border:2pt solid red"><td style="border:none">Row red</td><td style="border:2pt solid #444">Cell gray</td></tr><tr><td style="border:none">Column green</td><td style="border:none">Group blue</td></tr></tbody></table>
+<p>End conflict presentation</p>
+</body></html>

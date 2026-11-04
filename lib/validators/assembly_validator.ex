@@ -68,7 +68,9 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
            context.pages |> Enum.with_index(1) |> Map.new(fn {page, number} -> {number, page} end),
          page_tree_refs: Map.new(document.pages, &{&1.ref, true}),
          all_page_refs:
-           input.objects |> Enum.filter(&page_object?/1) |> Map.new(&{{&1.obj, &1.gen}, true})
+           input.objects
+           |> Enum.filter(&page_object?(document, &1))
+           |> Map.new(&{{&1.obj, &1.gen}, true})
        }}
     end
   end
@@ -118,11 +120,12 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
       inherited = Map.fetch!(inheritances, page.ref)
       dictionary = Map.fetch!(object_values, page.ref)
 
-      with {:ok, annotations} <-
+      with {:ok, annotations} <- PdfValidator.optional_entry(document, dictionary, "Annots", nil),
+           {:ok, annotations} <-
              sanitized_annotations(
                document,
                object_values,
-               Map.get(dictionary, "Annots"),
+               annotations,
                selected_refs,
                all_page_refs
              ) do
@@ -167,32 +170,29 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
       nil ->
         {:ok, nil}
 
-      annotations ->
-        case PdfValidator.resolve(document, annotations) do
-          {:ok, annotations} when is_list(annotations) ->
-            annotations
-            |> Enum.reduce_while({:ok, []}, fn annotation, {:ok, kept} ->
-              case keep_annotation?(
-                     document,
-                     object_values,
-                     annotation,
-                     selected_refs,
-                     all_page_refs
-                   ) do
-                {:ok, true} -> {:cont, {:ok, [annotation | kept]}}
-                {:ok, false} -> {:cont, {:ok, kept}}
-                {:error, _error} = annotation_error -> {:halt, annotation_error}
-              end
-            end)
-            |> case do
-              {:ok, []} -> {:ok, nil}
-              {:ok, kept} -> {:ok, Enum.reverse(kept)}
-              {:error, _error} = annotation_error -> annotation_error
-            end
-
-          _ ->
-            error(:annotations, :invalid_pdf_input, "page Annots entry must resolve to an array")
+      annotations when is_list(annotations) ->
+        annotations
+        |> Enum.reduce_while({:ok, []}, fn annotation, {:ok, kept} ->
+          case keep_annotation?(
+                 document,
+                 object_values,
+                 annotation,
+                 selected_refs,
+                 all_page_refs
+               ) do
+            {:ok, true} -> {:cont, {:ok, [annotation | kept]}}
+            {:ok, false} -> {:cont, {:ok, kept}}
+            {:error, _error} = annotation_error -> {:halt, annotation_error}
+          end
+        end)
+        |> case do
+          {:ok, []} -> {:ok, nil}
+          {:ok, kept} -> {:ok, Enum.reverse(kept)}
+          {:error, _error} = annotation_error -> annotation_error
         end
+
+      _ ->
+        error(:annotations, :invalid_pdf_input, "page Annots entry must resolve to an array")
     end
   end
 
@@ -210,11 +210,10 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
       end
 
     case resolved do
-      {:ok, %{"Subtype" => {:name, "Link"}} = dictionary} ->
-        link_destination_status(document, dictionary, selected_refs, all_page_refs)
-
       {:ok, dictionary} when is_map(dictionary) ->
-        {:ok, true}
+        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link"),
+          do: link_destination_status(document, dictionary, selected_refs, all_page_refs),
+          else: {:ok, true}
 
       _ ->
         error(:annotations, :invalid_pdf_input, "page annotation must resolve to a dictionary")
@@ -243,11 +242,11 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
 
       action ->
         case PdfValidator.resolve(document, action) do
-          {:ok, %{"S" => {:name, "GoTo"}} = action} ->
-            destination_status(document, Map.get(action, "D"), selected_refs, all_page_refs)
-
           {:ok, action} when is_map(action) ->
-            {:ok, true}
+            if PdfValidator.named?(document, Map.get(action, "S"), "GoTo"),
+              do:
+                destination_status(document, Map.get(action, "D"), selected_refs, all_page_refs),
+              else: {:ok, true}
 
           _ ->
             error(:annotations, :invalid_pdf_input, "link action must resolve to a dictionary")
@@ -333,8 +332,13 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
               {:ok, object} ->
                 nested_references =
                   case Map.fetch(overrides, ref) do
-                    {:ok, value} -> value_references(value)
-                    :error -> value_references(Map.get(object, :value_override, object.value))
+                    {:ok, value} ->
+                      NativeElixirPdfUtilities.Pdf.ObjectMapping.references(value)
+
+                    :error ->
+                      NativeElixirPdfUtilities.Pdf.ObjectMapping.references(
+                        Map.get(object, :value_override, object.value)
+                      )
                   end
 
                 walk_references(
@@ -357,25 +361,9 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
     end
   end
 
-  defp value_references(value) do
-    case value do
-      {:ref, ref} ->
-        [ref]
-
-      values when is_list(values) ->
-        Enum.flat_map(values, &value_references/1)
-
-      dictionary when is_map(dictionary) ->
-        dictionary |> Map.values() |> Enum.flat_map(&value_references/1)
-
-      _ ->
-        []
-    end
-  end
-
-  defp page_object?(object) do
+  defp page_object?(document, object) do
     case object do
-      %{value: %{"Type" => {:name, "Page"}}} -> true
+      %{value: %{"Type" => type}} -> PdfValidator.named?(document, type, "Page")
       _ -> false
     end
   end
