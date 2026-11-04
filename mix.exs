@@ -9,11 +9,11 @@ defmodule NativeElixirPdfUtilities.MixProject do
 
     [
       app: :native_elixir_pdf_utilities,
-      version: "1.0.0",
+      version: "1.1.0",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, forms, attachments, outlines, text extraction, and native HTML/CSS rendering.",
+        "Pure Elixir utilities for PDF inspection, metadata, tokenizing, merging, page transforms, splitting, stamping, forms, attachments, outlines, text extraction, and native HTML/CSS and MathML rendering.",
       deps: deps(),
       dialyzer: [
         paths: [Path.join(application_root, "ebin")]
@@ -174,7 +174,7 @@ defmodule NativeElixirPdfUtilities.MixProject do
           NativeElixirPdfUtilities.Validators.WriterValidator
         ]
       ],
-      source_ref: "v1.0.0",
+      source_ref: "v1.1.0",
       source_url: "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities"
     ]
   end

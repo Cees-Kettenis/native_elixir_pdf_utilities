@@ -1,234 +1,127 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-11-05
 
-- Preserve the v1.0.0 form-filling defaults, using bundled DejaVu Sans and
-  shrink-to-fit text. Original HTML field styling is available with
-  `appearance: :source`.
-- Preserve physical text operands in positioned extraction by default. Use
-  `actual_text: true` for semantic replacement spans; reconstructed strings
-  continue to honor PDF `ActualText`.
-- Accept older three-map font encodings without ligature metadata while
-  respecting explicit shaping settings in current encodings.
+Expanded static HTML-to-PDF rendering. See the [compatibility guide](docs/html-to-pdf-compatibility.md)
+for supported behavior and remaining limits.
 
-- Render initial `<details>` disclosures and summary legends, including fallback legends, nesting, named-group validation, markers and author styling. Closed bodies omit assets and fields while retaining input validation.
+### Added
 
-- Support boolean required attributes and initial `:required` / `:optional` styling on supported controls. Preserve empty initial values and map editable requirements to PDF field flags, including owner-scoped radio groups.
+#### HTML parsing and documents
 
-- Support all 148 CSS named colors through shared color validation, including backgrounds, borders and text decorations.
-- Render horizontal rules with native defaults, legacy color/size/alignment hints and author overrides; support automatic horizontal margins for ordinary blocks and separators inside selects.
-- Match structural positional selectors on document and fragment roots, reusing the per-render sibling cache without synthetic element ancestors.
-- Preserve fractional atomic inline baselines and fixed dimensions at 1/64 CSS-pixel precision.
-- Reject active `javascript:` and `vbscript:` references before skipping closed content, including normalized HTML references and escaped CSS background URLs.
+- Empty documents, root-level text/inline content, implied document/table groups,
+  and context-aware fragments.
+- Comments, empty/unquoted attributes, newline normalization, and expanded raw-text parsing.
+- Optional closing tags and nonvoid trailing slashes through `html_recovery: true`.
+- SVG/MathML namespaces, foreign-content integration, CDATA, and XML processing instructions.
+- `<base>` URL resolution, author/description/keywords metadata, language inheritance,
+  `Content-Language`, and preferred stylesheet selection.
+- Initial `hidden`, `hidden="until-found"`, and `inert` behavior; `noscript` and canvas
+  fallback; inert templates and non-executable script data blocks.
+- Custom HTML containers and preserved translation, editability, microdata, and
+  global interaction metadata. These attributes do not enable browser interactions.
 
-- Support ordinary option groups, inherited disabled option state and omitted group endings in dropdowns.
-- Resolve dropdown labels independently of export values, normalize text-derived ASCII whitespace, and reserve a normal font line for empty dropdowns.
+#### Text, lists, and tables
 
-- Resolve ordinary single-select initial state once: retain the last authored selection, otherwise select the first enabled option, and safely render empty or unselected controls. Add initial `:checked` matching without changing authored attributes.
-- Omit the PDF choice value when an HTML select has no selection; empty option values remain empty strings.
+- Description lists, figures/captions, address/grouping elements, and semantic inline text.
+- Locale-aware `<q>` quotations, abbreviation styling, and mark/insert/delete/strike defaults.
+- Preformatted and legacy raw-text elements, bundled monospace fonts, subscript/superscript,
+  and ruby base/reading annotations.
+- Ordered-list starts, reversed numbering, per-item values, marker images/types/placement,
+  and shared HTML/CSS list counters.
+- Legacy font, body, centering, horizontal-rule, image, and table presentation hints
+  below author CSS; obsolete inactive elements remain harmless.
+- HTML table slot formation, `rowspan="0"`, implied rows, `headers`/`scope` associations,
+  anonymous CSS rows/cells, and expanded caption placement.
 
-- Render ordinary form and label containers, resolve initial form ownership, and use the last authored checked radio in each actual owner group. Preserve authored attributes for CSS selectors and diagnose independent groups that cannot share one PDF field name.
-- Collapse normal parent margins with block grid and flex child margins, including form rows.
+#### Forms and initial state
 
-- Reuse builtin PDF font resources without collecting unused text from later boxes; preserve embedded glyph/spacing behavior and complete output.
+- Search, telephone, URL, email, password, and number inputs; multiple email values;
+  read-only and required PDF flags.
+- Form/label ownership, owner-scoped radio groups, fieldset disabling, and legend exceptions.
+- Placeholders, character-based sizing, textarea rows/columns, and HTML initial-value sanitation.
+- Multiple selects, option groups, disabled choices, separate labels/export values,
+  and rich selected-content cloning for supported customizable selects.
+- Static range, color, image-button, file, date, month, week, time, and `datetime-local`
+  artwork. Mutable specialized controls retain documented restrictions.
+- Progress/meter artwork, output elements, datalist associations, and range tick marks.
+- Initial required/type/pattern/range/step constraint states and control-state selectors,
+  including `:valid`, `:invalid`, `:indeterminate`, `:read-only`, and `:read-write`.
+- `appearance: :source` to preserve original field styling when filling forms.
 
-- Preserve HTML language attributes, resolve ordinary language inheritance and Content-Language pragmas, and support CSS `:lang()` lists, escapes, canonical aliases and wildcard filtering with language context prepared for language selectors and scoped to each style computation.
+#### Composition, links, and images
 
-- Generate form appearances as native PDF objects, avoiding unused temporary pages and supporting tested 1,000-control interactive documents under unchanged limits.
+- Details/summary disclosures with fallback summaries and named groups; initial dialog
+  states and author-exposed static popovers.
+- Declarative shadow roots, named/default slots, fallback content, `:host`/`::slotted`,
+  and scoped styles/fonts/resources.
+- Named template replacement with source validation and preserved source ownership.
+- Authorized embedded HTML, plaintext, and images through iframe/object/embed,
+  including `srcdoc`, blank documents, nested viewports, scrollbars, and static framesets.
+- Supported editable fields inside child documents, with independent field names and clipping.
+- Document-root, named-anchor, and fragment destinations scoped across child documents,
+  shadow trees, and running headers/footers; heading offsets/resets for bookmarks.
+- Responsive `picture`/`srcset`/`sizes`, lazy automatic sizing, image dimension hints,
+  expanded object positioning, and rectangle/circle/polygon image maps.
+- Inline SVG and expanded SVG images, filters, masks, markers, and text paths through
+  Resvg. SVG text is rasterized; internal links are inactive.
 
-- Align inline blocks to normal-flow baselines and measure multiline automatic widths by their widest forced line, while preserving empty control heights.
+#### CSS, mathematics, and fonts
 
-- Apply HTML heading offsets and inclusive resets to semantic bookmarks, preserve wrapped inline headings as single entries, and omit hidden title descendants.
+- Forward/reverse positional selectors, attribute operators/case flags, Unicode CSS
+  identifiers/escapes, and `:lang()` matching.
+- All 148 CSS named colors, font-metric text decorations, generated quotations,
+  and `counter-set`.
+- CSS `calc()`/`max()`/`clamp()` sizing, font/viewport-relative units, 2D transforms,
+  expanded clipping, and paragraph orphan/widow controls.
+- Nested print media feature queries and explicit `print_viewport`/`image_selection_density`
+  options for stylesheet and image selection.
+- Preserved whitespace, discretionary breaks, CJK line breaking, and distinct
+  `word-break`/`overflow-wrap` behavior across styled text.
+- Native MathML fractions, radicals, scripts/prescripts, limits, accents, stretched
+  operators, and matrices with bundled STIX Two Math or caller-provided math fonts.
+- MathML grouping, phantom/padding boxes, error styling, semantics/annotations,
+  and mixed HTML/CSS composition.
+- Supplementary Unicode font mappings and selected-font OpenType MATH metrics,
+  substitutions, glyph bounds, and multi-part glyph groups.
+- PDF `ActualText` extraction; use `actual_text: true` for replacement spans in
+  positioned output. Equation glyph groups retain their original text.
 
-- Support void optional word breaks and legacy nowrap containers, preserve styled-word table minima and expanded captions, and normalize budgeted nonpainting flow markers before PDF writing.
+### Changed
 
-- Preserve unbroken inline words across style boundaries; distinguish line-break, overflow-wrap and word-break semantics and validate their CSS/advanced-tree values.
+- Document operations use workers with configurable deadlines and observed memory
+  limits, defaulting to five minutes and 1 GiB. Expanded budgets cover PDF, HTML/CSS,
+  font, form, layout, and SVG processing.
+- Asset resolvers run in workers. Capture caller-local data before rendering;
+  see [migration guidance](docs/html-to-pdf-compatibility.md#resolver-process-context).
+- Automatic tables preserve minimum content widths, changing wrapping or causing
+  page overflow in narrow layouts. See [table sizing](docs/html-to-pdf-compatibility.md#tables).
+- Reused fonts, styles, measurements, and PDF resources; form appearances no longer
+  require temporary pages.
+- Removed Python/C generation tools and fixture notes; retained generated assets,
+  licenses, manifests, and historical sources in Git.
 
-- Use unvisited blue/underline defaults for supported anchors below author CSS; preserve ordinary inherited text for anchors without href and visible inactive inert artwork.
+### Fixed
 
-- Render unregistered custom HTML containers with canonical names, transparent
-  contents, harmless attributes and builtin `is` metadata. Apply initial global
-  `hidden` defaults below author CSS, preserving sibling positions and dormant
-  resources/fields. Keep until-found painting and remaining initial states open.
-- Preserve visible inert artwork while suppressing active PDF fields and links.
-  Render mark/ins/del/strike defaults and wrapped inline color backgrounds with
-  font metrics and decoration positions that match painted text baselines.
+- Corrected inline baselines/fragmentation, table spans/borders/sizing, flex wrapping
+  and alignment, grid tracks, margin collapse, clipping, and stacking.
+- Preserved positioned/decorated content, explicit space, links, and form artwork
+  across page breaks; corrected headers, footers, bookmarks, and stamp placement.
+- Fixed dropdown labels/empty selections, radio exclusivity, password masks,
+  and list-box appearances when filling or clearing forms.
+- Resolved indirect PDF names/metadata/appearances and optional null entries;
+  corrected CMaps, glyph names, text decoding, and PDF dates.
+- Honored selected-font Latin ligature settings while preserving older prepared
+  font encodings; corrected language-sensitive text casing.
+- Improved malformed-input/geometry/resource diagnostics, rejected active script
+  references in hidden content, and cancelled form evaluators/font loaders with callers.
 
-- Share Unicode and escaped CSS identifier grammar across type, class, ID,
-  attribute and supported pseudo selectors. Preserve escape boundaries and ASCII
-  HTML class separators, with exact decoded reference PDFs and diagnostics.
+### Documentation
 
-- Format supported blocks inside neutral inline ancestors and default noscript,
-  preserving surrounding text, widths and margin collapse.
-
-- Render initial scripting-disabled noscript fallback with active styles, head
-  metadata and editable controls. Keep template fallback inert and delegate
-  nested/head/transparent-content and layout diagnostics to canonical validators.
-
-- Preserve data-script and ordinary-template siblings in supported specialized
-  parents. Share select option views and recoverable direct-tree/layout diagnostics.
-  Use ASCII raw-text boundaries and decoded shared SVG script/event policy while
-  avoiding duplicate attribute-value conversion.
-
-- Add child/type forward and reverse An+B selectors and only-child/type selectors.
-  Cache sibling positions per render and remove duplicate internal DOM preflight
-  while preserving public stylesheet validation.
-
-- Preserve ordinary inert HTML template fragments without collecting unused styles,
-  fonts, images or fields. Allow author CSS to paint an empty template box, and
-  validate unused input, fragment shape, UTF-8 and shared limits.
-
-- Run browser parity comparisons with JavaScript denied in each fresh profile,
-  record the scripting mode and verify fallback with an independent reference probe.
-
-- Accept initial non-executable HTML script data blocks with literal data,
-  escaped closing boundaries, exact type classification and resource isolation.
-  Allow author CSS to expose data; diagnose executable script kinds with locations.
-
-- Add initial password inputs with grapheme masks and PDF Password flags.
-  Preserve sanitized field values, mask newly filled appearances, and count mask
-  bytes against existing resource budgets. Support external password Text fields.
-
-- Add HTML image width/height presentation hints and CSS automatic width/height.
-  Preserve strict asset checks and zero-size flow while avoiding empty image paint
-  boxes; share CSS size validation through HtmlValidator.
-
-- Add initial `:enabled` and `:disabled` matching for supported HTML controls.
-  Keep readonly and ARIA independent of disabled state, preserve hidden-input
-  precedence, and centralize simple pseudo-class ASCII keywords in the validator.
-
-- Render submit/reset/button inputs as static buttons with initial labels and
-  English missing-value defaults. Preserve empty/whitespace labels and selectors;
-  create no PDF fields or name reservations. Empty button elements no longer print
-  their submission value, and empty input buttons retain a line of intrinsic height.
-
-- Apply canonical ASCII input-type keywords and missing/invalid Text defaults.
-  Preserve authored type strings for CSS and shared sanitation, field naming and
-  readonly rules. Validate effective types and empty input contents in caller
-  trees.
-
-- Accept boolean `multiple` on email inputs. Initial lists trim ASCII token edges
-  and preserve comma order and empty tokens. Keep one PDF text field and existing
-  readonly flags, with canonical applicability checks for parsed and caller trees.
-
-- Render telephone, URL and single-email inputs through the shared text field
-  path. Telephone values strip CR/LF; URL/email also trim ASCII edge whitespace.
-  Preserve authored attributes for CSS, readonly/disabled flags and invalid
-  initial values without inventing constraint-validation failures.
-
-- Accept boolean `readonly` on text/search inputs and textareas. Interactive
-  fields preserve values and expose the PDF read-only flag; filling returns the
-  shared read-only diagnostic and flattening remains available. Static artwork
-  stays unchanged unless author selectors style the attribute.
-
-- Add CSS attribute token, dash, prefix, suffix and substring operators, with
-  explicit ASCII-insensitive `i` and exact `s` case flags. Keep grammar and
-  matching rules in the validator and charge scans to the shared CSS budget.
-
-- Match HTML attribute-value equality using the Standard's ASCII case rules,
-  including case-variant input types. Preserve exact values for other attributes
-  and foreign namespaces; bound folding with the shared CSS work budget.
-  Reject invalid string attributes in caller-supplied trees through the validator.
-
-- Accept search inputs with the shared CR/LF value sanitation and text-field
-  rendering path. Authored attributes remain available to selectors, and search
-  controls use editable PDF text fields with existing disabled handling.
-
-- Strip CR/LF from initial text-input values before static and interactive form
-  preparation. Selectors retain the authored attribute. Empty text controls keep
-  their single-line intrinsic height across supported layout containers.
-- Accept hidden inputs without painted content or PDF fields, including author
-  display overrides. Validate their attributes and CSS before hiding them.
-- Avoid rebuilding PNG filter history lists for every byte. A fixed-size history
-  tuple and the decoded prior row preserve exact samples with less allocation.
-- Return a shared resource diagnostic for math stretch requests whose tiny
-  positive font size would otherwise overflow repetition arithmetic. Reject
-  multi-scalar glyph input without allocating a full character list.
-- Avoided rebuilding root-relative style values on elements with no author
-  declarations. Inherited lengths and semantic margins retain their behavior.
-- Added selected-font mathematical stretch geometry using ordered variants and
-  connector-bounded assemblies. Shared budgets bound repetition before expansion.
-  Operator pieces retain one original Unicode string through PDF glyph groups.
-- Added PDF glyph groups with one Unicode replacement string for multiple painted
-  text pieces. Extraction handles marked-content replacement strings, named
-  properties, nested scopes and transformed Forms, with cumulative byte and
-  physical-operand limits.
-- Added selected mathematical glyph and row measurement, including original
-  Unicode, MathML italic mappings, script forms, device adjustments, ink bounds,
-  and baseline/italic spacing. Shared font advance caches avoid repeated list
-  scans. Single and alternate GSUB lookups retain distinct kinds.
-
-- Added validated explicit glyph runs to the PDF writer, preserving original
-  Unicode across script forms and subsets. Selected outlines, width metrics,
-  cumulative font work, and the fixed CID ceiling are checked before writing.
-  Empty text paints no operator.
-
-- Added selected-font math GSUB substitutions for script-style, flattened
-  accent, and dotless forms. Default math language selection, lookup order,
-  glyph bounds, and decoded work are validated.
-
-- Added context-dependent SVG and MathML namespace parsing, adjusted foreign
-  names and attributes, HTML integration points, CDATA, and foreign fragments.
-- Added lazy selected-font glyph ink bounds for equation layout, with source
-  validation, cumulative work limits, and reuse tied to exact font bytes.
-- Reduced TrueType checksum overhead while preserving identical font and PDF
-  bytes. Stylesheet preparation now preserves specific renderer diagnostics.
-
-- Added lazy, bounded OpenType MATH parsing for selected-font constants, glyph
-  corrections, device adjustments, corner kerning, variants, and assemblies.
-  Missing or malformed metrics return shared diagnostics.
-
-- Added full Unicode format-12 TrueType character maps with bounded group
-  validation, supplementary glyph encoding, and PDF extraction coverage.
-  Bundled unmodified STIX Two Math v2.13b171 loads on demand, with caller
-  overrides and its complete SIL Open Font License.
-
-- Added `u`, `s`, and solid text decorations with wrapping, originating colors,
-  selected-font metrics, font-relative thickness, pagination, and relative
-  positioning. Atomic inline and positioned descendants retain separate scopes.
-- Mapped HTML author, description, and keywords metadata to PDF fields while
-  preserving caller precedence and PDF metadata validation. Titles collapse
-  ASCII whitespace. Unsupported navigation, CSP, and cookie meta directives
-  return source diagnostics; charset declarations follow the UTF-8 contract.
-- Moved TrueType parsing and CSS color validation into validator modules.
-  Added a shared limit on text-decoration layers.
-
-- Added ordered-list starting values, reversed numbering, per-item values,
-  legacy marker hints, and CSS marker types and placement. Hidden and unmarked
-  items do not advance numbering. List markers receive font fallback and item
-  boxes retain authored padding, borders, and backgrounds.
-- Fixed preformatted tabs at zero font size, preserved a leading newline after
-  an intervening comment, and omitted zero-size text from PDF paint operators.
-  Added a configurable HTML numeric-token limit before integer conversion.
-
-- Added static description lists, quotations, figures, address and grouping
-  elements, semantic inline text, and legacy `center`, `listing`, and `tt`.
-  Preformatted whitespace preserves spaces, tab stops, and line breaks; author
-  CSS supports `pre`, `pre-wrap`, and `break-spaces`. Monospace faces load on
-  demand from an unmodified DejaVu 2.37 bundle.
-- Added nested and mixed-content list items, circle and square markers, and
-  description-item omission rules. Corrected heading defaults, child margin
-  collapse, and positioning after zero-height forced page-break markers.
-
-- Added valid optional HTML end tags, implied document and table groups, and
-  context-aware fragment parsing. Existing parser trees retain their format;
-  rendering uses constructed ancestry for CSS. Plain text and inline elements
-  can appear at the root or directly in the body. Empty documents render a
-  blank page, and empty tables and row groups are accepted.
-- Moved element support, content models, omission rules, doctype checks, and
-  text-content validation into the HTML validator. Quirks doctypes, duplicate
-  document sections, misplaced table sections, and required missing closing
-  tags retain actionable diagnostics.
-- Corrected list indentation, outside marker placement, bullet characters, and
-  default item spacing, with unit coverage and Chromium comparisons.
-
-- Added HTML comments and empty and unquoted syntax for supported attributes.
-  Comment delimiters in raw text and RCDATA retain their literal meaning.
-  Malformed comments report source locations, and duplicate or unsupported
-  attributes remain errors. Added parser, public diagnostic, and Chromium
-  rendering coverage.
-- Moved HTML attribute validation into the shared HTML validator and removed
-  duplicate attribute parsing from ordinary tokenizer mode detection.
+- Reorganized user/contributor guides and expanded examples, compatibility guidance,
+  resource-limit documentation, and license notices.
+- Expanded Chromium comparisons and parallel checks across supported Elixir runtimes,
+  with performance guards against v1.0.0 baselines.
 
 ## 1.0.0 - 2026-10-05
 

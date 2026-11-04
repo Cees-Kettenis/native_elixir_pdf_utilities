@@ -295,7 +295,7 @@ and upstream Git blob hashes are retained in
 
 Browser comparison assets contain independently renamed subsets of this face.
 They share the complete [SIL Open Font License](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/test/fixtures/html_to_pdf/browser_parity/assets/math-glyph-reference-LICENSE.txt).
-The [reference generator](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/scripts/fixtures/generate-math-glyph-reference.py) records
+The [reference generator](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/8c7ea9206657d1d887cc77c6633ab49ca0d4d075/scripts/fixtures/generate-math-glyph-reference.py) records
 source and derivative hashes and verifies retained outlines, advances and hints.
 These subsets are test assets; the library's bundled STIX face is unmodified.
 

@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font.MathTokenMetrics do
   @moduledoc false
 
   # Generated from the bundled font, independently of HTML/layout fixtures.
-  # See scripts/data/math-token-metrics/README.md for the sampling contract.
+  # Sampling parameters and source hashes are in priv/fonts/stix/token-ink-metrics.json.
   @metrics_file Path.expand("../../../priv/fonts/stix/token-ink-metrics.bin", __DIR__)
   @external_resource @metrics_file
   <<fingerprint::binary-size(32), glyph_count::16, maximum_size::16, records::binary>> =
