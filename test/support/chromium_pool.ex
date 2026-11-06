@@ -222,6 +222,14 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         end)
 
       state =
+        if reference do
+          {_, state} = command(state, "Page.bringToFront", %{}, session)
+          state
+        else
+          state
+        end
+
+      state =
         Telemetry.measure(:browser_readiness, %{}, fn -> await_documents(state, session) end)
 
       File.write!(output <> ".readiness.json", :json.encode(state.readiness))
@@ -406,6 +414,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   end
 
   defp raster_svg_reference(state, session, output, pdf) do
+    # Inactive tabs can wait indefinitely for a screenshot compositor frame.
+    # Keep activation explicit at the screenshot boundary.
+    {_, state} = command(state, "Page.bringToFront", %{}, session)
     File.write!(Path.rootname(output) <> "-vector.pdf", Base.decode64!(pdf["data"]))
 
     {targets, state} =
@@ -505,6 +516,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   end
 
   defp command(state, method, params \\ %{}, session \\ nil) do
+    Telemetry.annotate(%{cdp_method: method})
     message = %{id: state.next_id, method: method, params: params}
     message = if session, do: Map.put(message, :sessionId, session), else: message
     Port.command(state.port, [:json.encode(message), 0])

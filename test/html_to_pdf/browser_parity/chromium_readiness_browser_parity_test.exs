@@ -30,6 +30,68 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
     assert length(Enum.uniq(profiles)) == 2
   end
 
+  @tag timeout: 15_000
+  test "an inactive tiny SVG page becomes drawable before its screenshot" do
+    # Two fresh captures compare foreground and deliberately backgrounded tabs.
+    # Sharing a reference would skip the browser activation behavior under test.
+    owner = self()
+    svg = File.read!(Paths.fixture("html_to_pdf/svg/small_canvas_stroke.svg"))
+
+    html =
+      "<style>@page{size:48pt 3pt;margin:0}html,body{margin:0}svg{display:block}</style>" <> svg
+
+    url =
+      serve(fn path ->
+        if path == "/hold" do
+          send(owner, {:held_image, self()})
+          receive do: (:release -> {404, "text/plain", "Missing"})
+        else
+          {200, "text/html", html <> ~s|<img src="/hold" style="display:none">|}
+        end
+      end)
+
+    directory = Paths.project("tmp/browser_parity/chromium_readiness/active_svg")
+    File.mkdir_p!(directory)
+    fixture = Path.join(directory, "original.html")
+    File.write!(fixture, html)
+    browser = System.get_env("CHROMIUM_BIN") || System.find_executable("chromium")
+    reference = %{width: 64, height: 4, scale: 1}
+    foreground = Path.join(directory, "foreground")
+    background = Path.join(directory, "background")
+    File.mkdir_p!(foreground)
+    File.mkdir_p!(background)
+
+    assert :ok =
+             ChromiumPool.print_pdf!(
+               browser,
+               fixture,
+               Path.join(foreground, "chromium.pdf"),
+               reference
+             )
+
+    output = Path.join(background, "chromium.pdf")
+
+    capture =
+      Task.async(fn ->
+        ChromiumPool.print_pdf!(browser, url, output, reference,
+          browser_args: ["--remote-debugging-port=0"],
+          timeout: 4_000
+        )
+      end)
+
+    assert_receive {:held_image, request}, 10_000
+    metadata = output |> Kernel.<>(".browser.json") |> File.read!() |> :json.decode()
+
+    activate_other_tab!(metadata["profile"], url)
+    send(request, :release)
+    assert :ok = Task.await(capture, 10_000)
+
+    assert [%{"focused" => true}] = :json.decode(File.read!(output <> ".readiness.json"))
+
+    assert File.read!(Path.join(foreground, "chromium-svg-0.png")) ==
+             File.read!(Path.join(background, "chromium-svg-0.png"))
+  end
+
   test "caller death closes an active browser and removes its profile" do
     owner = self()
 
@@ -252,6 +314,86 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
 
     assert File.read!(output <> ".readiness-error.txt") =~ "/hang"
     refute File.exists?(output)
+  end
+
+  defp activate_other_tab!(profile, url) do
+    [port, path | _] = File.read!(Path.join(profile, "DevToolsActivePort")) |> String.split("\n")
+
+    assert {:ok, socket} =
+             :gen_tcp.connect(
+               ~c"127.0.0.1",
+               String.to_integer(port),
+               [:binary, active: false, packet: :http_bin],
+               5_000
+             )
+
+    try do
+      key = Base.encode64(:crypto.strong_rand_bytes(16))
+
+      assert :ok =
+               :gen_tcp.send(
+                 socket,
+                 "GET #{path} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: #{key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+               )
+
+      assert {:ok, {:http_response, _version, 101, _reason}} = :gen_tcp.recv(socket, 0, 5_000)
+
+      Stream.repeatedly(fn -> :gen_tcp.recv(socket, 0, 5_000) end)
+      |> Enum.reduce_while(nil, fn
+        {:ok, :http_eoh}, _ -> {:halt, nil}
+        {:ok, {:http_header, _, _, _, _}}, _ -> {:cont, nil}
+      end)
+
+      :ok = :inet.setopts(socket, packet: :raw)
+
+      command = fn id, method, params ->
+        payload = :json.encode(%{id: id, method: method, params: params}) |> IO.iodata_to_binary()
+        size = byte_size(payload)
+        header = if size < 126, do: <<0x81, 0x80 + size>>, else: <<0x81, 0xFE, size::16>>
+        mask = :crypto.strong_rand_bytes(4)
+
+        masked =
+          for {byte, index} <- Enum.with_index(:binary.bin_to_list(payload)),
+              into: <<>>,
+              do: <<Bitwise.bxor(byte, :binary.at(mask, rem(index, 4)))>>
+
+        :ok = :gen_tcp.send(socket, [header, mask, masked])
+        assert {:ok, <<0x81, size>>} = :gen_tcp.recv(socket, 2, 5_000)
+
+        size =
+          case size do
+            126 ->
+              assert {:ok, <<length::16>>} = :gen_tcp.recv(socket, 2, 5_000)
+              length
+
+            127 ->
+              assert {:ok, <<length::64>>} = :gen_tcp.recv(socket, 8, 5_000)
+              length
+
+            length ->
+              length
+          end
+
+        assert {:ok, response} = :gen_tcp.recv(socket, size, 5_000)
+        response = :json.decode(response)
+        assert response["id"] == id
+        refute response["error"]
+        response["result"]
+      end
+
+      info =
+        command.(1, "Target.getTargets", %{})["targetInfos"] |> Enum.find(&(&1["url"] == url))
+
+      assert info
+
+      assert %{"targetId" => _} =
+               command.(2, "Target.createTarget", %{
+                 url: "about:blank",
+                 browserContextId: info["browserContextId"]
+               })
+    after
+      :gen_tcp.close(socket)
+    end
   end
 
   defp serve(response) do
