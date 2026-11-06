@@ -98,12 +98,18 @@ if [[ "${1:-}" == --runtime ]]; then
     run_stage tests mix test --warnings-as-errors
     run_stage coverage mix test --cover --warnings-as-errors
     run_stage dialyzer mix dialyzer --no-compile
-    run_stage parity bash -c 'set -e; for partition in 1 2 3; do MIX_TEST_PARTITION="$partition" mix test.browser_parity --partitions 3 --warnings-as-errors; done'
+    run_stage parity env -u MIX_TEST_PARTITION BROWSER_PARITY_TELEMETRY="${log_dir}/parity-events" mix test.browser_parity --warnings-as-errors
+    if [[ -d "${log_dir}/parity-events" ]]; then
+      mix run --no-start scripts/browser-parity-report.exs "${log_dir}/parity-events" > "${log_dir}/parity-report.json" || exit 2
+    fi
     if [[ "${canonical}" != true ]]; then
       run_stage performance true
     fi
     if [[ "${failed_stage}" == parity && -d tmp/browser_parity ]]; then
       cp -a tmp/browser_parity "${log_dir}/browser-parity-artifacts" || exit 2
+      if [[ -d tmp/test_artifacts ]]; then
+        cp -a tmp/test_artifacts "${log_dir}/test-artifacts" || exit 2
+      fi
     fi
   else
     echo 'QUALITY_MATRIX_ERROR invalid_runtime_phase=true' >&2
@@ -127,7 +133,7 @@ for command in docker git tar; do
   command -v "${command}" >/dev/null 2>&1 || { echo "QUALITY_MATRIX_ERROR missing_command=${command}" >&2; exit 2; }
 done
 docker info >/dev/null 2>&1 || { echo 'QUALITY_MATRIX_ERROR docker_unavailable=true' >&2; exit 2; }
-parallel_jobs="${QUALITY_MATRIX_JOBS:-2}"
+parallel_jobs="${QUALITY_MATRIX_JOBS:-1}"
 [[ "${parallel_jobs}" =~ ^[1-9][0-9]*$ ]] || { echo 'QUALITY_MATRIX_ERROR QUALITY_MATRIX_JOBS=positive_integer_required' >&2; exit 2; }
 
 mkdir -p .quality || exit 2

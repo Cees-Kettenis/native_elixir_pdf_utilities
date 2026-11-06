@@ -971,9 +971,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
      [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_table_atomic_baselines.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_table_atomic_baseline_spans.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
-    {"html_table_border_conflicts.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_table_border_spans_groups.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
-    {"html_table_legacy_center.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_table_legacy_hints.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_table_bottom_captions.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
     {"html_table_background_layers.html", [max_changed_ratio: 0.01, max_average_delta: 0.01]},
@@ -2171,19 +2169,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     svg_text_filters_masks_sheet.html
     mathml_multiscripts_padding_fonts_sheet.html
     mathml_operator_stretch_tokens_sheet.html
+    text_wrapping_geometry_sheet.html
+    text_discretionary_geometry_sheet.html
     compact_typography.html
     compact_layout.html
     css_calculated_dimensions_inline_padding.html
-    css_discretionary_atomic_boundary.html
     css_discretionary_hyphens.html
-    css_discretionary_shaping.html
     css_inline_auto_width_clamp.html
-    css_text_atomic_geometry.html
-    css_text_atomic_intrinsics.html
-    css_authored_line_breaks.html
-    css_text_preserved_intrinsics.html
     css_text_preserved_opportunities.html
-    css_text_styled_hyphen_context.html
     drawing_group_affine.html
     html_abbreviation_titles.html
     html_atomic_outer_whitespace.html
@@ -2386,6 +2379,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
                do: 96 * NativeElixirPdfUtilities.Limits.get(:svg_raster_scale),
                else: 72
              )
+
+    if fixture_name in ~w(html_css_affine_boxes.html html_css_affine_nested.html html_css_affine_fragments.html html_css_affine_fragment_origins.html html_css_affine_table.html html_css_affine_widget_slices.html html_css_affine_descendant_sheets.html html_css_affine_clipped_descendants.html html_css_affine_rotated_widget_slices.html) do
+      assert page_count ==
+               if(
+                 fixture_name in ~w(html_css_affine_boxes.html html_css_affine_nested.html html_css_affine_table.html),
+                 do: 1,
+                 else: 2
+               )
+
+      if fixture_name in ~w(html_css_affine_boxes.html html_css_affine_nested.html html_css_affine_fragments.html html_css_affine_fragment_origins.html html_css_affine_table.html) do
+        assert {:ok, []} =
+                 NativeElixirPdfUtilities.Forms.fields(
+                   File.read!(Path.join(artifact_dir, "native.pdf"))
+                 )
+      end
+    end
+
+    if fixture_name == "fonts_and_print_media.html", do: assert(page_count == 1)
 
     if fixture_name == "inline_svg_text_paint_servers.html" do
       for renderer <- ["native", "chromium"] do
@@ -2850,6 +2861,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     assert Enum.all?(font_sources, &String.match?(&1.sha256, ~r/\A[0-9a-f]{64}\z/))
     assert File.dir?(artifact_dir)
 
+    if fixture_name == "html_skipped_special_controls.html" do
+      assert page_count == 2
+      assert length(font_sources) == 3
+
+      for source <- font_sources do
+        assert source.sha256 ==
+                 Base.encode16(:crypto.hash(:sha256, File.read!(source.path)), case: :lower)
+      end
+
+      for renderer <- ["native", "chromium"] do
+        pdf = File.read!(Path.join(artifact_dir, renderer <> ".pdf"))
+        assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+        for caption <- ~w(color range file date month week time image gauges),
+            do: assert(text =~ caption)
+
+        refute text =~ "secret" or text =~ "2026" or text =~ "chosen" or text =~ "Secret"
+      end
+
+      assert {:ok, []} =
+               NativeElixirPdfUtilities.Forms.fields(
+                 File.read!(Path.join(artifact_dir, "native.pdf"))
+               )
+    end
+
     if fixture_name == "html_child_fragment_destinations.html" do
       assert page_count == 2
       alias NativeElixirPdfUtilities.Pdf.Reader
@@ -2900,7 +2936,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
     if fixture_name in [
          "html_table_legacy_hints.html",
-         "html_table_legacy_center.html",
          "html_table_bottom_captions.html",
          "html_table_background_layers.html"
        ] do
@@ -2920,9 +2955,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
                 "Group minimum height",
                 "End legacy hints"
               ]
-
-            "html_table_legacy_center.html" ->
-              ["Centered", "CSS left margin", "CSS right margin", "End centered table"]
 
             "html_table_bottom_captions.html" ->
               [
@@ -4400,22 +4432,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
              )
   end
 
-  test "subset font output retains Chromium parity for print typography" do
-    fixture_path = Path.join(@fixtures_dir, "fonts_and_print_media.html")
+  @shared_reference_fixtures ~w(html_disabled_range_controls.html html_number_height_controls.html html_initial_number_controls.html html_authored_number_controls.html html_initial_select_controls.html html_authored_select_controls.html)
 
-    assert %{page_count: 1} =
-             PdfVisualCompare.assert_browser_match!(fixture_path,
-               artifact_dir: "tmp/browser_parity/fonts_and_print_media_subset",
-               max_changed_ratio: 0.01,
-               max_average_delta: 0.035
-             )
+  setup_all do
+    %{browser_reference_scope: start_supervised!({Agent, fn -> %{} end})}
+  end
+
+  setup context do
+    if name = context[:reference_fixture] do
+      {_name, options} = List.keyfind(@fixture_thresholds, name, 0)
+
+      reference =
+        PdfVisualCompare.scoped_browser_reference!(
+          context.browser_reference_scope,
+          Path.join(@fixtures_dir, name),
+          options
+        )
+
+      %{browser_reference: reference}
+    else
+      %{}
+    end
+  end
+
+  for name <- @shared_reference_fixtures do
+    @shared_fixture name
+    @tag reference_fixture: name
+    @tag :shared_form_references
+    if name in ~w(html_initial_select_controls.html html_initial_number_controls.html),
+      do: @tag(:auxiliary_controls)
+
+    if name == "html_disabled_range_controls.html", do: @tag(:range_controls)
+    if name != "html_disabled_range_controls.html", do: @tag(:composed_resource_context)
+
+    test "matches Chromium for #{@shared_fixture}", %{browser_reference: reference} do
+      {_name, options} = List.keyfind(@fixture_thresholds, @shared_fixture, 0)
+
+      assert_fixture(
+        @shared_fixture,
+        Keyword.put(options, :reference, reference)
+      )
+    end
   end
 
   @tag range_controls: true
-  test "disabled interactive ranges retain initial Chromium artwork and scalar fields" do
+  @tag reference_fixture: "html_disabled_range_controls.html"
+  @tag :shared_form_references
+  test "disabled interactive ranges retain initial Chromium artwork and scalar fields", %{
+    browser_reference: reference
+  } do
     stats =
       PdfVisualCompare.assert_browser_match!(
         Path.join(@fixtures_dir, "html_disabled_range_controls.html"),
+        reference: reference,
         render_opts: [forms: :interactive],
         artifact_dir: "tmp/browser_parity/html_disabled_range_controls-interactive",
         max_changed_ratio: 0.01,
@@ -4441,10 +4510,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     assert Enum.all?(fields, & &1.read_only)
   end
 
-  test "interactive initial number heights match Chromium" do
+  @tag reference_fixture: "html_number_height_controls.html"
+  @tag :shared_form_references
+  test "interactive initial number heights match Chromium", %{browser_reference: reference} do
     stats =
       PdfVisualCompare.assert_browser_match!(
         Path.join(@fixtures_dir, "html_number_height_controls.html"),
+        reference: reference,
         render_opts: [forms: :interactive],
         artifact_dir: "tmp/browser_parity/html_number_height_controls-interactive",
         max_changed_ratio: 0.01,
@@ -4496,9 +4568,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   for fixture <- ["html_initial_number_controls.html", "html_authored_number_controls.html"] do
     @number_fixture fixture
     @tag composed_resource_context: true
-    test "interactive initial numbers match Chromium for #{@number_fixture}" do
+    @tag reference_fixture: fixture
+    @tag :shared_form_references
+    test "interactive initial numbers match Chromium for #{@number_fixture}", %{
+      browser_reference: reference
+    } do
       stats =
         PdfVisualCompare.assert_browser_match!(Path.join(@fixtures_dir, @number_fixture),
+          reference: reference,
           render_opts: [forms: :interactive],
           artifact_dir: "tmp/browser_parity/#{Path.rootname(@number_fixture)}-interactive",
           native_renderer:
@@ -4631,9 +4708,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   for fixture <- ["html_initial_select_controls.html", "html_authored_select_controls.html"] do
     @select_fixture fixture
     @tag composed_resource_context: true
-    test "interactive initial choices match Chromium for #{@select_fixture}" do
+    @tag reference_fixture: fixture
+    @tag :shared_form_references
+    test "interactive initial choices match Chromium for #{@select_fixture}", %{
+      browser_reference: reference
+    } do
       stats =
         PdfVisualCompare.assert_browser_match!(Path.join(@fixtures_dir, @select_fixture),
+          reference: reference,
           render_opts: [forms: :interactive],
           artifact_dir: "tmp/browser_parity/#{Path.rootname(@select_fixture)}-interactive",
           max_changed_ratio: 0.01,
@@ -4763,6 +4845,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   def comparison_cases do
     %{
       fixtures: @fixture_thresholds,
+      shared_reference_fixtures: @shared_reference_fixtures,
       compact: @compact_fixture_groups,
       sheets: @fixture_sheets,
       real_documents: @real_document_fixture_thresholds
@@ -4780,6 +4863,7 @@ for group <- 0..7 do
   fixture_thresholds =
     Enum.filter(cases.fixtures, fn {name, _} ->
       :erlang.phash2(name, 8) == group and
+        name not in cases.shared_reference_fixtures and
         name not in [
           "html_embedded_text.html",
           "inline_svg_nested_html_resources.html",
@@ -4863,7 +4947,13 @@ for group <- 0..7 do
           if @fixture_sheet["name"] == "svg_text_filters_masks_sheet.html" do
             %{"inline_svg_text_paths.html" => %{max_changed_ratio: 0.011}}
           else
-            %{}
+            Map.new(@fixture_sheet["sources"] || %{}, fn {name, source} ->
+              {name,
+               %{
+                 max_changed_ratio: source["max_changed_ratio"],
+                 max_average_delta: source["max_average_delta"]
+               }}
+            end)
           end
 
         stats =
@@ -4871,6 +4961,13 @@ for group <- 0..7 do
             Path.join(@fixtures_dir, @fixture_sheet["name"]),
             regions: regions,
             region_thresholds: region_thresholds,
+            render_opts:
+              if(@fixture_sheet["render_opts"],
+                do: [
+                  system_font_discovery: @fixture_sheet["render_opts"]["system_font_discovery"]
+                ],
+                else: []
+              ),
             svg_reference: if(@fixture_sheet["family"] == "svg", do: :png),
             chromium_transform:
               if(@fixture_sheet["name"] == "mathml_operator_stretch_tokens_sheet.html",
@@ -4883,6 +4980,20 @@ for group <- 0..7 do
 
         assert stats.page_count == 1
         assert length(hd(stats.pages).regions) == length(regions)
+
+        if @fixture_sheet["sources"] do
+          NativeElixirPdfUtilities.TestSupport.BrowserFixtureSheetValidator.assert_comparison!(
+            stats
+          )
+
+          for engine <- @fixture_sheet["assertion_engines"] || ["native"] do
+            NativeElixirPdfUtilities.TestSupport.BrowserFixtureSheetValidator.assert_contents!(
+              @fixture_sheet,
+              File.read!(Path.join(stats.artifact_dir, engine <> ".pdf")),
+              engine
+            )
+          end
+        end
       end
     end
 

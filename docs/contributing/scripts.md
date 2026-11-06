@@ -18,10 +18,13 @@ and [testing](testing.md) for requirements. Paths below are relative to `scripts
 
 | Task | Command |
 | --- | --- |
-| Full matrix, two concurrent lanes | `./scripts/quality-matrix` |
-| Serial matrix for smaller hosts | `QUALITY_MATRIX_JOBS=1 ./scripts/quality-matrix` |
+| Full matrix, serial runtime lanes | `./scripts/quality-matrix` |
+| Optional concurrent runtime lanes | `QUALITY_MATRIX_JOBS=2 ./scripts/quality-matrix` |
 | Validate/print runtime config without Docker | `./scripts/quality-matrix --matrix-json` |
 | Performance | `mise exec -- ./scripts/check-performance` |
+| Browser parity telemetry | `MIX_ENV=test mise exec -- mix run --no-start scripts/browser-parity-report.exs <evidence-directory>` |
+| Browser sheet equivalence | `MIX_ENV=test mise exec -- mix run scripts/fixtures/check-browser-sheet-equivalence.exs` |
+| Browser page equivalence | `MIX_ENV=test mise exec -- mix run scripts/fixtures/check-browser-page-equivalence.exs` |
 | Browser sheets | `MIX_ENV=test mise exec -- mix run scripts/fixtures/build-browser-sheets.exs` |
 | HTML/PDF examples | `mise exec -- mix run scripts/examples/generate-html-to-pdf.exs` |
 

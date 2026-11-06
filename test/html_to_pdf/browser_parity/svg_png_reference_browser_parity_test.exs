@@ -30,6 +30,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPngReferenceBrowserParityTest do
       end
     ]
 
+    opts =
+      Keyword.put(opts, :reference, PdfVisualCompare.prepare_browser_reference!(fixture, opts))
+
     stats =
       PdfVisualCompare.assert_browser_match!(
         fixture,
@@ -82,6 +85,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPngReferenceBrowserParityTest do
       max_changed_ratio: 0.01,
       max_average_delta: 0.01
     ]
+
+    opts =
+      Keyword.put(opts, :reference, PdfVisualCompare.prepare_browser_reference!(fixture, opts))
 
     stats =
       PdfVisualCompare.assert_browser_match!(

@@ -1,6 +1,9 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
+Code.require_file(Paths.support("browser_parity_telemetry.ex"))
+Code.require_file(Paths.support("browser_reference_validator.ex"))
 Code.require_file(Paths.support("chromium_pool.ex"))
+Code.require_file(Paths.support("browser_fixture_pages.ex"))
 
 defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   @moduledoc false
@@ -9,6 +12,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.TestSupport.BrowserParityTelemetry, as: Telemetry
+  alias NativeElixirPdfUtilities.TestSupport.BrowserReferenceValidator
 
   @type comparison_stats :: %{
           required(:fixture) => String.t(),
@@ -25,7 +30,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           required(:font_sources) => [map()],
           required(:embedded_fonts) => %{chromium: String.t(), native: String.t()},
           required(:artifact_dir) => String.t(),
-          optional(:strict_vector_comparison) => map()
+          optional(:strict_vector_comparison) => map(),
+          optional(:reference_identity) => map()
         }
 
   @doc "Rasterizes PDF bytes with Poppler and returns RGB pixels for each page."
@@ -67,6 +73,149 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       assert stats.changed_pixels > 0, "No changed pixels on page #{number}"
       stats
     end)
+  end
+
+  @doc "Proves original-to-region raster and text geometry independently for both engines using retained 72-DPI artifacts."
+  @spec assert_sheet_region_equivalence!(
+          String.t(),
+          String.t(),
+          {number(), number(), number(), number()}
+        ) :: :ok
+  def assert_sheet_region_equivalence!(original_directory, sheet_directory, {x, y, width, height}) do
+    for engine <- ["native", "chromium"] do
+      original = read_ppm!(Path.join(original_directory, engine <> "-1.ppm"))
+      sheet = read_ppm!(Path.join(sheet_directory, engine <> "-1.ppm"))
+      # Chromium's physical media rounding can add a blank raster row/column.
+      # Prove it contains no ink before comparing the complete authored canvas.
+      assert original.width in [width, width + 1]
+      assert original.height in [height, height + 1]
+
+      for row <- 0..(original.height - 1) do
+        extra = if row < height, do: original.width - width, else: original.width
+        offset = (row * original.width + original.width - extra) * 3
+
+        assert binary_part(original.pixels, offset, extra * 3) == :binary.copy(<<255>>, extra * 3),
+               "#{engine} original has artwork outside its authored canvas"
+      end
+
+      pixels = crop_pixels(sheet, width, height, x, y)
+      stats = diff_stats(crop_pixels(original, width, height), pixels)
+
+      assert stats.changed_pixels == 0 and stats.average_delta == 0,
+             "#{engine} original-to-sheet raster changed: #{inspect(stats)}"
+
+      assert {:ok, %{pages: [original_page]}} =
+               NativeElixirPdfUtilities.Text.extract_file_spans(
+                 Path.join(original_directory, engine <> ".pdf")
+               )
+
+      assert {:ok, %{pages: [sheet_page]}} =
+               NativeElixirPdfUtilities.Text.extract_file_spans(
+                 Path.join(sheet_directory, engine <> ".pdf")
+               )
+
+      region_spans =
+        Enum.filter(
+          sheet_page.spans,
+          &(&1.x >= x and &1.x < x + width and &1.y >= y and &1.y < y + height)
+        )
+
+      assert length(original_page.spans) == length(region_spans)
+
+      for {before_span, after_span} <- Enum.zip(original_page.spans, region_spans) do
+        assert before_span.text == after_span.text
+        assert_in_delta before_span.font_size, after_span.font_size, 0.0001
+        assert_in_delta before_span.x + x, after_span.x, 0.0001
+        assert_in_delta before_span.y + y, after_span.y, 0.0001
+        assert_in_delta before_span.end_x + x, after_span.end_x, 0.0001
+        assert_in_delta before_span.end_y + y, after_span.end_y, 0.0001
+      end
+    end
+
+    :ok
+  end
+
+  @doc "Proves a sheet extension fills only previously white regions and preserves all existing pixels, text geometry and public form fields."
+  @spec assert_sheet_extension_equivalence!(String.t(), String.t(), [
+          {integer(), integer(), integer(), integer()}
+        ]) :: :ok
+  def assert_sheet_extension_equivalence!(before_directory, after_directory, additions) do
+    inside_addition? = fn span ->
+      Enum.any?(additions, fn {x, y, width, height} ->
+        max(span.x, span.end_x) >= x and min(span.x, span.end_x) < x + width and
+          span.y >= y and span.y < y + height
+      end)
+    end
+
+    for engine <- ["native", "chromium"] do
+      before = read_ppm!(Path.join(before_directory, engine <> "-1.ppm"))
+      after_image = read_ppm!(Path.join(after_directory, engine <> "-1.ppm"))
+      assert {before.width, before.height} == {after_image.width, after_image.height}
+
+      for row <- 0..(before.height - 1) do
+        offset = row * before.width * 3
+
+        occupied =
+          additions
+          |> Enum.filter(fn {_x, y, _width, height} -> row >= y and row < y + height end)
+          |> Enum.sort()
+
+        last =
+          Enum.reduce(occupied, 0, fn {x, _y, width, _height}, previous ->
+            assert binary_part(before.pixels, offset + previous * 3, (x - previous) * 3) ==
+                     binary_part(after_image.pixels, offset + previous * 3, (x - previous) * 3),
+                   "#{engine} existing sheet pixels changed on row #{row}"
+
+            assert binary_part(before.pixels, offset + x * 3, width * 3) ==
+                     :binary.copy(<<255>>, width * 3),
+                   "#{engine} addition covers existing artwork on row #{row}"
+
+            x + width
+          end)
+
+        assert binary_part(before.pixels, offset + last * 3, (before.width - last) * 3) ==
+                 binary_part(after_image.pixels, offset + last * 3, (before.width - last) * 3),
+               "#{engine} existing sheet pixels changed on row #{row}"
+      end
+
+      before_pdf = File.read!(Path.join(before_directory, engine <> ".pdf"))
+      after_pdf = File.read!(Path.join(after_directory, engine <> ".pdf"))
+
+      assert {:ok, %{pages: [original_page]}} =
+               NativeElixirPdfUtilities.Text.extract_spans(before_pdf)
+
+      assert {:ok, %{pages: [extended_page]}} =
+               NativeElixirPdfUtilities.Text.extract_spans(after_pdf)
+
+      refute Enum.any?(original_page.spans, inside_addition?), "Addition covers existing text"
+
+      stable_span = fn span ->
+        Map.take(span, [
+          :text,
+          :x,
+          :y,
+          :end_x,
+          :end_y,
+          :font_size,
+          :render_mode,
+          :paints_text?,
+          :adds_to_clip_path?,
+          :joins_previous?
+        ])
+      end
+
+      assert Enum.map(original_page.spans, stable_span) ==
+               extended_page.spans |> Enum.reject(inside_addition?) |> Enum.map(stable_span),
+             "#{engine} existing sheet text or geometry changed"
+
+      assert {:ok, before_fields} = NativeElixirPdfUtilities.Forms.fields(before_pdf)
+      assert {:ok, after_fields} = NativeElixirPdfUtilities.Forms.fields(after_pdf)
+
+      assert before_fields == after_fields,
+             "#{engine} existing sheet form fields changed"
+    end
+
+    :ok
   end
 
   @doc false
@@ -186,6 +335,27 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   @doc false
   @spec assert_browser_match!(String.t(), keyword()) :: comparison_stats()
   def assert_browser_match!(fixture_path, opts \\ []) do
+    details = %{
+      fixture: Path.expand(fixture_path),
+      source_sha256: Base.encode16(:crypto.hash(:sha256, File.read!(fixture_path)), case: :lower),
+      options: inspect(opts, limit: :infinity)
+    }
+
+    Telemetry.measure(:comparison, details, fn ->
+      reference =
+        Keyword.get(opts, :reference) ||
+          NativeElixirPdfUtilities.TestSupport.BrowserFixturePages.reference(
+            fixture_path,
+            opts,
+            &prepare_fixture_page_references!/4
+          )
+
+      opts = if reference, do: Keyword.put(opts, :reference, reference), else: opts
+      compare_browser_fixture!(fixture_path, opts)
+    end)
+  end
+
+  defp compare_browser_fixture!(fixture_path, opts) do
     %{
       fixture_path: fixture_path,
       artifact_dir: artifact_dir,
@@ -195,16 +365,28 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       render_opts: render_opts,
       chromium_pdf: chromium_pdf,
       native_pdf: native_pdf,
-      native_result: native_result
+      reference: reference,
+      identity: identity
     } = prepare_browser_fixture!(fixture_path, opts)
 
     opts = Keyword.put(opts, :dpi, dpi)
+
+    native_renderer = Keyword.get(opts, :native_renderer, &HtmlToPdf.render/2)
+
+    native_result =
+      Telemetry.measure(:native_render, %{}, fn ->
+        native_renderer.(File.read!(fixture_path), render_opts)
+      end)
 
     assert {:ok, native_pdf_binary} = native_result
     File.write!(native_pdf, native_pdf_binary)
 
     chromium_pages =
-      rasterize_pdf!(pdftoppm_bin, chromium_pdf, Path.join(artifact_dir, "chromium"), dpi)
+      if reference do
+        Enum.map(reference.pages, &Path.join(artifact_dir, Path.basename(&1)))
+      else
+        rasterize_pdf!(pdftoppm_bin, chromium_pdf, Path.join(artifact_dir, "chromium"), dpi)
+      end
 
     native_pages =
       rasterize_pdf!(pdftoppm_bin, native_pdf, Path.join(artifact_dir, "native"), dpi)
@@ -222,18 +404,24 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       |> Enum.zip(native_pages)
       |> Enum.with_index(1)
       |> Enum.map(fn {{chromium_page, native_page}, page_number} ->
-        compare_page!(chromium_page, native_page, page_number, artifact_dir, opts)
+        Telemetry.measure(:pixel_comparison, %{page: page_number, dpi: dpi}, fn ->
+          compare_page!(chromium_page, native_page, page_number, artifact_dir, opts)
+        end)
       end)
 
     strict_vector_comparison =
       if Keyword.get(opts, :svg_reference) == :png do
         vector_pages =
-          rasterize_pdf!(
-            pdftoppm_bin,
-            Path.rootname(chromium_pdf) <> "-vector.pdf",
-            Path.join(artifact_dir, "chromium-vector"),
-            72
-          )
+          if reference do
+            Enum.map(reference.vector_pages, &Path.join(artifact_dir, Path.basename(&1)))
+          else
+            rasterize_pdf!(
+              pdftoppm_bin,
+              Path.rootname(chromium_pdf) <> "-vector.pdf",
+              Path.join(artifact_dir, "chromium-vector"),
+              72
+            )
+          end
 
         original_native_pages =
           rasterize_pdf!(pdftoppm_bin, native_pdf, Path.join(artifact_dir, "native-strict"), 72)
@@ -245,7 +433,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           |> Enum.with_index(1)
           |> Enum.map(fn {{reference, actual}, number} ->
             try do
-              compare_page!(reference, actual, number, artifact_dir, original_opts)
+              Telemetry.measure(:strict_pixel_comparison, %{page: number, dpi: 72}, fn ->
+                compare_page!(reference, actual, number, artifact_dir, original_opts)
+              end)
             rescue
               error in ExUnit.AssertionError -> %{page: number, error: Exception.message(error)}
             end
@@ -300,9 +490,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       chromium_version: command_output!(chromium_bin, ["--version"]),
       scripting: :disabled,
       rasterizer_version: command_output!(pdftoppm_bin, ["-v"]) |> String.split("\n") |> hd(),
-      font_sources: source_fonts(render_opts),
+      font_sources: identity.fonts,
+      reference_identity: identity,
+      capture: if(reference, do: reference[:capture]),
       embedded_fonts: %{
-        chromium: command_output!(pdffonts_bin!(), [chromium_pdf]),
+        chromium:
+          if(reference,
+            do: reference.embedded_fonts,
+            else: command_output!(pdffonts_bin!(), [chromium_pdf])
+          ),
         native: command_output!(pdffonts_bin!(), [native_pdf])
       },
       artifact_dir: Path.expand(artifact_dir)
@@ -367,11 +563,79 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   defp prepare_browser_fixture!(fixture_path, opts) do
+    prepared = prepare_browser_input!(fixture_path, opts)
+
+    %{
+      fixture_path: fixture_path,
+      artifact_dir: artifact_dir,
+      chromium_bin: chromium_bin,
+      pdftoppm_bin: pdftoppm_bin,
+      dpi: dpi,
+      render_opts: render_opts,
+      chromium_pdf: chromium_pdf,
+      chromium_fixture_path: chromium_fixture_path,
+      temporary_input: temporary_input,
+      reference: reference
+    } = prepared
+
+    identity =
+      try do
+        if reference do
+          identity =
+            browser_reference_identity(
+              fixture_path,
+              chromium_fixture_path,
+              chromium_bin,
+              pdftoppm_bin,
+              render_opts,
+              opts,
+              dpi
+            )
+
+          BrowserReferenceValidator.assert_identity!(reference, identity)
+
+          for source <- reference.artifacts do
+            File.cp!(source, Path.join(artifact_dir, Path.basename(source)))
+          end
+
+          identity
+        else
+          render_chromium_pdf!(
+            chromium_bin,
+            chromium_fixture_path,
+            chromium_pdf,
+            opts,
+            render_opts
+          )
+
+          browser_reference_identity(
+            fixture_path,
+            chromium_fixture_path,
+            chromium_bin,
+            pdftoppm_bin,
+            render_opts,
+            opts,
+            dpi
+          )
+        end
+      after
+        if temporary_input, do: File.rm!(temporary_input)
+      end
+
+    prepared
+    |> Map.drop([:chromium_fixture_path, :temporary_input])
+    |> Map.put(:identity, identity)
+  end
+
+  defp prepare_browser_input!(fixture_path, opts) do
     fixture_path = Path.expand(fixture_path)
     fixture_name = fixture_path |> Path.basename() |> Path.rootname()
 
     artifact_dir =
       Keyword.get(opts, :artifact_dir, Path.join(["tmp", "browser_parity", fixture_name]))
+
+    reference = Keyword.get(opts, :reference)
+    if reference, do: BrowserReferenceValidator.assert_isolated_output!(reference, artifact_dir)
 
     chromium_bin = Keyword.get(opts, :chromium_bin, chromium_bin!())
     pdftoppm_bin = Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!())
@@ -398,16 +662,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     native_pdf = Path.join(artifact_dir, "native.pdf")
 
     {chromium_fixture_path, temporary_input} =
-      chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
-
-    try do
-      render_chromium_pdf!(chromium_bin, chromium_fixture_path, chromium_pdf, opts, render_opts)
-    after
-      if temporary_input, do: File.rm!(temporary_input)
-    end
-
-    html = File.read!(fixture_path)
-    native_renderer = Keyword.get(opts, :native_renderer, &HtmlToPdf.render/2)
+      Telemetry.measure(:reference_transform, %{}, fn ->
+        chromium_fixture_path!(fixture_path, artifact_dir, opts, render_opts)
+      end)
 
     %{
       fixture_path: fixture_path,
@@ -418,9 +675,265 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       render_opts: render_opts,
       chromium_pdf: chromium_pdf,
       native_pdf: native_pdf,
-      native_result: native_renderer.(html, render_opts)
+      chromium_fixture_path: chromium_fixture_path,
+      temporary_input: temporary_input,
+      reference: reference
     }
   end
+
+  @doc "Lazily prepares immutable references inside an ExUnit-owned scope, capturing only selected fixtures."
+  @spec scoped_browser_reference!(pid(), String.t(), keyword()) :: map()
+  def scoped_browser_reference!(scope, fixture_path, opts) do
+    context = Map.put(Telemetry.context(), :owner, inspect(Process.get(:"$process_label")))
+    key = {Path.expand(fixture_path), opts}
+
+    Agent.get_and_update(
+      scope,
+      fn references ->
+        case Map.fetch(references, key) do
+          {:ok, reference} ->
+            {reference, references}
+
+          :error ->
+            previous = Telemetry.context()
+            Telemetry.attach(context)
+
+            try do
+              reference = prepare_browser_reference!(fixture_path, opts)
+              {reference, Map.put(references, key, reference)}
+            after
+              Telemetry.attach(previous)
+            end
+        end
+      end,
+      :infinity
+    )
+  end
+
+  defp browser_reference_identity(
+         fixture_path,
+         chromium_fixture_path,
+         chromium_bin,
+         pdftoppm_bin,
+         render_opts,
+         opts,
+         dpi
+       ) do
+    fontconfig = System.get_env("FONTCONFIG_FILE")
+
+    %{
+      source_sha256: Base.encode16(:crypto.hash(:sha256, File.read!(fixture_path)), case: :lower),
+      reference_sha256:
+        Base.encode16(:crypto.hash(:sha256, File.read!(chromium_fixture_path)), case: :lower),
+      base_url: Keyword.fetch!(render_opts, :base_url),
+      fonts: source_fonts(render_opts),
+      page_size: Keyword.fetch!(render_opts, :page_size),
+      margin: Keyword.get(render_opts, :margin),
+      dpi: dpi,
+      reference_mode: Keyword.get(opts, :svg_reference),
+      browser: command_output!(chromium_bin, ["--version"]),
+      rasterizer: command_output!(pdftoppm_bin, ["-v"]),
+      environment:
+        System.get_env() |> Map.take(["FONTCONFIG_FILE", "FONTCONFIG_PATH", "LANG", "LC_ALL"]),
+      fontconfig_sha256:
+        if(fontconfig && File.regular?(fontconfig),
+          do: Base.encode16(:crypto.hash(:sha256, File.read!(fontconfig)), case: :lower),
+          else: nil
+        ),
+      browser_adapter: System.get_env("BROWSER_PARITY_BROWSER", "pipe")
+    }
+  end
+
+  @doc "Prepares immutable browser artifacts for native variants; each comparison verifies their identity and copies them to its own directory."
+  @spec prepare_browser_reference!(String.t(), keyword()) :: map()
+  def prepare_browser_reference!(fixture_path, opts \\ []) do
+    directory =
+      Path.join([
+        "tmp",
+        "browser_parity",
+        "references",
+        "#{System.pid()}-#{System.unique_integer([:positive])}"
+      ])
+
+    Telemetry.measure(:shared_reference, %{fixture: Path.expand(fixture_path)}, fn ->
+      prepared =
+        prepare_browser_fixture!(fixture_path, Keyword.put(opts, :artifact_dir, directory))
+
+      %{pdftoppm_bin: rasterizer, chromium_pdf: pdf, dpi: dpi} = prepared
+      pages = rasterize_pdf!(rasterizer, pdf, Path.join(directory, "chromium"), dpi)
+
+      vector_pages =
+        if Keyword.get(opts, :svg_reference) == :png do
+          rasterize_pdf!(
+            rasterizer,
+            Path.rootname(pdf) <> "-vector.pdf",
+            Path.join(directory, "chromium-vector"),
+            72
+          )
+        else
+          []
+        end
+
+      artifacts = directory |> Path.join("*") |> Path.wildcard() |> Enum.filter(&File.regular?/1)
+
+      Map.merge(prepared, %{
+        pages: pages,
+        vector_pages: vector_pages,
+        embedded_fonts: command_output!(pdffonts_bin!(), [pdf]),
+        artifacts: artifacts,
+        artifact_hashes:
+          Map.new(artifacts, fn path ->
+            {path, Base.encode16(:crypto.hash(:sha256, File.read!(path)), case: :lower)}
+          end)
+      })
+    end)
+  end
+
+  @doc "Captures reviewed page groups once and retains independent immutable artifacts for every original scenario."
+  @spec prepare_fixture_page_references!(String.t(), map(), [{String.t(), keyword()}], keyword()) ::
+          map()
+  def prepare_fixture_page_references!(fixture_path, group, entries, opts) do
+    alias NativeElixirPdfUtilities.TestSupport.{BrowserFixturePages, BrowserFixturePageValidator}
+    directory = Path.dirname(Path.expand(fixture_path))
+    sources = BrowserFixturePageValidator.prepare!(directory, group)
+    {first_name, first_options} = hd(entries)
+
+    original_options =
+      Keyword.merge(
+        default_render_opts(Path.join(directory, first_name)),
+        Keyword.get(first_options, :render_opts, [])
+      )
+
+    opts =
+      Keyword.put(
+        opts,
+        :render_opts,
+        Keyword.put(
+          Keyword.get(opts, :render_opts, []),
+          :fonts,
+          Keyword.fetch!(original_options, :fonts)
+        )
+      )
+
+    BrowserFixturePageValidator.assert_generated!(
+      fixture_path,
+      BrowserFixturePages.build!(directory, group)
+    )
+
+    if BrowserReferenceValidator.page_profile_supported?(group["proof"], %{
+         browser:
+           command_output!(Keyword.get(opts, :chromium_bin, chromium_bin!()), ["--version"]),
+         rasterizer: command_output!(Keyword.get(opts, :pdftoppm_bin, pdftoppm_bin!()), ["-v"]),
+         fonts:
+           source_fonts(
+             Keyword.merge(default_render_opts(fixture_path), Keyword.get(opts, :render_opts, []))
+           ),
+         environment:
+           System.get_env() |> Map.take(["FONTCONFIG_FILE", "FONTCONFIG_PATH", "LANG", "LC_ALL"]),
+         adapter: System.get_env("BROWSER_PARITY_BROWSER", "pipe")
+       }) do
+      prepare_verified_page_references!(fixture_path, group, entries, opts, sources)
+    else
+      Telemetry.annotate(%{page_reference_bypass: :unverified_environment})
+      Map.new(entries, fn {name, _} -> {name, nil} end)
+    end
+  end
+
+  defp prepare_verified_page_references!(fixture_path, group, entries, opts, sources) do
+    alias NativeElixirPdfUtilities.TestSupport.BrowserFixturePageValidator
+    directory = Path.dirname(Path.expand(fixture_path))
+    capture = prepare_browser_reference!(fixture_path, opts)
+    root = capture.artifact_dir
+    captured_input = Path.join(root, "captured-document.html")
+    transformed_input = Path.join(root, "chromium-input.html")
+
+    File.cp!(
+      if(File.regular?(transformed_input), do: transformed_input, else: fixture_path),
+      captured_input
+    )
+
+    {chromium, ranges} =
+      BrowserFixturePageValidator.clean_boundaries!(File.read!(capture.chromium_pdf), sources)
+
+    assert {:ok, browser_pdfs} = NativeElixirPdfUtilities.Split.by_ranges(chromium, ranges)
+
+    entries
+    |> Enum.zip(browser_pdfs)
+    |> Enum.zip(ranges)
+    |> Map.new(fn {{{name, source_opts}, browser_pdf}, range} ->
+      folder = Path.join([root, "sources", name])
+
+      input =
+        prepare_browser_input!(
+          Path.join(directory, name),
+          Keyword.put(source_opts, :artifact_dir, folder)
+        )
+
+      identity =
+        try do
+          browser_reference_identity(
+            input.fixture_path,
+            input.chromium_fixture_path,
+            input.chromium_bin,
+            input.pdftoppm_bin,
+            input.render_opts,
+            source_opts,
+            input.dpi
+          )
+        after
+          if input.temporary_input, do: File.rm!(input.temporary_input)
+        end
+
+      BrowserReferenceValidator.assert_page_environment!(
+        capture.identity,
+        identity,
+        group["page_mode"] != "named"
+      )
+
+      File.write!(input.chromium_pdf, browser_pdf)
+
+      pages =
+        for {global, local} <- Enum.with_index(range, 1) do
+          path = Path.join(folder, "chromium-#{local}.ppm")
+          File.cp!(Enum.at(capture.pages, global - 1), path)
+          path
+        end
+
+      provenance = %{
+        fixture: capture.fixture_path,
+        input: captured_input,
+        identity: capture.identity,
+        original: input.fixture_path,
+        pages: Enum.to_list(range),
+        native_input: :original
+      }
+
+      File.write!(Path.join(folder, "page-capture.exs"), inspect(provenance, limit: :infinity))
+      artifacts = Path.wildcard(Path.join(folder, "*")) |> Enum.filter(&File.regular?/1)
+
+      Map.new([capture.chromium_pdf, captured_input | artifacts], fn path ->
+        {path, Base.encode16(:crypto.hash(:sha256, File.read!(path)), case: :lower)}
+      end)
+      |> then(fn hashes ->
+        {name,
+         %{
+           artifact_dir: root,
+           identity: identity,
+           artifacts: artifacts,
+           artifact_hashes: hashes,
+           pages: pages,
+           vector_pages: [],
+           embedded_fonts: embedded_fonts!(input.chromium_pdf),
+           chromium_pdf: input.chromium_pdf,
+           capture: provenance
+         }}
+      end)
+    end)
+  end
+
+  @doc "Records the actual embedded font inventory of a PDF."
+  @spec embedded_fonts!(String.t()) :: String.t()
+  def embedded_fonts!(path), do: command_output!(pdffonts_bin!(), [path])
 
   defp source_fonts(render_opts) do
     render_opts
@@ -651,7 +1164,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     if cached do
       cached
     else
-      case System.cmd(command, args, stderr_to_stdout: true) do
+      case Telemetry.measure(:inspection, %{command: command, arguments: args}, fn ->
+             System.cmd(command, args, stderr_to_stdout: true)
+           end) do
         {output, 0} ->
           output = String.trim(output)
           if cacheable?, do: :persistent_term.put(key, output)
@@ -948,29 +1463,48 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   defp rasterize_pdf!(pdftoppm_bin, pdf_path, output_prefix, dpi) do
-    case System.cmd(pdftoppm_bin, ["-r", to_string(dpi), pdf_path, output_prefix],
-           stderr_to_stdout: true
-         ) do
-      {_output, 0} ->
-        pages =
-          output_prefix
-          |> Kernel.<>("-*.ppm")
-          |> Path.wildcard()
-          |> Enum.sort_by(&page_number/1)
+    Telemetry.measure(:rasterization, %{pdf: pdf_path, dpi: dpi}, fn ->
+      case System.cmd(pdftoppm_bin, ["-r", to_string(dpi), pdf_path, output_prefix],
+             stderr_to_stdout: true
+           ) do
+        {_output, 0} ->
+          pages =
+            output_prefix
+            |> Kernel.<>("-*.ppm")
+            |> Path.wildcard()
+            |> Enum.sort_by(&page_number/1)
 
-        assert pages != [],
-               "pdftoppm completed but produced no PPM pages for #{pdf_path}"
+          assert pages != [], "pdftoppm completed but produced no PPM pages for #{pdf_path}"
 
-        pages
+          canvases =
+            Enum.map(pages, fn path ->
+              # Poppler emits a binary PPM with three header lines. Read only
+              # those lines here; the comparator owns the full pixel read.
+              {:ok, canvas} =
+                File.open(path, [:read, :binary], fn file ->
+                  "P6\n" = IO.binread(file, :line)
 
-      {output, status} ->
-        flunk("""
-        PDF rasterization failed with status #{status}
-        command: #{pdftoppm_bin} -r #{dpi} #{pdf_path} #{output_prefix}
-        output:
-        #{output}
-        """)
-    end
+                  [width, height] =
+                    file |> IO.binread(:line) |> String.split() |> Enum.map(&String.to_integer/1)
+
+                  %{path: path, width: width, height: height, pixels: width * height}
+                end)
+
+              canvas
+            end)
+
+          Telemetry.annotate(%{raster_pages: canvases, page_count: length(canvases)})
+          pages
+
+        {output, status} ->
+          flunk("""
+          PDF rasterization failed with status #{status}
+          command: #{pdftoppm_bin} -r #{dpi} #{pdf_path} #{output_prefix}
+          output:
+          #{output}
+          """)
+      end
+    end)
   end
 
   defp page_number(path) do
@@ -983,6 +1517,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   defp compare_page!(chromium_page, native_page, page_number, artifact_dir, opts) do
     chromium = read_ppm!(chromium_page)
     native = read_ppm!(native_page)
+
+    Telemetry.annotate(%{
+      reference_pixels: chromium.width * chromium.height,
+      native_pixels: native.width * native.height
+    })
 
     width_delta = abs(native.width - chromium.width)
     height_delta = abs(native.height - chromium.height)

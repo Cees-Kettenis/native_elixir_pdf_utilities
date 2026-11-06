@@ -32,21 +32,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextMetricsBrowserParityTest do
     assert stats.page_count == 2
     assert stats.scripting == :disabled
   end
-
-  test "hyphen context remains intact when an overflowing word crosses spans" do
-    fixture =
-      Paths.fixture("html_to_pdf/browser_parity/css_text_styled_hyphen_context.html")
-
-    stats =
-      PdfVisualCompare.assert_browser_match!(fixture,
-        artifact_dir:
-          "tmp/test_artifacts/css_text_metrics_browser_parity/css-styled-hyphen-browser",
-        render_opts: [system_font_discovery: false],
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.page_count == 1
-    assert stats.scripting == :disabled
-  end
 end

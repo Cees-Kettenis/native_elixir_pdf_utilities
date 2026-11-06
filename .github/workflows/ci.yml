@@ -27,11 +27,11 @@ jobs:
         run: |
           matrix="$(./scripts/quality-matrix --matrix-json)"
           echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
-          jobs="$(printf '%s' "${matrix}" | jq -c '{include: [.include[] as $runtime | $runtime + {suite: "checks", partition: 0}, (range(1; 4) as $partition | $runtime + {suite: "parity", partition: $partition})]}')"
+          jobs="$(printf '%s' "${matrix}" | jq -c '{include: [.include[] as $runtime | $runtime + {suite: "checks"}, $runtime + {suite: "parity"}]}')"
           echo "jobs=${jobs}" >> "${GITHUB_OUTPUT}"
 
   runtime-checks:
-    name: Elixir ${{ matrix.elixir }} ${{ matrix.suite }} ${{ matrix.partition }}
+    name: Elixir ${{ matrix.elixir }} ${{ matrix.suite }}
     needs: runtime-matrix
     runs-on: ubuntu-latest
     strategy:
@@ -95,7 +95,7 @@ jobs:
       - name: Compile project with warnings as errors
         run: mix compile --warnings-as-errors
 
-      # Ordinary checks and each parity partition have independent runners.
+      # Ordinary checks and complete parity suites have independent runners.
       # The newest supported minor owns coverage, Dialyzer and performance.
       - name: Check formatting and dependencies
         if: matrix.suite == 'checks' && matrix.canonical
@@ -118,9 +118,7 @@ jobs:
       - name: Run Chromium browser parity tests
         id: browser-parity
         if: matrix.suite == 'parity'
-        env:
-          MIX_TEST_PARTITION: ${{ matrix.partition }}
-        run: mix test.browser_parity --partitions 3 --warnings-as-errors
+        run: env -u MIX_TEST_PARTITION mix test.browser_parity --warnings-as-errors
 
       - name: Check performance against recorded baselines
         if: matrix.suite == 'checks' && matrix.canonical
@@ -149,12 +147,28 @@ jobs:
         if: failure() && steps.browser-parity.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
-          name: browser-parity-artifacts-elixir-${{ matrix.elixir }}-partition-${{ matrix.partition }}
-          path: tmp/browser_parity
+          name: browser-parity-artifacts-elixir-${{ matrix.elixir }}
+          path: |
+            tmp/browser_parity
+            tmp/test_artifacts
+          retention-days: 7
+
+      - name: Summarize browser parity work
+        if: always() && (steps.browser-parity.outcome == 'success' || steps.browser-parity.outcome == 'failure')
+        run: |
+          mkdir -p .quality/browser-parity
+          mix run --no-start --no-compile scripts/browser-parity-report.exs .quality/browser-parity > .quality/browser-parity/report.json
+
+      - name: Upload browser parity telemetry
+        if: always() && matrix.suite == 'parity'
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-parity-telemetry-elixir-${{ matrix.elixir }}
+          path: .quality/browser-parity
           retention-days: 7
 
   # Keep the existing required check names, and never report success if a
-  # partition failed, was cancelled or did not run.
+  # suite failed, was cancelled or did not run.
   supported-elixir:
     name: Elixir ${{ matrix.elixir }}
     needs: [runtime-matrix, runtime-checks]
@@ -163,7 +177,7 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.runtime-matrix.outputs.matrix) }}
     steps:
-      - name: Require all runtime checks and browser partitions
+      - name: Require all runtime checks and complete browser suites
         env:
           RESULT: ${{ needs.runtime-checks.result }}
         run: test "${RESULT}" = success

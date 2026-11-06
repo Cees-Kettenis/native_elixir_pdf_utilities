@@ -1,5 +1,3 @@
-alias NativeElixirPdfUtilities.TestSupport.Paths
-
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{HtmlToPdf, Forms, Text}
@@ -166,66 +164,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Style.compute_detailed(dom)
     assert diagnostic.stage == :style
     assert diagnostic.message =~ "max_css_numeric_magnitude"
-  end
-
-  @tag :browser_parity
-  @tag :skipped_special_inputs
-  test "original skipped host artwork matches Chromium with caller fonts and empty PDF actions" do
-    alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
-
-    fonts =
-      for family <- ["Arial", "DejaVu Sans", "DejaVu Sans Mono"] do
-        %{
-          family: family,
-          path:
-            Path.expand(
-              "priv/fonts/dejavu/" <>
-                if(family == "DejaVu Sans Mono", do: "DejaVuSansMono.ttf", else: "DejaVuSans.ttf")
-            ),
-          weight: 400,
-          style: :normal
-        }
-      end
-
-    stats =
-      PdfVisualCompare.assert_browser_match!(
-        Paths.fixture("html_to_pdf/browser_parity/html_skipped_special_controls.html"),
-        render_opts: [forms: :interactive, fonts: fonts, system_font_discovery: false],
-        artifact_dir: "tmp/browser_parity/skipped-special-public-proof",
-        max_changed_ratio: 0.01,
-        max_average_delta: 0.01
-      )
-
-    assert stats.page_count == 2
-    assert length(stats.font_sources) == 3
-
-    for source <- stats.font_sources do
-      assert source.sha256 ==
-               Base.encode16(:crypto.hash(:sha256, File.read!(source.path)), case: :lower)
-    end
-
-    for renderer <- ["native", "chromium"] do
-      bytes = File.read!(Path.join(stats.artifact_dir, renderer <> ".pdf"))
-      assert {:ok, text} = Text.extract(bytes)
-
-      for caption <- [
-            "color",
-            "range",
-            "file",
-            "date",
-            "month",
-            "week",
-            "time",
-            "image",
-            "gauges"
-          ] do
-        assert text =~ caption
-      end
-
-      refute text =~ "secret" or text =~ "2026" or text =~ "chosen" or text =~ "Secret"
-    end
-
-    assert {:ok, []} = Forms.fields(File.read!(Path.join(stats.artifact_dir, "native.pdf")))
   end
 
   test "forged skipped paint state returns an actionable public layout diagnostic" do

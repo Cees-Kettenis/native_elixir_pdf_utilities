@@ -41,6 +41,16 @@ html,body{margin:0;padding:0;font-size:12pt}
 #sample_5 .track{height:60pt;width:110pt;background:#f1eee5;transform:translate(0,2pt)}
 #sample_5 .absolute{position:absolute;left:25%;top:50%;width:36pt;height:15pt;background:#305e84;color:white}
 #sample_5 p{margin:0}
+#sample_6,#sample_6{margin:0;padding:0}
+#sample_6{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}
+#sample_6 p{margin:0 0 6pt}
+#sample_6 table{width:240pt;table-layout:fixed;border-collapse:collapse;margin:0 0 10pt}
+#sample_6 td{height:24pt;padding:0;border:1px solid #888}
+#sample_6 col{width:50%}
+#sample_7,#sample_7{margin:0;padding:0}
+#sample_7{font-family:"DejaVu Sans";font-size:9pt;line-height:12pt}
+#sample_7 p{margin:0 0 6pt}
+#sample_7 table{border:0;margin-bottom:6pt}
 </style></head><body>
 <!-- html_selected_content_clones.html; SHA256 4617f373d0396e6aa798e2dd54234ff39134030f7f918c7bbb4fca32bc015321; original 300 x 200 pt canvas -->
 <section id="sample_0" style="position:absolute;left:12.0pt;top:12.0pt;width:276.0pt;height:176.0pt;box-sizing:border-box">
@@ -82,5 +92,21 @@ html,body{margin:0;padding:0;font-size:12pt}
 
 <!-- html_css_affine_positioned_tracks.html; SHA256 747f849ad96a8d78d3191f7ed4d9fee9dd89cc31bdbb324403114c810e66123c; original 300 x 300 pt canvas -->
 <section id="sample_5" style="position:absolute;left:12.0pt;top:915.0pt;width:276.0pt;height:276.0pt;box-sizing:border-box"><table><tr><td><p>Cell flow</p><div class="absolute">Cell</div></td><td>Peer</td></tr></table><div class="flex"><div class="track"><p>Flex flow</p><div class="absolute">Flex</div></div><div class="track">Peer</div></div><div class="grid"><div class="track"><p>Grid flow</p><div class="absolute">Grid</div></div><div class="track">Peer</div></div></section>
+
+<!-- html_table_border_conflicts.html; SHA256 e3e82efbe1501056610ed3da860f7efdda49b5944041938c99e8121503a30136; original 280 x 340 pt canvas -->
+<section id="sample_6" style="position:absolute;left:432pt;top:672pt;width:256pt;height:316pt;box-sizing:border-box">
+<p>Width then style then left tie</p><table><colgroup><col><col></colgroup><tr><td style="border-right:2pt double red">Narrow double</td><td style="border-left:4pt dotted blue">Wider dotted</td></tr><tr><td style="border-right:3pt solid red">Equal solid</td><td style="border-left:3pt double blue">Equal double</td></tr><tr><td style="border-right:3pt solid red">Left red wins</td><td style="border-left:3pt solid blue">Right blue loses</td></tr></table>
+<p>Hidden suppresses shared and outer borders</p><table style="border:6pt solid red"><colgroup><col><col></colgroup><tr><td style="border-left:hidden;border-right:12pt double red">Hidden outside</td><td style="border-left:hidden">Hidden shared</td></tr><tr><td>Visible outside</td><td>Visible outside</td></tr></table>
+<p>Row and column origin colors</p><table style="border:2pt solid black"><colgroup style="border:2pt solid blue"><col style="border:2pt solid green"><col></colgroup><tbody style="border:2pt solid blue"><tr style="border:2pt solid red"><td style="border:none">Row red</td><td style="border:2pt solid #444">Cell gray</td></tr><tr><td style="border:none">Column green</td><td style="border:none">Group blue</td></tr></tbody></table>
+<p>End conflict presentation</p>
+</section>
+
+<!-- html_table_legacy_center.html; SHA256 21b78d116399a18d3d7d1bb4cfa620b63a2d207c2887568687f5d4208166ffde; original 240 x 160 pt canvas -->
+<section id="sample_7" style="position:absolute;left:432pt;top:1014pt;width:216pt;height:136pt;box-sizing:border-box">
+<p>Legacy centered table</p><table width="160" align="center" bgcolor="#eef" cellspacing="0" cellpadding="4"><tr><td>Centered</td></tr></table>
+<table width="160" align="center" bgcolor="#def" cellspacing="0" cellpadding="4" style="margin-left:0"><tr><td>CSS left margin</td></tr></table>
+<table width="160" align="center" bgcolor="#fde" cellspacing="0" cellpadding="4" style="margin-right:0"><tr><td>CSS right margin</td></tr></table>
+<p>End centered table</p>
+</section>
 
 </body></html>

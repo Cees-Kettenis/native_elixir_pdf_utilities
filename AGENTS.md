@@ -97,6 +97,14 @@ Use case/cond/with or clearly named private functions instead of hidden branchin
   matrix. Use `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity`
   for focused host feedback or to investigate a host/container discrepancy.
 
+Before adding browser parity coverage, check whether the scenario can join an
+existing page group or share a browser reference. Explain any new independent
+capture in its owning test. Preserve original native inputs, thresholds and
+per-scenario assertions. Prove grouped output matches the originals in pixels,
+page bounds and positioned text on every supported runtime. Report and justify
+increases in browser launches or raster work, including unexpected reference
+fallbacks, and require the full quality matrix to pass.
+
 ## Quality Gates
 
 Run `./scripts/quality-matrix` for every change. Do not consider agent-authored

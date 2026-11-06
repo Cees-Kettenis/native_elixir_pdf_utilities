@@ -548,6 +548,24 @@
           300,
           300
         ]
+      ],
+      [
+        "html_table_border_conflicts.html",
+        [
+          420,
+          660,
+          280,
+          340
+        ]
+      ],
+      [
+        "html_table_legacy_center.html",
+        [
+          420,
+          1002,
+          240,
+          160
+        ]
       ]
     ],
     "size": [
@@ -562,8 +580,138 @@
       "table_presentation_correction",
       "table_presentation",
       "css_affine_pagination",
-      "html_fixture_sheets"
-    ]
+      "html_fixture_sheets",
+      "table_presentation_phase2",
+      "table_border_rules",
+      "table_legacy_centering",
+      "html_table_border_conflicts",
+      "html_table_legacy_center"
+    ],
+    "composition": "literal_additions",
+    "preserved_sources": {
+      "html_selected_content_clones.html": "4617f373d0396e6aa798e2dd54234ff39134030f7f918c7bbb4fca32bc015321",
+      "html_table_zero_edge_grid.html": "d835dac9217c984211ade8a47bc606b84e50c255000c900d50807764c1131e9b",
+      "html_table_rules_separate_override.html": "d6f167ac70c0c511ee9758098b2ba7a259f7f349dd02266ef3bc1bc1299999e0",
+      "html_table_legacy_borders.html": "75d271cd956ac2a07ff4e75420930591069d82cb95c0fbbd0895781d2c68edf2",
+      "html_table_baseline_override.html": "dfd608f6632daf023efaea047c23bfdb9fc044c11076c6a6c1fb75f9e210c267",
+      "html_css_affine_positioned_tracks.html": "747f849ad96a8d78d3191f7ed4d9fee9dd89cc31bdbb324403114c810e66123c"
+    },
+    "sources": {
+      "html_table_border_conflicts.html": {
+        "sha256": "e3e82efbe1501056610ed3da860f7efdda49b5944041938c99e8121503a30136",
+        "owner": "table_border_rules",
+        "canvas": [
+          280,
+          340
+        ],
+        "margin": 12,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "Width then style then left tie",
+            "Wider dotted",
+            "Equal double",
+            "Left red wins",
+            "Hidden shared",
+            "Row red",
+            "Column green"
+          ]
+        },
+        "percentage_columns": {
+          "table_width": 240,
+          "column_width": 50
+        }
+      },
+      "html_table_legacy_center.html": {
+        "sha256": "21b78d116399a18d3d7d1bb4cfa620b63a2d207c2887568687f5d4208166ffde",
+        "owner": "table_legacy_centering",
+        "canvas": [
+          240,
+          160
+        ],
+        "margin": 12,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "Centered",
+            "CSS left margin",
+            "CSS right margin",
+            "End centered table"
+          ]
+        }
+      }
+    },
+    "assertion_engines": [
+      "native",
+      "chromium"
+    ],
+    "text_whitespace": "collapse",
+    "preserved_fields": {
+      "native": [
+        {
+          "name": "CHOICE_1_1",
+          "type": "choice",
+          "value": "Selected rich child tree",
+          "read_only": false,
+          "widgets": [
+            {
+              "page": 1,
+              "rect": [
+                12.0,
+                1170.75,
+                222.0,
+                1191.0
+              ]
+            }
+          ],
+          "export_values": [],
+          "choices": [
+            {
+              "label": "Plain hidden label",
+              "value": "First rich choice"
+            },
+            {
+              "label": "Selected rich child tree",
+              "value": "Selected rich child tree"
+            }
+          ]
+        },
+        {
+          "name": "CHOICE_1_2",
+          "type": "choice",
+          "value": "Enabled default choice",
+          "read_only": false,
+          "widgets": [
+            {
+              "page": 1,
+              "rect": [
+                12.0,
+                1145.25,
+                222.0,
+                1164.75
+              ]
+            }
+          ],
+          "export_values": [],
+          "choices": [
+            {
+              "label": "Skipped",
+              "value": "Skipped"
+            },
+            {
+              "label": "Enabled default choice",
+              "value": "Enabled default choice"
+            }
+          ]
+        }
+      ],
+      "chromium": []
+    },
+    "preserved_sheet_sha256": "61146e9c94b9d48c5f2946dae6211ae77a6327a6e46fabc4e9f67bba2c8b3d24"
   },
   {
     "name": "html_structure_defaults_sheet.html",
@@ -760,5 +908,271 @@
     "tags": [
       "html_fixture_sheets"
     ]
+  },
+  {
+    "name": "text_wrapping_geometry_sheet.html",
+    "family": "html",
+    "composition": "literal_blocks",
+    "size": [
+      540,
+      500
+    ],
+    "font_size": "12pt",
+    "render_opts": {
+      "system_font_discovery": false
+    },
+    "resource_base": "assets/",
+    "reference_mode": "chromium_vector_pdf",
+    "standalone_reason": "The existing typography sheet uses a different font-discovery environment and has no room for the original canvases.",
+    "tags": [
+      "css_text_break_modes",
+      "text_wrapping_geometry",
+      "css_text_atomic_intrinsics",
+      "css_text_preserved_intrinsics",
+      "css_text_atomic_geometry",
+      "css_authored_line_breaks"
+    ],
+    "regions": [
+      [
+        "css_text_atomic_intrinsics.html",
+        [
+          0,
+          0,
+          240,
+          240
+        ]
+      ],
+      [
+        "css_text_preserved_intrinsics.html",
+        [
+          240,
+          0,
+          240,
+          240
+        ]
+      ],
+      [
+        "css_text_atomic_geometry.html",
+        [
+          0,
+          240,
+          240,
+          240
+        ]
+      ],
+      [
+        "css_authored_line_breaks.html",
+        [
+          240,
+          240,
+          300,
+          260
+        ]
+      ]
+    ],
+    "sources": {
+      "css_text_atomic_intrinsics.html": {
+        "sha256": "ee830517d32b24bfa360f08a5ce64e3e41586aa148270418fcb5fce39a1f017c",
+        "owner": "css_text_break_modes",
+        "canvas": [
+          240,
+          240
+        ],
+        "margin": 12,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "Box",
+            "ABCDE"
+          ]
+        }
+      },
+      "css_text_preserved_intrinsics.html": {
+        "sha256": "fe4d6ff46719de87d342db871b2f2eb9cc2c37e82cbacad702b571ed75506e2a",
+        "owner": "css_text_break_modes",
+        "canvas": [
+          240,
+          240
+        ],
+        "margin": 12,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "ABC",
+            "DE",
+            "A B"
+          ]
+        }
+      },
+      "css_text_atomic_geometry.html": {
+        "sha256": "899581e123a51f246c3c5346ee95f82d1919f129f42a2fc8c56cfb3bb32f6522",
+        "owner": "css_text_break_modes",
+        "canvas": [
+          240,
+          240
+        ],
+        "margin": 12,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "Box",
+            "Z"
+          ]
+        }
+      },
+      "css_authored_line_breaks.html": {
+        "sha256": "ae278ba01851297c2936fb38551fa7d85f16f03d9d1b4ce7b3d52468d7e52d03",
+        "owner": "css_text_break_modes",
+        "canvas": [
+          300,
+          260
+        ],
+        "margin": 12,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "Before",
+            "After",
+            "Inline block before",
+            "Block before",
+            "Hidden before",
+            "Hidden after"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "text_discretionary_geometry_sheet.html",
+    "family": "html",
+    "composition": "literal_blocks",
+    "size": [
+      540,
+      360
+    ],
+    "font_size": "12pt",
+    "render_opts": {
+      "system_font_discovery": false
+    },
+    "resource_base": "assets/",
+    "reference_mode": "chromium_vector_pdf",
+    "standalone_reason": "These local discretionary-text canvases share the same font environment. The existing text sheet has no free rectangle for them; this compact sheet preserves original canvas denominators.",
+    "tags": [
+      "css_discretionary_breaks",
+      "text_discretionary_geometry",
+      "css_discretionary_shaping",
+      "css_discretionary_atomic_boundary",
+      "css_text_styled_hyphen_context"
+    ],
+    "regions": [
+      [
+        "css_discretionary_shaping.html",
+        [
+          0,
+          0,
+          300,
+          240
+        ]
+      ],
+      [
+        "css_discretionary_atomic_boundary.html",
+        [
+          300,
+          0,
+          180,
+          120
+        ]
+      ],
+      [
+        "css_text_styled_hyphen_context.html",
+        [
+          300,
+          120,
+          240,
+          240
+        ]
+      ]
+    ],
+    "sources": {
+      "css_discretionary_shaping.html": {
+        "sha256": "b5a0ae2de4b5c3a9b6ebede79aecdf74cc38cf7b72129f4b32df19264eb83c9a",
+        "owner": "css_discretionary_breaks",
+        "canvas": [
+          300,
+          240
+        ],
+        "margin": 10,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "fice",
+            "office",
+            "A",
+            "V"
+          ]
+        },
+        "effective_margin": 9.75
+      },
+      "css_discretionary_atomic_boundary.html": {
+        "sha256": "b0c296d6f43c4ae351b24dd51a70579c528ef8c7be6522b9f6b70794e62b8b10",
+        "owner": "css_discretionary_breaks",
+        "canvas": [
+          180,
+          120
+        ],
+        "margin": 10,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "Box",
+            "Next",
+            "Atomic"
+          ]
+        },
+        "effective_margin": 9.75
+      },
+      "css_text_styled_hyphen_context.html": {
+        "sha256": "d37cf446b95a6f5ddc96e5b43ca1f16f75a8ee35d7e10cc14e32685fcd68d7a2",
+        "owner": "css_discretionary_breaks",
+        "canvas": [
+          240,
+          240
+        ],
+        "margin": 10,
+        "max_changed_ratio": 0.01,
+        "max_average_delta": 0.01,
+        "assertions": {
+          "page_count": 1,
+          "text": [
+            "prefix",
+            "water",
+            "repel",
+            "lent",
+            "ABCDEFGHI",
+            "J"
+          ]
+        },
+        "effective_margin": 9.75
+      }
+    },
+    "assertion_engines": [
+      "native"
+    ],
+    "preserved_fields": {
+      "native": [],
+      "chromium": []
+    }
   }
 ]

@@ -1,0 +1,49 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:540pt 500pt;margin:0}
+html,body{margin:0;padding:0;font-size:12pt}
+#sample_0,#sample_0{margin:0;font-family:'DejaVu Sans';font-size:12pt;line-height:18pt}
+#sample_0 table{width:30pt;border-spacing:0;margin-bottom:12pt;background:#dce8f6}
+#sample_0 td{padding:0}
+#sample_0 .box{display:inline-block;width:72pt;background:#e8d8bd}
+#sample_1,#sample_1{margin:0;font-family:'DejaVu Sans';font-size:24pt;line-height:30pt}
+#sample_1 table{width:10pt;border-spacing:0;margin-bottom:12pt;background:#dce8f6}
+#sample_1 td{padding:0}
+#sample_2,#sample_2{margin:0;font-family:'DejaVu Sans';font-size:12pt;line-height:30pt}
+#sample_2 p{margin:0 0 12pt}
+#sample_2 .box{display:inline-block;width:72pt;height:24pt;box-sizing:border-box;padding:2pt;border:1pt solid #304050;margin:3pt;background:#e8d8bd}
+#sample_3,#sample_3{ margin: 0; font-family: 'DejaVu Sans'; font-size: 16px; line-height: 24px; }
+#sample_3 p{ margin: 0 0 12px; }
+</style></head><body>
+<!-- css_text_atomic_intrinsics.html; SHA256 ee830517d32b24bfa360f08a5ce64e3e41586aa148270418fcb5fce39a1f017c; original 240 x 240 pt canvas -->
+<section id="sample_0" style="position:absolute;left:12pt;top:12pt;width:216pt;height:216pt;box-sizing:border-box">
+<table><tr><td><span class="box">Box</span>Z</td></tr></table>
+<table style="overflow-wrap:anywhere"><tr><td><span class="box">Box</span>ABCDE</td></tr></table>
+<table style="overflow-wrap:break-word"><tr><td><span class="box">Box</span>ABCDE</td></tr></table>
+<table style="word-break:break-word"><tr><td><span class="box">Box</span>ABCDE</td></tr></table>
+</section>
+
+<!-- css_text_preserved_intrinsics.html; SHA256 fe4d6ff46719de87d342db871b2f2eb9cc2c37e82cbacad702b571ed75506e2a; original 240 x 240 pt canvas -->
+<section id="sample_1" style="position:absolute;left:252pt;top:12pt;width:216pt;height:216pt;box-sizing:border-box">
+<table style="white-space:pre"><tr><td>ABC
+DE</td></tr></table>
+<table style="white-space:break-spaces"><tr><td>A B</td></tr></table>
+<table style="white-space:break-spaces"><tr><td>A<span> </span>B</td></tr></table>
+</section>
+
+<!-- css_text_atomic_geometry.html; SHA256 899581e123a51f246c3c5346ee95f82d1919f129f42a2fc8c56cfb3bb32f6522; original 240 x 240 pt canvas -->
+<section id="sample_2" style="position:absolute;left:12pt;top:252pt;width:216pt;height:216pt;box-sizing:border-box">
+<p><span class="box">Box</span>Z</p>
+<p><span class="box" style="max-width:60pt">Box</span>Z</p>
+<p><span class="box" style="min-width:84pt">Box</span>Z</p>
+</section>
+
+<!-- css_authored_line_breaks.html; SHA256 ae278ba01851297c2936fb38551fa7d85f16f03d9d1b4ce7b3d52468d7e52d03; original 300 x 260 pt canvas -->
+<section id="sample_3" style="position:absolute;left:252pt;top:252pt;width:276pt;height:236pt;box-sizing:border-box">
+<p>Before<br style="display:inline">After</p>
+<p>Inline block before<br style="display:inline-block">Inline block after</p>
+<p>Block before<br style="display:block">Block after</p>
+<p>Hidden before<br style="display:none">Hidden after</p>
+</section>
+
+</body></html>

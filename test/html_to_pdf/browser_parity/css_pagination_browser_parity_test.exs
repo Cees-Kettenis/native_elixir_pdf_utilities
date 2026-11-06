@@ -7,7 +7,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssPaginationBrowserParityTest do
   @moduletag :css_affine_pagination
   @fixtures_dir Paths.fixture("html_to_pdf/browser_parity")
   for name <-
-        ~w(html_css_affine_widget_slices html_css_affine_positioned_tracks html_css_affine_descendant_sheets html_css_affine_clipped_descendants html_css_affine_rotated_widget_slices) do
+        ~w(html_css_affine_positioned_tracks) do
     @fixture name
     test "authored CSS pagination source #{name}" do
       stats =
@@ -18,17 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssPaginationBrowserParityTest do
           max_average_delta: 0.01
         )
 
-      assert stats.page_count ==
-               if(
-                 @fixture in [
-                   "html_css_affine_widget_slices",
-                   "html_css_affine_descendant_sheets",
-                   "html_css_affine_clipped_descendants",
-                   "html_css_affine_rotated_widget_slices"
-                 ],
-                 do: 2,
-                 else: 1
-               )
+      assert stats.page_count == 1
     end
   end
 end

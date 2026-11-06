@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   @moduledoc false
   use GenServer
   import ExUnit.Assertions
+  alias NativeElixirPdfUtilities.TestSupport.BrowserParityTelemetry, as: Telemetry
 
   @doc """
   Prints a fixture in a fresh browser process and context, bounded by test concurrency.
@@ -11,18 +12,21 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
   """
   @spec print_pdf!(String.t(), String.t(), String.t(), map() | nil, keyword()) :: :ok
   def print_pdf!(binary, fixture, output, reference \\ nil, opts \\ []) do
-    slot = :erlang.phash2(self(), ExUnit.configuration()[:max_cases])
-    name = {:global, {__MODULE__, binary, self(), make_ref()}}
-    {:ok, pid} = GenServer.start(__MODULE__, {binary, slot, self(), opts}, name: name)
+    Telemetry.measure(:browser_capture, %{browser_input: fixture, output: output}, fn ->
+      slot = :erlang.phash2(self(), ExUnit.configuration()[:max_cases])
+      name = {:global, {__MODULE__, binary, self(), make_ref()}}
+      opts = Keyword.put(opts, :telemetry_context, Telemetry.context())
+      {:ok, pid} = GenServer.start(__MODULE__, {binary, slot, self(), opts}, name: name)
 
-    try do
-      case GenServer.call(pid, {:pdf, fixture, output, reference}, :infinity) do
-        :ok -> :ok
-        {:error, message} -> flunk(message)
+      try do
+        case GenServer.call(pid, {:pdf, fixture, output, reference}, :infinity) do
+          :ok -> :ok
+          {:error, message} -> flunk(message)
+        end
+      after
+        stop_browser(pid)
       end
-    after
-      stop_browser(pid)
-    end
+    end)
   end
 
   @doc "Closes the suite's browser processes and removes their temporary profiles."
@@ -54,6 +58,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
 
   @impl true
   def init({binary, slot, owner, opts}) do
+    Telemetry.attach(Keyword.fetch!(opts, :telemetry_context))
     owner_monitor = Process.monitor(owner)
     unique = "#{System.pid()}-#{System.unique_integer([:positive])}"
     profile = Path.join(System.tmp_dir!(), "native-pdf-chrome-#{unique}")
@@ -80,17 +85,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
     # Chrome's pipe uses descriptors 3 and 4. The shell only connects those
     # descriptors to the Erlang port; every executable argument stays quoted.
     port =
-      Port.open({:spawn_executable, System.find_executable("sh")}, [
-        :binary,
-        :exit_status,
-        args: [
-          "-c",
-          "browser_log=$1; shift; exec \"$@\" 3<&0 4>&1 2>\"$browser_log\"",
-          "browser-pipe",
-          log,
-          binary | args ++ Keyword.get(opts, :browser_args, [])
-        ]
-      ])
+      Telemetry.measure(:browser_launch, %{browser: binary, profile: profile}, fn ->
+        Port.open({:spawn_executable, System.find_executable("sh")}, [
+          :binary,
+          :exit_status,
+          args: [
+            "-c",
+            "browser_log=$1; shift; exec \"$@\" 3<&0 4>&1 2>\"$browser_log\"",
+            "browser-pipe",
+            log,
+            binary | args ++ Keyword.get(opts, :browser_args, [])
+          ]
+        ])
+      end)
 
     {:ok,
      %{
@@ -137,7 +144,10 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         else: "file://" <> URI.encode(Path.expand(fixture))
 
     try do
-      {context, state} = command(state, "Target.createBrowserContext")
+      {context, state} =
+        Telemetry.measure(:browser_context, %{}, fn ->
+          command(state, "Target.createBrowserContext")
+        end)
 
       {target, state} =
         command(state, "Target.createTarget", %{
@@ -211,14 +221,19 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
           event["loaderId"] == navigation["loaderId"] and event["name"] == "load"
         end)
 
-      state = await_documents(state, session)
+      state =
+        Telemetry.measure(:browser_readiness, %{}, fn -> await_documents(state, session) end)
+
       File.write!(output <> ".readiness.json", :json.encode(state.readiness))
 
-      {pdf, state} = print_page(state, session)
+      {pdf, state} = Telemetry.measure(:browser_print, %{}, fn -> print_page(state, session) end)
 
       {pdf, state} =
         if reference,
-          do: raster_svg_reference(state, session, output, pdf),
+          do:
+            Telemetry.measure(:svg_reference, %{}, fn ->
+              raster_svg_reference(state, session, output, pdf)
+            end),
           else: {pdf, state}
 
       File.write!(output, Base.decode64!(pdf["data"]))
@@ -259,21 +274,23 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
 
   @impl true
   def terminate(_reason, state) do
-    if Port.info(state.port) do
-      # Closing the pipe lets Chrome flush its profile asynchronously. Ask it
-      # to exit and wait before removing files it may still be writing.
-      Port.command(state.port, [:json.encode(%{id: state.next_id, method: "Browser.close"}), 0])
-      port = state.port
+    Telemetry.measure(:browser_cleanup, %{profile: state.profile}, fn ->
+      if Port.info(state.port) do
+        # Closing the pipe lets Chrome flush its profile asynchronously. Ask it
+        # to exit and wait before removing files it may still be writing.
+        Port.command(state.port, [:json.encode(%{id: state.next_id, method: "Browser.close"}), 0])
+        port = state.port
 
-      receive do
-        {^port, {:exit_status, _status}} -> :ok
-      after
-        ExUnit.configuration()[:timeout] -> raise("Chrome did not exit; log: #{state.log}")
+        receive do
+          {^port, {:exit_status, _status}} -> :ok
+        after
+          ExUnit.configuration()[:timeout] -> raise("Chrome did not exit; log: #{state.log}")
+        end
       end
-    end
 
-    File.rm_rf!(state.profile)
-    :ok
+      File.rm_rf!(state.profile)
+      :ok
+    end)
   end
 
   # The parent load event does not establish that every embedded document has

@@ -20,8 +20,8 @@ check() {
 prepare_fixture() {
   project="$directory/$1/project"
   bin="$directory/$1/bin"
-  export MOCK_TRACE="$directory/$1/trace" MOCK_COUNT=3 QUALITY_MATRIX_JOBS=3
-  unset MOCK_FAIL_PARITY MOCK_WARNINGS MOCK_FAIL_DIALYZER
+  export MOCK_TRACE="$directory/$1/trace" MOCK_COUNT=3 MOCK_START_BARRIER=3 QUALITY_MATRIX_JOBS=3
+  unset MOCK_FAIL_PARITY MOCK_WARNINGS MOCK_FAIL_DIALYZER MOCK_SERIAL
   export PATH="$bin:$original_path"
   mkdir -p "$project/scripts" "$project/ci" "$bin" "$MOCK_TRACE"
   cp "$repository_root/scripts/quality-matrix" "$project/scripts/quality-matrix"
@@ -87,10 +87,13 @@ case "$1" in
     echo "$MOCK_RUNTIME" > source.txt
     mkdir -p tmp/browser_parity
     echo "$MOCK_RUNTIME" > tmp/browser_parity/output
+    if [[ "${MOCK_SERIAL:-}" == true ]]; then
+      [[ "$(find "$MOCK_TRACE" -name 'done-*' | wc -l)" -eq "$(find "$MOCK_TRACE" -name 'started-*' | wc -l)" ]]
+    fi
     touch "$MOCK_TRACE/started-$MOCK_RUNTIME"
     ready=false
     for ((attempt=0; attempt<200; attempt++)); do
-      if [[ "$(find "$MOCK_TRACE" -name 'started-*' | wc -l)" -eq "$MOCK_COUNT" ]]; then
+      if [[ "$(find "$MOCK_TRACE" -name 'started-*' | wc -l)" -ge "$MOCK_START_BARRIER" ]]; then
         ready=true; break
       fi
       sleep 0.01
@@ -98,10 +101,11 @@ case "$1" in
     "$ready" ;;
   test.browser_parity)
     [[ "$(cat source.txt)" == "$MOCK_RUNTIME" ]]
-    [[ "$MIX_TEST_PARTITION" =~ ^[123]$ ]]
-    printf '%s\t%s\n' "$MOCK_RUNTIME" "$MIX_TEST_PARTITION" >> "$MOCK_TRACE/partitions"
+    [[ -z "${MIX_TEST_PARTITION+x}" ]]
+    [[ "$*" == 'test.browser_parity --warnings-as-errors' ]]
+    printf '%s\n' "$MOCK_RUNTIME" >> "$MOCK_TRACE/parity-invocations"
     touch "$MOCK_TRACE/done-$MOCK_RUNTIME"
-    if [[ "$MOCK_RUNTIME" == "${MOCK_FAIL_PARITY:-}" && "$MIX_TEST_PARTITION" == 2 ]]; then exit 3; fi ;;
+    if [[ "$MOCK_RUNTIME" == "${MOCK_FAIL_PARITY:-}" ]]; then exit 3; fi ;;
   test.performance)
     [[ "$(find "$MOCK_TRACE" -name 'done-*' | wc -l)" -eq "$MOCK_COUNT" ]]
     [[ "$ERL_FLAGS" == '+S 4:4 +SDcpu 4 +SDio 10' ]]
@@ -150,10 +154,8 @@ check grep -Fq 'QUALITY_MATRIX_SUMMARY status=PASS' "$project/output"
 check test "$(cat "$project/source.txt")" = 'pending change'
 check test ! -e "$project/tmp/browser_parity/output"
 for version in 1.19 1.20 1.21; do
-  check test "$(grep -Fc "$version"$'\ttest.browser_parity --partitions 3 --warnings-as-errors\ttest' "$MOCK_TRACE/commands")" -eq 3
-  for partition in 1 2 3; do
-    check test "$(grep -Fxc "$version"$'\t'"$partition" "$MOCK_TRACE/partitions")" -eq 1
-  done
+  check test "$(grep -Fc "$version"$'\ttest.browser_parity --warnings-as-errors\ttest' "$MOCK_TRACE/commands")" -eq 1
+  check test "$(grep -Fxc "$version" "$MOCK_TRACE/parity-invocations")" -eq 1
   if grep -Fq "$version"$'\tdocs' "$MOCK_TRACE/commands"; then
     fail "publishing_only_docs_in_routine_matrix=$version"
   fi
@@ -173,6 +175,17 @@ done
 check test ! -e "$project/.quality/matrix.lock"
 echo 'QUALITY_MATRIX_TEST_PASS parallel_source_isolation_latest_policy_and_performance_barrier'
 
+prepare_fixture serial
+export MOCK_SERIAL=true MOCK_START_BARRIER=1 MIX_TEST_PARTITION=2
+unset QUALITY_MATRIX_JOBS
+run_matrix
+unset MIX_TEST_PARTITION
+check test "$status" -eq 0
+for version in 1.19 1.20 1.21; do
+  check test "$(grep -Fxc "$version" "$MOCK_TRACE/parity-invocations")" -eq 1
+done
+echo 'QUALITY_MATRIX_TEST_PASS serial_default_complete_parity_and_inherited_partition_cleared'
+
 prepare_fixture failed-parity
 export MOCK_FAIL_PARITY=1.19
 run_matrix
@@ -180,7 +193,7 @@ check test "$status" -eq 1
 check grep -Fq 'runtime=1.19 stage=parity status=FAIL' "$project/output"
 check grep -Fq 'runtime=1.21 stage=performance status=PASS' "$project/output"
 check grep -Fq 'QUALITY_MATRIX_SUMMARY status=FAIL' "$project/output"
-check test "$(grep -Fc '1.19' "$MOCK_TRACE/partitions")" -eq 2
+check test "$(grep -Fxc '1.19' "$MOCK_TRACE/parity-invocations")" -eq 1
 artifacts=("$project"/.quality/logs/*/elixir-1.19/browser-parity-artifacts/output)
 check test "$(cat "${artifacts[0]}")" = 1.19
 check test ! -e "$project/.quality/matrix.lock"

@@ -8,7 +8,12 @@ Code.require_file(Paths.support("html_tree_helpers.ex"))
 
 Code.require_file(Paths.support("pdf_visual_compare.ex"))
 
-ExUnit.after_suite(fn _ -> NativeElixirPdfUtilities.TestSupport.ChromiumPool.stop() end)
+{:ok, _} = NativeElixirPdfUtilities.TestSupport.BrowserFixturePages.start()
+
+ExUnit.after_suite(fn _ ->
+  NativeElixirPdfUtilities.TestSupport.ChromiumPool.stop()
+  NativeElixirPdfUtilities.TestSupport.BrowserFixturePages.stop()
+end)
 
 Code.require_file(Paths.support("jpeg_fixture.ex"))
 
