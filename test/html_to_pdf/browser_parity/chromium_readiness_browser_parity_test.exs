@@ -82,14 +82,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
     assert_receive {:held_image, request}, 10_000
     metadata = output |> Kernel.<>(".browser.json") |> File.read!() |> :json.decode()
 
-    activate_other_tab!(metadata["profile"], url)
+    activate_other_tab!(metadata["profile"])
     send(request, :release)
     assert :ok = Task.await(capture, 10_000)
 
     assert [%{"focused" => true}] = :json.decode(File.read!(output <> ".readiness.json"))
 
-    assert File.read!(Path.join(foreground, "chromium-svg-0.png")) ==
-             File.read!(Path.join(background, "chromium-svg-0.png"))
+    png = File.read!(Path.join(foreground, "chromium-svg-0.png"))
+    assert <<137, 80, 78, 71, 13, 10, 26, 10, 13::32, "IHDR", 64::32, 1::32, _::binary>> = png
+    assert png == File.read!(Path.join(background, "chromium-svg-0.png"))
   end
 
   test "caller death closes an active browser and removes its profile" do
@@ -316,7 +317,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
     refute File.exists?(output)
   end
 
-  defp activate_other_tab!(profile, url) do
+  defp activate_other_tab!(profile) do
     [port, path | _] = File.read!(Path.join(profile, "DevToolsActivePort")) |> String.split("\n")
 
     assert {:ok, socket} =
@@ -381,10 +382,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
         response["result"]
       end
 
-      info =
-        command.(1, "Target.getTargets", %{})["targetInfos"] |> Enum.find(&(&1["url"] == url))
+      # The held response can precede publication of the navigation URL in
+      # TargetInfo. The capture is the only attached page in this fresh browser.
+      [info] =
+        command.(1, "Target.getTargets", %{})["targetInfos"]
+        |> Enum.filter(&(&1["type"] == "page" and &1["attached"]))
 
-      assert info
+      assert is_binary(info["browserContextId"])
 
       assert %{"targetId" => _} =
                command.(2, "Target.createTarget", %{

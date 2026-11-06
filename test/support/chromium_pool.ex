@@ -77,7 +77,6 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
       "--disable-gpu",
       "--disable-dev-shm-usage",
       "--allow-file-access-from-files",
-      "--run-all-compositor-stages-before-draw",
       "--remote-debugging-pipe",
       "--user-data-dir=#{profile}"
     ]
