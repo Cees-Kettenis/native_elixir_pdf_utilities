@@ -6,6 +6,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserFixturePages do
   @moduledoc false
   alias NativeElixirPdfUtilities.TestSupport.BrowserFixturePageValidator, as: Validator
 
+  # The checked-in JSON format has a fixed atom vocabulary. Decoding must not
+  # depend on which renderer modules happened to load before the first group.
+  @manifest_atoms Map.new(
+                    ~w(base_url chromium_page_size chromium_transform family fonts forms
+                       html_recovery margin page_size path render_opts style svg_reference
+                       system_font_discovery weight a4 interactive normal static)a,
+                    &{Atom.to_string(&1), &1}
+                  )
+
   @doc "Builds a document with independently scoped original scenarios beginning on separate pages."
   @spec build!(String.t(), map()) :: String.t()
   def build!(directory, group) do
@@ -200,12 +209,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserFixturePages do
 
   defp decode_options(options) do
     Enum.map(options, fn {key, value} ->
-      key = String.to_existing_atom(key)
+      key = Map.fetch!(@manifest_atoms, key)
 
       value =
         case value do
           :null -> nil
-          %{"atom" => atom} -> String.to_existing_atom(atom)
+          %{"atom" => atom} -> Map.fetch!(@manifest_atoms, atom)
           %{"tuple" => values} -> List.to_tuple(values)
           _ -> value
         end
@@ -232,7 +241,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserFixturePages do
             if is_list(value), do: List.to_tuple(value), else: value
 
           key when key in [:forms, :style, :svg_reference] ->
-            if is_binary(value), do: String.to_existing_atom(value), else: value
+            if is_binary(value), do: Map.fetch!(@manifest_atoms, value), else: value
 
           _ ->
             value

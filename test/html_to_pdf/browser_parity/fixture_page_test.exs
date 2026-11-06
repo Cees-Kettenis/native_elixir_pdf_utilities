@@ -1,6 +1,12 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FixturePageTest do
   use ExUnit.Case, async: true
-  alias NativeElixirPdfUtilities.TestSupport.{BrowserFixturePages, BrowserFixturePageValidator}
+
+  alias NativeElixirPdfUtilities.TestSupport.{
+    BrowserFixturePages,
+    BrowserFixturePageValidator,
+    Paths
+  }
+
   alias NativeElixirPdfUtilities.TestSupport.BrowserReferenceValidator
 
   setup do
@@ -148,6 +154,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FixturePageTest do
            )
 
     refute BrowserFixturePageValidator.same_browser_options?([chromium_page_margin: 12], [])
+  end
+
+  test "reviewed options decode in a fresh VM before renderer modules load", %{
+    directory: directory
+  } do
+    paths =
+      :code.get_path()
+      |> Enum.map(&List.to_string/1)
+      |> Enum.filter(&(Path.basename(&1) == "ebin"))
+      |> Enum.flat_map(&["-pa", &1])
+
+    manifest = Paths.fixture("html_to_pdf/browser_parity/pages.json")
+    result = Path.join(directory, "decoded-options.etf")
+
+    script = """
+    try do
+      String.to_existing_atom("html_recovery")
+      raise "The fresh-VM probe already loaded the renderer option atom"
+    rescue
+      ArgumentError -> :ok
+    end
+
+    Code.require_file(#{inspect(Paths.support("paths.ex"))})
+    Code.require_file(#{inspect(Paths.support("browser_fixture_pages.ex"))})
+    groups = :json.decode(File.read!(#{inspect(manifest)}))
+    entries = Enum.flat_map(groups, &NativeElixirPdfUtilities.TestSupport.BrowserFixturePages.entries/1)
+    File.write!(#{inspect(result)}, :erlang.term_to_binary(entries))
+    """
+
+    {output, status} =
+      System.cmd(System.find_executable("elixir"), paths ++ ["-e", script],
+        stderr_to_stdout: true
+      )
+
+    assert status == 0, output
+
+    expected =
+      manifest |> File.read!() |> :json.decode() |> Enum.flat_map(&BrowserFixturePages.entries/1)
+
+    assert result |> File.read!() |> :erlang.binary_to_term([:safe]) == expected
   end
 
   test "page boundaries reject missing, duplicate, moved and resized original scenarios" do
