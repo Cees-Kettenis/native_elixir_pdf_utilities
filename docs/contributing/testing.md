@@ -101,6 +101,14 @@ Resolve errors before publishing. Documentation builds are excluded from routine
 Visible rendering changes require focused unit coverage and a Chromium fixture.
 Every supported runtime runs the full parity suite.
 
+Pin the specification section behind a CSS expectation to a dated publication
+or an editor's draft commit, and identify provisional or historical syntax.
+Check that the reference browser renders the behavior; accepting its syntax is
+insufficient. Where Chromium lacks support, use an independently authored
+reference, such as a WPT reference document, or specification-derived geometry,
+font metrics or numerical vectors. Record how the expected result was obtained.
+Comparing two outputs from this library alone does not establish conformance.
+
 Reuse an existing page group or shared browser reference when adding a scenario.
 Keep each scenario's original native input, thresholds and assertions. Explain
 independent captures in their owning tests, and verify grouping with the
