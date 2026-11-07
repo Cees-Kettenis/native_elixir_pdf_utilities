@@ -230,7 +230,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
 
   test "impossible positive selector requirements do not spend sibling-position work" do
     html = String.duplicate("<p class='exists' data-state='actual'>Visible</p>", 600)
-    Limits.install(%{Limits.effective() | max_css_work: 1_000})
+    # Recovery and selector compilation spend work before any sibling traversal.
+    Limits.install(%{Limits.effective() | max_css_work: 1_400})
 
     assert {:ok, reference} = HtmlToPdf.render(html)
 

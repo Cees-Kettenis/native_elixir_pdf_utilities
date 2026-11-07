@@ -170,10 +170,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
     assert hd(rule.selectors).language_dependent
 
     for selector <- [":host([)", ":host(:unknown)", "::slotted(:unknown)", "::slotted"] do
-      assert {:error, {:invalid_css, diagnostic}} =
-               CssParser.prepare_source_stylesheet(selector <> "{color:red}")
-
-      assert diagnostic.stage == :css and diagnostic.source =~ selector
+      assert {:ok, %{rules: []}} = CssParser.prepare_source_stylesheet(selector <> "{color:red}")
     end
   end
 

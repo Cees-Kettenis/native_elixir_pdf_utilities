@@ -1573,9 +1573,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     for selector <- [":required()", ":optionalness", ":optıonal"] do
       html = "<style>input#{selector}{color:red}</style><input required>"
-      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :css and diagnostic.operation == :render
-      assert diagnostic.reason == :invalid_css and diagnostic.message != ""
+      assert {:ok, expected} = HtmlToPdf.render("<input required>")
+      assert {:ok, ^expected} = HtmlToPdf.render(html)
     end
 
     for tag <- ["button", "option"] do
@@ -3130,7 +3129,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "HTML attribute case folding consumes the shared CSS work budget" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_css_work: 6000})
+    # Shared component scanning precedes the additional ASCII folding work.
+    Limits.install(%{limits | max_css_work: 9000})
     selector_value = String.duplicate("a", 1000)
     css = ~s(<style>input[disabled="#{selector_value}"] { color:red; }</style>)
     exact = css <> ~s(<input disabled="#{selector_value}" value="Text">)
@@ -3183,15 +3183,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "malformed selector flags return actionable CSS diagnostics" do
-    for selector <- ["[title i]", "[title=abc q]", "[title==abc]", "[title=42]"] do
-      assert {:error, {:invalid_css, diagnostic}} =
-               HtmlToPdf.render("<style>p" <> selector <> " {color:red}</style><p>Text</p>")
+  test "malformed selector flags discard their rule without changing rendered output" do
+    assert {:ok, reference} = HtmlToPdf.render("<p>Text</p>")
 
-      assert diagnostic.stage == :css
-      assert diagnostic.reason == :invalid_css
-      assert diagnostic.operation == :render
-      assert is_binary(diagnostic.message) and diagnostic.message != ""
+    for selector <- ["[title i]", "[title=abc q]", "[title==abc]", "[title=42]"] do
+      assert {:ok, ^reference} =
+               HtmlToPdf.render("<style>p" <> selector <> "{color:red}</style><p>Text</p>")
     end
   end
 
@@ -3467,7 +3464,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
           "text-decoration:underline solid solid",
           "text-decoration:underline 1pt 2pt",
           "text-decoration:wavy",
-          "text-decoration:",
           "text-decoration-thickness:-1pt",
           "text-decoration-color:bad",
           "text-decoration-style:wavy"
@@ -3828,17 +3824,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert_pdf_text(pdf, "Valid page CSS")
   end
 
-  test "render returns diagnostics for malformed embedded media rules" do
+  test "render closes media blocks at EOF without discarding their complete declarations" do
     html = "<style>@media print { @media print { p { color: red; } }</style><p>x</p>"
-
-    assert {:error,
-            {:invalid_css,
-             %{
-               stage: :css,
-               reason: :invalid_css,
-               operation: :render,
-               module: NativeElixirPdfUtilities.HtmlToPdf
-             }}} = HtmlToPdf.render(html)
+    assert {:ok, expected} = HtmlToPdf.render("<p style='color:red'>x</p>")
+    assert {:ok, ^expected} = HtmlToPdf.render(html)
   end
 
   test "render falls back across CSS font sources and reports failed candidates" do
@@ -3948,25 +3937,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert message =~ "only non-executable data blocks"
   end
 
-  test "render returns detailed invalid selector diagnostics" do
-    html = """
-    <style>
-    p > { color: red; }
-    </style>
-    <p>Hello</p>
-    """
-
-    assert {:error,
-            {:invalid_css,
-             %{
-               stage: :css,
-               reason: :invalid_css,
-               line: 2,
-               source: "p >",
-               message: message
-             }}} = HtmlToPdf.render(html)
-
-    assert message == ~s(line 2: selector "p >" is invalid or unsupported)
+  test "render ignores an invalid selector while retaining valid following declarations" do
+    html = "<style>p > {color:red}p{color:blue}</style><p>Hello</p>"
+    assert {:ok, expected} = HtmlToPdf.render("<p style='color:blue'>Hello</p>")
+    assert {:ok, ^expected} = HtmlToPdf.render(html)
   end
 
   test "render returns detailed inline CSS diagnostics" do
@@ -4041,9 +4015,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :invalid_css,
                line: 1,
                column: 1,
-               source: "color",
-               message: ~s(line 1: declaration "color" is invalid or unsupported)
-             }}} = HtmlToPdf.render(~s(<p style="color">Bad CSS</p>))
+               source: "color:bananas",
+               message: ~s(line 1: declaration "color:bananas" is invalid or unsupported)
+             }}} = HtmlToPdf.render(~s(<p style="color:bananas">Bad CSS</p>))
 
     bad_background_html = """
     <style>p { background: linear-gradient(red, blue); }</style>
@@ -5326,9 +5300,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     for selector <- ["input:enabledness", "input:diſabled", "input:disabled()"] do
       html = "<style>#{selector} { color:red; }</style><input value='Initial'>"
-      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :css and diagnostic.operation == :render
-      assert diagnostic.message != "" and diagnostic.reason == :invalid_css
+      assert {:ok, expected} = HtmlToPdf.render("<input value='Initial'>")
+      assert {:ok, ^expected} = HtmlToPdf.render(html)
     end
   end
 
@@ -5525,13 +5498,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "invalid editing selectors retain public diagnostics" do
+  test "invalid editing selectors leave rendered output unchanged" do
     for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
       html = "<style>p#{selector}{color:red}</style><p contenteditable>Visible</p>"
-      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-      assert diagnostic.operation == :render and is_binary(diagnostic.message)
-      assert diagnostic.source =~ selector
+      assert {:ok, expected} = HtmlToPdf.render("<p contenteditable>Visible</p>")
+      assert {:ok, ^expected} = HtmlToPdf.render(html)
     end
   end
 
@@ -5646,13 +5617,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "invalid editing selectors retain public diagnostics and fieldsets render" do
+  test "invalid editing selectors recover and disabled fieldsets render" do
     for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
       html = "<style>p#{selector}{color:red}</style><p contenteditable>Visible</p>"
-      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-      assert diagnostic.operation == :render and is_binary(diagnostic.message)
-      assert diagnostic.source =~ selector
+      assert {:ok, expected} = HtmlToPdf.render("<p contenteditable>Visible</p>")
+      assert {:ok, ^expected} = HtmlToPdf.render(html)
     end
 
     assert {:ok, pdf} = HtmlToPdf.render("<fieldset disabled><input></fieldset>")

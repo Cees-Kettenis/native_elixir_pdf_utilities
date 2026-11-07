@@ -199,10 +199,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
 
     assert page_error.source == "margin:bananas"
 
-    assert {:error, {:invalid_css, syntax_error}} =
-             CssParser.prepare_source_stylesheet("@media screen{p{broken}}")
-
-    assert syntax_error.stage == :css
+    assert {:ok, recovered} = CssParser.prepare_source_stylesheet("@media screen{p{broken}}")
+    assert hd(recovered.authored_rules).declarations == []
 
     assert {:ok, nested} =
              CssParser.prepare_source_stylesheet("@media print{@media print{p{color:red}}}")
@@ -213,8 +211,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
 
   test "original grammar and reference failures retain precise source details" do
     for {css, source, line, column} <- [
-          {"/* first */\n@media screen{@font-face{font-family X;src:url(x.ttf)}}",
-           "font-family X", 2, 26},
+          {"/* first */\n@media screen{@font-face{font-family:X;font-style:wrong;src:url(x.ttf)}}",
+           "font-style:wrong", 2, 40},
           {"/* first */\n@font-face{font-family:X}", "@font-face{font-family:X}", 2, 1},
           {"/* first */\np{background-image:url()}", "url()", 2, 20}
         ] do
@@ -414,9 +412,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
              diagnostic.column == 3
 
     assert {:error, {:invalid_css, diagnostic}} =
-             CssParser.prepare_source_stylesheet("@media screen{@page{margin:1pt;\n  margin}}")
+             CssParser.prepare_source_stylesheet(
+               "@media screen{@page{margin:1pt;\n  margin:bananas}}"
+             )
 
-    assert diagnostic.source == "margin" and diagnostic.line == 2 and diagnostic.column == 3
+    assert diagnostic.source == "margin:bananas" and diagnostic.line == 2 and
+             diagnostic.column == 3
   end
 
   test "escaped URL function names and inline fallbacks cannot hide executable original references" do

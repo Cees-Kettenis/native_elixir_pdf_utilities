@@ -285,7 +285,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
   end
 
   test "new resource token families retain static executable URL policy even when unapplied" do
-    for value <- ["url(javascript:alert(1))", "var(--unused,url(javascript:alert(1)))"] do
+    for value <- ["url('javascript:alert(1)')", "var(--unused,url('javascript:alert(1)'))"] do
       declaration = "list-style:#{value}"
 
       html =

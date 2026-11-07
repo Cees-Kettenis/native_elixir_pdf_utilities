@@ -143,8 +143,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     assert {:error, {:invalid_css, _}} =
              CssValueValidator.validate_declarations("color:red!important!important")
 
-    assert {:error, {:invalid_css, _}} =
-             CssParser.prepare_stylesheet("@import 'unused.css';")
+    assert {:ok, %{rules: []}} = CssParser.prepare_stylesheet("@import 'unused.css';")
   end
 
   test "CSS variables resolve with the responsible shared rules before value validation" do
@@ -281,7 +280,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
           {"<p style='--x:2pt;width:bananas'>A</p>", "width:bananas", 1, 9},
           {"<p style='--x:var(--missing);width:bananas'>A</p>", "width:bananas", 1, 20},
           {"<style>:root{--x:2pt}\np{width:bananas}</style><p>A</p>", "width:bananas", 2, 3},
-          {"<p style='--x:2pt;broken'>A</p>", "broken", 1, 9}
+          {"<p style='--x:2pt;width:broken'>A</p>", "width:broken", 1, 9}
         ] do
       assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
       assert diagnostic.stage == :css

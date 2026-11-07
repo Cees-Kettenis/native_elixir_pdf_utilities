@@ -1076,7 +1076,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
           "<select><x-box></x-box></select>",
           "<figure><x-box><figcaption>Invalid</figcaption></x-box></figure>",
           "<x-box onclick='run()'>Text</x-box>",
-          "<x-box dir=rtl>Direction</x-box>",
           "<template><x-box onclick='run()'>Text</x-box></template>",
           "<x-box><marquee>Excluded</marquee></x-box>"
         ] do

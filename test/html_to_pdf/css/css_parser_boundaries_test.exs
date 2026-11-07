@@ -18,14 +18,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
 
   test "comments cannot create property, identifier, dimension, hash or function tokens" do
     for declaration <- ["co/**/lor:red", "--cu/**/stom:1pt"] do
-      for parse <- [
-            &CssParser.parse_declarations_detailed/1,
-            &CssParser.prepare_source_stylesheet("p{" <> &1 <> "}")
-          ] do
-        assert {:error, {:invalid_css, detail}} = parse.(declaration)
-        assert detail.stage == :css and detail.reason == :invalid_css
-        assert detail.source == declaration
-      end
+      assert {:error, :invalid_css} = HtmlValidator.validate_css_declaration(declaration)
+      assert {:ok, []} = CssParser.parse_declarations_detailed(declaration)
+
+      assert {:ok, %{rules: [%{declarations: []}]}} =
+               CssParser.prepare_source_stylesheet("p{" <> declaration <> "}")
     end
 
     for value <- ["1/**/0pt", "1/**/pt", "min/**/(1pt,2pt)", "mi/**/n(1pt,2pt)"] do
@@ -55,10 +52,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
              )
 
     for selector <- ["p/**/a", ".a/**/b", "#/**/a", "p:nth-child/**/(1)", ~S|p\31 /**/b|] do
-      assert {:error, {:invalid_css, _}} = CssParser.prepare_stylesheet(selector <> "{color:red}")
-
-      assert {:error, {:invalid_css, _}} =
-               CssParser.prepare_source_stylesheet(selector <> "{color:red}")
+      assert {:ok, %{rules: []}} = CssParser.prepare_stylesheet(selector <> "{color:red}")
+      assert {:ok, %{rules: []}} = CssParser.prepare_source_stylesheet(selector <> "{color:red}")
     end
   end
 
@@ -141,7 +136,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
     assert CssParser.strip_comments(~S|a\b/**/c|, " ") == ~S|a\b c|
     assert CssParser.strip_comments("x/* unfinished", " ") == "x/* unfinished"
 
-    assert {:error, {:invalid_css, _}} =
+    assert {:ok, [%{declarations: []}]} =
              CssParser.parse_detailed("p{} @media screen{p{color:red}} broken")
 
     assert {:ok, [{"content", ~S|"/* "|}]} =
@@ -168,17 +163,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
     end
   end
 
-  test "ordinary and authored failures name original comment bytes and locations" do
-    css = "/* before */\np { co/* authored */lor:red }"
-
-    for parse <- [&CssParser.parse_detailed/1, &CssParser.prepare_source_stylesheet/1] do
-      assert {:error, {:invalid_css, detail}} = parse.(css)
-      assert detail.source == "co/* authored */lor:red"
-      assert detail.line == 2 and detail.column == 5
-
-      assert detail.message ==
-               ~s(line 2: declaration "co/* authored */lor:red" is invalid or unsupported)
-    end
+  test "recovery keeps comments on the surrounding declaration source" do
+    css = "/* before */\np { co/* authored */lor:red; padding:2pt; width:ba/* authored */nanas }"
+    assert {:ok, prepared} = CssParser.prepare_source_stylesheet(css)
+    assert [padding, width] = hd(prepared.rules).source_declarations
+    assert padding.source.text == "padding:2pt"
+    assert width.source.text == "width:ba/* authored */nanas"
+    assert width.source.line == 2
+    assert binary_part(css, width.source.offset, width.source.length) == width.source.text
+    assert {:ok, dom} = HtmlParser.parse_detailed("<p>Text</p>")
+    assert {:error, {:invalid_css, detail}} = Style.compute_detailed(dom, stylesheets: [css: css])
+    assert detail.source == width.source.text
+    assert detail.line == width.source.line and detail.column == width.source.column
   end
 
   test "collection order and bounded growth survive large declarations selectors parts and values" do

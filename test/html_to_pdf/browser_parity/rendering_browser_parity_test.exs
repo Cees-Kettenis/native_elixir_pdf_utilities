@@ -1337,7 +1337,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     {"block_box_model.html", [max_changed_ratio: 0.01, max_average_delta: 0.02]},
     {"border_style_variants.html", [max_changed_ratio: 0.01, max_average_delta: 0.03]},
     {"box_sizing_and_margins.html", [max_changed_ratio: 0.01, max_average_delta: 0.03]},
-    {"css_cascade_selectors.html", [max_changed_ratio: 0.01, max_average_delta: 0.03]},
+    {"css_cascade_selectors.html",
+     [
+       # New cases occupy the existing page's unused area. Individual rows keep
+       # their own comparison denominator; no additional capture is needed.
+       regions: [
+         {"logical specificity", {20, 333, 555, 12}},
+         {"filtered forward", {20, 345, 555, 12}},
+         {"filtered reverse", {20, 357, 555, 12}},
+         {"relational child", {20, 369, 555, 12}},
+         {"relational sibling", {20, 381, 555, 12}},
+         {"initial link", {20, 393, 555, 12}},
+         {"initial placeholder", {20, 405, 555, 12}},
+         {"initial range", {20, 417, 555, 12}},
+         {"HTML namespace", {20, 429, 555, 12}},
+         {"initial direction", {20, 441, 555, 12}},
+         {"declaration recovery", {20, 453, 555, 12}},
+         {"shadow slot", {20, 465, 555, 12}},
+         {"shadow part", {20, 477, 555, 12}},
+         # Namespace selection checks painted interiors; general SVG/MathML
+         # fixtures own edge rasterization and inline baseline geometry.
+         {"SVG namespace fill", {22, 492, 116, 6}},
+         {"MathML namespace fill", {22, 504, 116, 4}}
+       ],
+       max_changed_ratio: 0.01,
+       max_average_delta: 0.03
+     ]},
     {"generated_content_counters.html", [max_changed_ratio: 0.01, max_average_delta: 0.035]},
     {"css_color_and_box_values.html", [max_changed_ratio: 0.01, max_average_delta: 0.04]},
     {"display_lists_and_inline_block.html", [max_changed_ratio: 0.01, max_average_delta: 0.035]},
@@ -5284,6 +5309,7 @@ for group <- 0..7 do
       if fixture_name in ~w(html_css_affine_boxes.html html_css_affine_nested.html html_css_affine_fragments.html html_css_affine_fragment_origins.html html_css_affine_table.html),
         do: @tag(:css_affine_styles)
 
+      if fixture_name == "css_cascade_selectors.html", do: @tag(:css_static_selectors)
       if fixture_name == "drawing_group_viewports.html", do: @tag(:drawing_group)
       if fixture_name == "html_object_selection.html", do: @tag(:object_selection)
       if fixture_name == "html_embedded_initialization.html", do: @tag(:embedded_initialization)

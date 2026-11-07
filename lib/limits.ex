@@ -55,6 +55,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_html_numeric_token_bytes: 1_024,
     max_css_rules: 10_000,
     max_css_work: 5_000_000,
+    max_css_syntax_depth: 128,
+    max_css_selector_depth: 64,
     max_css_calculation_depth: 64,
     max_media_query_depth: 32,
     max_layout_boxes: 100_000,
@@ -225,6 +227,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_html_numeric_token_bytes
           | :max_css_rules
           | :max_media_query_depth
+          | :max_css_syntax_depth
+          | :max_css_selector_depth
           | :max_css_calculation_depth
           | :max_css_work
           | :max_layout_boxes

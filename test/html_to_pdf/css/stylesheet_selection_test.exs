@@ -268,18 +268,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
                context
              )
 
-    assert stripped == ~S|p{content:"@media print{}"} |
+    assert stripped == ~S|p{content:"@media print{}"}|
 
-    for css <- [
-          "@media {p{color:red}}",
-          "@media print{p{color: red}",
-          "@media print; p{color: red}",
-          "@media bad;@media print{p{color: red}}"
+    assert {:ok, default} = HtmlToPdf.render("<p>Visible</p>")
+    assert {:ok, red} = HtmlToPdf.render("<p style='color:red'>Visible</p>")
+
+    for {css, expected} <- [
+          {"@media {p{color:red}}", default},
+          {"@media print{p{color:red}", red},
+          {"@media print; p{color:red}", red},
+          {"@media bad;@media print{p{color:red}}", red}
         ] do
-      assert {:error, {:invalid_css, diagnostic}} =
-               HtmlToPdf.render("<style>#{css}</style><p>Visible</p>")
-
-      assert diagnostic.stage == :css and diagnostic.message != ""
+      assert {:ok, ^expected} = HtmlToPdf.render("<style>#{css}</style><p>Visible</p>")
     end
   end
 
@@ -508,7 +508,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
 
   test "legacy child style viewport arity and CSS font failure paths remain recoverable" do
     alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
-    assert CssParser.font_faces("@media print") == {:error, :invalid_css}
+    assert CssParser.font_faces("@media print") == {:ok, []}
 
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, prepared} =

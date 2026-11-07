@@ -24,6 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
           names: map(),
           links: map(),
           selected: MapSet.t(),
+          initial_target: identity() | nil,
           document_targets: [map()]
         }
   @type destination :: {:xyz, pos_integer(), number(), number()}
@@ -148,6 +149,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         names: %{},
         links: %{},
         selected: MapSet.new(),
+        initial_target: nil,
         document_targets: [],
         logical_scope: HtmlMetadataValidator.tree_scope(targets)
       })
@@ -166,10 +168,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
                error -> {:halt, error}
              end
            end) do
+      initial_fragment =
+        case url_context.fallback_base do
+          url when is_binary(url) -> URI.parse(url).fragment
+          nil -> nil
+        end
+
       index =
-        if Enum.any?(links, fn {_href, destination} -> match?({:fragment, _}, destination) end),
-          do: HtmlMetadataValidator.first_tree_ids(targets),
-          else: %{}
+        if initial_fragment not in [nil, ""] or
+             Enum.any?(links, fn {_href, destination} -> match?({:fragment, _}, destination) end),
+           do: HtmlMetadataValidator.first_tree_ids(targets),
+           else: %{}
 
       ids =
         Map.new(index, fn {{_logical_document, _logical_tree, id}, node} ->
@@ -177,6 +186,25 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         end)
 
       context = %{context | ids: ids, links: links}
+
+      context =
+        if initial_fragment not in [nil, ""] do
+          {:ok, {:fragment, decoded}} =
+            HtmlUrlValidator.prepare_anchor("#" <> initial_fragment, %{
+              url_context
+              | resolution_base: url_context.fallback_base
+            })
+
+          target =
+            case select("#" <> initial_fragment, decoded, context) do
+              {:target, identity} -> identity
+              _ -> nil
+            end
+
+          %{context | initial_target: target}
+        else
+          context
+        end
 
       context =
         Enum.reduce(links, context, fn {href, destination}, context ->

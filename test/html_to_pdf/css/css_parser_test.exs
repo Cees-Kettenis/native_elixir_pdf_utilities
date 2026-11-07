@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.Validators.CssSelectorValidator
 
   test "editability selectors decode escapes and preserve compound negation specificity" do
     for {token, state} <- [
@@ -30,7 +31,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
            ] = rule.selectors
 
     for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
-      assert {:error, :invalid_css} = CssParser.parse("p#{selector}{color:red}")
+      assert {:error, :invalid_css} = CssSelectorValidator.parse("p#{selector}")
+      assert {:ok, []} = CssParser.parse("p#{selector}{color:red}")
     end
   end
 
@@ -82,7 +84,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert {:ok, [rule]} = CssParser.parse("input:not(:checked){color:blue}")
     assert [%{parts: [input]}] = rule.selectors
     assert [%{pseudo_classes: [:checked]}] = input.negations
-    assert {:error, :invalid_css} = CssParser.parse("input:checked(){color:red}")
+    assert {:error, :invalid_css} = CssSelectorValidator.parse("input:checked()")
+    assert {:ok, []} = CssParser.parse("input:checked(){color:red}")
   end
 
   test "language ranges preserve CSS strings, escapes and negated function boundaries" do
@@ -116,7 +119,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           ":lang(en",
           ":not(:lang(en)"
         ] do
-      assert {:error, :invalid_css} = CssParser.parse("p" <> source <> "{color:red}")
+      assert {:error, :invalid_css} = CssSelectorValidator.parse("p" <> source)
+      assert {:ok, []} = CssParser.parse("p" <> source <> "{color:red}")
     end
   end
 
@@ -218,15 +222,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           "p:not(.a\\)",
           "p::before.extra"
         ] do
-      assert {:error, {:invalid_css, diagnostic}} =
-               CssParser.parse_detailed(source <> " {color:red}")
-
-      assert diagnostic.stage == :css
-      assert diagnostic.reason == :invalid_css
-      assert is_binary(diagnostic.source)
-      assert diagnostic.line == 1
-      assert diagnostic.column >= 1
-      assert diagnostic.message =~ "invalid"
+      assert {:error, :invalid_css} = CssSelectorValidator.parse(source)
+      assert {:ok, []} = CssParser.parse_detailed(source <> " {color:red}")
     end
   end
 
@@ -286,18 +283,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           "1.0n",
           "1e2",
           "٢n",
-          "2n of p",
           "n 2",
           "odd+1",
           "\u00A02n",
           "n+1\u00A0"
         ] do
-      assert {:error, {:invalid_css, diagnostic}} =
-               CssParser.parse_detailed("p:nth-child(" <> expression <> "){color:red}")
+      assert {:error, :invalid_css} =
+               CssSelectorValidator.parse("p:nth-child(" <> expression <> ")")
 
-      assert diagnostic.stage == :css
-      assert diagnostic.reason == :invalid_css
-      assert is_binary(diagnostic.message)
+      assert {:ok, []} = CssParser.parse_detailed("p:nth-child(" <> expression <> "){color:red}")
     end
 
     for expression <- ["1000000001n", "-1000000001", "n+1000000001"] do
@@ -340,9 +334,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
     NativeElixirPdfUtilities.HtmlToPdf.RenderCache.with_stylesheets(fn ->
       for _ <- 1..2 do
-        assert {:error, {:invalid_css, diagnostic}} = CssParser.prepare_stylesheet("p { nope }")
-        assert diagnostic.stage == :css
-        assert diagnostic.line == 1
+        assert {:ok, %{rules: [%{declarations: []}]}} = CssParser.prepare_stylesheet("p { nope }")
       end
     end)
   end
@@ -498,7 +490,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
       [selector] = rule.selectors
       [part] = selector.parts
-      assert part.attributes == [{operator, "data-kind", "AbC", mode}]
+      assert part.attributes == [{operator, "DATA-KIND", "AbC", mode}]
       assert hd(part.negations).attributes == [{:equals, "title", "Skip", :insensitive}]
       assert selector.specificity == {0, 2, 1}
 
@@ -530,19 +522,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           "[title='a\nb']",
           "[title=abc\vI]"
         ] do
-      assert CssParser.parse(selector <> " { color:red; }") == {:error, :invalid_css}
+      assert CssSelectorValidator.parse(selector) == {:error, :invalid_css}
+      assert CssParser.parse(selector <> " { color:red; }") == {:ok, []}
     end
   end
 
-  test "parse keeps unsupported selector diagnostics strict" do
-    for css <- [
-          "p:not(div span) { color: red; }",
-          "p:not() { color: red; }",
-          "p::before span { color: red; }",
-          "p:nth-child(2n of .selected) { color: red; }",
-          "p::marker { color: red; }"
-        ] do
-      assert CssParser.parse(css) == {:error, :invalid_css}
+  test "newly supported selector grammar and discarded invalid rules stay distinct" do
+    for selector <- ["p:not(div span)", "p:nth-child(2n of .selected)", "p::marker"] do
+      assert {:ok, [_]} = CssParser.parse(selector <> "{color:red}")
+    end
+
+    for selector <- ["p:not()", "p::before span"] do
+      assert {:error, :invalid_css} = CssSelectorValidator.parse(selector)
+      assert {:ok, []} = CssParser.parse(selector <> "{color:red}")
     end
   end
 
@@ -702,9 +694,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert {:error,
             {:invalid_css,
              %{
-               source: "font-family X",
-               message:
-                 "line 1: @font-face declaration \"font-family X\" is invalid or unsupported"
+               source: "@font-face",
+               message: "line 1: @font-face is missing required \"font-family\" descriptor"
              }}} =
              CssParser.parse_detailed("@font-face { font-family X; src: url(valid.ttf); }")
 
@@ -755,8 +746,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           "@page { marks: crop cross crop; }",
           "@page { bleed: bananas; }",
           "@page { size: A4 landscape portrait; }",
-          "@page { nonsense: value; }",
-          "@page { color }"
+          "@page { nonsense: value; }"
         ] do
       assert CssParser.page_options(css) == {:error, :invalid_css}
       assert CssParser.parse(css) == {:error, :invalid_css}
@@ -777,9 +767,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
   test "page rules reject selectors, named pages, and misspelled at-rules" do
     for css <- [
           "@page :first { size: A5; margin: 1pt; }",
-          "@page rotated { size: letter; }",
-          "@pagefoo { size: A3; }",
-          "@page;"
+          "@page rotated { size: letter; }"
         ] do
       assert CssParser.page_options(css) == {:error, :invalid_css}
       assert CssParser.parse(css) == {:error, :invalid_css}
@@ -801,14 +789,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
                message: ~s(line 2: page rule "@page :first" is invalid or unsupported)
              }}} = CssParser.parse_detailed(css)
 
-    assert {:error,
-            {:invalid_css,
-             %{
-               line: 1,
-               column: 1,
-               source: "@pagefoo",
-               message: ~s(line 1: page rule "@pagefoo" is invalid or unsupported)
-             }}} = CssParser.parse_detailed("@pagefoo { size: A3; }")
+    assert {:ok, []} = CssParser.parse_detailed("@pagefoo { size: A3; }")
 
     custom_property_css = ~s(:root { --page-rule-label: "@pagefoo"; })
     assert {:ok, [_rule]} = CssParser.parse(custom_property_css)
@@ -1018,11 +999,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
                CssParser.parse_declarations(" \tCoLoR : red #{marker}\r\n")
     end
 
-    for source <- ["\u00a0color:red", "color\u00a0:red", "color:"] do
-      assert {:error, {:invalid_css, diagnostic}} = CssParser.parse_declarations_detailed(source)
-      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-      assert is_binary(diagnostic.source) and is_binary(diagnostic.message)
-    end
+    assert {:ok, [{"\u00a0color", "red"}]} =
+             CssParser.parse_declarations_detailed("\u00a0color:red")
+
+    assert {:ok, [{"color\u00a0", "red"}]} =
+             CssParser.parse_declarations_detailed("color\u00a0:red")
+
+    assert {:ok, []} = CssParser.parse_declarations_detailed("color:")
 
     assert CssParser.parse_declarations(
              " COLOR : var(--Accent) ; --Accent: #336699; --accent: #663399 "
@@ -1038,61 +1021,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
              {:ok, [{"display", "none", :important}]}
   end
 
-  test "parse rejects malformed CSS" do
-    assert CssParser.parse("p color: red;") == {:error, :invalid_css}
-    assert CssParser.parse("p { color: red; } dangling") == {:error, :invalid_css}
-    assert CssParser.parse("p { color: red;") == {:error, :invalid_css}
-    assert CssParser.parse("p { color: red; } /* unterminated") == {:error, :invalid_css}
-    assert CssParser.parse(~S|[title="open" { color: red; }|) == {:error, :invalid_css}
-    assert CssParser.parse("p] { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("{}") == {:error, :invalid_css}
-    assert CssParser.parse("p, { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("> p { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("p > { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("p > span > { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("p > { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("123 { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("p#one#two { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("p:active { color: red; }") == {:error, :invalid_css}
-    assert CssParser.parse("p { : red; }") == {:error, :invalid_css}
-    assert CssParser.parse("p { color: ; }") == {:error, :invalid_css}
-    assert CssParser.parse("p { color }") == {:error, :invalid_css}
+  test "syntax recovery keeps complete rules and discards invalid selectors and declarations" do
+    for css <- [
+          "p { color: red; } dangling",
+          "p { color: red;",
+          "p { color: red; } /* unterminated"
+        ] do
+      assert {:ok, [%{declarations: [{"color", "red"}]}]} = CssParser.parse(css)
+    end
+
+    for css <- [
+          "p color:red;",
+          ~S|[title="open" {color:red}|,
+          "p]{color:red}",
+          "{}",
+          "p,{color:red}",
+          "> p{color:red}",
+          "p >{color:red}",
+          "p > span >{color:red}",
+          "123{color:red}"
+        ] do
+      assert {:ok, []} = CssParser.parse(css), css
+    end
+
+    for css <- ["p{:red}", "p{color:}", "p{color}"] do
+      assert {:ok, [%{declarations: []}]} = CssParser.parse(css)
+    end
+
+    assert {:ok, [_]} = CssParser.parse("p:active{color:red}")
     assert CssParser.parse("") == {:ok, []}
     assert CssParser.parse(:not_css) == {:error, :invalid_css}
     assert CssParser.parse_declarations(:not_css) == {:error, :invalid_css}
   end
 
   test "parse_detailed returns source details for malformed CSS" do
-    assert {:error,
-            {:invalid_css,
-             %{
-               stage: :css,
-               reason: :invalid_css,
-               line: 1,
-               column: 1,
-               source: "",
-               message: ~s(line 1: declaration "" is invalid or unsupported)
-             }}} = CssParser.parse_detailed("p {}")
+    assert {:ok, [%{declarations: []}]} = CssParser.parse_detailed("p {}")
 
-    assert {:error,
-            {:invalid_css,
-             %{
-               stage: :css,
-               reason: :invalid_css,
-               line: 1,
-               source: "",
-               message: ~s(line 1: declaration "" is invalid or unsupported)
-             }}} = CssParser.parse_detailed("p { color: red; } div {}")
+    assert {:ok, [%{declarations: [{"color", "red"}]}, %{declarations: []}]} =
+             CssParser.parse_detailed("p { color: red; } div {}")
 
-    assert {:error,
-            {:invalid_css,
-             %{
-               stage: :css,
-               reason: :invalid_css,
-               line: 1,
-               column: 5,
-               source: "1/* hidden */bad: value"
-             }}} = CssParser.parse_detailed("p { 1/* hidden */bad: value; }")
+    assert {:ok, [%{declarations: []}]} =
+             CssParser.parse_detailed("p { 1/* hidden */bad: value; }")
 
     assert {:error,
             {:invalid_css,
@@ -1132,7 +1101,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           "input:enabled(x)",
           "input:unknown"
         ] do
-      assert {:error, :invalid_css} = CssParser.parse(selector <> " { color:blue; }")
+      assert {:error, :invalid_css} = CssSelectorValidator.parse(selector)
+      assert {:ok, []} = CssParser.parse(selector <> " { color:blue; }")
     end
 
     assert {:ok, [rule]} = CssParser.parse("input:enabled { color:blue; }")

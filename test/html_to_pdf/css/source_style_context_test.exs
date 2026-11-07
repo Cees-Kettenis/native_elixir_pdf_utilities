@@ -205,7 +205,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert {:ok, normal} = Style.compute_detailed(dom, source_budget: nil)
     assert find_styled(normal, "p").style.font_face != nil
 
-    assert {:error, {:invalid_css, _}} = collect(dom, ["p{color:red"])
+    assert {:ok, _, _} = collect(dom, ["p{color:red"])
 
     assert {:error, {:invalid_options, diagnostic}} =
              Style.with_source_style_contexts(dom, [], HtmlValidator.new_css_budget(), fn _,
@@ -223,7 +223,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
           "--size:var(--missing);width:var(--size)",
           "bad-property:x",
           "width : bananas",
-          "color",
+          "color:bananas",
           "width:1pt!important!important"
         ] do
       html = "<div style='--size:bananas'>\n  <p style='#{css}'>Bad</p></div>"
@@ -396,50 +396,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert node.source.text == "<p style='--x:&fjlig;;width&colon;3pt'>"
 
     assert {:ok, dom} =
-             HtmlParser.parse_document_detailed("<p style='color:red;&NewLine;  color'>Bad</p>")
+             HtmlParser.parse_document_detailed(
+               "<p style='color:red;&NewLine;  color:bananas'>Bad</p>"
+             )
 
     assert {:error, {:invalid_css, diagnostic}} = collect(dom)
-    assert diagnostic.source == "color"
+    assert diagnostic.source == "color:bananas"
     assert diagnostic.line == 1 and diagnostic.column == 32
-    assert diagnostic.message =~ "line 1:"
+    assert diagnostic.message =~ diagnostic.source
   end
 
   test "inline, embedded and font syntax failures report exact original declaration offsets" do
     for {html, snippet} <- [
-          {"<p style='color:red;\r\n  color'>Bad</p>", "color"},
-          {"<style>p{color:red;\r\n  color}</style>", "color"},
-          {"<style>@font-face{font-family:X;src:url(x.ttf);\r\n  font-family}</style>",
-           "font-family"}
+          {"<p style='color:red;\r\n  color:bananas'>Bad</p>", "color:bananas"},
+          {"<style>p{color:red;\r\n  color:bananas}</style>", "color:bananas"},
+          {"<style>@font-face{font-family:X;src:url(x.ttf);\r\n  font-style:wrong}</style>",
+           "font-style:wrong"}
         ] do
       assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
       assert {:error, {:invalid_css, diagnostic}} = collect(dom)
       assert diagnostic.source == snippet
       assert diagnostic.line == 2 and diagnostic.column == 3
-      assert diagnostic.message =~ "line 2:"
+      assert diagnostic.message != ""
     end
 
-    assert {:error, {:invalid_css, diagnostic}} =
-             CssParser.prepare_source_stylesheet("p{color:red;\n  color}")
+    assert {:ok, prepared} = CssParser.prepare_source_stylesheet("p{color:red;\n  color:bananas}")
+    record = List.last(hd(prepared.rules).source_declarations)
 
-    assert diagnostic.source == "color" and diagnostic.line == 2 and diagnostic.column == 3
+    assert record.source.text == "color:bananas" and record.source.line == 2 and
+             record.source.column == 3
   end
 
-  test "source selector syntax failures keep their original stylesheet location" do
-    html = "<style>/* original */\r\np:unknown{color:red}</style><p>Text</p>"
+  test "selector recovery preserves the following value failure location" do
+    html = "<style>/* original */\r\np:unknown{color:red}\np{width:bananas}</style><p>Text</p>"
     assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
     assert {:error, {:invalid_css, diagnostic}} = collect(dom)
-    assert diagnostic.source == "p:unknown"
-    assert diagnostic.line == 2 and diagnostic.column == 1
-    assert diagnostic.message =~ "line 2:"
+    assert diagnostic.source == "width:bananas"
+    assert diagnostic.line == 3 and diagnostic.column == 3
+    assert diagnostic.message =~ diagnostic.source
   end
 
   test "embedded stylesheet records bind original owners across preprocessing and repeated snippets" do
     html =
-      "\uFEFF<style>.unused{width:bananas}</style>\r\n<style>/*é🙂*/\r p{wi/**/dth:bananas}</style><p>Bad</p>"
+      "\uFEFF<style>.unused{width:3pt}</style>\r\n<style>/*é🙂*/\r p{width:ba/**/nanas}</style><p>Bad</p>"
 
     assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
     assert {:error, {:invalid_css, diagnostic}} = collect(dom)
-    assert diagnostic.source == "wi/**/dth:bananas"
+    assert diagnostic.source == "width:ba/**/nanas"
     assert diagnostic.line == 3 and diagnostic.column == 4
 
     html = "<style>p{color:blue}</style>\r\n<style>p{color:blue}</style><p>Good</p>"
@@ -987,10 +990,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
 
   test "detached source syntax and static URL failures retain original actionable diagnostics" do
     for {html, reason, source, line, column} <- [
-          {"<template><p style='color:red;\r\n  color'>Inert</p></template>", :invalid_css,
-           "color", 2, 3},
-          {"<template><style>p{color:red;\r\n  color}</style></template>", :invalid_css, "color",
-           2, 3},
+          {"<template><p style='color:red;\r\n  background-image:url(javascript:run)'>Inert</p></template>",
+           :unsupported_html, "url(javascript:run)", 2, 20},
+          {"<template><style>p{color:red;\r\n  background-image:url(javascript:run)}</style></template>",
+           :unsupported_html, "url(javascript:run)", 2, 20},
           {"<template><style>p{background-image:url('javascript:run()')}</style></template>",
            :unsupported_html, "url('javascript:run()')", 1, 37}
         ] do

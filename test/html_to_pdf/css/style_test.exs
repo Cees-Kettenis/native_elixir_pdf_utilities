@@ -1333,11 +1333,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert {:ok, dom} = HtmlParser.parse_detailed("<p>Text</p>")
 
     for css <- ["p:lang(){color:red}", "p:lang(en,){color:red}"] do
-      assert {:error, {:invalid_css, diagnostic}} =
-               Style.compute_detailed(dom, stylesheets: [{:css, css}])
-
-      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-      assert is_binary(diagnostic.message) and diagnostic.message != ""
+      assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, stylesheets: [{:css, css}])
+      assert node.style.color == {0, 0, 0}
     end
   end
 
@@ -2286,8 +2283,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
           {"list-style-type", "inside"},
           {"list-style-position", "square"},
           {"list-style", "inside outside"},
-          {"list-style", "url(marker.png) url(other.png)"},
-          {"list-style-type", ""}
+          {"list-style", "url(marker.png) url(other.png)"}
         ] do
       assert :error =
                NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_list_style(
@@ -2742,10 +2738,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert {:ok, invalid} = HtmlParser.parse("<p style='not valid CSS'>Invalid</p>")
 
-    assert {:error, {:invalid_css, %{stage: :css, reason: :invalid_css, message: message}}} =
-             Style.compute_detailed(invalid)
-
-    assert is_binary(message)
+    assert {:ok, %{children: [node]}} = Style.compute_detailed(invalid)
+    assert node.style.color == {0, 0, 0}
   end
 
   test "compute applies default paragraph styles" do
@@ -6194,7 +6188,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              {:ok, style_for!("div", "break-before: auto")}
 
     assert style_for("div", "flex: 1 1 auto") == {:ok, style_for!("div", "flex: 1 1 auto")}
-    assert style_for("div", "grid-template-columns: ") == {:error, :invalid_document}
+    assert {:ok, recovered} = style_for("div", "grid-template-columns: ")
+    assert Map.get(recovered, :grid_template_columns) == nil
     assert style_for("div", "grid-column: x") == {:error, :invalid_document}
     assert {:ok, missing_font_style} = style_for("div", "font-family: Missing")
     assert missing_font_style.font_family == "DejaVu Sans"

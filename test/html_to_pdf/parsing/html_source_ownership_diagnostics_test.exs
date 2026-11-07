@@ -35,7 +35,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSourceOwnershipDiagnosticsTest
     assert [record] = CssValueValidator.stylesheet_declaration_sources("p { width: bananas }")
     assert record.source.text == "width: bananas"
 
-    for css <- [nil, <<255>>, "p {"] do
+    for css <- [nil, <<255>>] do
       assert {:error, {:invalid_css, diagnostic}} = CssParser.style_declaration_records(css)
       assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
       assert is_binary(diagnostic.message) and diagnostic.message != ""
@@ -46,6 +46,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSourceOwnershipDiagnosticsTest
       assert {:invalid_css, ^diagnostic} =
                CssValueValidator.declaration_error(css, {:error, {:invalid_css, diagnostic}})
     end
+
+    assert {:ok, []} = CssParser.style_declaration_records("p {")
 
     Limits.install(Map.put(Limits.effective(), :max_css_source_bytes, 1))
 

@@ -313,12 +313,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
              )
   end
 
-  test "CSS parse errors fail closed and stylesheet resource errors retain their reason" do
+  test "CSS syntax recovery preserves filter work limits and stylesheet resource errors" do
     source =
       String.replace(svg("<feMorphology/>"), "</svg>", "<style>rect {broken}</style></svg>")
 
+    assert {:ok, _} = SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
+
+    limits = Limits.effective()
+    Limits.install(Map.put(limits, :max_css_source_bytes, 1))
+
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
+
+    Limits.install(limits)
 
     for content <- [
           "<style><g>rect {filter:url(#f)}</g></style>",

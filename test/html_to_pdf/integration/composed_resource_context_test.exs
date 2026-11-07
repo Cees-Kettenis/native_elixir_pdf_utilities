@@ -43,7 +43,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedResourceContextTest do
 
     assert dormant.rules == []
 
-    assert {:error, {:invalid_css, _}} =
+    assert {:ok, %{rules: [%{declarations: [{"color", "red"}]}]}} =
              CssParser.prepare_source_stylesheet("@media print {p{color:red}", nil, context)
   end
 

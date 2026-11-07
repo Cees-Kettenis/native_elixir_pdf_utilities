@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @variant_keys [:default, :first, :odd, :even]
   @type image_budget :: :atomics.atomics_ref()
 
-  @preserved_global_attributes ~w(accesskey autocapitalize autocorrect autofocus draggable enterkeyhint inputmode nonce spellcheck tabindex writingsuggestions)
+  @preserved_global_attributes ~w(accesskey autocapitalize autocorrect autofocus draggable enterkeyhint inputmode nonce spellcheck tabindex writingsuggestions part exportparts dir)
 
   @script_attributes ~w(type src language charset async defer nomodule crossorigin integrity referrerpolicy blocking fetchpriority)
   @script_data_boundaries ~r/<!--|-->|<\/?[sS][cC][rR][iI][pP][tT](?=[ \t\n\f\r\/>])/
@@ -147,6 +147,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                           "\\A:(?<keyword>#{@css_identifier_pattern})\\((?<expression>[^()]*)\\)(?<rest>.*)\\z",
                           "su"
                         )
+  # An escaped N is part of an identifier or a dimension's unit. Escaped
+  # coefficients remain identifiers and must never become integer tokens.
+  @css_nth_n_pattern "(?:[nN]|\\\\(?:[nN]|0{0,4}[46][eE](?:\\r\\n|[ \\t\\n\\r\\f])?))"
+  @css_nth_expression_regex Regex.compile!(
+                              "\\A(?<a>[+-]?[0-9]*)#{@css_nth_n_pattern}(?:[ \\t\\n\\f\\r]*(?<sign>[+-])[ \\t\\n\\f\\r]*(?<b>[0-9]+))?\\z",
+                              "u"
+                            )
   @css_string_pattern "(?:\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*')"
   # Consume an unterminated comment once, rather than retrying every opener.
   @css_comment_pattern "/\\*(?:[^*]|\\*(?!/))*(?:\\*/|\\z)"
@@ -175,7 +182,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                             )
 
   @css_opaque_source "(?:#{@css_escape_pattern}|\"(?:\\\\(?:\\r\\n|[\\n\\r\\f]|.)|[^\"\\\\])*\"|'(?:\\\\(?:\\r\\n|[\\n\\r\\f]|.)|[^'\\\\])*')"
-  @css_function_unit_regex Regex.compile!("#{@css_escape_pattern}|#{@css_string_pattern}|.", "su")
 
   @css_important_suffix_regex Regex.compile!(
                                 "(?:#{@css_string_pattern}|#{@css_escape_pattern})(*SKIP)(*F)|!(?<keyword>[ \t\r\n\f]*#{@css_identifier_pattern})[ \t\r\n\f]*\\z",
@@ -255,6 +261,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
+  @spec css_identifier_pattern() :: String.t()
+  def css_identifier_pattern, do: @css_identifier_pattern
+
+  @doc false
+  @spec css_escape_pattern() :: String.t()
+  def css_escape_pattern, do: @css_escape_pattern
+
+  @doc false
+  @spec css_url_name_pattern() :: String.t()
+  def css_url_name_pattern, do: @css_url_name_pattern
+
+  @doc false
+  @spec css_number_pattern() :: String.t()
+  def css_number_pattern, do: @css_number_pattern
+
+  @doc false
   @spec css_syntax_units(String.t()) :: [String.t()]
   def css_syntax_units(source) do
     if String.contains?(source, ["\\", "/*"]) do
@@ -317,9 +339,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           # in calc(). Retain its real token boundary for the math grammar.
           separator =
             cond do
-              not separate? -> ""
-              mode == :value and previous not in ["+", "-"] and following not in ["+", "-"] -> " "
-              true -> "/**/"
+              not separate? ->
+                ""
+
+              mode == :value and previous not in ["+", "-"] and following not in ["+", "-"] ->
+                # One space would only terminate the escape and join the next identifier.
+                if Regex.match?(
+                     ~r/\A\\[0-9a-fA-F]{1,6}\z/,
+                     List.last(css_syntax_units(previous))
+                   ),
+                   do: "  ",
+                   else: " "
+
+              true ->
+                "/**/"
             end
 
           removed = Enum.reduce(comments, 0, &(byte_size(&1) + &2)) - byte_size(separator)
@@ -382,18 +415,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec parse_css_pseudo_element(String.t()) :: {:ok, :before | :after | :picker_icon} | :error
+  @spec parse_css_pseudo_element(String.t()) :: {:ok, atom() | tuple()} | :error
   def parse_css_pseudo_element(source) do
     case source do
       <<"::", name::binary>> ->
         case parse_css_identifier(name) do
-          {:ok, name, ""} ->
-            case String.downcase(name, :ascii) do
-              "before" -> {:ok, :before}
-              "after" -> {:ok, :after}
-              "picker-icon" -> {:ok, :picker_icon}
-              _ -> :error
-            end
+          {:ok, name, rest} ->
+            NativeElixirPdfUtilities.Validators.CssPseudoValidator.parse(
+              String.downcase(name, :ascii),
+              rest
+            )
 
           _ ->
             :error
@@ -404,7 +435,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  defp decode_css_escapes(source) do
+  @doc false
+  @spec decode_css_escapes(String.t()) :: String.t()
+  def decode_css_escapes(source) do
     if String.contains?(source, "\\") do
       Regex.replace(@css_escape_regex, source, fn _escape, hexadecimal, literal ->
         case hexadecimal do
@@ -935,23 +968,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         _ ->
           if custom_html_tag?(tag) do
-            case Enum.find(~w(dir), &Map.has_key?(attributes, &1)) do
-              nil ->
-                NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
-                  :html,
-                  tag,
-                  attributes
-                )
-
-              attribute ->
-                Diagnostics.error(
-                  :html,
-                  :unsupported_html,
-                  "custom container #{attribute} requires direction semantics that are not implemented yet",
-                  module: __MODULE__,
-                  source: tag
-                )
-            end
+            NativeElixirPdfUtilities.Validators.ForeignContentValidator.validate_static_input(
+              :html,
+              tag,
+              attributes
+            )
           else
             :ok
           end
@@ -2508,7 +2529,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         decoded_flag = decode_css_escapes(flag)
 
         if decoded_flag in ["", "i", "I", "s", "S"] do
-          name = name |> decode_css_escapes() |> String.downcase(:ascii)
+          name = decode_css_escapes(name)
 
           attribute =
             case operator do
@@ -2549,6 +2570,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec attribute_selector_matches?(tuple(), map()) :: boolean()
   def attribute_selector_matches?(selector, node) do
     attributes = Map.fetch!(node, :attributes)
+
+    selector =
+      if Map.get(node, :namespace, :html) == :html,
+        do: put_elem(selector, 1, String.downcase(elem(selector, 1), :ascii)),
+        else: selector
 
     case selector do
       {:present, name} ->
@@ -4012,6 +4038,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           [property, value] ->
             property = trim_css_whitespace(property)
 
+            parsed_property = parse_css_identifier(property)
+
+            property =
+              case parsed_property do
+                {:ok, name, ""} -> name
+                _ -> property
+              end
+
             property =
               if String.starts_with?(property, "--"), do: property, else: downcase_ascii(property)
 
@@ -4043,9 +4077,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 offset -> value |> binary_part(0, offset) |> trim_css_whitespace()
               end
 
-            valid_property =
-              Regex.match?(~r/\A[a-z][a-z-]*\z/u, property) or
-                Regex.match?(~r/\A--[a-zA-Z_][a-zA-Z0-9_-]*\z/u, property)
+            valid_property = match?({:ok, _, ""}, parsed_property) and property != "--"
 
             cond do
               not valid_property or value == "" -> {:error, :invalid_css}
@@ -4669,53 +4701,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   # Escape units and complete quoted strings are opaque to function balancing.
   # Both :lang() and :not() use this parser rather than separate quote rules.
-  defp parse_css_function(selector, expected) do
-    case Regex.named_captures(@css_simple_pseudo_regex, selector) do
-      %{"keyword" => keyword, "rest" => rest} ->
-        if keyword |> decode_css_escapes() |> String.downcase(:ascii) == expected do
-          case rest do
-            <<"(", body::binary>> ->
-              reserve_render_resource(:max_css_work, byte_size(body), :css)
-              units = Regex.scan(@css_function_unit_regex, body)
-
-              result =
-                Enum.reduce_while(units, {1, [], 0}, fn [unit], {depth, content, offset} ->
-                  cond do
-                    unit in ["\"", "'"] ->
-                      {:halt, :error}
-
-                    unit == ")" and depth == 1 ->
-                      {:halt,
-                       {:ok, content |> Enum.reverse() |> IO.iodata_to_binary(),
-                        binary_part(body, offset + 1, byte_size(body) - offset - 1)}}
-
-                    unit == ")" ->
-                      {:cont, {depth - 1, [unit | content], offset + byte_size(unit)}}
-
-                    unit == "(" ->
-                      {:cont, {depth + 1, [unit | content], offset + byte_size(unit)}}
-
-                    true ->
-                      {:cont, {depth, [unit | content], offset + byte_size(unit)}}
-                  end
-                end)
-
-              case result do
-                {:ok, _content, _rest} = parsed -> parsed
-                _ -> :error
-              end
-
-            _ ->
-              :error
-          end
-        else
-          nil
-        end
-
-      nil ->
-        nil
-    end
-  end
+  defp parse_css_function(source, expected),
+    do: NativeElixirPdfUtilities.Validators.CssSyntaxValidator.function(source, expected)
 
   # Shared CSS string/identifier decoding for attribute and language selectors.
   defp decode_css_value(value) do
@@ -4762,8 +4749,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   # An+B uses integer tokens, ASCII keywords and whitespace only around the B sign.
   defp parse_css_nth_expression(expression) do
     expression = trim_ascii_whitespace(expression)
+    grammar_source = expression |> normalize_css_comments(:value) |> trim_ascii_whitespace()
 
-    case String.downcase(expression, :ascii) do
+    identifier =
+      case parse_css_identifier(grammar_source) do
+        {:ok, name, ""} -> String.downcase(name, :ascii)
+        _ -> nil
+      end
+
+    grammar_source =
+      if is_binary(identifier) and Regex.match?(~r/\A-?n(?:-[0-9]+)?\z/, identifier),
+        do: identifier,
+        else: grammar_source
+
+    case identifier || String.downcase(grammar_source, :ascii) do
       "odd" ->
         {:ok, :odd}
 
@@ -4773,13 +4772,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       _ ->
         tokens =
           cond do
-            Regex.match?(~r/\A[+-]?[0-9]+\z/, expression) ->
-              {:integer, [expression]}
+            Regex.match?(~r/\A[+-]?[0-9]+\z/, grammar_source) ->
+              {:integer, [grammar_source]}
 
             captures =
                 Regex.named_captures(
-                  ~r/\A(?<a>[+-]?[0-9]*)[nN](?:[ \t\n\f\r]*(?<sign>[+-])[ \t\n\f\r]*(?<b>[0-9]+))?\z/,
-                  expression
+                  @css_nth_expression_regex,
+                  grammar_source
                 ) ->
               a =
                 case captures["a"] do

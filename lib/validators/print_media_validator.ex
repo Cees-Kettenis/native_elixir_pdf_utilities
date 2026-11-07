@@ -13,16 +13,6 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   @forward_range ~r/\A(width|height|resolution|aspect-ratio)\s*(<=|>=|<|>|=)\s*(.+)\z/s
   @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|resolution|aspect-ratio)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
 
-  @media_start Regex.compile!(
-                 "#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|@media\\b[ \\t\\r\\n\\f]*(?<query>[^{};]*)\\{",
-                 "ui"
-               )
-  @media_candidate Regex.compile!(
-                     "#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|@media\\b",
-                     "ui"
-                   )
-  @brace_token Regex.compile!("#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|[{}]", "u")
-
   @page_candidate Regex.compile!(
                     "#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|@page\\b",
                     "ui"
@@ -169,9 +159,32 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   @spec cache_context(String.t(), context() | nil | :unpositioned) ::
           context() | nil | :unpositioned | :print
   def cache_context(css, context) do
-    if Enum.any?(Regex.scan(@media_start, css, capture: ["query"]), fn [query] ->
-         String.contains?(query, "(")
-       end), do: context, else: :print
+    if String.contains?(css, "@") and
+         NativeElixirPdfUtilities.HtmlToPdf.RenderCache.fetch_stylesheet(
+           {:media_context_required, css},
+           fn -> media_context_required?(css) end
+         ), do: context, else: :print
+  end
+
+  defp media_context_required?(css) do
+    css
+    |> NativeElixirPdfUtilities.Validators.CssSyntaxValidator.rules()
+    |> Enum.any?(fn rule ->
+      case HtmlValidator.trim_css_whitespace(rule.selectors) do
+        <<"@", name::binary>> ->
+          case HtmlValidator.parse_css_identifier(name) do
+            {:ok, name, query} ->
+              String.downcase(name, :ascii) == "media" and
+                (String.contains?(query, "(") or media_context_required?(rule.declarations))
+
+            _ ->
+              false
+          end
+
+        _ ->
+          false
+      end
+    end)
   end
 
   @doc "Checks stylesheet applicability and diagnoses viewport-qualified page defaults during page preparation."
@@ -214,64 +227,78 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   end
 
   defp select_media(css, context, depth, mode, origin) do
+    alias NativeElixirPdfUtilities.Validators.CssSyntaxValidator
     HtmlValidator.check_render_resource(:max_media_query_depth, depth, :css)
     HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
 
-    case Regex.run(@media_start, css, return: :index) do
-      [{offset, size}, {query_offset, query_size}] ->
-        prefix = binary_part(css, 0, offset)
-        query = binary_part(css, query_offset, query_size)
-        tail = binary_part(css, offset + size, byte_size(css) - offset - size)
+    {output, records, cursor} =
+      css
+      |> CssSyntaxValidator.rules()
+      |> Enum.reduce({[], [], 0}, fn rule, {output, records, cursor} ->
+        selector = HtmlValidator.trim_css_whitespace(rule.selectors)
 
-        closing =
-          @brace_token
-          |> Regex.scan(tail, return: :index)
-          |> Enum.reduce_while(1, fn [{index, _}], level ->
-            next = if binary_part(tail, index, 1) == "{", do: level + 1, else: level - 1
-            if next == 0, do: {:halt, {:closed, index}}, else: {:cont, next}
-          end)
-
-        case closing do
-          {:closed, index} ->
-            body = binary_part(tail, 0, index)
-            rest = binary_part(tail, index + 1, byte_size(tail) - index - 1)
-            active = matches_stylesheet?(query, body, context)
-
-            with true <- HtmlValidator.trim_css_whitespace(query) != "",
-                 false <- Regex.match?(@media_candidate, prefix),
-                 {:ok, selected, children} <-
-                   if(active or mode == :source,
-                     do: select_media(body, context, depth + 1, mode, origin + offset + size),
-                     else: {:ok, "", []}
-                   ),
-                 {:ok, remaining, siblings} <-
-                   select_media(rest, context, depth, mode, origin + offset + size + index + 1) do
-              if mode == :source do
-                record = %{
-                  offset: origin + offset,
-                  length: size + index + 1,
-                  query: query,
-                  active: active,
-                  body_offset: origin + offset + size,
-                  body_length: index
-                }
-
-                projected = prefix <> String.duplicate(" ", size) <> selected <> " " <> remaining
-                {:ok, projected, [record | children] ++ siblings}
-              else
-                {:ok, prefix <> selected <> remaining, []}
+        media =
+          case selector do
+            <<"@", name::binary>> ->
+              case HtmlValidator.parse_css_identifier(name) do
+                {:ok, name, query} -> if String.downcase(name, :ascii) == "media", do: query
+                _ -> nil
               end
+
+            _ ->
+              nil
+          end
+
+        {replacement, new_records} =
+          if is_binary(media) do
+            body_at = rule.offset + byte_size(rule.selectors) + 1
+
+            active =
+              rule.block and HtmlValidator.trim_css_whitespace(media) != "" and
+                matches_stylesheet?(media, rule.declarations, context)
+
+            {:ok, selected, children} =
+              if rule.block and (active or mode == :source),
+                do: select_media(rule.declarations, context, depth + 1, mode, origin + body_at),
+                else: {:ok, "", []}
+
+            if mode == :source do
+              leading = byte_size(rule.selectors) - byte_size(String.trim_leading(rule.selectors))
+
+              record = %{
+                offset: origin + rule.offset + leading,
+                length: byte_size(rule.source) - leading,
+                query: media,
+                active: active,
+                body_offset: origin + body_at,
+                body_length: byte_size(rule.declarations)
+              }
+
+              projected =
+                if rule.block,
+                  do:
+                    String.duplicate(" ", byte_size(rule.selectors) + 1) <>
+                      selected <> if(rule.closed, do: " ", else: ""),
+                  else: String.duplicate(" ", byte_size(rule.source))
+
+              {projected, [record | children]}
             else
-              _ -> {:error, :invalid_css}
+              {selected, []}
             end
+          else
+            {rule.source, []}
+          end
 
-          _ ->
-            {:error, :invalid_css}
-        end
+        before = binary_part(css, cursor, rule.offset - cursor)
 
-      nil ->
-        if Regex.match?(@media_candidate, css), do: {:error, :invalid_css}, else: {:ok, css, []}
-    end
+        {[replacement, before | output], [new_records | records],
+         rule.offset + byte_size(rule.source)}
+      end)
+
+    tail = binary_part(css, cursor, byte_size(css) - cursor)
+
+    {:ok, IO.iodata_to_binary(Enum.reverse([tail | output])),
+     records |> Enum.reverse() |> List.flatten()}
   end
 
   @doc "Evaluates a media query list against a validated print context. Unknown features do not match."

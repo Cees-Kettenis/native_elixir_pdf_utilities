@@ -433,29 +433,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       root_selector_id: root_id,
                       root_canvas_key: make_ref(),
                       image_maps: image_maps,
+                      url_context: url_context,
+                      initial_target: link_context.initial_target,
                       position_viewport: media_context
                     }
 
                     context =
-                      if Map.get(compiled_rules.selectors, :positional_dependent, false) do
-                        context = Map.put(context, :root_children, children)
-
-                        if map_size(composition.roots) > 0,
-                          do:
-                            Map.merge(context, %{
-                              logical_nodes:
-                                Map.merge(
-                                  NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator.logical_index(
-                                    dom
-                                  ),
-                                  Map.get(composition, :clone_logical_nodes, %{})
-                                ),
-                              consumed_shadow_roots: composition.roots
-                            }),
-                          else: context
-                      else
-                        context
-                      end
+                      if Map.get(compiled_rules.selectors, :positional_dependent, false),
+                        do:
+                          NativeElixirPdfUtilities.HtmlToPdf.CssSelector.prepare_context(
+                            context,
+                            dom,
+                            children,
+                            composition
+                          ),
+                        else: context
 
                     style_opts = Keyword.put(style_opts, :__render_cache__, cache)
 
@@ -2105,7 +2097,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               style,
               counters,
               counters,
-              {node._selector_id, pseudo_element},
+              NativeElixirPdfUtilities.HtmlToPdf.CssSelector.owner_identity(node, pseudo_element),
               :pseudo
             )
 
@@ -2211,7 +2203,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    ) do
               {:ok,
                HtmlValidator.prepare_list_owner(
-                 %{tag: "::#{pseudo_element}", _selector_id: {node._selector_id, pseudo_element}},
+                 %{
+                   tag: "::#{pseudo_element}",
+                   _selector_id:
+                     NativeElixirPdfUtilities.HtmlToPdf.CssSelector.owner_identity(
+                       node,
+                       pseudo_element
+                     )
+                 },
                  style,
                  inherited_style
                )}
@@ -2303,13 +2302,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp element_style(node, inherited_style, rules, ancestors, opts) do
-    case RenderCache.lookup(
-           rules.cache,
-           :list_preparation,
-           {:list_prepared_style, node._selector_id}
-         ) do
-      {:ok, prepared} -> prepared
-      :error -> compute_element_style(node, inherited_style, rules, ancestors, opts)
+    result =
+      case RenderCache.lookup(
+             rules.cache,
+             :list_preparation,
+             {:list_prepared_style, node._selector_id}
+           ) do
+        {:ok, prepared} -> prepared
+        :error -> compute_element_style(node, inherited_style, rules, ancestors, opts)
+      end
+
+    with {:ok, style} <- result,
+         :ok <-
+           if(Map.has_key?(rules, :source_budget),
+             do: :ok,
+             else:
+               NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidator.validate_paint_direction(
+                 node,
+                 ancestors
+               )
+           ),
+         owners =
+           NativeElixirPdfUtilities.HtmlToPdf.CssSelector.pseudo_owners(
+             rules.rules.gated_selectors,
+             node,
+             ancestors,
+             rules,
+             style
+           ),
+         :ok <-
+           NativeElixirPdfUtilities.Validators.CssPseudoValidator.validate_paint(owners, node) do
+      {:ok, style}
     end
   end
 
@@ -2532,7 +2555,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               pseudo_style,
               counters,
               counters,
-              {node._selector_id, pseudo},
+              NativeElixirPdfUtilities.HtmlToPdf.CssSelector.owner_identity(node, pseudo),
               :pseudo
             )
 
@@ -4935,50 +4958,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 _ -> indexes
               end
 
-            # Retain source roots only when a validated selector uses positions.
             indexes =
-              if not Map.get(indexes, :positional_dependent, false) and
-                   Enum.any?(selector.parts, fn part ->
-                     compounds =
-                       case Map.get(part, :shadow_selector) do
-                         {_kind, compound} when is_map(compound) ->
-                           [compound | compound.negations]
-
-                         _ ->
-                           []
-                       end
-
-                     Enum.any?([part | part.negations] ++ compounds, fn compound ->
-                       Enum.any?(compound.pseudo_classes, fn pseudo_class ->
-                         case pseudo_class do
-                           kind
-                           when kind in [
-                                  :first_child,
-                                  :last_child,
-                                  :first_of_type,
-                                  :last_of_type,
-                                  :only_child,
-                                  :only_of_type
-                                ] ->
-                             true
-
-                           {kind, _index}
-                           when kind in [
-                                  :nth_child,
-                                  :nth_last_child,
-                                  :nth_of_type,
-                                  :nth_last_of_type
-                                ] ->
-                             true
-
-                           _ ->
-                             false
-                         end
-                       end)
-                     end)
-                   end),
-                 do: Map.put(indexes, :positional_dependent, true),
-                 else: indexes
+              if Map.get(selector, :tree_dependent, false),
+                do: Map.put(indexes, :positional_dependent, true),
+                else: indexes
 
             [rightmost | _] = parts = Enum.reverse(selector.parts)
 
@@ -4986,11 +4969,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             # Attribute-only and negation-only selectors must remain general candidates.
             key =
               cond do
-                match?({:slotted, _}, Map.get(rightmost, :shadow_selector)) -> :universal
-                rightmost.id != nil -> {:id, rightmost.id}
-                rightmost.classes != [] -> {:class, hd(rightmost.classes)}
-                rightmost.tag != nil -> {:tag, rightmost.tag}
-                true -> :universal
+                match?({:slotted, _}, Map.get(rightmost, :shadow_selector)) or
+                    match?({:part, _}, Map.get(rightmost, :shadow_selector)) ->
+                  :universal
+
+                rightmost.id != nil ->
+                  {:id, rightmost.id}
+
+                rightmost.classes != [] ->
+                  {:class, hd(rightmost.classes)}
+
+                rightmost.tag != nil ->
+                  {:tag, rightmost.tag}
+
+                true ->
+                  :universal
               end
 
             selector = %{selector | parts: parts}
@@ -5003,7 +4996,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
             entry = {rule.order, selector}
 
-            Map.update!(indexes, rightmost.pseudo_element, fn index ->
+            Map.update(indexes, rightmost.pseudo_element, %{key => [entry]}, fn index ->
               Map.update(index, key, [entry], &[entry | &1])
             end)
           end)
@@ -5014,6 +5007,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         }
       end
     )
+    |> then(fn compiled ->
+      gated =
+        for {pseudo, index} <- compiled.selectors,
+            is_map(index),
+            not NativeElixirPdfUtilities.Validators.CssPseudoValidator.paint_ready?(pseudo),
+            pseudo != nil,
+            {_key, entries} <- index,
+            {_order, selector} <- entries,
+            do: %{selector | parts: Enum.reverse(selector.parts)}
+
+      Map.put(compiled, :gated_selectors, gated)
+    end)
   end
 
   defp apply_author_styles(
@@ -5344,42 +5349,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         keys
         |> Enum.flat_map(&Map.get(index, &1, []))
         |> Enum.reduce(%{}, fn {order, selector}, matched ->
-          scope = Map.get(selector, :shadow_scope_id)
-          host = Map.get(selector, :shadow_host_id)
-          rightmost = hd(selector.parts)
-          boundary = Map.get(rightmost, :shadow_selector)
-
-          applicable? =
-            case {scope, boundary} do
-              {nil, nil} -> not Map.has_key?(node, :shadow_scope_id)
-              {nil, _} -> false
-              {_scope, {:host, _}} -> Map.get(node, :node_id) == host
-              {scope, {:slotted, _}} -> Map.get(node, :assigned_shadow_scope_id) == scope
-              {scope, nil} -> Map.get(node, :tree_scope_id) == scope
-            end
-
-          local_ancestors =
-            if is_nil(scope),
-              do: Enum.filter(ancestors, &(not Map.has_key?(&1, :shadow_scope_id))),
-              else:
-                Enum.filter(ancestors, fn ancestor ->
-                  Map.get(ancestor, :tree_scope_id) == scope or
-                    Map.get(ancestor, :node_id) == host
-                end)
-
-          local_ancestors =
-            if match?({:slotted, _}, boundary),
-              do:
-                Enum.reject(
-                  local_ancestors,
-                  &(Map.get(&1, :node_id) == Map.get(node, :assigned_slot_id))
-                ),
-              else: local_ancestors
-
-          selector_context = Map.merge(context, %{shadow_scope_id: scope, shadow_host_id: host})
-
-          case applicable? and
-                 match_selector_parts(selector.parts, node, local_ancestors, selector_context) do
+          case NativeElixirPdfUtilities.HtmlToPdf.CssSelector.matches_rule?(
+                 selector,
+                 node,
+                 ancestors,
+                 context
+               ) do
             true ->
               Map.update(matched, order, selector.specificity, &max(&1, selector.specificity))
 
@@ -5393,242 +5368,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> Enum.map(&Map.put(&1, :specificity, specificity))
         end)
     end
-  end
-
-  defp match_selector_parts(parts, node, ancestors, context) do
-    case parts do
-      [part] ->
-        matches_simple_selector?(part, node, ancestors, context)
-
-      [part, left_part | remaining] ->
-        case matches_simple_selector?(part, node, ancestors, context) do
-          true ->
-            matches_ancestor_selector?(part.combinator, left_part, remaining, ancestors, context)
-
-          false ->
-            false
-        end
-    end
-  end
-
-  defp matches_ancestor_selector?(combinator, left_part, remaining, ancestors, context) do
-    case {combinator, ancestors} do
-      {:child, [parent | rest]} ->
-        match_selector_parts([left_part | remaining], parent, rest, context)
-
-      {:descendant, ancestors} ->
-        ancestors
-        |> Enum.with_index()
-        |> Enum.any?(fn {ancestor, index} ->
-          rest = Enum.drop(ancestors, index + 1)
-          match_selector_parts([left_part | remaining], ancestor, rest, context)
-        end)
-
-      _ ->
-        false
-    end
-  end
-
-  defp matches_simple_selector?(part, node, ancestors, context) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
-
-    target =
-      case Map.get(part, :shadow_selector) do
-        {:slotted, _} -> Map.get(node, :assigned_slot, node)
-        _ -> node
-      end
-
-    attributes = Map.get(target, :attributes, %{})
-
-    classes =
-      Map.get_lazy(target, :_selector_classes, fn ->
-        target
-        |> Map.get(:attributes, %{})
-        |> Map.get("class", "")
-        |> HtmlValidator.html_class_tokens()
-        |> MapSet.new()
-      end)
-
-    expected_tag =
-      if Map.get(node, :namespace, :html) == :html,
-        do: part.tag,
-        else: Map.get(part, :source_tag, part.tag)
-
-    tag_matches? = is_nil(part.tag) or Map.get(target, :tag) == expected_tag
-    id_matches? = is_nil(part.id) or Map.get(attributes, "id") == part.id
-    classes_match? = Enum.all?(part.classes, &MapSet.member?(classes, &1))
-
-    # Resolve context only for compounds whose positive requirements match.
-    # An impossible compound needs neither sibling positions nor negation work.
-    shadow_matches? =
-      case Map.get(part, :shadow_selector) do
-        {:host, compound} ->
-          Map.get(node, :node_id) == Map.get(context, :shadow_host_id) and
-            (is_nil(compound) or
-               matches_simple_selector?(
-                 compound,
-                 node,
-                 ancestors,
-                 Map.put(context, :shadow_argument, true)
-               ))
-
-        {:slotted, compound} ->
-          Map.get(node, :assigned_shadow_scope_id) == Map.get(context, :shadow_scope_id) and
-            matches_simple_selector?(
-              compound,
-              node,
-              ancestors,
-              Map.put(context, :shadow_argument, true)
-            )
-
-        nil ->
-          Map.get(context, :shadow_argument, false) or is_nil(Map.get(context, :shadow_scope_id)) or
-            Map.get(node, :node_id) != Map.get(context, :shadow_host_id)
-      end
-
-    shadow_matches? and tag_matches? and id_matches? and classes_match? and
-      Enum.all?(part.attributes, &HtmlValidator.attribute_selector_matches?(&1, target)) and
-      Enum.all?(part.pseudo_classes, &pseudo_class_matches?(&1, target, ancestors, context)) and
-      Enum.all?(part.negations, &(not matches_simple_selector?(&1, target, ancestors, context)))
-  end
-
-  defp pseudo_class_matches?(pseudo_class, node, ancestors, context) do
-    case pseudo_class do
-      {:lang, ranges} ->
-        language = LanguageValidator.resolved_language(node, ancestors)
-        Enum.any?(ranges, &LanguageValidator.matches?(&1, language))
-
-      state
-      when state in [
-             :enabled,
-             :disabled,
-             :checked,
-             :required,
-             :optional,
-             :valid,
-             :invalid,
-             :popover_open,
-             :indeterminate
-           ] ->
-        HtmlValidator.control_state_matches?(state, node)
-
-      state when state in [:read_only, :read_write] ->
-        HtmlValidator.editing_state_matches?(state, node, ancestors, context.cache)
-
-      :root ->
-        Map.get(node, :tag) == "html" and ancestors == []
-
-      kind
-      when kind in [
-             :first_child,
-             :last_child,
-             :first_of_type,
-             :last_of_type,
-             :only_child,
-             :only_of_type
-           ] ->
-        case Map.fetch(
-               selector_positions(ancestors, context, node),
-               Map.get(node, :node_id, node._selector_id)
-             ) do
-          {:ok, {position, count, type_position, type_count}} ->
-            case kind do
-              :first_child -> position == 1
-              :last_child -> position == count
-              :first_of_type -> type_position == 1
-              :last_of_type -> type_position == type_count
-              :only_child -> count == 1
-              :only_of_type -> type_count == 1
-            end
-
-          :error ->
-            # The virtual body supplying fragment defaults is not a source node.
-            false
-        end
-
-      {kind, index} when kind in [:nth_child, :nth_last_child, :nth_of_type, :nth_last_of_type] ->
-        case Map.fetch(
-               selector_positions(ancestors, context, node),
-               Map.get(node, :node_id, node._selector_id)
-             ) do
-          {:ok, {position, count, type_position, type_count}} ->
-            position =
-              case kind do
-                :nth_child -> position
-                :nth_last_child -> count - position + 1
-                :nth_of_type -> type_position
-                :nth_last_of_type -> type_count - type_position + 1
-              end
-
-            case index do
-              :odd ->
-                rem(position, 2) == 1
-
-              :even ->
-                rem(position, 2) == 0
-
-              {0, offset} ->
-                position == offset
-
-              {step, offset} ->
-                rem(position - offset, step) == 0 and div(position - offset, step) >= 0
-
-              index ->
-                position == index
-            end
-
-          :error ->
-            false
-        end
-    end
-  end
-
-  # The stylesheet cache lives only within this render. Fresh selector identities
-  # prevent reuse across style computations, documents or changed child lists.
-  defp selector_positions(ancestors, context, node) do
-    parent =
-      case Map.get(context, :logical_nodes, %{})[Map.get(node, :parent_id)] do
-        parent when is_map(parent) ->
-          parent
-
-        _ ->
-          case ancestors do
-            [parent | _rest] -> parent
-            [] -> %{_selector_id: context.root_selector_id, children: context.root_children}
-          end
-      end
-
-    key = Map.get(parent, :node_id, Map.get(parent, :_selector_id))
-
-    RenderCache.fetch_stylesheet({:selector_positions, context.cache, key}, fn ->
-      elements =
-        Enum.filter(parent.children, fn child ->
-          match?(%{type: :element}, child) and
-            not (Map.get(child, :tag) == "template" and
-                   Map.has_key?(
-                     Map.get(context, :consumed_shadow_roots, %{}),
-                     get_in(child, [:content, :node_id])
-                   ))
-        end)
-
-      HtmlValidator.reserve_render_resource(:max_css_work, length(elements), :css)
-      type_counts = Enum.frequencies_by(elements, &{Map.get(&1, :namespace, :html), &1.tag})
-      count = length(elements)
-
-      {positions, _seen} =
-        elements
-        |> Enum.with_index(1)
-        |> Enum.reduce({%{}, %{}}, fn {child, index}, {positions, seen} ->
-          type = {Map.get(child, :namespace, :html), child.tag}
-          type_position = Map.get(seen, type, 0) + 1
-          value = {index, count, type_position, Map.fetch!(type_counts, type)}
-
-          {Map.put(positions, Map.get(child, :node_id, Map.get(child, :_selector_id)), value),
-           Map.put(seen, type, type_position)}
-        end)
-
-      positions
-    end)
   end
 
   defp apply_declarations(style, declarations, cache) do

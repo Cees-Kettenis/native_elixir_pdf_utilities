@@ -2089,14 +2089,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
              }
            ])
 
-    for attribute <- ~w(dir) do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlValidator.validate_html_element_attributes("x-box", %{attribute => ""})
-
-      assert diagnostic.stage == :html
-      assert diagnostic.source == "x-box"
-      assert diagnostic.message =~ attribute
-    end
+    assert :ok = HtmlValidator.validate_html_element_attributes("x-box", %{"dir" => ""})
   end
 
   test "CSS identifier helpers preserve escape boundaries and fixed grammar" do

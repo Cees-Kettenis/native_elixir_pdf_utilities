@@ -43,13 +43,22 @@ or page furniture. Unsupported widget transforms return diagnostics.
 
 | Area | Supported |
 | --- | --- |
-| Selectors | Tags, classes, IDs, attributes, descendants/children, positional selectors, `:lang()`, simple `:not()` and initial control states |
+| Selectors | Namespaces, tags, classes, IDs, attributes, descendant/child/sibling combinators, `:is()`/`:where()`/`:not()`/`:has()`, filtered positions, `:lang()`/`:dir()` and initial control/link/disclosure states |
 | Styles | Cascade, inheritance, `!important`, custom properties, `var()` and `currentColor` |
 | Layout | Block, inline, inline-block, flex, grid, sizing, margins, padding and gaps |
 | Text | Fonts, alignment, spacing, wrapping, whitespace, list markers and solid text decorations |
 | Boxes | Colors, borders, rounded corners and background images |
 | Generated content | `::before`, `::after`, strings, `attr()`, `counter()` and counter reset/increment/set controls |
 | Printing | Print media queries, bare `@page` size/margins and page breaks |
+
+Shadow styles support `:host()`, `:host-context()`, `::slotted()` and explicit
+`::part()` exports. Matching uses authored tree relationships across slot composition.
+Malformed declarations and invalid selector rules are discarded; unknown at-rules
+and `@import` are ignored. Valid declarations still receive strict value and resource
+checks. Direction selectors resolve initial HTML direction; right-to-left layout
+and painting remain gated. New pseudo-elements such as `::first-line`, `::first-letter`, `::marker`,
+`::placeholder` and control parts have selector ownership, but return
+`:not_implemented` when selected until their layout and painting are available.
 
 Support is a subset of browser CSS. Common body lengths include `pt`, `px`,
 `mm`, `cm`, `in`, `rem` and supported percentages.

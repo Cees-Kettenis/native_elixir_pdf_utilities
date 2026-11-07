@@ -113,7 +113,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
     end
 
     html =
-      "<style>.absent{background-image:var(--bg,url(javascript:alert(1)))}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
+      "<style>.absent{background-image:var(--bg,url('javascript:alert(1)'))}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
     assert {:error, {_reason, diagnostic}} = HtmlToPdf.render(html, @opts)
     assert diagnostic.stage == :css

@@ -106,6 +106,8 @@ hard memory caps. The operation deadline and worker-memory allowance also apply.
 | `max_html_depth` | 128 | Nested HTML elements or advanced input tree depth |
 | `max_css_rules` | 10,000 | Stylesheet rules prepared across a render, including separate repeated entries |
 | `max_css_work` | 5,000,000 | CSS scanned bytes, selector parsing work, and selector comparisons |
+| `max_css_syntax_depth` | 128 | Nested CSS component blocks and functions |
+| `max_css_selector_depth` | 64 | Nested logical, relational, filtered positional and shadow selector arguments |
 | `max_layout_boxes` | 100,000 | Drawing-box construction attempts, including measurements and furniture |
 | `max_rendered_text_bytes` | 10,000,000 | Text production bytes, including generated-content parts before joining and transformations |
 | `max_layout_text_work` | 20,000,000 | Text bytes measured and glyph-width entries visited, including repeated measurements |

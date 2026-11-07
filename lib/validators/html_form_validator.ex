@@ -197,6 +197,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             end
           end)
 
+        default_buttons =
+          Enum.reduce(controls, %{}, fn item, buttons ->
+            submit =
+              (item.tag == "input" and item.input_type in ["submit", "image"]) or
+                (item.tag == "button" and
+                   String.downcase(Map.get(item.attributes, "type", "submit"), :ascii) not in [
+                     "reset",
+                     "button"
+                   ])
+
+            if submit and item.owner != nil,
+              do: Map.put_new(buttons, {item.scope, item.owner}, item.ref),
+              else: buttons
+          end)
+
         {states, selected_options, disabled_options} =
           Enum.reduce(controls, {%{}, %{}, MapSet.new()}, fn item,
                                                              {states, selected_options,
@@ -208,7 +223,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 do: Map.get(winners, {item.scope, item.owner, name}) == item.ref,
                 else: Map.has_key?(item.attributes, "checked")
 
-            state = %{owner: item.owner, checked: checked, disabled: item.disabled}
+            state = %{
+              owner: item.owner,
+              checked: checked,
+              disabled: item.disabled,
+              default_button: Map.get(default_buttons, {item.scope, item.owner}) == item.ref
+            }
 
             state =
               if item.tag == "input",
