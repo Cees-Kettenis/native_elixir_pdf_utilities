@@ -220,6 +220,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
           {name, _} when name in ["media", "font-face", "page"] and not rule.block ->
             {String.duplicate(" ", byte_size(rule.source)), namespaces, false}
 
+          {name, _} when name in ["layer", "scope", "supports"] ->
+            {rule.source, namespaces,
+             if(name == "layer" and not rule.block, do: prelude, else: false)}
+
+          {"property", _} ->
+            {rule.source, namespaces, false}
+
           {"media", _} ->
             {body, _} = stylesheet_projection(rule.declarations)
             replacement = rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: "")
@@ -383,6 +390,83 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
         else: rules
 
     Enum.reverse(rules)
+  end
+
+  @doc "Returns authored declarations and nested rules with original byte spans in a rule block."
+  @spec block_items(String.t(), boolean()) :: [map()]
+  def block_items(source, top_level \\ false) do
+    {items, start} =
+      source
+      |> components()
+      |> Enum.reduce({[], 0}, fn component, {items, start} ->
+        boundary =
+          (component.kind == :block and component.opener == "{") or
+            (component.kind == :token and component.text == ";") or
+            (top_level and component.kind == :token and component.text in ["<!--", "-->"])
+
+        prelude = if boundary, do: binary_part(source, start, component.offset - start), else: ""
+        text = HtmlValidator.trim_css_whitespace(prelude)
+
+        declaration =
+          component.kind == :block and
+            case HtmlValidator.parse_css_identifier(text) do
+              {:ok, "--" <> _, tail} ->
+                String.starts_with?(HtmlValidator.trim_css_whitespace(tail), ":")
+
+              _ ->
+                false
+            end
+
+        cond do
+          top_level and component.kind == :token and component.text in ["<!--", "-->"] and
+              text == "" ->
+            {items, component.offset + component.length}
+
+          component.kind == :block and component.opener == "{" and not declaration ->
+            finish = component.offset + component.length
+
+            item = %{
+              kind: :rule,
+              selectors: prelude,
+              offset: start,
+              source: binary_part(source, start, finish - start),
+              block: true,
+              declarations:
+                binary_part(
+                  component.text,
+                  1,
+                  component.length - if(component.closed, do: 2, else: 1)
+                ),
+              closed: component.closed
+            }
+
+            {[item | items], finish}
+
+          component.kind == :token and component.text == ";" ->
+            finish = component.offset + 1
+
+            item = %{
+              kind: if(String.starts_with?(text, "@"), do: :rule, else: :declaration),
+              source: binary_part(source, start, finish - start),
+              offset: start,
+              selectors: prelude,
+              declarations: "",
+              block: false,
+              closed: true
+            }
+
+            {[item | items], finish}
+
+          true ->
+            {items, start}
+        end
+      end)
+
+    tail = binary_part(source, start, byte_size(source) - start)
+
+    if HtmlValidator.trim_css_whitespace(tail) == "",
+      do: Enum.reverse(items),
+      else: Enum.reverse([%{kind: :declaration, source: tail, offset: start} | items])
   end
 
   defp finish(source, stack, offset) do

@@ -44,12 +44,12 @@ or page furniture. Unsupported widget transforms return diagnostics.
 | Area | Supported |
 | --- | --- |
 | Selectors | Namespaces, tags, classes, IDs, attributes, descendant/child/sibling combinators, `:is()`/`:where()`/`:not()`/`:has()`, filtered positions, `:lang()`/`:dir()` and initial control/link/disclosure states |
-| Styles | Cascade, inheritance, `!important`, custom properties, `var()` and `currentColor` |
+| Styles | Cascade, inheritance, CSS-wide keywords, `all`, `!important`, layers, nesting, `@scope`, custom properties, `@property`, `var()` and `currentColor` |
 | Layout | Block, inline, inline-block, flex, grid, sizing, margins, padding and gaps |
 | Text | Fonts, alignment, spacing, wrapping, whitespace, list markers and solid text decorations |
 | Boxes | Colors, borders, rounded corners and background images |
 | Generated content | `::before`, `::after`, strings, `attr()`, `counter()` and counter reset/increment/set controls |
-| Printing | Print media queries, bare `@page` size/margins and page breaks |
+| Printing | Print media queries, static `@supports`, bare `@page` size/margins and page breaks |
 
 Shadow styles support `:host()`, `:host-context()`, `::slotted()` and explicit
 `::part()` exports. Matching uses authored tree relationships across slot composition.
@@ -65,6 +65,25 @@ Support is a subset of browser CSS. Common body lengths include `pt`, `px`,
 
 Ordinary HTML text paints Unicode line/paragraph separators as spaces, matching Chromium.
 Ordinary newlines follow `white-space`.
+
+### Cascade and custom properties
+
+Named, anonymous and nested `@layer` rules share order across stylesheets.
+Important declarations reverse that order. `revert-layer` restores the earlier
+layer; `revert` restores the element's user-agent and inherited styling.
+Shorthands reset omitted components and preserve later longhand overrides.
+CSS nesting supports `&`, selector lists and interleaved declarations.
+`@scope` supports explicit or owning-style roots, limits and scope proximity,
+including the existing shadow and slot boundaries.
+
+Custom properties preserve token boundaries and compute before inheritance.
+Missing variables, cycles and invalid substituted values use CSS defaulting for
+the affected property. Resource permissions and rendering limits still apply.
+Registered `@property` declarations support typed scalars, alternatives and lists,
+with their declared defaults and inheritance. Relative values use the declaring
+element's metrics. Invalid registrations are ignored. Registered gradient images
+require the CSS image implementation and return `:not_implemented`; source-only
+contexts cannot invent missing font or viewport metrics.
 
 ### Positioning and transforms
 

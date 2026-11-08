@@ -219,27 +219,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
 
   test "declaration failures retain exact original context sources without replay expansion" do
     for css <- [
-          "width:var(--size)",
-          "--size:var(--missing);width:var(--size)",
+          "display:var(--size)",
+          "--size:inline math;display:var(--size)",
           "bad-property:x",
           "width : bananas",
           "color:bananas",
           "width:1pt!important!important"
         ] do
-      html = "<div style='--size:bananas'>\n  <p style='#{css}'>Bad</p></div>"
+      html = "<div style='--size:inline math'>\n  <p style='#{css}'>Bad</p></div>"
       assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
       assert {:error, {:invalid_css, diagnostic}} = collect(dom)
       assert diagnostic.stage == :css
-      assert diagnostic.source in [css, "--size:var(--missing)", "width:var(--size)"]
+      assert diagnostic.source in [css, "--size:inline math", "display:var(--size)"]
       assert diagnostic.line == 2 and diagnostic.column >= 13
     end
 
     assert {:ok, dom} =
-             HtmlParser.parse_document_detailed("<p style='--x:abc;width:var(--x)'>Bad</p>")
+             HtmlParser.parse_document_detailed(
+               "<p style='--x:inline math;display:var(--x)'>Bad</p>"
+             )
 
     budget = HtmlValidator.new_css_budget()
     assert {:error, {:invalid_css, _}} = collect(dom, [], budget)
-    assert :atomics.get(budget, 1) == 9
+    assert :atomics.get(budget, 1) == 44
     assert :atomics.get(budget, 2) > 0
   end
 

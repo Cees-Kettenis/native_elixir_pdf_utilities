@@ -229,11 +229,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
 
         case parse_selector_modifiers(modifiers, part, context) do
           {:ok, part} ->
-            part = if host_eligible?(part), do: Map.put(part, :host_eligible, true), else: part
+            part =
+              if featureless_eligible?(part, :host_eligible),
+                do: Map.put(part, :host_eligible, true),
+                else: part
 
             part =
               if Map.get(context, :part_argument, false),
                 do: Map.put(part, :part_eligible, part_eligible?(part)),
+                else: part
+
+            part =
+              if featureless_eligible?(part, :scope_eligible),
+                do: Map.put(part, :scope_eligible, true),
                 else: part
 
             {:ok,
@@ -287,27 +295,30 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
       end)
   end
 
-  defp host_eligible?(part) do
+  defp featureless_eligible?(part, key) do
     logical = fn selectors ->
-      Enum.any?(selectors, &Map.get(List.last(&1.parts), :host_eligible, false))
+      Enum.any?(selectors, &Map.get(List.last(&1.parts), key, false))
     end
 
     positive =
-      match?({kind, _} when kind in [:host, :host_context], Map.get(part, :shadow_selector)) or
+      (key == :host_eligible and
+         match?({kind, _} when kind in [:host, :host_context], Map.get(part, :shadow_selector))) or
+        (key == :scope_eligible and :scope in part.pseudo_classes) or
         Enum.any?(part.pseudo_classes, fn pseudo ->
           case pseudo do
             {kind, selectors} when kind in [:is, :where, :not] -> logical.(selectors)
             _ -> false
           end
         end) or
-        Enum.any?(part.negations, &Map.get(&1, :host_eligible, false))
+        Enum.any?(part.negations, &Map.get(&1, key, false))
 
     positive and is_nil(part.tag) and is_nil(part.id) and part.classes == [] and
       part.attributes == [] and not Map.get(part, :explicit_type, false) and
-      Enum.all?(part.negations, &Map.get(&1, :host_eligible, false)) and
+      Enum.all?(part.negations, &Map.get(&1, key, false)) and
       Enum.all?(part.pseudo_classes, fn pseudo ->
         case pseudo do
           {:has, _} -> true
+          :scope -> key == :scope_eligible
           {kind, selectors} when kind in [:is, :where, :not] -> logical.(selectors)
           _ -> false
         end

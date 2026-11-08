@@ -172,16 +172,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
                "--size:2pt!important;--size:bananas;width:var(--size)"
              )
 
-    assert {:error, {:invalid_css, diagnostic}} =
-             CssValueValidator.validate_declarations("--size:bananas;width:var(--size)")
+    for css <- [
+          "--size:bananas;width:var(--size)",
+          "width:var(--missing)",
+          "--a:var(--b);--b:var(--a);width:var(--a)"
+        ] do
+      assert {:ok, computed} =
+               CssValueValidator.validate_declarations_in_context(
+                 css,
+                 %{font_size: 12.0, color: {0, 0, 0}, _custom_properties: %{}},
+                 HtmlValidator.new_css_budget()
+               )
 
-    assert diagnostic.source == "width:var(--size)"
-
-    assert {:error, {:invalid_css, _}} =
-             CssValueValidator.validate_declarations("width:var(--missing)")
-
-    assert {:error, {:invalid_css, _}} =
-             CssValueValidator.validate_declarations("--a:var(--b);--b:var(--a);width:var(--a)")
+      assert computed.width == :auto
+    end
   end
 
   test "active URL values diagnose through existing HTML CSS URL policy" do
@@ -265,13 +269,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
           {1, "2pt"},
           {"width", "2pt", :bogus},
           {"width", "bananas"},
-          {"unknown", "value"},
-          {"width", "var(--missing)"}
+          {"unknown", "value"}
         ] do
       assert {:error, :invalid_document} =
                CssValueValidator.validate_declaration(context, declaration, budget)
     end
 
+    assert {:error, {:invalid_css, diagnostic}} =
+             CssValueValidator.validate_declaration(context, {"width", "var(--missing)"}, budget)
+
+    assert diagnostic.operation == :invalid_computed_value
+    assert diagnostic.source == "var(--missing)"
     refute CssValueValidator.custom_property_declaration?(nil)
   end
 
@@ -381,7 +389,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
 
     refute_receive {:consumed, _, _}
 
-    for declaration <- [{"font-family", "var(--missing)"}, nil, {"font-size", "bananas"}] do
+    for declaration <- [nil, {"font-size", "bananas"}] do
       assert {:error, :invalid_document} =
                CssValueValidator.validate_cascade(
                  base,
@@ -392,6 +400,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
 
       refute_receive {:consumed, _, _}
     end
+
+    assert {:ok, defaulted} =
+             CssValueValidator.validate_cascade(
+               base,
+               [{"font-family", "var(--missing)"}],
+               HtmlValidator.new_css_budget(),
+               consumer
+             )
+
+    assert defaulted.font_families == ["serif"]
+    assert_receive {:consumed, "font-family", %{font_families: ["serif"]}}
 
     assert {:error, {:invalid_options, diagnostic}} =
              CssValueValidator.validate_cascade(
@@ -421,17 +440,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
       color: {0, 0, 0},
       font_size: 12.0,
       _root_font_size: 12.0,
-      _custom_properties: %{"--size" => "bananas"}
+      _custom_properties: %{"--size" => "inline math"}
     }
 
     assert {:error, {:invalid_css, diagnostic}} =
              CssValueValidator.validate_declarations_in_context(
-               "--valid:2pt;\n  width:var(--size)",
+               "--valid:2pt;\n  display:var(--size)",
                inherited,
                HtmlValidator.new_css_budget()
              )
 
-    assert diagnostic.source == "width:var(--size)"
+    assert diagnostic.source == "display:var(--size)"
     assert diagnostic.line == 2
     assert diagnostic.column == 3
     assert diagnostic.stage == :css

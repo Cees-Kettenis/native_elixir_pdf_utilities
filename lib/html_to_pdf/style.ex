@@ -81,6 +81,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     "#PilGi"
   ]
 
+  @inherited_css_fields NativeElixirPdfUtilities.Validators.CssCascadeValidator.inherited_fields()
   @medium_border_width 2.25
   # Fixed style values share literal edge maps across the styled document.
   @zero_edges CssValueValidator.edges(0.0)
@@ -95,6 +96,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     :font_face,
     :_root_font_face,
     :_inherited_font,
+    :_position_viewport,
+    :_property_registrations,
     :image,
     :svg_image,
     :_text_decorations,
@@ -355,7 +358,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                              shadow_scope_id: scope,
                              shadow_parent_scope_id: root.host_tree_scope_id,
                              shadow_host_id: root.host_id,
-                             shadow_depth: root.depth
+                             shadow_depth: root.depth,
+                             scope_owner_id: Map.get(style, :parent_id)
                            }
                          end)
                        end),
@@ -418,7 +422,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         ),
                       else: base_style
 
-                  compiled_rules = compile_selector_rules(rules)
+                  compiled_rules =
+                    compile_selector_rules(rules)
+                    |> Map.put(
+                      :registrations,
+                      NativeElixirPdfUtilities.Validators.CssCascadeValidator.registrations(
+                        stylesheet_entries
+                      )
+                    )
 
                   compute_styles = fn cache ->
                     root_id =
@@ -640,7 +651,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    provenance,
                    fn context_entries, inline, observe, select ->
                      {:ok, rules} = stylesheet_rules(context_entries)
-                     compiled = compile_selector_rules(rules)
+
+                     compiled =
+                       compile_selector_rules(rules)
+                       |> Map.put(
+                         :registrations,
+                         NativeElixirPdfUtilities.Validators.CssCascadeValidator.registrations(
+                           context_entries
+                         )
+                       )
 
                      RenderCache.run(fn cache ->
                        context = %{
@@ -2332,6 +2351,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
            ),
          :ok <-
            NativeElixirPdfUtilities.Validators.CssPseudoValidator.validate_paint(owners, node) do
+      style = Map.drop(style, [:_cascade_ua, :_cascade_inherited])
+
+      RenderCache.fetch_partition(rules.cache, :cascade_styles, node._selector_id, fn ->
+        {:ok, style}
+      end)
+
       {:ok, style}
     end
   end
@@ -3294,6 +3319,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           |> reuse_inherited_text_style(rules)
           |> Map.merge(defaults)
           |> Map.merge(%{
+            _cascade_inherited: inherited_style,
             _inherited_font:
               Map.take(inherited_style, [
                 :font_families,
@@ -3840,9 +3866,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :_math_text,
           :_body_link_color,
           :_quote_shaping,
-          :math_style,
-          :math_shift,
-          :math_depth,
           :_fieldset_precision,
           :_table_atomic_context,
           :_form_owner,
@@ -3850,7 +3873,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :_text_decorations,
           :_custom_properties,
           :_font_registry,
-          :_font_family_scope,
           :_base_select,
           :_root_font_size,
           :_root_font_face,
@@ -3859,35 +3881,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :_frameset_parent,
           :_html_list_owner,
           :_list_box_owner,
-          :color,
-          :accent_color,
-          :font_face,
-          :font_families,
-          :font_family,
-          :font_size,
-          :font_style,
-          :font_weight,
-          :letter_spacing,
-          :line_break,
-          :overflow_wrap,
-          :word_break,
-          :line_height,
-          :line_height_multiplier,
-          :line_height_normal,
-          :orphans,
-          :widows,
-          :list_marker_type,
-          :list_style_position,
-          :list_style_image,
           :link_url,
-          :link_destination,
-          :text_align,
-          :_text_align_initial,
-          :caption_side,
-          :text_transform,
-          :quotes,
-          :white_space
-        ],
+          :link_destination
+        ] ++ @inherited_css_fields,
         style
       )
 
@@ -4478,19 +4474,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp stylesheet_rules(entries) do
-    {rules, _next_order} =
-      Enum.reduce(entries, {[], 0}, fn entry, state ->
-        Enum.reduce(entry.prepared.rules, state, fn rule, {rules, order} ->
-          rule = %{rule | order: order}
-
-          rule =
-            Map.merge(rule, Map.take(entry, [:shadow_scope_id, :shadow_host_id, :shadow_depth]))
-
-          {[rule | rules], order + 1}
-        end)
-      end)
-
-    {:ok, Enum.reverse(rules)}
+    {:ok, NativeElixirPdfUtilities.Validators.CssCascadeValidator.layer_rules(entries)}
   end
 
   defp read_stylesheet(path, opts \\ []) do
@@ -4532,6 +4516,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             %{
               css: Enum.map_join(node.children, "", & &1.text),
               source_kind: :embedded,
+              scope_owner_id: Map.get(node, :parent_id),
               base_url: base_url,
               trusted_local_resources: false
             }
@@ -4932,7 +4917,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               order: rule.order,
               declaration_index: declaration_index,
               definition_scope: Map.get(rule, :shadow_scope_id),
-              encapsulation: -Map.get(rule, :shadow_depth, 0)
+              encapsulation: -Map.get(rule, :shadow_depth, 0),
+              layer: Map.get(rule, :layer, []),
+              layer_order: Map.get(rule, :layer_order, [])
             }
             |> then(fn matched ->
               case Map.get(rule, :source_declarations) do
@@ -4959,7 +4946,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               end
 
             indexes =
-              if Map.get(selector, :tree_dependent, false),
+              if Map.get(selector, :tree_dependent, false) or Map.get(rule, :scopes, []) != [],
                 do: Map.put(indexes, :positional_dependent, true),
                 else: indexes
 
@@ -4991,7 +4978,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             selector =
               Map.merge(
                 selector,
-                Map.take(rule, [:shadow_scope_id, :shadow_host_id, :shadow_depth])
+                Map.take(rule, [
+                  :shadow_scope_id,
+                  :shadow_host_id,
+                  :shadow_depth,
+                  :scopes,
+                  :implicit_scope_root_id
+                ])
               )
 
             entry = {rule.order, selector}
@@ -5029,6 +5022,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          pseudo_element \\ nil,
          matched_declarations \\ nil
        ) do
+    inherited =
+      case ancestors do
+        [parent | _] ->
+          case RenderCache.lookup(rules.cache, :cascade_styles, parent._selector_id) do
+            {:ok, {:ok, parent_style}} -> parent_style
+            :error -> Map.get(style, :_cascade_inherited, style)
+          end
+
+        [] ->
+          Map.get(style, :_cascade_inherited, style)
+      end
+
+    style =
+      style
+      |> Map.put(:_cascade_ua, style)
+      |> Map.put(:_cascade_inherited, inherited)
+      |> Map.put(:_property_registrations, Map.get(rules.rules, :registrations, %{}))
+      |> Map.put(:_position_viewport, Map.get(rules, :position_viewport))
+
     inline_style =
       case pseudo_element do
         nil -> Map.get(node.attributes, "style", "")
@@ -5092,12 +5104,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 end
               end)
             )
-            |> Enum.sort_by(fn matched ->
-              encapsulation = Map.get(matched, :encapsulation, 0)
-
-              {matched.important, if(matched.important, do: -encapsulation, else: encapsulation),
-               matched.inline, matched.specificity, matched.order, matched.declaration_index}
-            end)
+            |> NativeElixirPdfUtilities.Validators.CssCascadeValidator.order()
 
           style =
             Enum.reduce(matched, style, fn matched, style ->
@@ -5116,9 +5123,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           declarations =
             matched
             |> Enum.map(fn matched ->
-              if Map.has_key?(rules, :source_budget) and Map.has_key?(matched, :source),
-                do: Map.take(matched, [:declaration, :source, :context_id]),
-                else: matched.declaration
+              Map.take(matched, [
+                :declaration,
+                :source,
+                :context_id,
+                :important,
+                :inline,
+                :layer,
+                :layer_order,
+                :definition_scope,
+                :encapsulation
+              ])
             end)
             |> then(&(presentation ++ &1))
 
@@ -5147,6 +5162,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
               {:ok,
                validated
+               |> Map.drop([:_cascade_ua, :_cascade_inherited])
                |> resolve_rem_values()
                |> resolve_font_relative_defaults()
                |> Map.delete(:_inherited_color)
@@ -5158,6 +5174,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             end
           else
             with {:ok, style} <- apply_declarations(style, hints ++ declarations, rules.cache),
+                 style = Map.drop(style, [:_cascade_ua, :_cascade_inherited]),
                  # Defaults contain no rem values; inherited lengths are already resolved.
                  style = if(declarations == [], do: style, else: resolve_rem_values(style)),
                  style =
@@ -5349,23 +5366,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         keys
         |> Enum.flat_map(&Map.get(index, &1, []))
         |> Enum.reduce(%{}, fn {order, selector}, matched ->
-          case NativeElixirPdfUtilities.HtmlToPdf.CssSelector.matches_rule?(
+          case NativeElixirPdfUtilities.HtmlToPdf.CssSelector.match_rule(
                  selector,
                  node,
                  ancestors,
                  context
                ) do
-            true ->
-              Map.update(matched, order, selector.specificity, &max(&1, selector.specificity))
+            {:ok, proximity} ->
+              key =
+                {selector.specificity, if(is_nil(proximity), do: {0, 0}, else: {1, -proximity})}
+
+              Map.update(matched, order, {key, proximity}, fn {previous, previous_proximity} ->
+                if key > previous, do: {key, proximity}, else: {previous, previous_proximity}
+              end)
 
             false ->
               matched
           end
         end)
-        |> Enum.flat_map(fn {order, specificity} ->
+        |> Enum.flat_map(fn {order, {{specificity, _}, proximity}} ->
           context.rules.declarations
           |> Map.fetch!(order)
-          |> Enum.map(&Map.put(&1, :specificity, specificity))
+          |> Enum.map(
+            &(&1
+              |> Map.put(:specificity, specificity)
+              |> Map.put(:scope_proximity, proximity))
+          )
         end)
     end
   end
@@ -5376,9 +5402,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       declarations,
       css_budget(cache),
       fn declaration, validated ->
-        if elem(declaration, 0) == "font-family",
-          do: put_font_face(validated, cache),
-          else: {:ok, validated}
+        property = elem(CssValueValidator.declaration_pair(declaration), 0)
+
+        if property in ["font-family", "font"] or
+             (property in ["all", "font-weight", "font-style"] and
+                Map.get(validated, :_property_registrations, %{}) != %{}),
+           do: put_font_face(validated, cache),
+           else: {:ok, validated}
       end
     )
   end

@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
   end
 
   test "prospective application cannot borrow the symbolic declaration's missing variable or asset authority" do
-    for declaration <- ["width:var(--missing)", "background-image:url(missing.png)"] do
+    for declaration <- ["width:bananas", "background-image:url(missing.png)"] do
       html =
         "<style>.selected{#{declaration}}</style><body><?marker name='A'><template for='A'><p class='selected'>Good</p></template></body>"
 

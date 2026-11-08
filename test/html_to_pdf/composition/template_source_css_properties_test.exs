@@ -201,8 +201,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
 
     for declaration <- [
           "font-style:oblique",
-          "border:var(--missing)",
-          "border:var(--missing,)",
+          "border:bananas",
           "text-decoration:underline underline",
           "border-top:transparent red"
         ] do
@@ -230,10 +229,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
 
   test "prospective selected fonts and tokens cannot reuse the earlier unapplied source completion" do
     html =
-      "<style>.selected{font-weight:var(--missing)}</style><body><?marker name='A'><template for='A'><p class='selected'>Good</p></template></body>"
+      "<style>.selected{font-weight:heavy}</style><body><?marker name='A'><template for='A'><p class='selected'>Good</p></template></body>"
 
     assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
-    assert diagnostic.source == "font-weight:var(--missing)"
+    assert diagnostic.source == "font-weight:heavy"
   end
 
   test "canonical signed source lengths retain dimensions and reject percentage and automatic spacing" do

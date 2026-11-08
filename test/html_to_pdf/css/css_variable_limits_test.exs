@@ -31,8 +31,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssVariableLimitsTest do
   test "byte checks account for multibyte values, prefixes, suffixes and repeated references" do
     Limits.install(Map.put(Limits.effective(), :max_css_variable_bytes, 20))
 
-    assert {:ok, "éééééééééé"} =
-             HtmlValidator.resolve_css_variables("var(--x)var(--x)", %{"--x" => "ééééé"}, %{})
+    assert {:ok, "éééé/**/éééé"} =
+             HtmlValidator.resolve_css_variables("var(--x)var(--x)", %{"--x" => "éééé"}, %{})
 
     # xvar is a distinct CSS function token, so only the trailing var resolves.
     assert {:ok, "xvar(--x)ééééé"} =
@@ -93,9 +93,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssVariableLimitsTest do
 
   test "work counts repeated references and dependencies are computed once" do
     Limits.install(Map.put(Limits.effective(), :max_css_variable_work, 4))
-    properties = %{"--a" => "x", "--b" => "var(--a)var(--a)"}
+    # Commas stay separate tokens without identifier-boundary serialization bytes.
+    properties = %{"--a" => ",", "--b" => "var(--a)var(--a)"}
 
-    assert {:ok, %{"--a" => "x", "--b" => "xx"}} =
+    assert {:ok, %{"--a" => ",", "--b" => ",,"}} =
              HtmlValidator.compute_custom_properties(properties)
 
     Limits.install(Map.put(Limits.effective(), :max_css_variable_work, 3))
@@ -124,12 +125,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssVariableLimitsTest do
     Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, 7))
 
     properties = %{
-      "--a" => "x",
+      "--a" => ",",
       "--b" => "var(--a)var(--a)",
       "--c" => "var(--b)var(--b)"
     }
 
-    assert {:ok, %{"--a" => "x", "--b" => "xx", "--c" => "xxxx"}} =
+    assert {:ok, %{"--a" => ",", "--b" => ",,", "--c" => ",,,,"}} =
              HtmlValidator.compute_custom_properties(properties)
 
     Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, 6))

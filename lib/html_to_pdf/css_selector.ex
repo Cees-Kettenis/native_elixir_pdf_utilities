@@ -66,7 +66,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
   @doc "Matches a compiled rule in its author tree, including shadow host and part boundaries."
   @spec matches_rule?(map(), map(), [map()], map()) :: boolean()
-  def matches_rule?(selector, node, ancestors, context) do
+  def matches_rule?(selector, node, ancestors, context),
+    do: match?({:ok, _}, match_rule(selector, node, ancestors, context))
+
+  @doc "Matches a validated scoped rule and returns its innermost scope proximity."
+  @spec match_rule(map(), map(), [map()], map()) :: {:ok, non_neg_integer() | nil} | false
+  def match_rule(selector, node, ancestors, context) do
     scope = Map.get(selector, :shadow_scope_id)
     host = Map.get(selector, :shadow_host_id)
     boundary = Map.get(hd(selector.parts), :shadow_selector)
@@ -74,13 +79,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
     case boundary do
       {:part, names} ->
-        Enum.any?(part_hosts(node, names, scope, context), fn host ->
-          matches?(
-            selector.parts,
-            host,
-            logical_ancestors(host, context),
-            Map.put(context, :part_target, node)
-          )
+        Enum.reduce(part_hosts(node, names, scope, context), false, fn host, best ->
+          scoped_match =
+            scoped_match(
+              selector,
+              host,
+              logical_ancestors(host, context),
+              Map.put(context, :part_target, node)
+            )
+
+          closer_match(best, scoped_match)
         end)
 
       _ ->
@@ -100,8 +108,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
             {scope, nil} ->
               Map.get(node, :tree_scope_id) == scope or
-                (Map.get(node, :node_id) == host and
-                   Map.get(hd(selector.parts), :host_eligible, false))
+                ((Map.get(node, :node_id) == host and
+                    Map.get(hd(selector.parts), :host_eligible, false)) or
+                   (Map.get(selector, :scopes, []) != [] and
+                      Map.get(hd(selector.parts), :scope_eligible, false)))
           end
 
         local =
@@ -117,7 +127,103 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
             do: Enum.reject(local, &(Map.get(&1, :node_id) == Map.get(node, :assigned_slot_id))),
             else: local
 
-        applicable and matches?(selector.parts, node, local, context)
+        if applicable, do: scoped_match(selector, node, local, context), else: false
+    end
+  end
+
+  defp scoped_match(selector, node, ancestors, context) do
+    scopes = Map.get(selector, :scopes, [])
+
+    if scopes == [] do
+      if matches?(selector.parts, node, ancestors, context), do: {:ok, nil}, else: false
+    else
+      subject =
+        case Map.get(hd(selector.parts), :shadow_selector) do
+          {:slotted, _} -> Map.get(node, :assigned_slot, node)
+          _ -> node
+        end
+
+      parents =
+        if identity(subject) == identity(node),
+          do: ancestors,
+          else: logical_ancestors(subject, context)
+
+      chain = [subject | parents]
+
+      states =
+        Enum.reduce(scopes, [%{context: context, root_index: length(chain) - 1}], fn scope,
+                                                                                     states ->
+          Enum.flat_map(states, fn state ->
+            chain
+            |> Enum.with_index()
+            |> Enum.flat_map(fn {root, index} ->
+              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              root_parents = Enum.drop(chain, index + 1)
+
+              root_match =
+                if is_nil(scope.roots) do
+                  owner = Map.get(selector, :implicit_scope_root_id)
+                  owner_node = Map.get(Map.get(context, :logical_nodes, %{}), owner)
+
+                  implicit =
+                    cond do
+                      is_map(owner_node) and owner_node.type == :element -> owner
+                      not is_nil(Map.get(context, :shadow_host_id)) -> context.shadow_host_id
+                      true -> identity(List.last(chain))
+                    end
+
+                  identity(root) == implicit
+                else
+                  Enum.any?(
+                    scope.roots,
+                    &matches?(Enum.reverse(&1.parts), root, root_parents, state.context)
+                  )
+                end
+
+              local = Map.put(state.context, :scope_root, identity(root))
+
+              limited =
+                if is_nil(scope.limits),
+                  do: false,
+                  else:
+                    chain
+                    |> Enum.take(index + 1)
+                    |> Enum.with_index()
+                    |> Enum.any?(fn {candidate, position} ->
+                      Enum.any?(
+                        scope.limits,
+                        &matches?(
+                          Enum.reverse(&1.parts),
+                          candidate,
+                          Enum.drop(chain, position + 1),
+                          local
+                        )
+                      )
+                    end)
+
+              if index <= state.root_index and root_match and not limited,
+                do: [%{context: local, root_index: index}],
+                else: []
+            end)
+          end)
+        end)
+
+      Enum.reduce(states, false, fn state, best ->
+        result =
+          if matches?(selector.parts, node, ancestors, state.context),
+            do: {:ok, state.root_index},
+            else: false
+
+        closer_match(best, result)
+      end)
+    end
+  end
+
+  defp closer_match(left, right) do
+    case {left, right} do
+      {false, result} -> result
+      {result, false} -> result
+      {{:ok, left}, {:ok, right}} -> {:ok, min(left, right)}
     end
   end
 
@@ -270,6 +376,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
     classes_match? = Enum.all?(part.classes, &MapSet.member?(classes, &1))
 
+    scope_eligible =
+      Map.get(context, :scope_root) == identity(node) and
+        not is_nil(Map.get(context, :scope_root)) and Map.get(part, :scope_eligible, false)
+
     # Resolve context only for compounds whose positive requirements match.
     # An impossible compound needs neither sibling positions nor negation work.
     shadow_matches? =
@@ -317,7 +427,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
         nil ->
           Map.get(context, :shadow_argument, false) or is_nil(Map.get(context, :shadow_scope_id)) or
             Map.get(node, :node_id) != Map.get(context, :shadow_host_id) or
-            Map.get(part, :host_eligible, false)
+            Map.get(part, :host_eligible, false) or scope_eligible
       end
 
     featureless =
@@ -326,7 +436,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
         not Map.get(context, :shadow_argument, false)
 
     (not Map.get(context, :part_argument, false) or Map.get(part, :part_eligible, false)) and
-      (not featureless or Map.get(part, :host_eligible, false)) and shadow_matches? and
+      (not featureless or Map.get(part, :host_eligible, false) or scope_eligible) and
+      shadow_matches? and
       namespace_matches? and tag_matches? and id_matches? and classes_match? and
       Enum.all?(part.attributes, &attribute_matches?(&1, target)) and
       Enum.all?(part.pseudo_classes, &pseudo_class_matches?(&1, target, ancestors, context)) and
@@ -387,7 +498,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
         end)
 
       :scope ->
-        Map.get(node, :tag) == "html" and ancestors == []
+        case Map.get(context, :scope_root) do
+          nil -> Map.get(node, :tag) == "html" and ancestors == []
+          root -> identity(node) == root
+        end
 
       state
       when state in [

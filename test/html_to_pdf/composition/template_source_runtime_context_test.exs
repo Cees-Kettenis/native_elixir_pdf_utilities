@@ -206,13 +206,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
     assert {:ok, "Good"} = Text.extract(pdf)
   end
 
-  test "invalid original scoped variables still fail before replacement and preserve their source" do
+  test "invalid original scoped values still fail before replacement and preserve their source" do
     html =
-      "<body><?start name='A'><math><mspace style='width:var(--missing);height:2px'></mspace><mi>x</mi></math><?end?><template for='A'><p>Good</p></template></body>"
+      "<body><?start name='A'><math><mspace style='width:bananas;height:2px'></mspace><mi>x</mi></math><?end?><template for='A'><p>Good</p></template></body>"
 
     assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
     assert diagnostic.stage == :css
-    assert diagnostic.source == "width:var(--missing)"
+    assert diagnostic.source == "width:bananas"
     assert Process.get({TemplateExecutionValidator, :execution}) == nil
     assert Process.get({TemplateRendererContextValidator, :preparation}) == nil
   end

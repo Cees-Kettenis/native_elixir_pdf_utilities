@@ -3129,8 +3129,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "HTML attribute case folding consumes the shared CSS work budget" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    # Shared component scanning precedes the additional ASCII folding work.
-    Limits.install(%{limits | max_css_work: 9000})
+    # Measured shared preparation uses 9,271 units, then ASCII folding adds 2,000.
+    Limits.install(%{limits | max_css_work: 10000})
     selector_value = String.duplicate("a", 1000)
     css = ~s(<style>input[disabled="#{selector_value}"] { color:red; }</style>)
     exact = css <> ~s(<input disabled="#{selector_value}" value="Text">)

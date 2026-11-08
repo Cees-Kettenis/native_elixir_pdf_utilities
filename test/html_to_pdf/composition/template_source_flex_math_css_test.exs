@@ -82,10 +82,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFlexMathCssTest do
     assert diagnostic.source == "display:inline math"
 
     html =
-      "<style>.selected{flex:var(--missing)}</style><body><?marker name='A'><template for='A'><p class='selected'>Good</p></template></body>"
+      "<style>.selected{flex:1 1 1pt extra}</style><body><?marker name='A'><template for='A'><p class='selected'>Good</p></template></body>"
 
     assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
-    assert diagnostic.source == "flex:var(--missing)"
+    assert diagnostic.source == "flex:1 1 1pt extra"
   end
 
   test "Math display keyword grammar never issues a context for malformed public input" do

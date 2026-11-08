@@ -101,10 +101,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     html =
       "<body style='--host:8px'><div><?marker name='A'></div><template for='A'><p style='width:var(--host)'>Inert</p></template></body>"
 
-    assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
-    assert diagnostic.source == "width:var(--host)"
-    assert diagnostic.message =~ "declaration/context policy failed"
-    assert diagnostic.operation == :source_style_contexts
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+
+    assert {:ok, expected} =
+             HtmlToPdf.render(
+               "<body style='--host:8px'><div><p style='width:8px'>Inert</p></div></body>",
+               @opts
+             )
+
+    assert pdf == expected
 
     assert {:ok, _} =
              HtmlToPdf.render(

@@ -168,21 +168,25 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
   defp media_context_required?(css) do
     css
-    |> NativeElixirPdfUtilities.Validators.CssSyntaxValidator.rules()
+    |> NativeElixirPdfUtilities.Validators.CssSyntaxValidator.block_items(true)
     |> Enum.any?(fn rule ->
-      case HtmlValidator.trim_css_whitespace(rule.selectors) do
-        <<"@", name::binary>> ->
-          case HtmlValidator.parse_css_identifier(name) do
-            {:ok, name, query} ->
-              String.downcase(name, :ascii) == "media" and
-                (String.contains?(query, "(") or media_context_required?(rule.declarations))
+      if rule.kind == :rule and Map.get(rule, :block, false) do
+        case HtmlValidator.trim_css_whitespace(rule.selectors) do
+          <<"@", name::binary>> ->
+            case HtmlValidator.parse_css_identifier(name) do
+              {:ok, name, query} ->
+                (String.downcase(name, :ascii) == "media" and String.contains?(query, "(")) or
+                  media_context_required?(rule.declarations)
 
-            _ ->
-              false
-          end
+              _ ->
+                false
+            end
 
-        _ ->
-          false
+          _ ->
+            media_context_required?(rule.declarations)
+        end
+      else
+        false
       end
     end)
   end
@@ -233,16 +237,21 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
     {output, records, cursor} =
       css
-      |> CssSyntaxValidator.rules()
+      |> CssSyntaxValidator.block_items(origin == 0)
       |> Enum.reduce({[], [], 0}, fn rule, {output, records, cursor} ->
-        selector = HtmlValidator.trim_css_whitespace(rule.selectors)
+        selector =
+          if rule.kind == :rule, do: HtmlValidator.trim_css_whitespace(rule.selectors), else: ""
 
         media =
           case selector do
             <<"@", name::binary>> ->
               case HtmlValidator.parse_css_identifier(name) do
-                {:ok, name, query} -> if String.downcase(name, :ascii) == "media", do: query
-                _ -> nil
+                {:ok, name, query} ->
+                  name = String.downcase(name, :ascii)
+                  if name in ["media", "supports"], do: {name, query}
+
+                _ ->
+                  nil
               end
 
             _ ->
@@ -250,16 +259,27 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
           end
 
         {replacement, new_records} =
-          if is_binary(media) do
+          if is_tuple(media) do
+            {kind, query} = media
             body_at = rule.offset + byte_size(rule.selectors) + 1
 
             active =
-              rule.block and HtmlValidator.trim_css_whitespace(media) != "" and
-                matches_stylesheet?(media, rule.declarations, context)
+              rule.block and HtmlValidator.trim_css_whitespace(query) != "" and
+                if(kind == "media",
+                  do: matches_stylesheet?(query, rule.declarations, context),
+                  else: NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(query)
+                )
 
             {:ok, selected, children} =
               if rule.block and (active or mode == :source),
-                do: select_media(rule.declarations, context, depth + 1, mode, origin + body_at),
+                do:
+                  select_media(
+                    rule.declarations,
+                    context,
+                    depth + if(kind == "media", do: 1, else: 0),
+                    mode,
+                    origin + body_at
+                  ),
                 else: {:ok, "", []}
 
             if mode == :source do
@@ -268,11 +288,13 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               record = %{
                 offset: origin + rule.offset + leading,
                 length: byte_size(rule.source) - leading,
-                query: media,
+                query: query,
                 active: active,
                 body_offset: origin + body_at,
                 body_length: byte_size(rule.declarations)
               }
+
+              record = if kind == "supports", do: Map.put(record, :kind, :supports), else: record
 
               projected =
                 if rule.block,
@@ -286,7 +308,16 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               {selected, []}
             end
           else
-            {rule.source, []}
+            if rule.kind == :rule and rule.block do
+              body_at = rule.offset + byte_size(rule.selectors) + 1
+
+              {:ok, body, children} =
+                select_media(rule.declarations, context, depth, mode, origin + body_at)
+
+              {rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: ""), children}
+            else
+              {rule.source, []}
+            end
           end
 
         before = binary_part(css, cursor, rule.offset - cursor)

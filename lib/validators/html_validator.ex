@@ -993,10 +993,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec compute_custom_properties(map(), :atomics.atomics_ref()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def compute_custom_properties(properties, budget \\ new_css_budget()) do
-    with {:ok, memo} <- custom_property_cycle_memo(properties) do
+  @spec compute_custom_properties(map(), :atomics.atomics_ref(), nil | function()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def compute_custom_properties(properties, budget \\ new_css_budget(), transform \\ nil) do
+    with {:ok, memo} <- custom_property_cycle_memo(properties, not is_nil(transform)),
+         {:ok, memo} <-
+           Enum.reduce_while(memo, {:ok, %{}}, fn {name, {value, height}}, {:ok, memo} ->
+             case if(transform, do: transform.(name, value), else: {:ok, value}) do
+               {:ok, value} -> {:cont, {:ok, Map.put(memo, name, {value, height})}}
+               error -> {:halt, error}
+             end
+           end) do
       Enum.reduce_while(properties, {:ok, memo}, fn {name, _value}, {:ok, memo} ->
-        case resolve_custom_property(name, properties, %{}, memo, budget) do
+        case resolve_custom_property(name, properties, %{}, memo, budget, transform) do
           {:ok, _value, _height, memo} ->
             {:cont, {:ok, memo}}
 
@@ -1033,10 +1042,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   # Fallback references participate in the CSS dependency graph even when the
   # chosen property has a value. Only actual custom-property computation needs
   # this cycle result; source preparation retains the same dependencies as tokens.
-  defp custom_property_cycle_memo(properties) do
-    if Enum.any?(properties, fn {_name, value} ->
-         is_binary(value) and String.contains?(value, ",")
-       end) do
+  defp custom_property_cycle_memo(properties, force) do
+    if force or
+         Enum.any?(properties, fn {_name, value} ->
+           is_binary(value) and String.contains?(value, ",")
+         end) do
       graph = :digraph.new([:private])
 
       try do
@@ -1081,14 +1091,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec resolve_css_variables(String.t(), map(), map(), :atomics.atomics_ref()) ::
           {:ok, String.t()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve_css_variables(value, properties, resolving, budget \\ new_css_budget()) do
-    case expand_css_value(value, properties, resolving, %{}, budget) do
+    case expand_css_value(value, properties, resolving, %{}, budget, nil) do
       {:ok, nil, _height, _memo} -> :error
       {:ok, resolved, _height, _memo} -> {:ok, resolved}
       error -> error
     end
   end
 
-  defp resolve_custom_property(name, properties, resolving, memo, budget) do
+  defp resolve_custom_property(name, properties, resolving, memo, budget, transform) do
     depth = map_size(resolving)
 
     with :ok <- css_limit(:max_css_variable_work, :atomics.add_get(budget, 2, 1)),
@@ -1103,11 +1113,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           end
 
         {false, :error, nil} ->
-          {:ok, nil, 0, Map.put(memo, name, {nil, 0})}
+          case if(transform, do: transform.(name, nil), else: {:ok, nil}) do
+            {:ok, value} -> {:ok, value, 0, Map.put(memo, name, {value, 0})}
+            error -> error
+          end
 
         {false, :error, value} ->
           with {:ok, resolved, height, memo} <-
-                 expand_css_value(value, properties, Map.put(resolving, name, true), memo, budget) do
+                 expand_css_value(
+                   value,
+                   properties,
+                   Map.put(resolving, name, true),
+                   memo,
+                   budget,
+                   transform
+                 ),
+               {:ok, resolved} <-
+                 if(transform, do: transform.(name, resolved), else: {:ok, resolved}) do
             height = height + 1
             {:ok, resolved, height, Map.put(memo, name, {resolved, height})}
           end
@@ -1258,16 +1280,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
-  defp expand_css_value(value, properties, resolving, memo, budget) do
+  defp expand_css_value(value, properties, resolving, memo, budget, transform) do
     with :ok <- css_limit(:max_css_variable_bytes, byte_size(value)),
          {:ok, matches} <- css_variable_references(value, map_size(resolving)) do
       Enum.reduce_while(matches, {:ok, [], 0, 0, 0, memo}, fn
         %{offset: offset, length: length, name: name, fallback: fallback},
         {:ok, chunks, cursor, size, height, memo} ->
           resolved =
-            case resolve_custom_property(name, properties, resolving, memo, budget) do
+            case resolve_custom_property(name, properties, resolving, memo, budget, transform) do
               {:ok, nil, _height, memo} when not is_nil(fallback) ->
-                expand_css_value(fallback, properties, resolving, memo, budget)
+                expand_css_value(fallback, properties, resolving, memo, budget, transform)
 
               result ->
                 result
@@ -1285,7 +1307,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                   prefix = binary_part(value, cursor, offset - cursor)
 
                   {:cont,
-                   {:ok, [replacement, prefix | chunks], offset + length, size,
+                   {:ok, ["/**/", replacement, "/**/", prefix | chunks], offset + length, size,
                     max(height, dependency_height), memo}}
 
                 error ->
@@ -1303,7 +1325,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           with :ok <- css_limit(:max_css_variable_bytes, size),
                :ok <- css_limit(:max_css_variable_total_bytes, :atomics.add_get(budget, 1, size)) do
             suffix = binary_part(value, cursor, byte_size(value) - cursor)
-            {:ok, IO.iodata_to_binary(Enum.reverse([suffix | chunks])), height, memo}
+            computed = IO.iodata_to_binary(Enum.reverse([suffix | chunks]))
+            computed = if matches == [], do: computed, else: normalize_css_comments(computed)
+
+            with :ok <- css_limit(:max_css_variable_bytes, byte_size(computed)),
+                 :ok <-
+                   css_limit(
+                     :max_css_variable_total_bytes,
+                     :atomics.add_get(budget, 1, max(0, byte_size(computed) - size))
+                   ) do
+              {:ok, computed, height, memo}
+            end
           end
 
         result ->

@@ -118,7 +118,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPositioningTest do
   end
 
   test "prospective selected position cannot reuse the unapplied symbolic state" do
-    declaration = "object-position:var(--missing)"
+    declaration = "object-position:bananas"
 
     html =
       "<style>.selected{#{declaration}}</style><body><?marker name='A'><template for='A'><p class='selected'>Good</p></template></body>"

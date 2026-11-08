@@ -560,7 +560,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
          Map.get(style, :display) not in [:inline, :contents, :none] do
       attributes = initial_control_attributes(node)
       kind = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
-      properties = MapSet.new(declarations, &elem(&1, 0))
+
+      properties =
+        MapSet.new(
+          declarations,
+          &elem(NativeElixirPdfUtilities.Validators.CssValueValidator.declaration_pair(&1), 0)
+        )
 
       style =
         case kind do
@@ -1194,7 +1199,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     native? =
       style.appearance == :auto and
         not Enum.any?(declarations, fn declaration ->
-          property = elem(declaration, 0)
+          property =
+            elem(
+              NativeElixirPdfUtilities.Validators.CssValueValidator.declaration_pair(declaration),
+              0
+            )
 
           property in ["background", "background-color", "background-image", "box-shadow"] or
             (String.starts_with?(property, "border") and property != "border-radius")
@@ -1229,7 +1238,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     # The UA font shorthand resets inherited line height. An authored temporal
     # line-height or font shorthand still wins in the ordinary cascade.
     if Enum.any?(declarations, fn declaration ->
-         elem(declaration, 0) in ["line-height", "font"]
+         elem(
+           NativeElixirPdfUtilities.Validators.CssValueValidator.declaration_pair(declaration),
+           0
+         ) in ["line-height", "font"]
        end),
        do: style,
        else:

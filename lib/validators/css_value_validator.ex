@@ -4,6 +4,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.CssCascadeValidator
+  alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator
   alias NativeElixirPdfUtilities.Validators.CssReferenceValidator
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
   alias NativeElixirPdfUtilities.Validators.SvgStyleValidator
@@ -45,7 +47,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                                 @source_position_properties ++
                                 @source_color_properties ++
                                 @source_remaining_properties ++
-                                ~w(font-size font-family background-image list-style-image)
+                                ~w(font-size font-family font all background-image list-style-image)
   @medium_border_width 2.25
   @doc false
   @spec custom_property_declaration?(term()) :: boolean()
@@ -68,29 +70,82 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec validate_declaration(map(), term(), :atomics.atomics_ref()) ::
           {:ok, map()} | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
   def validate_declaration(style, declaration, budget) do
-    case declaration_pair(declaration) do
-      {"--" <> _ = property, value} ->
-        with {:ok, _references} <- HtmlValidator.parse_css_variable_references(value),
-             do: validate_resolved(style, property, value)
+    result =
+      case declaration_pair(declaration) do
+        {"--" <> _ = property, value} ->
+          with {:ok, _references} <- HtmlValidator.parse_css_variable_references(value),
+               do:
+                 validate_resolved(
+                   style,
+                   property,
+                   CssCascadeValidator.custom_value(style, property, value)
+                 )
 
-      {property, value} ->
-        with {:ok, value} <-
-               HtmlValidator.resolve_css_variables(
-                 value,
-                 Map.get(style, :_custom_properties, %{}),
-                 %{},
-                 budget
-               ),
-             {:ok, validated} <- validate_resolved(style, property, value) do
-          {:ok, validated}
-        else
-          :error -> {:error, :invalid_document}
-          error -> error
+        {property, value} ->
+          resolved =
+            HtmlValidator.resolve_css_variables(
+              value,
+              Map.get(style, :_custom_properties, %{}),
+              %{},
+              budget
+            )
+
+          validate_computed_declaration(style, property, value, resolved, budget)
+
+        nil ->
+          {:error, :invalid_document}
+      end
+
+    if result == :error, do: {:error, :invalid_document}, else: result
+  end
+
+  defp validate_computed_declaration(style, property, value, resolved, budget) do
+    case resolved do
+      {:ok, computed} ->
+        case validate_resolved(style, property, computed) do
+          error when error in [:error, {:error, :invalid_document}] ->
+            case HtmlValidator.parse_css_variable_references(value) do
+              {:ok, [_ | _]} ->
+                record = %{
+                  declaration: {property, computed},
+                  source: %{text: property <> ":" <> computed, line: nil, column: nil}
+                }
+
+                case prepare_unapplied_declaration(record, budget) do
+                  {:ok, _} -> error
+                  :requires_element_context -> error
+                  {:error, {:resource_limit_exceeded, _}} = resource_error -> resource_error
+                  _ -> invalid_computed_value(value)
+                end
+
+              _ ->
+                {:error, :invalid_document}
+            end
+
+          result ->
+            result
         end
 
-      nil ->
-        {:error, :invalid_document}
+      :error ->
+        case HtmlValidator.parse_css_variable_references(value) do
+          {:ok, [_ | _]} -> invalid_computed_value(value)
+          _ -> {:error, :invalid_document}
+        end
+
+      error ->
+        error
     end
+  end
+
+  defp invalid_computed_value(value) do
+    Diagnostics.error(
+      :css,
+      :invalid_css,
+      "variable substitution produces an invalid computed value; the cascade must apply CSS defaulting",
+      module: __MODULE__,
+      operation: :invalid_computed_value,
+      source: value
+    )
   end
 
   @doc """
@@ -121,7 +176,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         property not in (@source_layout_properties ++
                            @source_margin_properties ++
                            @source_padding_properties) or
-          String.contains?(value, ["(", "%"]) or
+          String.contains?(value, ["(", "%"]) or not is_nil(CssCascadeValidator.keyword(value)) or
           Enum.any?(tokens, fn token ->
             token in (@source_wide_keywords ++ ~w(currentcolor math math-auto)) or
               case HtmlValidator.parse_css_number(token) do
@@ -187,7 +242,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           cond do
             property in @source_symbolic_properties and
-                String.downcase(value, :ascii) in @source_wide_keywords ->
+                not is_nil(CssCascadeValidator.keyword(value)) ->
               {:ok,
                Map.merge(tokens, %{kind: :cascade_keyword, dependencies: [:cascade_context]})}
 
@@ -281,8 +336,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                    do: {:ok, Map.merge(tokens, %{kind: :flex, properties: specified})}
 
             property == "display" ->
-              with {:ok, display} <- MathLayoutValidator.parse_display(value),
-                   do: {:ok, Map.merge(tokens, %{kind: :math_display, display: display})}
+              case MathLayoutValidator.parse_display(value) do
+                {:ok, display} ->
+                  {:ok, Map.merge(tokens, %{kind: :math_display, display: display})}
+
+                :error ->
+                  with {:ok, properties} <- put_display(%{}, value),
+                       do:
+                         {:ok,
+                          Map.merge(tokens, %{kind: :specified_tokens, properties: properties})}
+              end
 
             property in @source_scalar_properties ->
               with {:ok, specified} <- validate_declaration(%{}, record, budget),
@@ -558,43 +621,169 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp validate_cascade_steps(style, declarations, budget, consumer, failure) do
-    if declarations == [] and style._custom_properties == %{} do
+    if declarations == [] and style._custom_properties == %{} and
+         Map.get(style, :_property_registrations, %{}) == %{} do
       prepare_cascade_defaults(style)
     else
-      {custom_declarations, ordinary_declarations} =
-        Enum.split_with(declarations, &custom_property_declaration?/1)
-
-      {foundational_declarations, dependent_declarations} =
-        Enum.split_with(ordinary_declarations, fn declaration ->
-          declaration =
-            case declaration do
-              %{declaration: tuple} -> tuple
-              tuple -> tuple
-            end
-
-          case declaration do
-            {property, _value} ->
-              property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
-
-            {property, _value, :important} ->
-              property in ["color", "font-size", "math-style", "math-shift", "math-depth"]
-
-            _ ->
-              false
-          end
-        end)
-
       with {:ok, style} <-
-             validate_cascade_list(style, custom_declarations, budget, consumer, failure),
-           {:ok, custom_properties} <-
-             HtmlValidator.compute_custom_properties(style._custom_properties, budget),
-           style = Map.put(style, :_custom_properties, custom_properties),
-           {:ok, style} <-
-             validate_cascade_list(style, foundational_declarations, budget, consumer, failure),
-           {:ok, style} <- prepare_cascade_defaults(style) do
-        validate_cascade_list(style, dependent_declarations, budget, consumer, failure)
+             CssPropertyRegistrationValidator.baseline(Map.put_new(style, :_cascade_ua, style)) do
+        custom_baseline = style._custom_properties
+        planned = CssCascadeValidator.plan(declarations, style)
+
+        {custom_declarations, ordinary_declarations} =
+          Enum.split_with(planned, &custom_property_declaration?/1)
+
+        {foundational_declarations, dependent_declarations} =
+          Enum.split_with(ordinary_declarations, fn declaration ->
+            declaration = declaration.declaration
+
+            case declaration do
+              {property, _value} ->
+                property in [
+                  "color",
+                  "font-size",
+                  "font",
+                  "all",
+                  "math-style",
+                  "math-shift",
+                  "math-depth"
+                ]
+
+              {property, _value, :important} ->
+                property in [
+                  "color",
+                  "font-size",
+                  "font",
+                  "all",
+                  "math-style",
+                  "math-shift",
+                  "math-depth"
+                ]
+
+              _ ->
+                false
+            end
+          end)
+
+        {metric_declarations, dependent_declarations} =
+          if Map.get(style, :_property_registrations, %{}) == %{} do
+            {[], dependent_declarations}
+          else
+            Enum.split_with(dependent_declarations, fn declaration ->
+              {property, _} = declaration_pair(declaration)
+              property in ["font-family", "font-style", "font-weight", "line-height"]
+            end)
+          end
+
+        {early_metrics, metric_declarations} =
+          Enum.split_with(metric_declarations, fn declaration ->
+            {property, value} = declaration_pair(declaration)
+
+            property == "line-height" and
+              match?({:ok, []}, HtmlValidator.parse_css_variable_references(value))
+          end)
+
+        with {:ok, style} <-
+               validate_cascade_list(style, custom_declarations, budget, consumer, failure),
+             {:ok, style} <-
+               validate_cascade_list(style, early_metrics, budget, consumer, failure),
+             {:ok, custom_properties, raw_custom_properties, prepared_ordinary} <-
+               CssCascadeValidator.resolve_custom(
+                 custom_declarations,
+                 style,
+                 ordinary_declarations,
+                 custom_baseline,
+                 budget
+               ),
+             style = Map.put(style, :_custom_properties, custom_properties),
+             foundational_declarations =
+               prepared_stage(prepared_ordinary, foundational_declarations),
+             metric_declarations = prepared_stage(prepared_ordinary, metric_declarations),
+             dependent_declarations = prepared_stage(prepared_ordinary, dependent_declarations),
+             {:ok, style} <-
+               validate_cascade_list(style, foundational_declarations, budget, consumer, failure),
+             {:ok, style} <-
+               validate_cascade_list(style, metric_declarations, budget, consumer, failure),
+             {:ok, style} <- prepare_cascade_defaults(style),
+             style =
+               if(Map.get(style, :_property_registrations, %{}) == %{},
+                 do: style,
+                 else: registered_metrics(style)
+               ),
+             {:ok, final_custom_properties} <-
+               if(Map.get(style, :_property_registrations, %{}) == %{},
+                 do: {:ok, custom_properties},
+                 else:
+                   case CssPropertyRegistrationValidator.resolve(
+                          raw_custom_properties,
+                          style,
+                          ordinary_declarations,
+                          budget,
+                          :final
+                        ) do
+                     {:ok, properties, _raw} -> {:ok, properties}
+                     error -> error
+                   end
+               ) do
+          style = Map.put(style, :_custom_properties, final_custom_properties)
+
+          dependent =
+            if Map.get(style, :_property_registrations, %{}) == %{},
+              do: {:ok, dependent_declarations},
+              else: CssCascadeValidator.prepare_values(dependent_declarations, style, budget)
+
+          with {:ok, dependent_declarations} <- dependent do
+            validate_cascade_list(
+              style,
+              dependent_declarations,
+              budget,
+              consumer,
+              failure
+            )
+          end
+        end
       end
     end
+  end
+
+  defp prepared_stage(prepared, stage) do
+    cond do
+      stage == [] ->
+        []
+
+      length(stage) == length(prepared) ->
+        prepared
+
+      true ->
+        originals = MapSet.new(stage, & &1.cascade_original)
+        Enum.filter(prepared, &MapSet.member?(originals, &1.cascade_original))
+    end
+  end
+
+  defp registered_metrics(style) do
+    line_height =
+      cond do
+        is_number(Map.get(style, :line_height_multiplier)) ->
+          style.font_size * style.line_height_multiplier
+
+        Map.get(style, :line_height_normal, false) and not is_nil(Map.get(style, :font_face)) ->
+          HtmlValidator.normal_line_height(style)
+
+        match?({:rem, _}, Map.get(style, :line_height)) ->
+          elem(style.line_height, 1) * style._root_font_size
+
+        true ->
+          Map.get(style, :line_height)
+      end
+
+    style = Map.put(style, :line_height, line_height)
+
+    if Map.get(style, :_root_element, false),
+      do:
+        style
+        |> Map.put(:_root_font_face, Map.get(style, :font_face))
+        |> Map.put(:_root_line_height, line_height),
+      else: style
   end
 
   defp prepare_cascade_defaults(style) do
@@ -651,27 +840,93 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         ) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_source_cascade(context, declarations, budget, original_node) do
-    validate_cascade_steps(
-      context,
-      declarations,
-      budget,
-      fn _declaration, validated -> {:ok, validated} end,
-      fn error, declaration ->
-        case error do
-          {:error, {_reason, _diagnostic}} when not is_map(declaration) -> error
-          _ -> HtmlValidator.source_style_error(original_node, declaration, error)
+    result =
+      validate_cascade_steps(
+        context,
+        declarations,
+        budget,
+        fn _declaration, validated -> {:ok, validated} end,
+        fn error, declaration ->
+          case error do
+            {:error, {_reason, diagnostic}} when is_map(diagnostic) and not is_map(declaration) ->
+              error
+
+            _ ->
+              HtmlValidator.source_style_error(original_node, declaration, error)
+          end
         end
-      end
-    )
+      )
+
+    if result == {:error, :invalid_document},
+      do: HtmlValidator.source_style_error(original_node, declarations, result),
+      else: result
   end
 
   defp validate_cascade_list(style, declarations, budget, consumer, failure) do
     Enum.reduce_while(declarations, {:ok, style}, fn declaration, {:ok, context} ->
-      with {:ok, validated} <- validate_declaration(context, declaration, budget),
-           {:ok, consumed} <- consumer.(declaration, validated) do
-        {:cont, {:ok, consumed}}
-      else
-        error -> {:halt, failure.(error, declaration)}
+      case declaration_pair(declaration) do
+        nil ->
+          {:halt,
+           failure.(
+             {:error, :invalid_document},
+             Map.get(declaration, :cascade_original, declaration)
+           )}
+
+        {property, _value} ->
+          targets = declaration.cascade_targets
+
+          context =
+            if "font-family" in targets and Map.has_key?(declaration, :definition_scope),
+              do: Map.put(context, :_font_family_scope, declaration.definition_scope),
+              else: context
+
+          result =
+            case if(Map.has_key?(declaration, :cascade_resolved),
+                   do:
+                     validate_computed_declaration(
+                       context,
+                       property,
+                       elem(declaration.declaration, 1),
+                       declaration.cascade_resolved,
+                       budget
+                     ),
+                   else: validate_declaration(context, declaration, budget)
+                 ) do
+              {:error, {:invalid_css, %{operation: :invalid_computed_value}}} ->
+                CssCascadeValidator.wide(context, property, "unset")
+
+              result ->
+                result
+            end
+
+          with {:ok, validated} <- result,
+               {:ok, consumed} <-
+                 if(targets == [],
+                   do: {:ok, context},
+                   else:
+                     consumer.(
+                       Map.get(declaration, :cascade_original, declaration),
+                       if(targets == CssCascadeValidator.targets(property, context),
+                         do: validated,
+                         else:
+                           CssCascadeValidator.project(context, validated, targets)
+                           |> then(fn projected ->
+                             if property in ["border", "border-color"],
+                               do: Map.put(projected, :border_color, validated.border_color),
+                               else: projected
+                           end)
+                       )
+                     )
+                 ) do
+            {:cont, {:ok, consumed}}
+          else
+            error ->
+              {:halt,
+               failure.(
+                 if(error == :error, do: {:error, :invalid_document}, else: error),
+                 Map.get(declaration, :cascade_original, declaration)
+               )}
+          end
       end
     end)
   end
@@ -782,11 +1037,30 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec validate_resolved(map(), String.t(), String.t()) ::
           {:ok, map()} | :error | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
   def validate_resolved(style, property, value) do
-    style =
-      if Map.get(style, :_svg_element, false),
-        do:
-          Map.update(style, :_svg_specified, %{property => value}, &Map.put(&1, property, value)),
-        else: style
+    case if(is_binary(value),
+           do: CssCascadeValidator.wide(style, property, value),
+           else: :unhandled
+         ) do
+      :unhandled -> validate_property(style, property, value)
+      {:ok, validated} -> {:ok, remember_svg_specified(validated, property, value)}
+    end
+  end
+
+  defp remember_svg_specified(style, property, value) do
+    if Map.get(style, :_svg_element, false) do
+      properties =
+        if property == "all", do: CssCascadeValidator.targets(property, style), else: [property]
+
+      Enum.reduce(properties, style, fn property, style ->
+        Map.update(style, :_svg_specified, %{property => value}, &Map.put(&1, property, value))
+      end)
+    else
+      style
+    end
+  end
+
+  defp validate_property(style, property, value) do
+    style = remember_svg_specified(style, property, value)
 
     svg_property =
       if Map.get(style, :_svg_prepare, false) and
@@ -997,21 +1271,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             normalized = value |> String.trim() |> String.downcase(:ascii)
             key = if property == "orphans", do: :orphans, else: :widows
 
-            case normalized do
-              "initial" ->
-                {:ok, Map.put(style, key, 2)}
-
-              keyword when keyword in ["inherit", "unset"] ->
-                inherited = if key == :orphans, do: :_inherited_orphans, else: :_inherited_widows
-                {:ok, Map.put(style, key, Map.get(style, inherited, Map.get(style, key, 2)))}
-
-              _ ->
-                with {number, ""} <- HtmlValidator.parse_css_number(normalized),
-                     true <- number > 0 and Regex.match?(~r/\A[+]?[0-9]+\z/, normalized) do
-                  {:ok, Map.put(style, key, String.to_integer(normalized))}
-                else
-                  _ -> {:error, :invalid_document}
-                end
+            with {number, ""} <- HtmlValidator.parse_css_number(normalized),
+                 true <- number > 0 and Regex.match?(~r/\A[+]?[0-9]+\z/, normalized) do
+              {:ok, Map.put(style, key, String.to_integer(normalized))}
+            else
+              _ -> {:error, :invalid_document}
             end
 
           "vertical-align" ->
@@ -1037,21 +1301,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               {:ok, style}
             end
 
+          "font" ->
+            put_font(style, value)
+
           "font-size" ->
-            case font_keyword(style, value, :font_size, 12.0) do
-              {:ok, _} = prepared ->
-                prepared
+            context =
+              if Map.has_key?(style, :_math_context),
+                do: style,
+                else: Map.merge(style, Map.get(style, :_inherited_font, %{}))
 
-              :unhandled ->
-                context =
-                  if Map.has_key?(style, :_math_context),
-                    do: style,
-                    else: Map.merge(style, Map.get(style, :_inherited_font, %{}))
-
-                with {:ok, properties} <-
-                       MathLayoutValidator.parse_property("font-size", value, context),
-                     do: {:ok, Map.merge(style, properties)}
-            end
+            with {:ok, properties} <-
+                   MathLayoutValidator.parse_property("font-size", value, context),
+                 do: {:ok, Map.merge(style, properties)}
 
           property when property in ["math-style", "math-shift", "math-depth"] ->
             with {:ok, properties} <- MathLayoutValidator.parse_property(property, value, style),
@@ -1086,22 +1347,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             end
 
           "font-weight" ->
-            case font_keyword(style, value, :font_weight, 400) do
-              {:ok, _} = prepared -> prepared
-              :unhandled -> put_font_weight(style, value)
-            end
+            put_font_weight(style, value)
 
           "font-style" ->
-            case font_keyword(style, value, :font_style, :normal) do
-              {:ok, _} = prepared -> prepared
-              :unhandled -> put_font_style(style, value)
-            end
+            put_font_style(style, value)
 
           "font-family" ->
-            case font_keyword(style, value, :font_families, ["serif"]) do
-              {:ok, _} = prepared -> prepared
-              :unhandled -> {:ok, Map.put(style, :font_families, value)}
-            end
+            {:ok, Map.put(style, :font_families, value)}
 
           property
           when property in ~w(text-decoration text-decoration-line text-decoration-color text-decoration-thickness text-decoration-style) ->
@@ -1198,13 +1450,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               "bottom" ->
                 {:ok, Map.put(style, :caption_side, :bottom)}
 
-              "initial" ->
-                {:ok, Map.put(style, :caption_side, :top)}
-
-              value when value in ["inherit", "unset"] ->
-                {:ok,
-                 Map.put(style, :caption_side, Map.get(style, :_inherited_caption_side, :top))}
-
               _ ->
                 {:error, :invalid_document}
             end
@@ -1288,6 +1533,120 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
       result ->
         result
+    end
+  end
+
+  @doc "Extracts a font shorthand's line-height through the shared component grammar without selecting fonts."
+  @spec font_line_height(String.t()) :: {:ok, String.t()} | {:error, :invalid_document}
+  def font_line_height(value) do
+    case CssCascadeValidator.keyword(value) do
+      nil ->
+        with {:ok, components} <-
+               font_components(value, &HtmlValidator.prepare_css_length_source/1),
+             do: {:ok, components.line_height}
+
+      keyword ->
+        {:ok, keyword}
+    end
+  end
+
+  defp put_font(style, value) do
+    with {:ok, components} <-
+           font_components(
+             value,
+             &MathLayoutValidator.parse_property("font-size", &1, style)
+           ),
+         initial =
+           CssCascadeValidator.project(
+             style,
+             CssCascadeValidator.initial(style),
+             ~w(font-weight font-style line-height)
+           ),
+         {:ok, initial} <-
+           put_font_style(
+             initial,
+             if("italic" in components.prefix, do: "italic", else: "normal")
+           ),
+         {:ok, initial} <- put_font_weight(initial, List.first(components.weight) || "normal"),
+         computed = Map.merge(initial, components.properties),
+         {:ok, computed} <- validate_property(computed, "line-height", components.line_height),
+         {:ok, computed} <- validate_property(computed, "font-family", components.family) do
+      {:ok, computed}
+    end
+  end
+
+  defp font_components(value, size_parser) do
+    alias NativeElixirPdfUtilities.Validators.CssSyntaxValidator
+
+    values =
+      value
+      |> CssSyntaxValidator.components()
+      |> Enum.reject(&(&1.kind == :comment or Regex.match?(~r/\A[ \t\n\r\f]+\z/, &1.text)))
+
+    parsed =
+      Enum.reduce_while(values, {[], nil}, fn component, {prefix, nil} ->
+        case size_parser.(component.text) do
+          {:ok, size} -> {:halt, {Enum.reverse(prefix), {component, size}}}
+          _ -> {:cont, {[component.text | prefix], nil}}
+        end
+      end)
+
+    case parsed do
+      {prefix, {size, properties}} ->
+        tail =
+          value
+          |> binary_part(size.offset + size.length, byte_size(value) - size.offset - size.length)
+          |> HtmlValidator.trim_css_whitespace()
+
+        {line_height, family} =
+          case tail do
+            <<"/", rest::binary>> ->
+              components =
+                rest
+                |> CssSyntaxValidator.components()
+                |> Enum.reject(
+                  &(&1.kind == :comment or Regex.match?(~r/\A[ \t\n\r\f]+\z/, &1.text))
+                )
+
+              case components do
+                [height | _] ->
+                  finish = height.offset + height.length
+
+                  {height.text,
+                   rest
+                   |> binary_part(finish, byte_size(rest) - finish)
+                   |> HtmlValidator.trim_css_whitespace()}
+
+                _ ->
+                  {nil, ""}
+              end
+
+            _ ->
+              {"normal", tail}
+          end
+
+        prefix = Enum.map(prefix, &String.downcase(&1, :ascii))
+        weight = Enum.reject(prefix, &(&1 in ["normal", "italic"]))
+        # The font grammar has four optional style/variant/weight/stretch slots.
+        valid =
+          Enum.count(prefix, &(&1 == "italic")) <= 1 and length(weight) <= 1 and
+            length(prefix) <= 4 and family != "" and line_height != nil
+
+        if valid do
+          {:ok,
+           %{
+             prefix: prefix,
+             weight: weight,
+             properties: properties,
+             line_height: line_height,
+             family: family
+           }}
+        else
+          {:error, :invalid_document}
+        end
+
+      _ ->
+        {:error, :invalid_document}
     end
   end
 
@@ -1900,13 +2259,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
          |> Map.put(:flex_shrink, 1.0)
          |> Map.put(:flex_basis, :auto)}
 
-      ["initial"] ->
-        {:ok,
-         style
-         |> Map.put(:flex_grow, 0.0)
-         |> Map.put(:flex_shrink, 1.0)
-         |> Map.put(:flex_basis, :auto)}
-
       [grow] ->
         with {:ok, grow} <- parse_nonnegative_number(grow) do
           {:ok,
@@ -2208,34 +2560,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
       _ ->
         {:error, :invalid_document}
-    end
-  end
-
-  # CSS font inheritance uses the actual ancestor, before UA control defaults.
-  # Reverting author declarations restores that element's UA font instead.
-  defp font_keyword(style, value, property, initial) do
-    keyword = value |> String.trim() |> String.downcase(:ascii)
-
-    case keyword do
-      keyword when keyword in ~w(inherit unset initial revert revert-layer) ->
-        context =
-          case keyword do
-            keyword when keyword in ~w(inherit unset) -> Map.get(style, :_inherited_font, style)
-            "initial" -> %{property => initial}
-            _ -> Map.get(style, :_ua_font, style)
-          end
-
-        prepared = Map.put(style, property, Map.get(context, property, Map.get(style, property)))
-
-        prepared =
-          if property == :font_families,
-            do: Map.put(prepared, :_font_family_scope, Map.get(context, :_font_family_scope)),
-            else: prepared
-
-        {:ok, prepared}
-
-      _ ->
-        :unhandled
     end
   end
 

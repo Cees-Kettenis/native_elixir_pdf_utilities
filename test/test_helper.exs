@@ -5,6 +5,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 ExUnit.start(exclude: [:browser_parity])
 
 Code.require_file(Paths.support("html_tree_helpers.ex"))
+Code.require_file(Paths.support("css_styles.ex"))
 
 Code.require_file(Paths.support("pdf_visual_compare.ex"))
 

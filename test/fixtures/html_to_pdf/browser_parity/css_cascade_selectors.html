@@ -77,6 +77,60 @@
       @future ignored { .selector-matrix p { color:red; } }
       .selector-matrix .recovery { broken; color:#0f766e; padding:; }
     </style>
+    <!-- Cascade 5, 13 January 2022, sections 6 and 7; Cascade 6, 6 September
+         2024, section 2; Variables 1, 16 June 2022, sections 2 and 3;
+         Properties and Values API 1, 26 March 2024, sections 2, 3 and 5;
+         Nesting 1, 22 January 2026, sections 2 and 3. Independently authored.
+         Each row uses previously blank space in this independent document. -->
+    <style>
+      .cascade-matrix { position:relative;margin-top:12pt; font-size:9pt; color:#064f80; }
+      .cascade-row { height:12pt; width:300pt; line-height:12pt; margin:0; }
+      @layer cascade-base,cascade-theme;
+      @layer cascade-base {
+        .cascade-normal { color:red; }
+        .cascade-important { color:#0f766e!important; }
+        .cascade-rollback { color:#064f80; }
+        .cascade-custom { --cascade-tone:#0f766e; }
+      }
+      @layer cascade-theme {
+        .cascade-normal { color:#0f766e; }
+        .cascade-important { color:red!important; }
+        .cascade-rollback { color:red; color:revert-layer; }
+      }
+      .cascade-inline { color:#064f80; }
+      .cascade-matrix .cascade-nested,#cascade-absent {
+        & > span { color:#0f766e; }
+        color:red;
+        color:#064f80;
+      }
+      .cascade-matrix .cascade-nested > span { color:red; }
+      .cascade-custom { --cascade-tone:var(--missing,revert-layer);color:var(--cascade-tone); }
+      .cascade-invalid { color:red;color:var(--missing); }
+      .cascade-token span { display:inline-block;--cascade-number:2;width:var(--cascade-number)pt;color:#0f766e; }
+      .cascade-shorthand { font-weight:bold;font-style:italic;font:9pt/12pt "DejaVu Sans";color:#0f766e; }
+      @property --cascade-size { syntax:'<length>';inherits:false;initial-value:120pt; }
+      @property --cascade-color { syntax:'<color>';inherits:true;initial-value:#0f766e; }
+      @property --cascade-relative { syntax:'<length>';inherits:true;initial-value:1pt; }
+      .cascade-typed { --cascade-size:bad;width:var(--cascade-size);background-color:#e8f2fa;color:var(--cascade-color); }
+      .cascade-relative { font-size:9pt;--cascade-relative:12em; }
+      .cascade-relative span { display:block;font-size:9pt;width:var(--cascade-relative);background-color:#e8f2fa; }
+      @scope (.cascade-scope) {
+        .cascade-near { color:#0f766e; }
+        #cascade-specific { color:#064f80; }
+        & .cascade-zero { color:red; }
+      }
+      @scope (.cascade-matrix) {
+        .cascade-near { color:red; }
+        .cascade-specific { color:red; }
+      }
+      .cascade-matrix .cascade-zero { color:#0f766e; }
+      @scope (.cascade-scope) to (.cascade-stop) { .cascade-limited { color:red; } }
+      .cascade-scope > .cascade-limited { color:#0f766e; }
+      #cascade-part::part(label) { color:#0f766e; }
+      .cascade-lineheight { --cascade-height:12pt;line-height:var(--cascade-height);--cascade-relative:0.75lh;font-size:var(--cascade-relative); }
+      .cascade-font-height { --cascade-relative:0.75lh;font:var(--cascade-relative)/12pt "DejaVu Sans"; }
+      .cascade-inherited-lineheight { position:absolute;left:330pt;top:228pt;width:200pt;height:12pt;line-height:var(--missing); }
+    </style>
   </head>
   <body>
     <main class="sheet">
@@ -110,6 +164,31 @@
         <div id="selector-shadow"><span slot="label">Scoped assigned text</span><template shadowrootmode="open"><style>:host{display:block}:host-context(.selector-matrix) ::slotted(span){color:#0f766e}span{display:block}</style><slot name="label"></slot><span part="label" lang="fr">Explicit shadow part</span></template></div>
         <div class="foreign-row"><svg width="120pt" height="12pt"><rect id="selector-ns-svg" data-mark="yes" width="120pt" height="12pt" /></svg></div>
         <div class="foreign-row"><math><mspace id="selector-ns-math" width="120pt" height="8pt" depth="0pt" /></math></div>
+      </section>
+      <section class="cascade-matrix">
+        <p class="cascade-row cascade-normal">Normal layer order</p>
+        <p class="cascade-row cascade-important">Important layer reversal</p>
+        <p class="cascade-row cascade-rollback">Layer rollback</p>
+        <p class="cascade-row cascade-inline" style="color:revert-layer!important">Inline important rollback</p>
+        <p class="cascade-row cascade-nested"><span>Nesting specificity</span></p>
+        <p class="cascade-row cascade-custom">Computed custom rollback</p>
+        <p class="cascade-row cascade-invalid">Invalid variable defaults</p>
+        <p class="cascade-row cascade-token"><span>Token boundary stays separate</span></p>
+        <p class="cascade-row cascade-shorthand">Font shorthand reset</p>
+        <p class="cascade-row cascade-typed">Typed default</p>
+        <p class="cascade-row cascade-relative"><span>Typed em inheritance</span></p>
+        <div class="cascade-scope">
+          <p class="cascade-row cascade-near">Nearby scope</p>
+          <p class="cascade-row cascade-specific" id="cascade-specific">Scope specificity</p>
+          <p class="cascade-row cascade-zero">Zero nesting specificity</p>
+          <p class="cascade-row cascade-limited">Inside scope</p>
+          <div class="cascade-stop"><p class="cascade-row cascade-limited">Beyond scope limit</p></div>
+        </div>
+        <div class="cascade-row" id="cascade-part"><template shadowrootmode="open"><style>:host{display:block}@scope(:host){span{color:red}}</style><span part="label">Scoped shadow part</span></template></div>
+        <div class="cascade-row"><style>@scope { .cascade-implicit {color:#0f766e} }</style><span class="cascade-implicit">Implicit scope</span></div>
+        <p class="cascade-row cascade-lineheight">Independent variable line height</p>
+        <p class="cascade-row cascade-font-height">Independent shorthand line height</p>
+        <div class="cascade-inherited-lineheight">Inherited line height</div>
       </section>
     </main>
   </body>

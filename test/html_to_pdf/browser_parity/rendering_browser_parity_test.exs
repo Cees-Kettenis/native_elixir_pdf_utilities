@@ -1358,7 +1358,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
          # Namespace selection checks painted interiors; general SVG/MathML
          # fixtures own edge rasterization and inline baseline geometry.
          {"SVG namespace fill", {22, 492, 116, 6}},
-         {"MathML namespace fill", {22, 504, 116, 4}}
+         {"MathML namespace fill", {22, 504, 116, 4}},
+         {"normal layers", {20, 525, 555, 12}},
+         {"important layers", {20, 537, 555, 12}},
+         {"layer rollback", {20, 549, 555, 12}},
+         {"inline rollback", {20, 561, 555, 12}},
+         {"nested specificity", {20, 573, 555, 12}},
+         {"custom rollback", {20, 585, 555, 12}},
+         {"invalid variable default", {20, 597, 555, 12}},
+         {"substitution token boundary", {20, 609, 555, 12}},
+         {"shorthand reset", {20, 621, 555, 12}},
+         {"registered default", {20, 633, 555, 12}},
+         {"registered inheritance", {20, 645, 555, 12}},
+         {"scope proximity", {20, 657, 555, 12}},
+         {"scope specificity", {20, 669, 555, 12}},
+         {"scoped nesting specificity", {20, 681, 555, 12}},
+         {"scope descendant", {20, 693, 555, 12}},
+         {"scope limit", {20, 705, 555, 12}},
+         {"scoped shadow part", {20, 717, 555, 12}},
+         {"implicit scope", {20, 729, 555, 12}},
+         {"independent variable line height", {20, 741, 555, 12}},
+         {"independent shorthand line height", {20, 753, 555, 12}},
+         {"defaulted inherited line height", {350, 753, 220, 12}}
        ],
        max_changed_ratio: 0.01,
        max_average_delta: 0.03
@@ -5309,7 +5330,11 @@ for group <- 0..7 do
       if fixture_name in ~w(html_css_affine_boxes.html html_css_affine_nested.html html_css_affine_fragments.html html_css_affine_fragment_origins.html html_css_affine_table.html),
         do: @tag(:css_affine_styles)
 
-      if fixture_name == "css_cascade_selectors.html", do: @tag(:css_static_selectors)
+      if fixture_name == "css_cascade_selectors.html" do
+        @tag :css_static_selectors
+        @tag :css_cascade_values
+      end
+
       if fixture_name == "drawing_group_viewports.html", do: @tag(:drawing_group)
       if fixture_name == "html_object_selection.html", do: @tag(:object_selection)
       if fixture_name == "html_embedded_initialization.html", do: @tag(:embedded_initialization)

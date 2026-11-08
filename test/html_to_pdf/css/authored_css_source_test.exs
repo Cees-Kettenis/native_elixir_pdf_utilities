@@ -64,7 +64,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
 
   test "matched cross-rule inherited failures identify the declaration without replay" do
     css =
-      "/* untouched */html { --bad:bananas }\np {width:3pt}\n@media print { p.target { width/**/:var(--bad); } }"
+      "/* untouched */html { --bad:inline math }\np {width:3pt}\n@media print { p.target { display/**/:var(--bad); } }"
 
     assert {:ok, dom} = HtmlParser.parse_document_detailed("<p class='target'>Text</p>")
     budget = HtmlValidator.new_css_budget()
@@ -73,12 +73,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
              Style.with_source_style_contexts(dom, [css], budget, fn _, _, _ -> :ok end)
 
     assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-    assert diagnostic.source == "width/**/:var(--bad)"
+    assert diagnostic.source == "display/**/:var(--bad)"
     assert diagnostic.line == 3 and diagnostic.column == 27
     assert diagnostic.operation == :source_style_contexts
     # Existing original html/head/body/p custom contexts plus the two p values.
     # Mapping the failure does not resolve the failed value a second time.
-    assert :atomics.get(budget, 1) == 45
+    assert :atomics.get(budget, 1) == 80
   end
 
   test "unmatched and inactive inherited values remain explicit without invented context" do

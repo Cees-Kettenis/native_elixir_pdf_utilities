@@ -2379,8 +2379,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
           "line-height: #{number}",
           "aspect-ratio: #{number} / 1",
           # Representable as a float, but not as a usable CSS length.
-          "margin-left: #{String.duplicate("9", 308)}in",
-          "--distance: #{number}pt; margin-left: var(--distance)"
+          "margin-left: #{String.duplicate("9", 308)}in"
         ] do
       assert {:error, {reason, diagnostic}} = HtmlToPdf.render("<p style='#{declaration}'>A</p>")
       assert reason in [:invalid_css, :invalid_document]
@@ -2389,6 +2388,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       assert is_binary(diagnostic.message)
       assert diagnostic.module == HtmlToPdf
     end
+
+    assert {:ok, computed} =
+             style_for("p", "--distance: #{number}pt; margin-left: var(--distance)")
+
+    assert computed.margin.left == 0.0
 
     assert {:ok, _pdf} =
              HtmlToPdf.render("<p style='margin-left: 1in; letter-spacing: 0.5pt'>A</p>")
@@ -2458,7 +2462,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                "<div style='--alias:var(--missing)'><p style='--missing:red;color:var(--alias)'>Invalid</p></div>"
              )
 
-    assert {:error, _} = Style.compute_detailed(dom)
+    assert {:ok, %{children: [parent]}} = Style.compute_detailed(dom)
+    [child] = parent.children
+    assert child.style._custom_properties["--alias"] == nil
+    assert child.style.color == parent.style.color
   end
 
   test "variable functions inside quoted strings remain literal" do
@@ -5033,7 +5040,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert inline.style.background_color == {0, 0, 1}
   end
 
-  test "compute recursively resolves custom properties and rejects cycles" do
+  test "compute recursively resolves custom properties and defaults cyclic values" do
     nested =
       style_for!(
         "p",
@@ -5047,10 +5054,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert nested.color == {1, 0, 0}
 
-    assert style_for(
-             "p",
-             "--first: var(--second); --second: var(--first); color: var(--first)"
-           ) == {:error, :invalid_document}
+    cyclic = style_for!("p", "--first:var(--second);--second:var(--first);color:var(--first)")
+    assert cyclic.color == {0, 0, 0}
+    assert cyclic._custom_properties["--first"] == nil
+    assert cyclic._custom_properties["--second"] == nil
   end
 
   test "compute cascades custom properties before resolving ordinary declarations" do
@@ -6148,9 +6155,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "width: 2em",
       "width: -10%",
       "height: -1pt",
-      "height: var(--missing)",
       "max-width: nope",
-      "min-height: var(--missing)",
       "min-height: nope",
       "overflow: scroll",
       "border-top-color: nope",
