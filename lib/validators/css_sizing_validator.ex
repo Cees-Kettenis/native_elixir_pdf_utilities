@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
 
   @properties [
     :calculation_context,
+    :_calculated_edges,
     :width,
     :min_width,
     :max_width,
@@ -32,7 +33,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
   ]
 
   @typedoc "A validated calculation whose percentage dependency remains tied to the containing axis."
-  @type calculation :: {:css_size_math, {String.t(), boolean()}}
+  @type calculation ::
+          {:css_size_math, {String.t() | CssMathValidator.length_calculation(), boolean()}}
 
   @doc "Prepares general box size arithmetic through the shared CSS calculation grammar."
   @spec prepare_math(term()) ::
@@ -40,9 +42,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
   def prepare_math(value) do
     with value when is_binary(value) <- value,
          true <- String.valid?(value),
-         normalized = NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments(value),
-         {:ok, _identifier, "(" <> _} <-
-           HtmlValidator.parse_css_identifier(String.trim(normalized)),
+         false <- match?({number, _} when number < 0, HtmlValidator.parse_css_number(value)),
          {:ok, dependencies} <- CssMathValidator.length_dependencies(value) do
       {:ok, {:css_size_math, {value, dependencies.percentage?}}}
     else
@@ -55,11 +55,82 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
   @spec valid_calculation?(term()) :: boolean()
   def valid_calculation?(value) do
     case value do
+      {:css_size_math, {{:css_calculation, _} = calculation, percentage?}} ->
+        case CssMathValidator.validate_prepared_length(calculation) do
+          {:ok, dependencies} -> dependencies.percentage? == percentage?
+          _ -> false
+        end
+
       {:css_size_math, {source, percentage?}} ->
         prepare_math(source) == {:ok, {:css_size_math, {source, percentage?}}}
 
       _ ->
         false
+    end
+  end
+
+  @doc "Freezes computed dimension units at their declaring element while preserving used percentage bases."
+  @spec compute_dimensions(map()) ::
+          {:ok, map()} | :error | {:error, Diagnostics.detailed_error()}
+  def compute_dimensions(style) do
+    case style do
+      %{
+        width: width,
+        height: height,
+        min_width: min_width,
+        max_width: max_width,
+        min_height: min_height,
+        max_height: max_height,
+        background_size: {:auto, :auto}
+      }
+      when not is_tuple(width) and not is_tuple(height) and not is_tuple(min_width) and
+             not is_tuple(max_width) and not is_tuple(min_height) and not is_tuple(max_height) ->
+        {:ok, style}
+
+      _ ->
+        Enum.reduce_while(@dimension_properties ++ [:background_size], {:ok, style}, fn property,
+                                                                                        {:ok,
+                                                                                         result} ->
+          value = Map.get(result, property)
+
+          computed =
+            case {property, value} do
+              {:background_size, {width, height}} ->
+                with {:ok, width} <- compute_dimension(width, style),
+                     {:ok, height} <- compute_dimension(height, style),
+                     do: {:ok, {width, height}}
+
+              _ ->
+                compute_dimension(value, style)
+            end
+
+          case computed do
+            {:ok, value} ->
+              {:cont,
+               {:ok,
+                if(value == Map.get(result, property),
+                  do: result,
+                  else: Map.put(result, property, value)
+                )}}
+
+            error ->
+              {:halt, error}
+          end
+        end)
+    end
+  end
+
+  defp compute_dimension(value, style) do
+    case value do
+      {:css_size_math, {source, percentage?}} when is_binary(source) ->
+        with {:ok, calculation} <- CssMathValidator.compute_length(source, style),
+             do: {:ok, {:css_size_math, {calculation, percentage?}}}
+
+      {:css_intrinsic_size, _} ->
+        NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator.compute(value, style)
+
+      _ ->
+        {:ok, value}
     end
   end
 
@@ -70,7 +141,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
     |> Map.take(@dimension_properties)
     |> Enum.reduce_while(:ok, fn {property, value}, :ok ->
       calculated? =
-        is_tuple(value) and tuple_size(value) > 0 and elem(value, 0) in [:css_size_math, :min]
+        is_tuple(value) and tuple_size(value) > 0 and
+          elem(value, 0) in [:css_size_math, :css_intrinsic_size, :min]
 
       if calculated? and HtmlValidator.validate_prepared_css_size(value, property) != :ok do
         {:halt,
@@ -91,7 +163,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
   @doc "Resolves box calculations against selected font metrics and the actual containing dimension."
   @spec resolve_math(calculation(), number() | nil, map()) ::
           {:ok, number() | nil} | {:error, Diagnostics.detailed_error()}
-  def resolve_math({:css_size_math, {source, percentage?}}, basis, style) do
+  @spec resolve_math(calculation(), number() | nil, map(), :nonnegative | :signed) ::
+          {:ok, number() | nil} | {:error, Diagnostics.detailed_error()}
+  def resolve_math({:css_size_math, {source, percentage?}}, basis, style, range \\ :nonnegative) do
     if percentage? and is_nil(basis) do
       {:ok, nil}
     else
@@ -101,7 +175,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
                basis || 0.0,
                Map.get(style, :calculation_context, style)
              ),
-           do: {:ok, max(value, 0.0)}
+           do: {:ok, if(range == :signed, do: value, else: max(value, 0.0))}
     end
   end
 
@@ -113,15 +187,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
         root = Map.take(style, @properties)
 
         calculated? =
-          Enum.any?(
-            @dimension_properties,
-            fn property ->
-              value = Map.get(style, property)
+          Map.get(style, :_calculated_edges, false) or
+            Enum.any?(
+              @dimension_properties,
+              fn property ->
+                value = Map.get(style, property)
 
-              is_tuple(value) and tuple_size(value) > 0 and
-                elem(value, 0) in [:css_size_math, :min]
-            end
-          )
+                is_tuple(value) and tuple_size(value) > 0 and
+                  elem(value, 0) in [:css_size_math, :css_intrinsic_size, :min]
+              end
+            )
 
         if calculated? do
           context =
@@ -158,15 +233,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
             Enum.all?(Map.keys(root), &(&1 in @properties)) and
               Enum.all?(root, fn {property, value} ->
                 case property do
+                  :_calculated_edges ->
+                    value == true
+
                   :calculation_context ->
                     is_map(value) and
                       match?(
-                        {:ok, 1.0},
-                        CssPositionValidator.resolve(
-                          {:css_position_math, "calc(1pt)"},
-                          0.0,
-                          value
-                        )
+                        {:ok, _},
+                        CssPositionValidator.math_environment(value, 0.0)
                       )
 
                   :box_sizing ->
@@ -179,7 +253,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
                     is_map(value) and
                       Enum.sort(Map.keys(value)) == [:bottom, :left, :right, :top] and
                       Enum.all?(value, fn {_edge, number} ->
-                        is_number(number) and valid_size?(abs(number), 0)
+                        NativeElixirPdfUtilities.Validators.CssLengthValidator.valid_edge?(
+                          number,
+                          :margin
+                        )
                       end)
 
                   :border_styles ->
@@ -208,7 +285,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
                     is_map(value) and
                       Enum.sort(Map.keys(value)) == [:bottom, :left, :right, :top] and
                       Enum.all?(value, fn {_edge, number} ->
-                        valid_size?(number, 0) and is_number(number)
+                        NativeElixirPdfUtilities.Validators.CssLengthValidator.valid_edge?(
+                          number,
+                          edge
+                        )
                       end)
 
                   _ ->
@@ -331,6 +411,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
 
       {:css_size_math, _} = calculation ->
         valid_calculation?(calculation)
+
+      {:css_intrinsic_size, _} = intrinsic ->
+        NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator.valid?(intrinsic)
 
       {:min, sizes} when is_list(sizes) and sizes != [] ->
         HtmlValidator.reserve_render_resource(:max_css_work, length(sizes), :layout)

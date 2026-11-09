@@ -192,9 +192,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               NativeElixirPdfUtilities.Validators.HtmlFormValidator.layout_mode()
             ),
             fn ->
-              styled_tree =
-                styled_tree |> collapse_child_margins() |> attach_positioned_descendants()
-
               page_size = if viewport == nil, do: page_size, else: viewport
 
               {layout_page_size, margins} =
@@ -224,11 +221,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 background_box(canvas.style, 0, 0, elem(page_size, 0), elem(page_size, 1))
                 |> Enum.map(&Map.put(&1, :position_anchor, :canvas))
 
-              root_style = Map.get(styled_tree, :document_root_sizing) || %{}
+              available_width = elem(layout_page_size, 0) - margins.left - margins.right
+
+              root_style =
+                case NativeElixirPdfUtilities.Validators.CssLengthValidator.resolve_edges(
+                       Map.get(styled_tree, :document_root_sizing) || %{},
+                       available_width
+                     ) do
+                  {:ok, style} -> style
+                  error -> throw({:render_resource_limit, error})
+                end
+
               root_margin = Map.get(root_style, :margin, edges(0.0))
               root_padding = Map.get(root_style, :padding, edges(0.0))
               root_border = Map.get(root_style, :border_widths, edges(0.0))
-              available_width = elem(layout_page_size, 0) - margins.left - margins.right
+
+              root_style =
+                resolve_fit_content_style(
+                  %{
+                    style: Map.merge(Map.get(root_style, :calculation_context, %{}), root_style),
+                    children: styled_tree.children
+                  },
+                  available_width
+                ).style
 
               root_width =
                 resolved_content_size(
@@ -243,6 +258,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 )
 
               root_box_width = root_width + horizontal_box_size(root_style)
+
+              styled_tree =
+                styled_tree
+                |> attach_positioned_descendants()
+                |> collapse_child_margins(
+                  nil,
+                  if(deferred_box_edges?(styled_tree), do: root_width)
+                )
 
               root_box_x =
                 margins.left + root_margin.left +
@@ -1031,11 +1054,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end)
   end
 
-  defp collapse_child_margins(node, parent_display \\ nil) do
+  defp deferred_box_edges?(node) do
+    match?(%{style: %{_calculated_edges: true}}, node) or
+      Enum.any?(Map.get(node, :children, []), &deferred_box_edges?/1)
+  end
+
+  defp collapse_child_margins(node, parent_display, available_width) do
     case node do
       %{children: children} ->
-        display = node |> Map.get(:style, %{}) |> Map.get(:display)
-        node = %{node | children: Enum.map(children, &collapse_child_margins(&1, display))}
+        style = Map.get(node, :style, %{})
+
+        style =
+          if match?(%{_calculated_edges: true}, style) do
+            case NativeElixirPdfUtilities.Validators.CssLengthValidator.resolve_edges(
+                   style,
+                   available_width
+                 ) do
+              {:ok, style} -> style
+              error -> throw({:render_resource_limit, error})
+            end
+          else
+            style
+          end
+
+        style =
+          if available_width != nil and Map.has_key?(node, :style),
+            do: resolve_fit_content_style(%{node | style: style}, available_width).style,
+            else: style
+
+        display = Map.get(style, :display)
+
+        # Item, cell and atomic content widths can change after intrinsic measurement.
+        # Retain their original children so percentages and margin collapse can be
+        # recomputed together when that formatting owner allocates its content box.
+        style =
+          if available_width != nil and
+               (parent_display in [:flex, :inline_flex, :grid, :inline_grid] or
+                  display in [:table_cell, :inline_block, :inline_flex, :inline_grid]) and
+               Enum.any?(children, &deferred_box_edges?/1),
+             do: Map.put(style, :_percentage_edge_children, children),
+             else: style
+
+        width =
+          if available_width != nil and Map.has_key?(node, :style),
+            do:
+              resolved_content_size(
+                style,
+                :width,
+                available_width,
+                max(
+                  available_width - horizontal_box_size(style) -
+                    Map.get(Map.get(style, :margin, %{}), :left, 0) -
+                    Map.get(Map.get(style, :margin, %{}), :right, 0),
+                  0
+                )
+              ),
+            else: available_width
+
+        node = %{node | children: Enum.map(children, &collapse_child_margins(&1, display, width))}
+        node = if Map.has_key?(node, :style), do: %{node | style: style}, else: node
 
         case node do
           %{style: %{display: display} = style}
@@ -1110,6 +1187,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       _ ->
         node
+    end
+  end
+
+  defp used_edge_children(children, style, width) do
+    case Map.fetch(style, :_percentage_edge_children) do
+      {:ok, originals} -> Enum.map(originals, &collapse_child_margins(&1, style.display, width))
+      :error -> children
     end
   end
 
@@ -2485,6 +2569,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   # Reuse ordinary inline/block intrinsic measurement for HTML's fit-content UA width.
   defp resolve_fit_content_style(block, available_width) do
     case block do
+      %{style: style, children: children} ->
+        if match?(%{width: {:css_intrinsic_size, _}}, style) or
+             match?(%{min_width: {:css_intrinsic_size, _}}, style) or
+             match?(%{max_width: {:css_intrinsic_size, _}}, style) do
+          sizes = %{
+            min_content:
+              intrinsic_content_width(children, style, :min) +
+                if(Map.get(style, :box_sizing) == :border_box,
+                  do: horizontal_box_size(style),
+                  else: 0.0
+                ),
+            max_content:
+              intrinsic_content_width(children, style, :max) +
+                if(Map.get(style, :box_sizing) == :border_box,
+                  do: horizontal_box_size(style),
+                  else: 0.0
+                ),
+            auto:
+              max(
+                available_width -
+                  if(Map.get(style, :box_sizing) == :border_box,
+                    do: 0.0,
+                    else: horizontal_box_size(style)
+                  ) -
+                  Map.get(Map.get(style, :margin, %{}), :left, 0) -
+                  Map.get(Map.get(style, :margin, %{}), :right, 0),
+                0
+              )
+          }
+
+          sizes = Map.put(sizes, :stretch, sizes.auto)
+          %{block | style: Map.put(style, :_intrinsic_widths, sizes)}
+        else
+          resolve_ua_fit_content_style(block, available_width)
+        end
+
+      _ ->
+        block
+    end
+  end
+
+  defp resolve_ua_fit_content_style(block, available_width) do
+    case block do
       %{style: %{width: :fit_content, display: display} = style, children: children}
       when display != :image ->
         available = max(available_width - horizontal_box_size(style), 0.0)
@@ -2584,6 +2711,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp positioned_child_box(%{type: :element, style: style} = child, containing_block, index) do
+    style =
+      case NativeElixirPdfUtilities.Validators.CssLengthValidator.resolve_edges(
+             style,
+             containing_block.width
+           ) do
+        {:ok, style} -> style
+        error -> throw({:render_resource_limit, error})
+      end
+
+    child =
+      collapse_child_margins(
+        %{child | style: style},
+        nil,
+        if(deferred_box_edges?(child), do: containing_block.width)
+      )
+
+    style = child.style
+
     {child, style} =
       case Map.get(style, :_math_box) do
         nil ->
@@ -2969,6 +3114,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp layout_block_content(children, style, x, y, width, metadata) do
+    children = used_edge_children(children, style, width)
     key = {__MODULE__, :svg_containing_height}
     previous = Process.get(key)
     height = resolved_content_size(style, :height, previous, nil)
@@ -3730,6 +3876,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
 
     ratio = Map.get(style, :aspect_ratio, natural_ratio)
+
+    style =
+      if Enum.any?(
+           [:width, :height, :min_width, :max_width, :min_height, :max_height],
+           &match?({:css_intrinsic_size, _}, Map.get(style, &1))
+         ) do
+        definite_width = resolved_content_size(style, :width, available_width, nil)
+        definite_height = resolved_content_size(style, :height, available_height, nil)
+
+        intrinsic_width =
+          if is_number(definite_height) and is_number(ratio),
+            do: HtmlValidator.aspect_ratio_dimension(definite_height, ratio, :width, :layout),
+            else: natural_width
+
+        intrinsic_height =
+          if is_number(definite_width) and is_number(ratio),
+            do: HtmlValidator.aspect_ratio_dimension(definite_width, ratio, :height, :layout),
+            else: natural_height
+
+        border_box? = Map.get(style, :box_sizing) == :border_box
+        width = intrinsic_width + if(border_box?, do: horizontal_box_size(style), else: 0.0)
+        height = intrinsic_height + if(border_box?, do: vertical_box_size(style), else: 0.0)
+
+        style
+        |> Map.put(:_intrinsic_widths, %{min_content: width, max_content: width, auto: width})
+        |> Map.put(:_intrinsic_heights, %{min_content: height, max_content: height, auto: height})
+      else
+        style
+      end
+
     width = resolved_content_size(style, :width, available_width, nil)
     height = resolved_content_size(style, :height, available_height, nil)
 
@@ -5924,6 +6100,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     runs =
       case Map.fetch(item, :inline_children) do
         {:ok, children} ->
+          children = used_edge_children(children, style, max(content_width, 0.0))
           {:ok, runs} = inline_runs(children, style)
           runs
 
@@ -5942,6 +6119,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp flex_block_item_boxes(item, style, padding, border_widths, children) do
+    children =
+      used_edge_children(children, style, max(item.box_width - horizontal_box_size(style), 0.0))
+
     case Map.get(style, :_fieldset, false) do
       true ->
         style = nested_flex_item_style(style, item)
@@ -6313,7 +6493,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolved_size(style, property, available_size, default) do
-    size = resolve_size_value(Map.get(style, property), available_size, style) || default
+    style =
+      if property == :height and is_number(default) and
+           (match?(%{height: {:css_intrinsic_size, _}}, style) or
+              match?(%{min_height: {:css_intrinsic_size, _}}, style) or
+              match?(%{max_height: {:css_intrinsic_size, _}}, style)),
+         do:
+           Map.put_new(style, :_intrinsic_heights, %{
+             min_content: default,
+             max_content: default,
+             auto: default
+           }),
+         else: style
+
+    value = Map.get(style, property)
+
+    size =
+      if match?({:css_intrinsic_size, _}, value),
+        do: resolve_intrinsic_size(value, property, available_size, style, default),
+        else: resolve_size_value(value, available_size, style)
+
+    size = size || default
 
     apply_size_constraints(style, property, size, available_size)
   end
@@ -6359,8 +6559,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       {:min, sizes} when is_list(sizes) ->
         sizes
         |> Enum.map(&resolve_size_value(&1, available_size, style))
-        |> Enum.reject(&is_nil/1)
-        |> Enum.min(fn -> nil end)
+        |> then(fn sizes -> if Enum.any?(sizes, &is_nil/1), do: nil, else: Enum.min(sizes) end)
 
       {:percent, ratio} when is_number(available_size) ->
         max(available_size * ratio, 0.0)
@@ -6405,9 +6604,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolved_constraint_size(style, property, available_size) do
-    style
-    |> Map.get(property)
-    |> resolve_size_value(available_size, style)
+    value = Map.get(style, property)
+
+    if match?({:css_intrinsic_size, _}, value),
+      do: resolve_intrinsic_size(value, property, available_size, style, nil),
+      else: resolve_size_value(value, available_size, style)
+  end
+
+  defp resolve_intrinsic_size(value, property, available_size, style, default) do
+    axis =
+      if property in [:width, :min_width, :max_width],
+        do: :_intrinsic_widths,
+        else: :_intrinsic_heights
+
+    sizes = Map.get(style, axis, %{min_content: default, max_content: default, auto: default})
+
+    case NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator.resolve(
+           value,
+           available_size,
+           sizes,
+           style
+         ) do
+      {:ok, size} -> size
+      error -> throw({:render_resource_limit, error})
+    end
   end
 
   defp apply_image_size_constraints(
@@ -8867,6 +9087,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     previous = Process.get(key)
     reference = if measure_baseline, do: make_ref(), else: nil
 
+    children = used_edge_children(children, style, content_width)
+    style = Map.delete(style, :_percentage_edge_children)
+
     measured_children =
       if measure_baseline, do: inline_baseline_children(children, reference), else: children
 
@@ -8977,6 +9200,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp layout_table_cell_content(children, style, x, y, width, available_height) do
+    children = used_edge_children(children, style, width)
+
     case inline_runs(children, style) do
       {:ok, runs} ->
         runs = Enum.map(runs, &Map.put(&1, :_table_text, true))

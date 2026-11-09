@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SourceSizeValidator}
 
   @length_units ~w(pt px in cm mm pc q em rem ex rex cap rcap ch rch ic ric lh rlh vw vh vi vb vmin vmax svw svh svi svb svmin svmax lvw lvh lvi lvb lvmin lvmax dvw dvh dvi dvb dvmin dvmax cqw cqh cqi cqb cqmin cqmax)
+  @absolute_length_units ~w(pt px in cm mm pc q)
   @type numeric :: number() | :infinity | :negative_infinity | :nan
   @type dimension :: %{optional(atom()) => integer()}
 
@@ -15,6 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   """
   @spec evaluate(String.t(), map()) :: {:ok, numeric(), dimension()} | :error
   def evaluate(value, environment) do
+    environment = Map.put_new(environment, :_source_expression, value)
     value = HtmlValidator.normalize_css_comments(value)
     value = value |> HtmlValidator.trim_css_whitespace() |> String.downcase(:ascii)
 
@@ -44,40 +46,247 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     |> evaluate(%{width: 0, height: 0, color_components: true})
   end
 
+  @doc "Parses a CSS number or integer, rounding calculated integers toward positive infinity at ties."
+  @spec scalar(String.t(), :number | :integer) :: {:ok, number()} | :error
+  @spec scalar(String.t(), :number | :integer, map()) :: {:ok, number()} | :error
+  def scalar(value, category \\ :number, environment \\ %{}) do
+    value = value |> HtmlValidator.normalize_css_comments() |> HtmlValidator.trim_css_whitespace()
+
+    case HtmlValidator.parse_css_number(value) do
+      {number, ""} ->
+        if category == :number or Regex.match?(~r/\A[+-]?[0-9]+\z/, value),
+          do: {:ok, if(category == :integer, do: trunc(number), else: number)},
+          else: :error
+
+      _ ->
+        with {:ok, _name, "(" <> _} <- HtmlValidator.parse_css_identifier(value),
+             {:ok, number, type} when type == %{} <- evaluate(value, environment),
+             number = if(number == :nan, do: 0.0, else: number),
+             true <- is_number(number) do
+          HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(number), :style)
+
+          # floor(x + 0.5) loses large odd integers when x + 0.5 rounds in binary64.
+          rounded =
+            if category == :integer,
+              do: floor(number) + if(number - floor(number) >= 0.5, do: 1, else: 0),
+              else: number
+
+          {:ok, rounded}
+        else
+          _ -> :error
+        end
+    end
+  end
+
+  @doc "Applies a property's numeric range, rejecting out-of-range literals and clamping valid calculations."
+  @spec scalar_in_range(String.t(), :number | :integer, number(), number() | nil) ::
+          {:ok, number()} | :error
+  @spec scalar_in_range(String.t(), :number | :integer, number(), number() | nil, map()) ::
+          {:ok, number()} | :error
+  def scalar_in_range(value, category, minimum, maximum \\ nil, environment \\ %{}) do
+    with {:ok, number} <- scalar(value, category, environment) do
+      if number >= minimum and (maximum == nil or number <= maximum) do
+        {:ok, number}
+      else
+        value =
+          value |> HtmlValidator.normalize_css_comments() |> HtmlValidator.trim_css_whitespace()
+
+        if match?({:ok, _, "(" <> _}, HtmlValidator.parse_css_identifier(value)),
+          do: {:ok, max(minimum, if(maximum == nil, do: number, else: min(maximum, number)))},
+          else: :error
+      end
+    end
+  end
+
+  @typedoc "A scalar whose dimensional products need the selected element's metrics."
+  @type scalar_calculation ::
+          {:css_scalar_math, {String.t(), :number | :integer, number() | nil, number() | nil}}
+
+  @doc "Prepares scalars without substituting an initial font for context-dependent dimensional products."
+  @spec prepare_scalar(String.t(), :number | :integer, number() | nil, number() | nil) ::
+          {:ok, number() | scalar_calculation()} | :error | {:error, Diagnostics.detailed_error()}
+  def prepare_scalar(value, category, minimum \\ nil, maximum \\ nil) do
+    result =
+      if is_tuple(HtmlValidator.parse_css_number(String.trim(value))) and
+           not String.contains?(value, "("),
+         do: {:ok, %{units: []}},
+         else: scalar_dependencies(value)
+
+    with {:ok, dependencies} <- result do
+      if Enum.any?(dependencies.units, &(&1 not in @absolute_length_units)) do
+        {:ok, {:css_scalar_math, {value, category, minimum, maximum}}}
+      else
+        if minimum == nil,
+          do: scalar(value, category),
+          else: scalar_in_range(value, category, minimum, maximum)
+      end
+    end
+  end
+
+  @doc "Computes a prepared scalar using actual selected/root font and print viewport metrics."
+  @spec resolve_scalar(term(), map()) ::
+          {:ok, number()} | :error | {:error, Diagnostics.detailed_error()}
+  def resolve_scalar(value, style) do
+    case value do
+      {:css_scalar_math, {source, category, minimum, maximum}} ->
+        with {:ok, environment} <-
+               NativeElixirPdfUtilities.Validators.CssPositionValidator.math_environment(
+                 style,
+                 0.0
+               ) do
+          environment = Map.delete(environment, :percentage_basis)
+
+          result =
+            if minimum == nil,
+              do: scalar(source, category, environment),
+              else: scalar_in_range(source, category, minimum, maximum, environment)
+
+          case result do
+            :error ->
+              Diagnostics.error(
+                :style,
+                :not_implemented,
+                "CSS scalar calculation requires measured units in the original element context",
+                module: __MODULE__,
+                operation: :resolve_css_math,
+                source: source
+              )
+
+            result ->
+              result
+          end
+        end
+
+      _ ->
+        {:ok, value}
+    end
+  end
+
+  @doc "Finalizes validated scalar properties and counters after element font selection."
+  @spec resolve_scalars(map()) :: {:ok, map()} | :error | {:error, Diagnostics.detailed_error()}
+  def resolve_scalars(style) do
+    result =
+      Enum.reduce_while(
+        [:z_index, :orphans, :widows, :order, :flex_grow, :flex_shrink],
+        {:ok, style},
+        fn property, {:ok, result} ->
+          case Map.get(result, property) do
+            {:css_scalar_math, _} = value ->
+              case resolve_scalar(value, result) do
+                {:ok, number} -> {:cont, {:ok, Map.put(result, property, number)}}
+                error -> {:halt, error}
+              end
+
+            _ ->
+              {:cont, {:ok, result}}
+          end
+        end
+      )
+
+    with {:ok, style} <- result do
+      Enum.reduce_while(
+        [:counter_reset, :counter_increment, :counter_set],
+        {:ok, style},
+        fn property, {:ok, style} ->
+          values = Map.get(style, property, [])
+
+          result =
+            Enum.reduce_while(values, {:ok, []}, fn {name, value}, {:ok, values} ->
+              case resolve_scalar(value, style) do
+                {:ok, value} -> {:cont, {:ok, [{name, value} | values]}}
+                error -> {:halt, error}
+              end
+            end)
+
+          case result do
+            {:ok, reversed} ->
+              resolved = Enum.reverse(reversed)
+
+              {:cont,
+               {:ok, if(resolved == values, do: style, else: Map.put(style, property, resolved))}}
+
+            error ->
+              {:halt, error}
+          end
+        end
+      )
+    end
+  end
+
   @typedoc "A length-percentage source with validated grammar and measured point scales."
-  @type length_calculation :: {:css_calculation, {String.t(), %{String.t() => number()}}}
+  @type length_calculation ::
+          {:css_calculation,
+           {String.t(), %{String.t() => number()}}
+           | {String.t(), %{String.t() => number()}, :css_pixel}}
 
   @doc "Prepares a length-percentage calculation while deferring its percentage basis."
   @spec prepare_length(term(), term()) ::
           {:ok, length_calculation()} | :error | {:error, Diagnostics.detailed_error()}
-  def prepare_length(value, scales) do
+  @spec prepare_length(term(), term(), :point | :css_pixel) ::
+          {:ok, length_calculation()} | :error | {:error, Diagnostics.detailed_error()}
+  def prepare_length(value, scales, unit \\ :point) do
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, calculation, _dependencies} <- prepare_measured_length(value, scales, unit),
+           do: {:ok, calculation}
+    end)
+  end
+
+  defp prepare_measured_length(value, scales, unit) do
+    if is_map(scales),
+      do: HtmlValidator.check_render_resource(:max_css_work, map_size(scales), :style)
+
     valid? =
-      is_binary(value) and String.valid?(value) and is_map(scales) and
+      unit in [:point, :css_pixel] and is_binary(value) and String.valid?(value) and
+        is_map(scales) and
         Enum.all?(scales, fn {unit, scale} ->
           is_binary(unit) and is_number(scale) and scale >= 0 and
             scale <= Limits.get(:max_css_numeric_magnitude)
         end)
 
-    if valid? do
-      with {:ok, units} <- referenced_length_units(value) do
-        case Enum.find(units, &(not Map.has_key?(scales, &1))) do
-          nil ->
-            {:ok, {:css_calculation, {value, scales}}}
+    cond do
+      unit == :point and is_binary(value) and
+          byte_size(value) > Limits.get(:max_html_numeric_token_bytes) ->
+        length_failure(
+          :resource_limit_exceeded,
+          "CSS calculation exceeds max_html_numeric_token_bytes",
+          value
+        )
 
-          unit ->
-            length_failure(
-              :invalid_document,
-              "CSS calculation in #{unit} requires measured unit geometry",
-              value
-            )
+      valid? ->
+        with {:ok, dependencies} <- length_dependencies(value) do
+          case Enum.find(dependencies.units, &(not Map.has_key?(scales, &1))) do
+            nil ->
+              if unit == :point or
+                   (valid_unit_scales?(scales) and
+                      Enum.sort(Map.keys(scales)) == Enum.sort(dependencies.units)) do
+                calculation =
+                  {:css_calculation,
+                   if(unit == :point, do: {value, scales}, else: {value, scales, :css_pixel})}
+
+                {:ok, calculation, dependencies}
+              else
+                length_failure(
+                  :invalid_document,
+                  "Captured CSS pixel scales must match the referenced length units",
+                  value
+                )
+              end
+
+            unit ->
+              length_failure(
+                :invalid_document,
+                "CSS calculation in #{unit} requires measured unit geometry",
+                value
+              )
+          end
         end
-      end
-    else
-      length_failure(
-        :invalid_document,
-        "CSS calculation requires text and measured unit scales",
-        nil
-      )
+
+      true ->
+        length_failure(
+          :invalid_document,
+          "CSS calculation requires text and measured unit scales",
+          nil
+        )
     end
   end
 
@@ -96,20 +305,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
           {:ok, %{units: [String.t()], percentage?: boolean()}}
           | :error
           | {:error, Diagnostics.detailed_error()}
-  def length_dependencies(value) do
+  @spec length_dependencies(term(), map()) ::
+          {:ok, map()} | :error | {:error, Diagnostics.detailed_error()}
+  def length_dependencies(value, context \\ %{}) do
+    calculation_dependencies(value, %{length: 1}, context)
+  end
+
+  @doc "Collects length dependencies while validating a scalar result without acquiring fonts or a viewport."
+  @spec scalar_dependencies(term()) ::
+          {:ok, map()} | :error | {:error, Diagnostics.detailed_error()}
+  def scalar_dependencies(value), do: calculation_dependencies(value, %{}, %{})
+
+  defp calculation_dependencies(value, expected_type, context) do
     cond do
       not (is_binary(value) and String.valid?(value)) ->
         length_failure(
           :invalid_document,
           "CSS calculation requires text and measured unit scales",
           nil
-        )
-
-      byte_size(value) > Limits.get(:max_html_numeric_token_bytes) ->
-        length_failure(
-          :resource_limit_exceeded,
-          "CSS calculation exceeds max_html_numeric_token_bytes",
-          value
         )
 
       true ->
@@ -120,22 +333,32 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
           try do
             HtmlValidator.reserve_render_resource(:max_css_work, byte_size(value), :css)
 
-            environment = %{
-              type_check: true,
-              percentage_basis: 1.0,
-              unit_scales: Map.new(@length_units, &{&1, 1.0}),
-              _depth_limit: :max_css_calculation_depth,
-              _unit_collector: collector
-            }
+            environment =
+              Map.merge(context, %{
+                type_check: true,
+                percentage_basis: 1.0,
+                unit_scales: Map.new(@length_units, &{&1, 1.0}),
+                _depth_limit: :max_css_calculation_depth,
+                _unit_collector: collector
+              })
+
+            environment =
+              if expected_type == %{},
+                do: Map.delete(environment, :percentage_basis),
+                else: environment
 
             case evaluate(value, environment) do
-              {:ok, _, %{length: 1}} ->
+              {:ok, _, ^expected_type} ->
                 dependencies = collector |> Process.get() |> Enum.reverse() |> Enum.uniq()
                 {:ok, %{units: List.delete(dependencies, "%"), percentage?: "%" in dependencies}}
 
               _ ->
                 :error
             end
+          catch
+            {:render_resource_limit,
+             {:error, {:resource_limit_exceeded, %{operation: :prepare_css_calculation}}} = error} ->
+              error
           after
             Process.delete(collector)
           end
@@ -146,12 +369,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   @doc "Evaluates a prepared length against its actual point-valued percentage basis."
   @spec resolve_length(term(), term()) ::
           {:ok, number()} | {:error, Diagnostics.detailed_error()}
-  def resolve_length(calculation, basis) do
-    case calculation do
-      {:css_calculation, {value, scales}}
-      when is_binary(value) and is_map(scales) and is_number(basis) and basis >= 0 ->
+  @spec resolve_length(term(), term(), :source | :property) ::
+          {:ok, number()} | {:error, Diagnostics.detailed_error()}
+  def resolve_length(calculation, basis, policy \\ :source) do
+    prepared =
+      case calculation do
+        {:css_calculation, {source, scales}} -> {source, scales, 1.0}
+        {:css_calculation, {source, scales, :css_pixel}} -> {source, scales, 0.75}
+        _ -> nil
+      end
+
+    case prepared do
+      {value, scales, factor}
+      when is_binary(value) and is_map(scales) and is_number(basis) and
+             (basis >= 0 or policy == :property) ->
         HtmlValidator.with_render_budget(fn ->
-          if basis > Limits.get(:max_css_numeric_magnitude) do
+          if abs(basis) > Limits.get(:max_css_numeric_magnitude) do
             length_failure(
               :resource_limit_exceeded,
               "CSS calculation exceeds max_css_numeric_magnitude",
@@ -160,14 +393,33 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
           else
             environment = %{
               unit_scales: scales,
-              percentage_basis: basis,
+              percentage_basis: basis / factor,
               _depth_limit: :max_css_calculation_depth,
-              _bounded_length: true
+              _bounded_length: policy == :source
             }
 
             case evaluate(value, environment) do
               {:ok, number, %{length: 1}} when is_number(number) ->
-                {:ok, number}
+                result = number * factor
+
+                HtmlValidator.check_render_resource(
+                  :max_css_numeric_magnitude,
+                  abs(result),
+                  :layout
+                )
+
+                {:ok, result}
+
+              {:ok, :nan, %{length: 1}} when policy == :property ->
+                {:ok, 0.0}
+
+              {:ok, special, %{length: 1}}
+              when policy == :property and special in [:infinity, :negative_infinity] ->
+                length_failure(
+                  :resource_limit_exceeded,
+                  "CSS calculation exceeds the finite layout numeric range",
+                  value
+                )
 
               {:ok, _, %{length: 1}} ->
                 length_failure(
@@ -192,6 +444,103 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
           "CSS calculation requires a validated expression and percentage basis",
           nil
         )
+    end
+  end
+
+  @doc "Captures referenced length units from actual selected/root fonts and the original print viewport."
+  @spec capture_unit_scales([String.t()], map()) ::
+          {:ok, map()} | :error | {:error, Diagnostics.detailed_error()}
+  def capture_unit_scales(units, style) do
+    if units == [] do
+      {:ok, %{}}
+    else
+      environment =
+        cond do
+          Map.has_key?(style, :_css_unit_scales) ->
+            {:ok, %{unit_scales: style._css_unit_scales}}
+
+          Enum.all?(units, &(&1 in @absolute_length_units)) ->
+            {:ok, %{}}
+
+          Enum.all?(units, &(&1 not in ~w(ex rex cap rcap ch rch ic ric lh rlh))) ->
+            viewport = Map.get(style, :_position_viewport) || %{}
+            size = Map.get(style, :font_size)
+            root_size = Map.get(style, :_root_font_size, size)
+
+            {:ok,
+             %{
+               font_size: if(is_number(size), do: size / 0.75),
+               root_font_size: if(is_number(root_size), do: root_size / 0.75),
+               width: Map.get(viewport, :width),
+               height: Map.get(viewport, :height),
+               writing_mode: Map.get(style, :writing_mode, :horizontal_tb)
+             }}
+
+          true ->
+            NativeElixirPdfUtilities.Validators.CssPositionValidator.math_environment(style, 0.0)
+        end
+
+      with {:ok, environment} <- environment do
+        Enum.reduce_while(units, {:ok, %{}}, fn unit, {:ok, scales} ->
+          case evaluate("1" <> unit, environment) do
+            {:ok, scale, %{length: 1}} when is_number(scale) and scale >= 0 ->
+              {:cont, {:ok, Map.put(scales, unit, scale)}}
+
+            _ ->
+              {:halt,
+               Diagnostics.error(
+                 :style,
+                 :not_implemented,
+                 "CSS unit #{unit} requires measured geometry in the original element context",
+                 module: __MODULE__,
+                 operation: :compute_css_units,
+                 source: "1" <> unit
+               )}
+          end
+        end)
+      end
+    end
+  end
+
+  @doc "Freezes length-unit scales while leaving the percentage basis for the consuming formatting box."
+  @spec compute_length(String.t(), map()) ::
+          {:ok, length_calculation()} | :error | {:error, Diagnostics.detailed_error()}
+  def compute_length(source, style) do
+    with {:ok, dependencies} <- length_dependencies(source),
+         {:ok, scales} <- capture_unit_scales(dependencies.units, style),
+         do: {:ok, {:css_calculation, {source, scales, :css_pixel}}}
+  end
+
+  @doc "Checks a captured unit dictionary without acquiring a font or other resource."
+  @spec valid_unit_scales?(term()) :: boolean()
+  def valid_unit_scales?(scales) do
+    # A dictionary has at most one entry per grammar unit, not a resource ceiling.
+    is_map(scales) and map_size(scales) <= length(@length_units) and
+      Enum.all?(scales, fn {unit, scale} ->
+        unit in @length_units and is_number(scale) and scale >= 0 and
+          scale <= Limits.get(:max_css_numeric_magnitude)
+      end)
+  end
+
+  @doc "Checks captured length metadata through its original grammar and exact referenced units."
+  @spec valid_prepared_length?(term()) :: boolean()
+  def valid_prepared_length?(value), do: match?({:ok, _}, validate_prepared_length(value))
+
+  @doc "Validates measured calculation metadata and returns its genuine unit and percentage dependencies."
+  @spec validate_prepared_length(term()) ::
+          {:ok, map()} | :error | {:error, Diagnostics.detailed_error()}
+  def validate_prepared_length(value) do
+    case value do
+      {:css_calculation, {source, scales, :css_pixel}} ->
+        with {:ok, ^value, dependencies} <- prepare_measured_length(source, scales, :css_pixel),
+             do: {:ok, dependencies}
+
+      {:css_calculation, {source, scales}} ->
+        with {:ok, ^value, dependencies} <- prepare_measured_length(source, scales, :point),
+             do: {:ok, dependencies}
+
+      _ ->
+        :error
     end
   end
 
@@ -271,7 +620,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
 
   defp expression_value(value, environment, depth) do
     HtmlValidator.check_render_resource(
-      Map.get(environment, :_depth_limit, :max_media_query_depth),
+      Map.get(environment, :_depth_limit, :max_css_calculation_depth),
       depth,
       :style
     )
@@ -395,6 +744,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
       end
 
     case identifier do
+      {:ok, "size", ""} ->
+        case Map.get(environment, :_intrinsic_basis) do
+          value when is_number(value) -> {:ok, value, %{length: 1}}
+          _ -> :error
+        end
+
       {:ok, "pi", ""} ->
         {:ok, :math.pi(), %{}}
 
@@ -439,13 +794,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
               parsed
           end
 
+        if is_tuple(parsed_number) and
+             byte_size(value) > Limits.get(:max_html_numeric_token_bytes) do
+          throw(
+            {:render_resource_limit,
+             length_failure(
+               :resource_limit_exceeded,
+               "CSS numeric token exceeds max_html_numeric_token_bytes",
+               Map.get(environment, :_source_expression, value)
+             )}
+          )
+        end
+
         case parsed_number do
           {number, raw_unit} ->
-            unit =
-              case HtmlValidator.parse_css_identifier(raw_unit) do
-                {:ok, unit, ""} -> String.downcase(unit, :ascii)
-                _ -> raw_unit
-              end
+            unit = HtmlValidator.normalize_css_unit(raw_unit)
 
             if Map.get(environment, :color_components, false) and
                  unit not in ["", "%", "deg", "grad", "rad", "turn"] do
@@ -476,18 +839,46 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
               {scale, type} =
                 case unit do
                   unit when unit in ~w(vw svw lvw dvw vi svi lvi dvi) ->
-                    {Map.get(environment, :width, 0.0) / 100, :length}
+                    axis =
+                      if String.ends_with?(unit, "vi") and
+                           Map.get(environment, :writing_mode, :horizontal_tb) != :horizontal_tb,
+                         do: :height,
+                         else: :width
+
+                    extent = Map.get(environment, axis, 0.0)
+                    {if(is_number(extent), do: extent / 100), :length}
 
                   unit when unit in ~w(vh svh lvh dvh vb svb lvb dvb) ->
-                    {Map.get(environment, :height, 0.0) / 100, :length}
+                    axis =
+                      if String.ends_with?(unit, "vb") and
+                           Map.get(environment, :writing_mode, :horizontal_tb) != :horizontal_tb,
+                         do: :width,
+                         else: :height
+
+                    extent = Map.get(environment, axis, 0.0)
+                    {if(is_number(extent), do: extent / 100), :length}
 
                   unit when unit in ~w(vmin svmin lvmin dvmin) ->
-                    {min(Map.get(environment, :width, 0.0), Map.get(environment, :height, 0.0)) /
-                       100, :length}
+                    {if(
+                       is_number(Map.get(environment, :width, 0.0)) and
+                         is_number(Map.get(environment, :height, 0.0)),
+                       do:
+                         min(
+                           Map.get(environment, :width, 0.0),
+                           Map.get(environment, :height, 0.0)
+                         ) / 100
+                     ), :length}
 
                   unit when unit in ~w(vmax svmax lvmax dvmax) ->
-                    {max(Map.get(environment, :width, 0.0), Map.get(environment, :height, 0.0)) /
-                       100, :length}
+                    {if(
+                       is_number(Map.get(environment, :width, 0.0)) and
+                         is_number(Map.get(environment, :height, 0.0)),
+                       do:
+                         max(
+                           Map.get(environment, :width, 0.0),
+                           Map.get(environment, :height, 0.0)
+                         ) / 100
+                     ), :length}
 
                   unit when unit in ~w(em rem) ->
                     {Map.get(
@@ -564,6 +955,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                     {1000.0, :frequency}
 
                   "dppx" ->
+                    {1.0, :resolution}
+
+                  "x" ->
                     {1.0, :resolution}
 
                   "dpi" ->

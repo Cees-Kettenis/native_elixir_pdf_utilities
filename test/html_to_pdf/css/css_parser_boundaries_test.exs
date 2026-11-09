@@ -198,11 +198,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
       values = Enum.map_join(1..count, " ", &"#{&1}pt")
       assert length(HtmlValidator.split_css_tokens(values)) == count
 
-      assert {:ok, {:min, sizes}} =
-               HtmlValidator.parse_css_size("min(" <> String.replace(values, " ", ",") <> ")")
+      source = "min(" <> String.replace(values, " ", ",") <> ")"
 
-      assert length(sizes) == count
-      assert hd(sizes) == 1.0 and List.last(sizes) == count * 1.0
+      assert {:ok, {:css_size_math, {^source, false}} = expression} =
+               HtmlValidator.parse_css_size(source)
+
+      assert {:ok, 1.0} =
+               NativeElixirPdfUtilities.Validators.CssSizingValidator.resolve_math(
+                 expression,
+                 nil,
+                 %{font_size: 12, line_height: 15, _root_font_size: 12}
+               )
     end
 
     assert {:ok, %{rules: [rule]}} =
@@ -245,7 +251,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
   test "min depth is checked before recursion through applied and authored declarations" do
     Limits.install(Map.put(Limits.effective(), :max_css_calculation_depth, 4))
 
-    assert {:ok, {:min, _}} =
+    assert {:ok, {:css_size_math, _}} =
              HtmlValidator.parse_css_size(
                String.duplicate("min(", 4) <> "1pt" <> String.duplicate(")", 4)
              )

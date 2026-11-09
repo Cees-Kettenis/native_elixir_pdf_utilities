@@ -83,10 +83,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
         {property, value} ->
           resolved =
-            HtmlValidator.resolve_css_variables(
+            NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.resolve_value(
               value,
-              Map.get(style, :_custom_properties, %{}),
-              %{},
+              style,
               budget
             )
 
@@ -104,7 +103,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       {:ok, computed} ->
         case validate_resolved(style, property, computed) do
           error when error in [:error, {:error, :invalid_document}] ->
-            case HtmlValidator.parse_css_variable_references(value) do
+            case computed_references(value) do
               {:ok, [_ | _]} ->
                 record = %{
                   declaration: {property, computed},
@@ -127,7 +126,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         end
 
       :error ->
-        case HtmlValidator.parse_css_variable_references(value) do
+        case computed_references(value) do
           {:ok, [_ | _]} -> invalid_computed_value(value)
           _ -> {:error, :invalid_document}
         end
@@ -137,11 +136,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
+  defp computed_references(value) do
+    with {:ok, references} <- HtmlValidator.parse_css_variable_references(value) do
+      if NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.contains?(value) do
+        if NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.valid_syntax?(value),
+          do: {:ok, [:substitution]},
+          else: :error
+      else
+        {:ok, references}
+      end
+    end
+  end
+
   defp invalid_computed_value(value) do
     Diagnostics.error(
       :css,
       :invalid_css,
-      "variable substitution produces an invalid computed value; the cascade must apply CSS defaulting",
+      "CSS substitution produces an invalid computed value; the cascade must apply CSS defaulting",
       module: __MODULE__,
       operation: :invalid_computed_value,
       source: value
@@ -249,6 +260,38 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             custom_property_declaration?(record) ->
               {:ok, Map.put(tokens, :kind, :custom_property_tokens)}
 
+            property == "content" and
+                NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.contains?(value) ->
+              case put_generated_content(%{}, value) do
+                {:ok, specified} ->
+                  {:ok, Map.merge(tokens, %{kind: :specified_tokens, properties: specified})}
+
+                _ ->
+                  if NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.valid_syntax?(
+                       value
+                     ),
+                     do:
+                       {:ok,
+                        Map.merge(tokens, %{
+                          kind: :substitution_tokens,
+                          dependencies: [:element_attributes_or_environment]
+                        })},
+                     else: :error
+              end
+
+            property in @source_symbolic_properties and
+                NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.contains?(value) ->
+              if NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.valid_syntax?(
+                   value
+                 ),
+                 do:
+                   {:ok,
+                    Map.merge(tokens, %{
+                      kind: :substitution_tokens,
+                      dependencies: [:element_attributes_or_environment]
+                    })},
+                 else: :error
+
             variables != [] and
                 property in @source_symbolic_properties ->
               {:ok, Map.put(tokens, :kind, :substitution_tokens)}
@@ -259,12 +302,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                   {:ok, Map.merge(tokens, %{kind: :length_percentage, length: length})}
 
                 :error ->
-                  if property == "font-size" and
-                       String.downcase(value, :ascii) in ["math", "inherit"],
-                     do:
-                       {:ok,
-                        Map.merge(tokens, %{kind: :font_keyword, dependencies: [:inherited_font]})},
-                     else: :error
+                  if property == "font-size" do
+                    if String.downcase(value, :ascii) in ["math", "inherit"],
+                      do:
+                        {:ok,
+                         Map.merge(tokens, %{kind: :font_keyword, dependencies: [:inherited_font]})},
+                      else: :error
+                  else
+                    with {:ok, size} <-
+                           HtmlValidator.parse_css_size(value, length_property(property)),
+                         do: {:ok, Map.merge(tokens, %{kind: :intrinsic_size, size: size})}
+                  end
 
                 error ->
                   error
@@ -279,8 +327,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             property in ["border-width" | @source_border_width_properties] ->
               parser = fn token ->
                 case parse_border_width(token) do
-                  {:ok, _} = parsed -> parsed
-                  _ -> HtmlValidator.prepare_css_length_source(token, :length)
+                  {:ok, {:css_length_math, _}} ->
+                    HtmlValidator.prepare_css_length_source(token, :length)
+
+                  {:ok, _} = parsed ->
+                    parsed
+
+                  _ ->
+                    HtmlValidator.prepare_css_length_source(token, :length)
                 end
               end
 
@@ -359,8 +413,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             property in ~w(border border-top border-right border-bottom border-left) ->
               parser = fn token ->
                 case parse_border_width(token) do
-                  {:ok, _} = parsed -> parsed
-                  _ -> HtmlValidator.prepare_css_length_source(token, :length)
+                  {:ok, {:css_length_math, _}} ->
+                    HtmlValidator.prepare_css_length_source(token, :length)
+
+                  {:ok, _} = parsed ->
+                    parsed
+
+                  _ ->
+                    HtmlValidator.prepare_css_length_source(token, :length)
                 end
               end
 
@@ -488,6 +548,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           )
       end
     end)
+  end
+
+  @doc "Finalizes calculated properties after selecting the element font and computed text metrics."
+  @spec compute_units(map()) :: {:ok, map()} | :error | {:error, {atom(), map()}}
+  def compute_units(style) do
+    alias NativeElixirPdfUtilities.Validators.{
+      CssLengthValidator,
+      CssMathValidator,
+      CssSizingValidator,
+      CssPositionValidator
+    }
+
+    with {:ok, style} <- CssLengthValidator.resolve_text(style),
+         {:ok, style} <- CssMathValidator.resolve_scalars(style),
+         {:ok, style} <- CssLengthValidator.resolve_edges(style),
+         {:ok, style} <- CssSizingValidator.compute_dimensions(style),
+         do: CssPositionValidator.compute_style(style)
   end
 
   @doc "Returns the property and value of an ordinary, important or source-wrapped declaration, or nil for a malformed declaration."
@@ -705,6 +782,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
              {:ok, style} <-
                validate_cascade_list(style, metric_declarations, budget, consumer, failure),
              {:ok, style} <- prepare_cascade_defaults(style),
+             {:ok, style} <-
+               if(Map.get(style, :_property_registrations, %{}) == %{},
+                 do: {:ok, style},
+                 else: NativeElixirPdfUtilities.Validators.CssLengthValidator.resolve_text(style)
+               ),
+             {:ok, style} <-
+               if(Map.get(style, :_property_registrations, %{}) == %{},
+                 do: {:ok, style},
+                 else: NativeElixirPdfUtilities.Validators.CssMathValidator.resolve_scalars(style)
+               ),
              style =
                if(Map.get(style, :_property_registrations, %{}) == %{},
                  do: style,
@@ -762,19 +849,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
   defp registered_metrics(style) do
     line_height =
-      cond do
-        is_number(Map.get(style, :line_height_multiplier)) ->
-          style.font_size * style.line_height_multiplier
-
-        Map.get(style, :line_height_normal, false) and not is_nil(Map.get(style, :font_face)) ->
-          HtmlValidator.normal_line_height(style)
-
-        match?({:rem, _}, Map.get(style, :line_height)) ->
-          elem(style.line_height, 1) * style._root_font_size
-
-        true ->
-          Map.get(style, :line_height)
-      end
+      NativeElixirPdfUtilities.Validators.CssLengthValidator.computed_line_height(style)
 
     style = Map.put(style, :line_height, line_height)
 
@@ -1136,11 +1211,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             put_box_sizing(style, value)
 
           "margin" ->
-            with {:ok, lengths} <- HtmlValidator.parse_css_box_lengths(value, :margin),
+            with {:ok, lengths} <-
+                   HtmlValidator.parse_css_box_lengths(value, {:computed, :margin}),
                  do: {:ok, put_box_lengths(style, "margin", lengths)}
 
           "padding" ->
-            with {:ok, lengths} <- parse_box_lengths(value),
+            with {:ok, lengths} <-
+                   HtmlValidator.parse_css_box_lengths(value, {:computed, :padding}),
                  do: {:ok, put_box_lengths(style, "padding", lengths)}
 
           "border-width" ->
@@ -1149,12 +1226,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           property
           when property in ["margin-top", "margin-right", "margin-bottom", "margin-left"] ->
-            with {:ok, length} <- HtmlValidator.parse_css_margin(value),
+            with {:ok, length} <-
+                   NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(value, :margin),
                  do: {:ok, put_edge_length(style, property, length)}
 
           property
           when property in ["padding-top", "padding-right", "padding-bottom", "padding-left"] ->
-            with {:ok, length} <- parse_length(value),
+            with {:ok, length} <-
+                   NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(value, :padding),
                  do: {:ok, put_edge_length(style, property, length)}
 
           "border-color" ->
@@ -1271,9 +1350,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             normalized = value |> String.trim() |> String.downcase(:ascii)
             key = if property == "orphans", do: :orphans, else: :widows
 
-            with {number, ""} <- HtmlValidator.parse_css_number(normalized),
-                 true <- number > 0 and Regex.match?(~r/\A[+]?[0-9]+\z/, normalized) do
-              {:ok, Map.put(style, key, String.to_integer(normalized))}
+            with {:ok, number} <-
+                   NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(
+                     normalized,
+                     :integer,
+                     1
+                   ) do
+              {:ok, Map.put(style, key, number)}
             else
               _ -> {:error, :invalid_document}
             end
@@ -1305,10 +1388,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             put_font(style, value)
 
           "font-size" ->
-            context =
-              if Map.has_key?(style, :_math_context),
-                do: style,
-                else: Map.merge(style, Map.get(style, :_inherited_font, %{}))
+            context = font_size_context(style)
 
             with {:ok, properties} <-
                    MathLayoutValidator.parse_property("font-size", value, context),
@@ -1319,7 +1399,26 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                  do: {:ok, Map.merge(style, properties)}
 
           "line-height" ->
-            case parse_line_height(value) do
+            case parse_line_height(
+                   value,
+                   &NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(&1, :padding)
+                 ) do
+              {:ok, {:css_length_math, _} = calculation} ->
+                {:ok,
+                 style
+                 |> Map.put(:line_height, calculation)
+                 |> Map.put(
+                   :_line_height_parent,
+                   Map.get(
+                     Map.get(style, :_cascade_inherited, %{}),
+                     :line_height,
+                     Map.get(style, :line_height)
+                   )
+                 )
+                 |> Map.put(:_line_height_root, Map.get(style, :_root_element, false))
+                 |> Map.delete(:line_height_multiplier)
+                 |> Map.delete(:line_height_normal)}
+
               {:ok, {:multiplier, multiplier}} ->
                 {:ok,
                  style
@@ -1550,11 +1649,26 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
+  defp font_size_context(style) do
+    parent = Map.get(style, :_cascade_inherited, style)
+
+    context =
+      if Map.has_key?(style, :_math_context),
+        do: style,
+        else: Map.merge(style, Map.get(style, :_inherited_font, %{}))
+
+    Map.put(
+      context,
+      :_css_line_height,
+      NativeElixirPdfUtilities.Validators.CssLengthValidator.computed_line_height(parent)
+    )
+  end
+
   defp put_font(style, value) do
     with {:ok, components} <-
            font_components(
              value,
-             &MathLayoutValidator.parse_property("font-size", &1, style)
+             &MathLayoutValidator.parse_property("font-size", &1, font_size_context(style))
            ),
          initial =
            CssCascadeValidator.project(
@@ -1884,8 +1998,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         {:ok, Map.put(style, :z_index, :auto)}
 
       value ->
-        case Integer.parse(value) do
-          {z_index, ""} -> {:ok, Map.put(style, :z_index, z_index)}
+        case NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(value, :integer) do
+          {:ok, z_index} -> {:ok, Map.put(style, :z_index, z_index)}
           _ -> {:error, :invalid_document}
         end
     end
@@ -2010,7 +2124,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_counter_values(style, property, value, default_value) do
-    tokens = value |> String.trim() |> String.split(~r/\s+/u, trim: true)
+    tokens = HtmlValidator.split_css_tokens(value)
 
     case tokens do
       ["none"] ->
@@ -2027,8 +2141,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                 {:cont, {:ok, [{token, default_value} | values], true}}
 
               integer_allowed? ->
-                case Integer.parse(token) do
-                  {integer, ""} ->
+                case NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(
+                       token,
+                       :integer
+                     ) do
+                  {:ok, integer} ->
                     [{name, _old_value} | rest] = values
                     {:cont, {:ok, [{name, integer} | rest], false}}
 
@@ -2052,8 +2169,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_letter_spacing(style, value) do
-    with {:ok, spacing} <- parse_letter_spacing(value, Map.get(style, :font_size)),
-         do: {:ok, Map.put(style, :letter_spacing, spacing)}
+    parsed =
+      case parse_letter_spacing(value, Map.get(style, :font_size)) do
+        {:error, :invalid_document} ->
+          NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(value, :signed_length)
+
+        result ->
+          result
+      end
+
+    with {:ok, spacing} <- parsed, do: {:ok, Map.put(style, :letter_spacing, spacing)}
   end
 
   defp parse_letter_spacing(value, font_size) do
@@ -2218,8 +2343,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_order(style, value) do
-    case Integer.parse(String.trim(value)) do
-      {order, ""} -> {:ok, Map.put(style, :order, order)}
+    case NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(value, :integer) do
+      {:ok, order} -> {:ok, Map.put(style, :order, order)}
       _ -> {:error, :invalid_document}
     end
   end
@@ -2600,14 +2725,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_box_lengths(value) do
-    parse_box_lengths(value, :nonnegative)
-  end
-
-  defp parse_box_lengths(value, length_context) do
-    HtmlValidator.parse_css_box_lengths(value, length_context)
-  end
-
   defp parse_gap(value, parser \\ &parse_length/1) do
     gaps =
       value
@@ -2643,7 +2760,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp parse_size(value) do
-    HtmlValidator.parse_css_size(value)
+    case HtmlValidator.parse_css_size(value) do
+      {:ok, {:css_intrinsic_size, _}} -> :error
+      result -> result
+    end
   end
 
   defp parse_position_component(value, font_size \\ nil) do
@@ -2803,7 +2923,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_line_height(value, parser \\ &parse_length/1) do
+  defp parse_line_height(value, parser) do
     normalized = value |> String.trim() |> String.downcase()
 
     cond do
@@ -2821,8 +2941,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp parse_nonnegative_number(value) do
-    case HtmlValidator.parse_css_number(String.trim(value)) do
-      {number, ""} when number >= 0 -> {:ok, number}
+    case NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(value, :number, 0) do
+      {:ok, number} -> {:ok, number}
       _ -> :error
     end
   end
@@ -3056,7 +3176,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       "thin" -> {:ok, 0.75}
       "medium" -> {:ok, @medium_border_width}
       "thick" -> {:ok, 3.75}
-      value -> parse_length(value)
+      value -> NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(value, :length)
     end
   end
 

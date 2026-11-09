@@ -3189,7 +3189,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert label.style.border_widths == %{top: 0.75, right: 0.75, bottom: 0.75, left: 0.75}
     assert label.style.break_after == :auto
     assert label.style.word_break == :break_word
-    assert label.style.width == {:min, [{:percent, 1.0}, 270.0]}
+
+    assert NativeElixirPdfUtilities.HtmlToPdf.Layout.resolve_content_size(
+             label.style,
+             :width,
+             200,
+             nil
+           ) == 198.5
+
+    assert NativeElixirPdfUtilities.HtmlToPdf.Layout.resolve_content_size(
+             label.style,
+             :width,
+             300,
+             nil
+           ) == 268.5
+
     assert first_text.text == "ONE"
     assert second.style.display == :block
     assert second.style.margin_after == 1.5
@@ -3292,8 +3306,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              {:minmax, :auto, {:length, 120.0}}
            ]
 
-    assert style_for!("div", "width: min(100%, min(10px, 20px))").width ==
-             {:min, [{:percent, 1.0}, {:min, [7.5, 15.0]}]}
+    minimum = style_for!("div", "width: min(100%, min(10px, 20px))")
+
+    assert NativeElixirPdfUtilities.HtmlToPdf.Layout.resolve_content_size(
+             minimum,
+             :width,
+             100,
+             nil
+           ) == 7.5
+
+    assert NativeElixirPdfUtilities.HtmlToPdf.Layout.resolve_content_size(minimum, :width, 5, nil) ==
+             5
 
     lowercase = text_for_style("text-transform: lowercase", "MiXeD")
     capitalized = text_for_style("text-transform: capitalize", "hello world")
@@ -6337,11 +6360,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for!("div", "background-size: 25% 8pt").background_size ==
              {{:percent, 0.25}, 8.0}
 
-    assert style_for!("div", "background-size: min(10pt, 50%)").background_size ==
-             {{:min, [10.0, {:percent, 0.5}]}, :auto}
+    {width, :auto} = style_for!("div", "background-size: min(10pt, 50%)").background_size
 
-    assert style_for!("div", "background-size: min(10pt, 50%) min(8pt, 50%)").background_size ==
-             {{:min, [10.0, {:percent, 0.5}]}, {:min, [8.0, {:percent, 0.5}]}}
+    assert {:ok, 10.0} =
+             NativeElixirPdfUtilities.Validators.CssSizingValidator.resolve_math(width, 100, %{})
+
+    assert {:ok, 5.0} =
+             NativeElixirPdfUtilities.Validators.CssSizingValidator.resolve_math(width, 10, %{})
+
+    {width, height} =
+      style_for!("div", "background-size: min(10pt, 50%) min(8pt, 50%)").background_size
+
+    assert {:ok, 10.0} =
+             NativeElixirPdfUtilities.Validators.CssSizingValidator.resolve_math(width, 100, %{})
+
+    assert {:ok, 8.0} =
+             NativeElixirPdfUtilities.Validators.CssSizingValidator.resolve_math(height, 100, %{})
 
     assert style_for!("div", "background-repeat: repeat").background_repeat == :repeat
     assert style_for!("div", "background-repeat: repeat-x").background_repeat == :repeat_x

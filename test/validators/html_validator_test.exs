@@ -3620,7 +3620,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert :error = HtmlValidator.parse_css_size("auto", :min_height)
     assert :error = HtmlValidator.parse_css_size("min(auto, 10pt)", :width)
 
-    assert {:ok, {:min, [10.0, {:percent, 0.5}]}} =
+    assert {:ok, {:css_size_math, {"min(10pt, 50%)", true}}} =
              HtmlValidator.parse_css_size("min(10pt, 50%)", :width)
 
     assert :error = HtmlValidator.parse_css_size("-1pt", :height)

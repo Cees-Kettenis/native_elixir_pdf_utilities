@@ -6,8 +6,24 @@ p {margin:0 0 12pt}
 .fixed {width:240pt;height:60pt;background:#eee}
 .calculated {width:calc(50% + 12pt);height:calc(50% - 6pt);min-width:max(80pt,30%);max-width:clamp(100pt,60%,150pt);background:#497c9b}
 .borderbox {box-sizing:border-box;width:calc(50% - 6pt);min-height:calc(1em + 6pt);max-height:30pt;height:calc(2em + 12pt);padding:3pt;border:1.5pt solid #23513a;background:#83b88f}
+/* CSS Values 4 (2024-03-12), Values 5 ED 2da1cb17a43306d3ef80d09d328883c71cdb54b2.
+   Font metrics are rounded explicitly to avoid platform hinting differences.
+   New independent regions occupy the original page's unused lower strip. */
+#metric-values,#attribute-values,#intrinsic-values,#text-values {position:absolute;font-family:"DejaVu Sans";font-size:8pt;line-height:10pt;margin:0}
+#metric-values {left:12pt;top:160pt;width:round(up,calc(2ch + 2cap + 1ex),3pt);height:10pt;padding:round(up,1ex,1pt);border:calc(1px + 1px) solid #31546b;background:#c6dde9}
+#attribute-values {left:106pt;top:160pt;width:attr(data-width pt,24pt);height:env(unknown-print-height,16pt);padding-left:calc(10% - 2pt);background:#ddbc84}
+#intrinsic-values {left:212pt;top:160pt;box-sizing:border-box;padding:2pt;border:0.75pt solid #23513a;width:calc-size(max-content,round(up,size + 4pt,3pt));height:16pt;background:#83b88f}
+#text-values {left:106pt;top:190pt;width:max-content;font-size:calc(1em - 4pt);line-height:calc(1lh + 2pt);letter-spacing:calc(1ch / 4);background:#e1c9ae}
+#allocated-values {position:absolute;left:12pt;top:190pt;width:80pt;height:20pt;display:flex;font-size:8pt;line-height:10pt}
+#allocated-values > div {flex:1}
+#allocated-values > div > div {padding:calc(10% + 1pt);background:#c6dde9}
 </style></head><body>
 <p>A<span style="padding:2pt;background:#c6dde9">B<span style="padding:3pt;background:#e1c9ae">C</span><span style="display:inline-block;width:10pt;height:6pt;background:#704060"></span>D</span>E.</p>
 <div class="fixed"><div class="calculated"></div><div class="borderbox"></div></div>
 <p style="margin-top:12pt">Fixed <span style="display:inline-block;width:min(40pt,calc(20% + 2pt));height:calc(1lh + 2pt);background:#ddbc84"></span> tail.</p>
+<div id="metric-values">Units</div>
+<div id="attribute-values" data-width="30">Attr</div>
+<div id="intrinsic-values">Size</div>
+<div id="text-values">Text</div>
+<div id="allocated-values"><div><div>Basis</div></div><div>B</div></div>
 </body></html>

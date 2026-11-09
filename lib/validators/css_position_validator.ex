@@ -17,20 +17,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
         _depth_limit: :max_css_calculation_depth
       }
 
-      result =
-        if is_binary(value) and String.valid?(value),
-          do: CssMathValidator.evaluate(value, environment),
-          else: :error
-
-      case result do
-        {:ok, _, %{length: 1} = type} when map_size(type) == 1 ->
+      case CssMathValidator.length_dependencies(value) do
+        {:ok, _} ->
           {:ok, {:css_position_math, value}}
 
-        {:ok, zero, type} when zero == 0 and map_size(type) == 0 ->
-          {:ok, {:css_position_math, value}}
+        {:error, {:resource_limit_exceeded, _}} = error ->
+          error
 
         _ ->
-          :error
+          case if(is_binary(value) and String.valid?(value),
+                 do: CssMathValidator.evaluate(value, environment),
+                 else: :error
+               ) do
+            {:ok, zero, type} when zero == 0 and map_size(type) == 0 ->
+              {:ok, {:css_position_math, value}}
+
+            _ ->
+              :error
+          end
       end
     end)
   end
@@ -38,14 +42,33 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
   @doc "Prepares the selected-font CSS math environment using a real point percentage basis."
   @spec math_environment(map(), number()) :: {:ok, map()} | {:error, {atom(), map()}}
   def math_environment(style, remaining) do
+    case Map.fetch(style, :_css_unit_scales) do
+      {:ok, scales} ->
+        {:ok,
+         %{
+           unit_scales: scales,
+           percentage_basis: remaining / 0.75,
+           _intrinsic_basis: Map.get(style, :_intrinsic_basis),
+           _depth_limit: :max_css_calculation_depth
+         }}
+
+      :error ->
+        selected_math_environment(style, remaining)
+    end
+  end
+
+  defp selected_math_environment(style, remaining) do
     font = Map.get(style, :font_face)
     root_font = Map.get(style, :_root_font_face) || font
     size = Map.get(style, :font_size)
     root_size = Map.get(style, :_root_font_size, size)
 
+    line_height =
+      NativeElixirPdfUtilities.Validators.CssLengthValidator.computed_line_height(style)
+
     with true <- is_number(size) and size >= 0 and is_number(root_size) and root_size >= 0,
-         true <- is_number(Map.get(style, :line_height)),
-         {:ok, metrics} <- SourceSizeValidator.prepare_font_metrics(font, size, style.line_height),
+         true <- is_number(line_height),
+         {:ok, metrics} <- SourceSizeValidator.prepare_font_metrics(font, size, line_height),
          {:ok, root_metrics} <-
            SourceSizeValidator.prepare_font_metrics(
              root_font,
@@ -60,6 +83,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
          height: if(is_map(viewport), do: Map.get(viewport, :height), else: nil),
          font_size: size / 0.75,
          root_font_size: root_size / 0.75,
+         writing_mode: Map.get(style, :writing_mode, :horizontal_tb),
+         _intrinsic_basis: Map.get(style, :_intrinsic_basis),
          source_metrics: metrics,
          root_metrics: root_metrics,
          percentage_basis: remaining / 0.75,
@@ -80,6 +105,62 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
     end
   end
 
+  @doc "Computes position units at their declaring element while retaining the used percentage space."
+  @spec compute_style(map()) :: {:ok, map()} | :error | {:error, {atom(), map()}}
+  def compute_style(style) do
+    Enum.reduce_while(
+      [:offsets, :object_position, :background_position, :transform_origin],
+      {:ok, style},
+      fn property, {:ok, result} ->
+        case compute_position(Map.get(result, property), style) do
+          {:ok, value} ->
+            {:cont,
+             {:ok,
+              if(value == Map.get(result, property),
+                do: result,
+                else: Map.put(result, property, value)
+              )}}
+
+          error ->
+            {:halt, error}
+        end
+      end
+    )
+  end
+
+  defp compute_position(position, style) do
+    case position do
+      {:css_position_math, source} when is_binary(source) ->
+        case CssMathValidator.length_dependencies(source) do
+          {:ok, %{percentage?: true}} ->
+            with {:ok, calculation} <- CssMathValidator.compute_length(source, style),
+                 do: {:ok, {:css_position_math, calculation}}
+
+          _ ->
+            resolve(position, 0.0, style)
+        end
+
+      {:end, offset} ->
+        with {:ok, offset} <- compute_position(offset, style), do: {:ok, {:end, offset}}
+
+      {x, y} when not is_atom(x) ->
+        with {:ok, x} <- compute_position(x, style),
+             {:ok, y} <- compute_position(y, style),
+             do: {:ok, {x, y}}
+
+      map when is_map(map) ->
+        Enum.reduce_while(map, {:ok, map}, fn {edge, value}, {:ok, result} ->
+          case compute_position(value, style) do
+            {:ok, value} -> {:cont, {:ok, Map.put(result, edge, value)}}
+            error -> {:halt, error}
+          end
+        end)
+
+      _ ->
+        {:ok, position}
+    end
+  end
+
   @doc "Checks prepared CSS position dimensions through the shared math grammar and numeric bounds."
   @spec valid_prepared?(term()) :: boolean()
   def valid_prepared?(position) do
@@ -90,6 +171,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
     HtmlValidator.check_render_resource(:max_css_calculation_depth, depth, :layout)
 
     case position do
+      {:css_position_math, {:css_calculation, _} = calculation} ->
+        CssMathValidator.valid_prepared_length?(calculation)
+
       {:percent, ratio} ->
         match?({:ok, _}, HtmlValidator.normalize_geometry_number(ratio))
 
@@ -97,19 +181,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
         valid_prepared_position?(offset, depth + 1)
 
       {:css_position_math, source} when is_binary(source) ->
-        if String.valid?(source) do
-          case CssMathValidator.evaluate(source, %{
-                 type_check: true,
-                 width: 1.0,
-                 height: 1.0,
-                 percentage_basis: 1.0,
-                 _depth_limit: :max_css_calculation_depth
-               }) do
-            {:ok, value, type} -> type == %{length: 1} or (value == 0 and type == %{})
-            _ -> false
-          end
-        else
-          false
+        case prepare_math(source) do
+          {:error, {:resource_limit_exceeded, _}} = error ->
+            throw({:render_resource_limit, error})
+
+          prepared ->
+            prepared == {:ok, position}
         end
 
       number when is_number(number) ->
@@ -128,6 +205,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
            true <- is_map(style) do
         result =
           case position do
+            {:css_position_math, {:css_calculation, _} = calculation} ->
+              CssMathValidator.resolve_length(calculation, remaining, :property)
+
             {:percent, ratio} when is_number(ratio) ->
               {:ok, remaining * ratio}
 
@@ -138,7 +218,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
             {:css_position_math, source} when is_binary(source) ->
               source = if String.valid?(source), do: source, else: "invalid"
 
-              with {:ok, environment} <- math_environment(style, remaining) do
+              context = Map.take(style, [:_intrinsic_basis])
+              dependencies = CssMathValidator.length_dependencies(source, context)
+
+              prepared =
+                case dependencies do
+                  {:ok, dependencies} ->
+                    with {:ok, scales} <-
+                           CssMathValidator.capture_unit_scales(dependencies.units, style),
+                         do:
+                           math_environment(Map.put(style, :_css_unit_scales, scales), remaining)
+
+                  _ ->
+                    {:ok, %{}}
+                end
+
+              with {:ok, environment} <- prepared do
                 case CssMathValidator.evaluate(source, environment) do
                   {:ok, :nan, type} when type == %{length: 1} ->
                     {:ok, 0.0}

@@ -356,6 +356,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
     |> Enum.reject(&(&1 == ""))
   end
 
+  @doc "Reports the static outline font formats accepted by the native font source validator."
+  @spec supports_format?(String.t()) :: boolean()
+  def supports_format?(format), do: String.downcase(format, :ascii) in ["truetype", "opentype"]
+
+  @doc "Reports font technologies used by native layout, including Latin and Math OpenType features."
+  @spec supports_technology?(String.t()) :: boolean()
+  def supports_technology?(technology),
+    do: String.downcase(technology, :ascii) == "features-opentype"
+
   defp supported_font_source?(source, format) do
     normalized_format = String.downcase(format)
     extension = source |> Path.extname() |> String.downcase()
@@ -365,7 +374,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
     format_supported? =
       case normalized_format do
         "" -> true
-        format -> format in ["truetype", "opentype"]
+        format -> supports_format?(format)
       end
 
     supported_reference? and extension in [".ttf", ".otf"] and format_supported?

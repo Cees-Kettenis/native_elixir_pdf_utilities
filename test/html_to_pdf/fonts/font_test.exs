@@ -945,13 +945,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert {:ok, x_height} = FontValidator.prepare_x_height(font)
       assert_in_delta ex_space.width, x_height * 40, 0.00001
 
-      assert {:error, {:unsupported_glyph, _}} =
+      assert {:ok, fallback_space} =
                MathLayout.measure(%{
                  space
                  | children: [],
                    attributes: %{"width" => "2ex"},
                    style: %{style | font_face: %{font | cmap: %{}}}
                })
+
+      # CSS Values 4 defines ex as 0.5em when the selected face has no x glyph.
+      assert fallback_space.width == style.font_size
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathLayout.measure(%{
+                 space
+                 | children: [],
+                   attributes: %{"width" => "2ex"},
+                   style: %{style | font_face: %{font | data: <<>>}}
+               })
+
+      assert diagnostic.stage == :font
 
       assert {:ok, negative_depth} =
                MathLayout.measure(%{

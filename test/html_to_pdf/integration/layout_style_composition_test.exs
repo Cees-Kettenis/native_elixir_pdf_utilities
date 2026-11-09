@@ -245,7 +245,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
     Limits.install(%{Limits.effective() | max_html_numeric_token_bytes: 4})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssSizingValidator.prepare_math("calc(1pt)")
+             CssSizingValidator.prepare_math("calc(123pt)")
 
     assert diagnostic.message =~ "max_html_numeric_token_bytes"
   end

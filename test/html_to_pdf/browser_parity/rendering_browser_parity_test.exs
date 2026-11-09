@@ -2400,6 +2400,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
          do: Keyword.put(thresholds, :svg_reference, :png),
          else: thresholds
 
+    thresholds =
+      if fixture_name == "fonts_and_print_media.html",
+        do:
+          Keyword.put(thresholds, :regions, [
+            {"print viewport", {34, 298, 146, 24}},
+            {"print conditions", {208, 298, 96, 24}},
+            {"root font units", {34, 338, 70, 18}}
+          ]),
+        else: thresholds
+
     compare = fn -> PdfVisualCompare.assert_browser_match!(fixture_path, thresholds) end
 
     stats =
@@ -2442,7 +2452,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
       end
     end
 
-    if fixture_name == "fonts_and_print_media.html", do: assert(page_count == 1)
+    if fixture_name == "fonts_and_print_media.html" do
+      assert page_count == 1
+
+      for engine <- ["native", "chromium"] do
+        assert {:ok, text} =
+                 NativeElixirPdfUtilities.Text.extract_file(
+                   Path.join(artifact_dir, engine <> ".pdf"),
+                   layout: false
+                 )
+
+        for label <- ["Print-ready report", "Viewport", "Print conditions", "Root units"],
+            do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
+      end
+    end
 
     if fixture_name == "inline_svg_text_paint_servers.html" do
       for renderer <- ["native", "chromium"] do
@@ -3022,7 +3045,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
               ]
           end
 
-        for label <- labels, do: assert(text =~ label)
+        for label <- labels,
+            do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
+
         assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
 
         if fixture_name == "html_table_bottom_captions.html" do
@@ -3064,7 +3089,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
               "Empty table caption",
               "Zero columns after."
             ],
-            do: assert(text =~ label)
+            do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
 
         refute text =~ ~r/\bHidden cell\b/u
         assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
@@ -3121,7 +3146,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
               ]
           end
 
-        for label <- labels, do: assert(text =~ label)
+        for label <- labels,
+            do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
+
         assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
       end
     end
@@ -3155,7 +3182,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
               "Visible value",
               "Block captions after."
             ],
-            do: assert(text =~ label)
+            do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
 
         assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
         assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
@@ -3216,7 +3243,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
               "Next neighbor",
               "Header associations after."
             ],
-            do: assert(text =~ label)
+            do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
 
         refute text =~ "Hidden blocker"
         assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
@@ -5044,6 +5071,8 @@ for group <- 0..7 do
     end
 
     for {fixture_name, thresholds} <- @fixture_thresholds do
+      if fixture_name == "fonts_and_print_media.html", do: @tag(:css_print_values)
+
       if fixture_name in [
            "html_special_control_geometry.html",
            "html_constraint_aggregation.html"

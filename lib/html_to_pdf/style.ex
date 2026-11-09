@@ -92,6 +92,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @cell_padding_edges CssValueValidator.edges(0.75)
   @control_padding_edges CssValueValidator.edges(1.5)
   @rem_opaque_style_keys [
+    :_css_attributes,
     :_font_registry,
     :font_face,
     :_root_font_face,
@@ -2239,16 +2240,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp generated_content_text(content, attributes, counters, quote_pairs) do
+  defp generated_content_text(content, _attributes, counters, quote_pairs) do
     {parts, counters} =
       Enum.reduce(content_parts(content), {[], counters}, fn part, {parts, counters} ->
         {text, counters} =
           case part do
             {:string, text} ->
               {text, counters}
-
-            {:attr, name} ->
-              {Map.get(attributes, name, ""), counters}
 
             {:counter, name} ->
               text = counters |> CounterState.value(name) |> Integer.to_string()
@@ -3327,6 +3325,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 :font_style,
                 :font_weight,
                 :font_face,
+                :line_height,
                 :_font_family_scope
               ]),
             orphans: Map.get(inherited_style, :orphans, 2),
@@ -5148,6 +5147,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           hints = if pseudo_element == nil, do: MathLayoutValidator.style_hints(node), else: []
 
+          style =
+            if Enum.any?(declarations, fn declaration ->
+                 {_property, value} = CssValueValidator.declaration_pair(declaration)
+                 NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.contains?(value)
+               end),
+               do:
+                 style
+                 |> Map.put(:_css_attributes, node.attributes)
+                 |> Map.put(
+                   :_css_attribute_case,
+                   if(Map.get(node, :namespace, :html) == :html, do: :html, else: :xml)
+                 ),
+               else: style
+
           if Map.has_key?(rules, :source_budget) do
             with {:ok, validated} <-
                    CssValueValidator.validate_source_cascade(
@@ -5176,7 +5189,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             with {:ok, style} <- apply_declarations(style, hints ++ declarations, rules.cache),
                  style = Map.drop(style, [:_cascade_ua, :_cascade_inherited]),
                  # Defaults contain no rem values; inherited lengths are already resolved.
-                 style = if(declarations == [], do: style, else: resolve_rem_values(style)),
+                 style =
+                   if(
+                     (declarations != [] or hints != []) and
+                       NativeElixirPdfUtilities.Validators.CssLengthValidator.requires_root_units?(
+                         hints ++ declarations
+                       ),
+                     do: resolve_rem_values(style),
+                     else: style
+                   ),
                  style =
                    style
                    |> resolve_font_relative_defaults()
@@ -5187,7 +5208,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      :_inherited_caption_side,
                      :_inherited_orphans,
                      :_inherited_widows,
-                     :_root_element,
                      :_inherited_font,
                      :_inherited_quotes,
                      :_inherited_css_transform,
@@ -5197,9 +5217,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      :_ua_font
                    ])
                    |> resolve_current_color_values(),
-                 style = style |> apply_border_styles() |> resolve_auto_margin_values(),
                  {:ok, style} <- put_font_face(style, rules.cache),
-                 {:ok, style} <- MathLayoutValidator.compute_style(style) do
+                 {:ok, style} <- MathLayoutValidator.compute_style(style),
+                 {:ok, style} <-
+                   if(declarations != [] or hints != [],
+                     do: CssValueValidator.compute_units(style),
+                     else: {:ok, style}
+                   ),
+                 style = style |> apply_border_styles() |> resolve_auto_margin_values() do
               # Native dropdown appearance uses the font's normal line height.
               # HTML's select rendering rules reset authored line-height here.
               # Native dropdown text includes one CSS pixel of internal leading
@@ -5329,6 +5354,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    do:
                      {:ok,
                       style
+                      |> then(fn style ->
+                        if is_map_key(style, :_css_attributes),
+                          do:
+                            Map.drop(style, [
+                              :_css_attributes,
+                              :_css_attribute_case,
+                              :_root_element
+                            ]),
+                          else: Map.delete(style, :_root_element)
+                      end)
                       |> Map.put(:_position_viewport, Map.get(rules, :position_viewport))
                       |> then(
                         &NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_skipped_input_style(

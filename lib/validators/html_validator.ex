@@ -1039,6 +1039,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
+  @doc "Invalidates custom-property cycles before conditional substitutions select their fallbacks."
+  @spec invalidate_custom_property_cycles(map()) ::
+          {:ok, map()} | :error | {:error, {atom(), map()}}
+  def invalidate_custom_property_cycles(properties) do
+    with {:ok, memo} <- custom_property_cycle_memo(properties, true) do
+      {:ok,
+       Map.new(properties, fn {name, value} ->
+         {name, if(Map.has_key?(memo, name), do: nil, else: value)}
+       end)}
+    end
+  end
+
   # Fallback references participate in the CSS dependency graph even when the
   # chosen property has a value. Only actual custom-property computation needs
   # this cycle result; source preparation retains the same dependencies as tokens.
@@ -6757,6 +6769,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       {:css_size_math, _} = calculation ->
         NativeElixirPdfUtilities.Validators.CssSizingValidator.valid_calculation?(calculation)
 
+      {:css_intrinsic_size, _} = intrinsic ->
+        depth == 0 and
+          NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator.valid?(intrinsic)
+
       {:min, [_ | _] = values} ->
         prepared_css_sizes?(values, depth + 1)
 
@@ -6785,44 +6801,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         ) :: {:ok, term()} | :error
   @spec parse_css_size(String.t(), atom(), number() | nil) :: {:ok, term()} | :error
   def parse_css_size(value, context \\ :size, em_scale \\ nil) do
-    parse_css_size_at_depth(value, context, em_scale, 0)
-  end
-
-  defp parse_css_size_at_depth(value, context, em_scale, depth) do
-    check_render_resource(:max_css_calculation_depth, depth, :style)
     normalized = String.trim(value)
 
     cond do
       context in [:width, :height] and String.downcase(normalized, :ascii) == "auto" ->
         {:ok, :auto}
 
+      String.downcase(normalized, :ascii) in ["min-content", "max-content", "fit-content"] or
+          String.starts_with?(String.downcase(normalized, :ascii), ["fit-content(", "calc-size("]) ->
+        NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator.prepare(normalized)
+
       Regex.match?(~r/^\d+(?:\.\d+)?%$/u, normalized) ->
         with {number, "%"} <- parse_css_number(normalized),
              do: {:ok, {:percent, number / 100}}
-
-      String.starts_with?(String.downcase(normalized), "min(") ->
-        reserve_render_resource(:max_css_work, byte_size(normalized), :style)
-
-        case Regex.named_captures(~r/^min\((?<sizes>.+)\)$/u, String.downcase(normalized)) do
-          %{"sizes" => sizes} ->
-            parsed_sizes =
-              sizes
-              |> split_css_comma()
-              |> Enum.map(&parse_css_size_at_depth(&1, :size, em_scale, depth + 1))
-
-            case Enum.all?(parsed_sizes, &match?({:ok, _size}, &1)) do
-              true ->
-                if Enum.any?(parsed_sizes, &match?({:ok, {:css_size_math, _}}, &1)),
-                  do: NativeElixirPdfUtilities.Validators.CssSizingValidator.prepare_math(value),
-                  else: {:ok, {:min, Enum.map(parsed_sizes, fn {:ok, size} -> size end)}}
-
-              false ->
-                NativeElixirPdfUtilities.Validators.CssSizingValidator.prepare_math(value)
-            end
-
-          _ ->
-            NativeElixirPdfUtilities.Validators.CssSizingValidator.prepare_math(value)
-        end
 
       true ->
         case parse_css_length(value, :nonnegative, em_scale) do
@@ -6852,9 +6843,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec parse_css_box_lengths(
           term(),
-          :margin | :nonnegative | {:source, :margin | :nonnegative | :length}
+          :margin
+          | :nonnegative
+          | {:source, :margin | :nonnegative | :length}
+          | {:computed, :margin | :padding}
         ) ::
-          {:ok, map()} | :error
+          {:ok, map()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def parse_css_box_lengths(value, context \\ :nonnegative) do
     case value do
       value when is_binary(value) ->
@@ -6862,6 +6856,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           case context do
             {:source, _} ->
               NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(value, false)
+
+            {:computed, _} ->
+              if String.contains?(value, ["(", "\\", "/*"]),
+                do:
+                  NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(
+                    value,
+                    false
+                  ),
+                else: String.split(value, ~r/[ \t\n\f\r]+/, trim: true)
 
             _ ->
               String.split(value, ~r/[ \t\n\f\r]+/, trim: true)
@@ -6871,10 +6874,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           tokens
           |> Enum.map(fn token ->
             case context do
-              :margin -> parse_css_margin(token)
-              :nonnegative -> parse_css_length(token, :nonnegative)
-              {:source, source_context} -> prepare_css_length_source(token, source_context)
-              _ -> :error
+              :margin ->
+                parse_css_margin(token)
+
+              :nonnegative ->
+                parse_css_length(token, :nonnegative)
+
+              {:source, source_context} ->
+                prepare_css_length_source(token, source_context)
+
+              {:computed, policy} ->
+                NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(token, policy)
+
+              _ ->
+                :error
             end
           end)
 
@@ -6946,7 +6959,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:ok, float() | {:rem, float()}} | :error
   def parse_css_length(value, context, em_scale \\ nil) do
     with true <- is_binary(value) and context in [:nonnegative, :margin],
-         {number, unit} <- parse_css_number(String.trim(value)) do
+         {number, unit} <- parse_css_number(String.trim(value)),
+         unit = normalize_css_unit(unit) do
       scale =
         case unit do
           "" -> if number == 0, do: 1.0
@@ -6955,6 +6969,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           "mm" -> 72.0 / 25.4
           "cm" -> 72.0 / 2.54
           "in" -> 72.0
+          "pc" -> 12.0
+          "q" -> 72.0 / 101.6
           "rem" -> 1.0
           "em" -> em_scale
           _ -> nil
@@ -6972,6 +6988,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       end
     else
       _ -> :error
+    end
+  end
+
+  @doc "Decodes escaped CSS dimension units and folds their ASCII case without changing other suffixes."
+  @spec normalize_css_unit(String.t()) :: String.t()
+  def normalize_css_unit(unit) do
+    if String.contains?(unit, "\\") do
+      case parse_css_identifier(unit) do
+        {:ok, name, ""} -> String.downcase(name, :ascii)
+        _ -> unit
+      end
+    else
+      String.downcase(unit, :ascii)
     end
   end
 
@@ -7978,23 +8007,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                     if Map.get(node, :positioned_children, []) == [] and
                          (alignment in [:baseline, :sub, :super, :top, :middle, :bottom] or
                             (is_number(alignment) and
-                               abs(alignment) <= Limits.get(:max_css_numeric_magnitude))) and
-                         Enum.all?([:padding, :margin, :border_widths], fn key ->
-                           case Map.fetch(style, key) do
-                             :error ->
-                               true
-
-                             {:ok, %{top: top, right: right, bottom: bottom, left: left}} ->
-                               Enum.all?([top, right, bottom, left], fn value ->
-                                 is_number(value) and
-                                   abs(value) <= Limits.get(:max_css_numeric_magnitude) and
-                                   (key == :margin or value >= 0)
-                               end)
-
-                             _ ->
-                               false
-                           end
-                         end) do
+                               abs(alignment) <= Limits.get(:max_css_numeric_magnitude))) do
                       if parent_display == :inline, do: :block_flow, else: :ok
                     else
                       Diagnostics.error(
@@ -8249,15 +8262,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp validate_auto_margin_context(node, _parent_display) do
     case node do
       %{style: style} when is_map(style) ->
+        source = Map.get(node, :tag, "element")
+
         with :ok <-
+               NativeElixirPdfUtilities.Validators.CssLengthValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
                NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_auto_margins(
                  style,
-                 Map.get(node, :tag, "element")
+                 source
                ),
              do:
                NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_calculations(
                  style,
-                 Map.get(node, :tag, "element")
+                 source
                )
 
       _ ->

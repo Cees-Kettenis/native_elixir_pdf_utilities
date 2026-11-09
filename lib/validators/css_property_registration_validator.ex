@@ -11,7 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
     CssCascadeValidator
   }
 
-  @types ~w(length number percentage length-percentage color image url integer angle time resolution
+  @types ~w(length number percentage length-percentage color string image url integer angle time resolution
     transform-function transform-list custom-ident)
   @font_units ~w(em ex ch cap ic lh rem rex rch rcap ric rlh)
   @viewport_units ~w(vw vh vi vb vmin vmax svw svh svi svb svmin svmax
@@ -96,7 +96,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
     end)
   end
 
-  defp syntax(value) do
+  @doc "Parses the shared CSS typed-value syntax used by registrations and attribute references."
+  @spec syntax(String.t()) :: {:ok, term()} | :error
+  def syntax(value) do
     case CssSyntaxValidator.components(value) do
       [%{kind: :string, text: value}] ->
         source = value |> HtmlValidator.decode_css_string() |> HtmlValidator.trim_css_whitespace()
@@ -146,6 +148,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
       _ ->
         :error
     end
+  end
+
+  @doc "Checks a typed value without resolving relative geometry or acquiring resources."
+  @spec matches_syntax?(term(), String.t()) :: boolean()
+  def matches_syntax?(syntax, value) do
+    not CssSyntaxValidator.invalid_value?(CssSyntaxValidator.components(value)) and
+      match?(
+        {:ok, _},
+        compute(%{syntax: syntax}, value, %{syntax_only: true, registration_phase: :provisional})
+      )
   end
 
   @doc "Computes a registered value through its declared type using the actual element's metrics."
@@ -240,44 +252,68 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
   @spec resolve(map(), map(), [map()], :atomics.atomics_ref(), atom()) ::
           {:ok, map(), map()} | {:error, {atom(), map()}}
   def resolve(properties, context, declarations, budget, phase) do
-    registrations = Map.get(context, :_property_registrations, %{})
+    with {:ok, properties} <-
+           NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.prepare_properties(
+             properties,
+             context,
+             budget
+           ) do
+      registrations = Map.get(context, :_property_registrations, %{})
 
-    if registrations == %{} do
-      with {:ok, values} <- HtmlValidator.compute_custom_properties(properties, budget),
-           do: {:ok, values, properties}
-    else
-      context = Map.put(context, :registration_phase, phase)
-      transform = &compute_registered(&1, &2, registrations, context)
+      if registrations == %{} do
+        with {:ok, values} <-
+               HtmlValidator.compute_custom_properties(properties, budget, fn _name, value ->
+                 NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.resolve_custom_value(
+                   value,
+                   Map.put(context, :_custom_properties, properties),
+                   budget
+                 )
+               end),
+             do: {:ok, values, properties}
+      else
+        context = Map.put(context, :registration_phase, phase)
 
-      with {:ok, values} <- HtmlValidator.compute_custom_properties(properties, budget, transform),
-           {:ok, invalid, metric_context} <-
-             if(phase == :provisional,
-               do:
-                 dependency_cycles(
-                   properties,
-                   values,
-                   registrations,
-                   declarations,
-                   context,
+        transform = fn name, value ->
+          with {:ok, value} <-
+                 NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.resolve_custom_value(
+                   value,
+                   Map.put(context, :_custom_properties, properties),
                    budget
                  ),
-               else: {:ok, MapSet.new(), context}
-             ) do
-        if MapSet.size(invalid) == 0 and metric_context == context do
-          {:ok, values, properties}
-        else
-          properties =
-            Map.new(properties, fn {name, value} ->
-              {name, if(MapSet.member?(invalid, name), do: nil, else: value)}
-            end)
+               do: compute_registered(name, value, registrations, context)
+        end
 
-          with {:ok, values} <-
-                 HtmlValidator.compute_custom_properties(
-                   properties,
-                   budget,
-                   &compute_registered(&1, &2, registrations, metric_context)
-                 ),
-               do: {:ok, values, properties}
+        with {:ok, values} <-
+               HtmlValidator.compute_custom_properties(properties, budget, transform),
+             {:ok, invalid, metric_context} <-
+               if(phase == :provisional,
+                 do:
+                   dependency_cycles(
+                     properties,
+                     values,
+                     registrations,
+                     declarations,
+                     context,
+                     budget
+                   ),
+                 else: {:ok, MapSet.new(), context}
+               ) do
+          if MapSet.size(invalid) == 0 and metric_context == context do
+            {:ok, values, properties}
+          else
+            properties =
+              Map.new(properties, fn {name, value} ->
+                {name, if(MapSet.member?(invalid, name), do: nil, else: value)}
+              end)
+
+            with {:ok, values} <-
+                   HtmlValidator.compute_custom_properties(
+                     properties,
+                     budget,
+                     &compute_registered(&1, &2, registrations, metric_context)
+                   ),
+                 do: {:ok, values, properties}
+          end
         end
       end
     end
@@ -473,7 +509,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
         %{kind: :token, text: text} ->
           case HtmlValidator.parse_css_number(text) do
             {_, unit} ->
-              {[unit | units], color}
+              {[HtmlValidator.normalize_css_unit(unit) | units], color}
 
             :error ->
               {units,
@@ -510,7 +546,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
       Map.put(
         context,
         :registration_type_check,
-        deferred and Map.get(context, :registration_phase) == :provisional
+        Map.get(context, :syntax_only, false) or
+          (deferred and Map.get(context, :registration_phase) == :provisional)
       )
 
     unavailable_metrics =
@@ -526,6 +563,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
         :error
 
       Enum.any?(units, &(&1 in @viewport_units)) and
+        not Map.get(context, :syntax_only, false) and
         not Map.get(context, :independent, false) and
           not (is_number(get_in(context, [:_position_viewport, :width])) and
                    is_number(get_in(context, [:_position_viewport, :height]))) ->
@@ -580,6 +618,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
                   :error
               end
 
+            {:type, "string"} ->
+              values =
+                value
+                |> CssSyntaxValidator.components()
+                |> Enum.reject(
+                  &(&1.kind == :comment or Regex.match?(~r/\A[ \t\r\n\f]+\z/, &1.text))
+                )
+
+              case values do
+                [%{kind: :string} = string] -> {:ok, CssSyntaxValidator.serialize(string)}
+                _ -> :error
+              end
+
             {:type, image} when image in ["image", "url"] ->
               case {CssSyntaxValidator.components(value),
                     HtmlValidator.parse_background_image_reference(value)} do
@@ -629,6 +680,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
                 end
               end
 
+            {:type, scalar} when scalar in ["number", "integer"] ->
+              with {:ok, number} <-
+                     CssMathValidator.scalar(
+                       value,
+                       if(scalar == "integer", do: :integer, else: :number),
+                       environment(context)
+                     ),
+                   do: {:ok, to_string(number)}
+
             {:type, numeric} ->
               case CssMathValidator.evaluate(value, environment(context)) do
                 {:ok, number, type} when is_number(number) ->
@@ -638,14 +698,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
 
                     {"length", empty} when number == 0 and map_size(empty) == 0 ->
                       {:ok, "0px"}
-
-                    {"number", empty} when map_size(empty) == 0 ->
-                      {:ok, to_string(number)}
-
-                    {"integer", empty} when map_size(empty) == 0 ->
-                      if Regex.match?(~r/\A[+-]?[0-9]+\z/, value) or String.contains?(value, "("),
-                        do: {:ok, to_string(floor(number + 0.5))},
-                        else: :error
 
                     {"percentage", %{percentage: 1}} ->
                       {:ok, "#{number}%"}

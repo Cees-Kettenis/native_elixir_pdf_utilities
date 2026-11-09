@@ -851,7 +851,7 @@
     "directory": "html_to_pdf/browser_parity",
     "page_mode": "named",
     "page_css": "size:612pt 792pt;margin:0",
-    "html_sha256": "ac3e767c2c505e416f78ccea4da53bbeb4beef7f9d3fef282068e1b49c57fd14",
+    "html_sha256": "1ed961f0b19608b589d44fd01fb06be5464dcc7c588ddbd518004021ea4f8382",
     "proof": {
       "browser": "Chromium 155.0.8059.79 built on Debian GNU/Linux 13 (trixie)",
       "rasterizer": "pdftoppm version 25.03.0\nCopyright 2005-2025 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC",
@@ -909,7 +909,7 @@
       },
       {
         "name": "css_calculated_dimensions_inline_padding.html",
-        "sha256": "e998134935b7296b51bb7364e413564bf4a74aee11391e4aa5da9d24d491b9e8",
+        "sha256": "a18d2f0e137c9fe8b02ba987127d7ebb860ee4244443cdcea85ed711f0ec81b5",
         "page_count": 1,
         "page_css": "size:300pt 220pt;margin:0",
         "media_boxes": [

@@ -10,8 +10,26 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
-  @forward_range ~r/\A(width|height|resolution|aspect-ratio)\s*(<=|>=|<|>|=)\s*(.+)\z/s
-  @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|resolution|aspect-ratio)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
+  @forward_range ~r/\A(width|height|resolution|aspect-ratio|color|color-index|monochrome|grid)\s*(<=|>=|<|>|=)\s*(.+)\z/s
+  @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|resolution|aspect-ratio|color|color-index|monochrome|grid)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
+
+  # Static print output uses sRGB, eight bits per component, no device session.
+  @numeric_features %{"color" => 8, "color-index" => 0, "monochrome" => 0, "grid" => 0}
+  @discrete_features %{
+    "prefers-color-scheme" => {"light", ~w(light dark)},
+    "prefers-contrast" => {"no-preference", ~w(no-preference more less custom)},
+    "prefers-reduced-motion" => {"no-preference", ~w(no-preference reduce)},
+    "prefers-reduced-transparency" => {"no-preference", ~w(no-preference reduce)},
+    "prefers-reduced-data" => {"no-preference", ~w(no-preference reduce)},
+    "forced-colors" => {"none", ~w(none active)},
+    "inverted-colors" => {"none", ~w(none inverted)},
+    "dynamic-range" => {"standard", ~w(standard high)},
+    "color-gamut" => {"srgb", ~w(srgb p3 rec2020)},
+    "update" => {"none", ~w(none slow fast)},
+    "overflow-block" => {"paged", ~w(none scroll paged)},
+    "overflow-inline" => {"none", ~w(none scroll)},
+    "scripting" => {"none", ~w(none initial-only enabled)}
+  }
 
   @page_candidate Regex.compile!(
                     "#{HtmlValidator.css_opaque_pattern()}(*SKIP)(*F)|@page\\b",
@@ -461,6 +479,18 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
             orientation == if(context.width > context.height, do: "landscape", else: "portrait"),
           else: :unknown
 
+      [_, name, expected] when is_map_key(@discrete_features, name) ->
+        {actual, allowed} = Map.fetch!(@discrete_features, name)
+
+        case HtmlValidator.parse_css_identifier(HtmlValidator.trim_css_whitespace(expected)) do
+          {:ok, expected, ""} ->
+            expected = String.downcase(expected, :ascii)
+            if expected in allowed, do: actual == expected, else: :unknown
+
+          _ ->
+            :unknown
+        end
+
       [_, name, expected] ->
         {comparison, name} =
           cond do
@@ -511,11 +541,26 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
           _ ->
             case value do
-              "width" -> context.width > 0
-              "height" -> context.height > 0
-              "aspect-ratio" -> context.width > 0 and context.height > 0
-              name when name in ~w(resolution color) -> true
-              _ -> :unknown
+              "width" ->
+                context.width > 0
+
+              "height" ->
+                context.height > 0
+
+              "aspect-ratio" ->
+                context.width > 0 and context.height > 0
+
+              "resolution" ->
+                true
+
+              name when is_map_key(@numeric_features, name) ->
+                Map.fetch!(@numeric_features, name) > 0
+
+              name when is_map_key(@discrete_features, name) ->
+                elem(Map.fetch!(@discrete_features, name), 0) not in ["none", "no-preference"]
+
+              _ ->
+                :unknown
             end
         end
     end
@@ -523,6 +568,11 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
   defp feature_values(name, expected, context) do
     case name do
+      name when is_map_key(@numeric_features, name) ->
+        with {:ok, expected} <-
+               NativeElixirPdfUtilities.Validators.CssMathValidator.scalar(expected, :integer),
+             do: {:ok, Map.fetch!(@numeric_features, name), expected}
+
       name when name in ~w(width height) ->
         with {:ok, expected} <- evaluated_length(expected, context, :signed),
              do: {:ok, Map.fetch!(context, String.to_existing_atom(name)), expected}

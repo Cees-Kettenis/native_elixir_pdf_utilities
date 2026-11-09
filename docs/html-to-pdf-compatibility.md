@@ -60,8 +60,22 @@ and painting remain gated. New pseudo-elements such as `::first-line`, `::first-
 `::placeholder` and control parts have selector ownership, but return
 `:not_implemented` when selected until their layout and painting are available.
 
-Support is a subset of browser CSS. Common body lengths include `pt`, `px`,
-`mm`, `cm`, `in`, `rem` and supported percentages.
+Support is a subset of browser CSS. Lengths include physical units, selected-font
+`em`, `ex`, `ch`, `cap`, `ic`, `lh` and their root-relative forms. Physical and
+logical viewport units, including small, large and dynamic forms, use the same
+static print viewport. Child documents use their own viewport.
+
+Shared typed arithmetic supports calculated dimensions, box edges, text metrics,
+positions and transforms. Font units compute on the declaring element; percentages
+retain the consuming box's basis. Intrinsic dimensions support `min-content`,
+`max-content`, `fit-content` and static `calc-size()` calculations.
+
+Typed `attr()` supports raw strings, numeric units, `type()` and fallbacks.
+Attribute substitutions cannot supply resource URLs. `env()` supplies zero safe-area
+insets and a preferred text scale of one; unknown values require a fallback.
+Print conditions use 8-bit color, light colors and unchanged accessibility
+preferences. Font support queries report the formats and features the renderer
+can actually use. Imports and live device state remain excluded.
 
 Ordinary HTML text paints Unicode line/paragraph separators as spaces, matching Chromium.
 Ordinary newlines follow `white-space`.

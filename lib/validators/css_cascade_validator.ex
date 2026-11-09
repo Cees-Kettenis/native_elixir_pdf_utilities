@@ -31,7 +31,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
               [:line_height],
               [:line_height_normal],
               [:line_height_multiplier],
-              [:line_height_explicit]
+              [:line_height_explicit],
+              [:_line_height_parent],
+              [:_line_height_root]
             ],
             "display" => [[:display], [:_math_display], [:_math_formatting], [:_ruby_annotation]],
             "text-align" => [[:text_align], [:_text_align_initial]],
@@ -375,7 +377,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
       Enum.map(declarations, fn declaration ->
         case NativeElixirPdfUtilities.Validators.CssValueValidator.declaration_pair(declaration) do
           {_property, value} ->
-            HtmlValidator.resolve_css_variables(value, context._custom_properties, %{}, budget)
+            NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.resolve_value(
+              value,
+              context,
+              budget
+            )
 
           nil ->
             {:error, :invalid_document}

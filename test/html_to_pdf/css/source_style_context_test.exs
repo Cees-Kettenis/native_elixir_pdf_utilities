@@ -788,7 +788,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     {_, nil, %{style: first}} = Enum.find(contexts, fn {node, _, _} -> node.tag == "p" end)
     {_, nil, %{style: own}} = Enum.find(contexts, fn {node, _, _} -> node.tag == "div" end)
     assert first.width == 40.0
-    assert own.width == {:min, [20.0, 30.0]} and own.height == 30.0
+
+    assert NativeElixirPdfUtilities.HtmlToPdf.Layout.resolve_content_size(own, :width, 100, nil) ==
+             20.0
+
+    assert own.height == 30.0
     assert {:ok, result, _} = collect(dom, [".absent{width:2em}"])
 
     pending =

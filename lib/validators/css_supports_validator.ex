@@ -130,13 +130,33 @@ defmodule NativeElixirPdfUtilities.Validators.CssSupportsValidator do
       %{kind: :block, opener: opener, closed: true} ->
         case HtmlValidator.parse_css_identifier(opener) do
           {:ok, name, "("} ->
-            if String.downcase(name, :ascii) == "selector" do
-              selector =
-                binary_part(term.text, byte_size(opener), term.length - byte_size(opener) - 1)
+            argument =
+              binary_part(term.text, byte_size(opener), term.length - byte_size(opener) - 1)
+              |> HtmlValidator.trim_css_whitespace()
 
-              match?({:ok, _}, CssSelectorValidator.parse(selector))
-            else
-              false
+            case String.downcase(name, :ascii) do
+              "selector" ->
+                match?({:ok, _}, CssSelectorValidator.parse(argument))
+
+              name when name in ["font-tech", "font-format"] ->
+                case HtmlValidator.parse_css_identifier(argument) do
+                  {:ok, value, ""} ->
+                    if name == "font-tech",
+                      do:
+                        NativeElixirPdfUtilities.Validators.CssFontFaceValidator.supports_technology?(
+                          value
+                        ),
+                      else:
+                        NativeElixirPdfUtilities.Validators.CssFontFaceValidator.supports_format?(
+                          value
+                        )
+
+                  _ ->
+                    false
+                end
+
+              _ ->
+                false
             end
 
           _ ->

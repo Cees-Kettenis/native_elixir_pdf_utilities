@@ -30,6 +30,14 @@
           color: #334155;
         }
       }
+      /* The existing body already selects Liberation Sans. Set the same root
+         face for root-metric cases; extension proofs retain every old pixel. */
+      html {font-family:"Liberation Sans",sans-serif;font-size:12pt}
+      #root-unit-values {position:absolute;left:36pt;top:340pt;width:round(up,calc(4rch + 2rex + 2rcap),6pt);height:1rlh;background:#c6dde9;font-size:10pt}
+      /* Whole-document viewport and media queries retain their original capture. */
+      #viewport-values {position:absolute;left:36pt;top:300pt;width:calc(2vw + 2vh + 2svw + 2svh + 2lvw + 2lvh + 2dvw + 2dvh + 2vi + 2vb);height:20pt;background:#bca7ce;font-size:10pt}
+      #condition-values {position:absolute;left:210pt;top:300pt;width:90pt;height:20pt;background:red;font-size:10pt}
+      @media print and (color:8) and (prefers-color-scheme:light) { @supports font-format(truetype) { #condition-values {background:#83b88f} } }
     </style>
   </head>
   <body>
@@ -38,5 +46,8 @@
       <p>Local CSS font with print-only presentation.</p>
       <p class="unicode-fallback">Fallback glyphs: café © α €</p>
     </main>
+    <div id="root-unit-values">Root units</div>
+    <div id="viewport-values">Viewport</div>
+    <div id="condition-values">Print conditions</div>
   </body>
 </html>

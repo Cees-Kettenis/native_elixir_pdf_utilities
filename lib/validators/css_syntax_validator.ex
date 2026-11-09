@@ -127,7 +127,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
     end)
   end
 
-  defp serialize(value) do
+  @doc "Serializes a recovered component with closed blocks and strings and CSS replacement characters."
+  @spec serialize(map()) :: String.t()
+  def serialize(value) do
     case value do
       %{kind: :block, opener: opener, children: children} ->
         closing =
@@ -149,7 +151,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
     end
   end
 
-  defp invalid_value?(components) do
+  @doc "Rejects malformed CSS value tokens through the shared syntax recovery rules."
+  @spec invalid_value?([map()]) :: boolean()
+  def invalid_value?(components) do
     Enum.any?(components, fn value ->
       case value do
         %{kind: :bad_string} ->

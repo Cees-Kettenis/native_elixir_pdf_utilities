@@ -170,7 +170,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputTest do
   test "shared math depth exhaustion is recoverable and source-specific" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_media_query_depth: 1})
+    Limits.install(%{previous | max_css_calculation_depth: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=color value='rgb(calc(calc(10)) 20 30)'>",
@@ -178,7 +178,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputTest do
              )
 
     assert diagnostic.stage == :style
-    assert diagnostic.message =~ "max_media_query_depth"
+    assert diagnostic.message =~ "max_css_calculation_depth"
     assert diagnostic.source == "input/color"
     Limits.install(previous)
 

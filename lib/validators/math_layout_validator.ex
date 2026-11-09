@@ -519,15 +519,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             end
 
           "mathsize" when value not in ["inherit", "math"] ->
-            case HtmlValidator.parse_css_number(value) do
-              {number, "ex"} when number >= 0 ->
-                [{"font-size", value}]
-
-              _ ->
-                case parse_font_size(value, %{font_size: 1, _root_font_size: 1}) do
-                  {:ok, _} -> [{"font-size", value}]
-                  _ -> []
-                end
+            case NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(value, :padding) do
+              {:ok, _} -> [{"font-size", value}]
+              _ -> []
             end
 
           "displaystyle" ->
@@ -579,16 +573,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                 else: {:ok, %{width: size, _math_width_set: true}}
 
             _ ->
-              valid? =
-                match?({:ok, _}, HtmlValidator.parse_css_length(value, :nonnegative, 1)) or
-                  case HtmlValidator.parse_css_number(value) do
-                    {number, "ex"} -> number >= 0
-                    _ -> false
-                  end
-
-              if valid?,
-                do: {:ok, %{width: {:math_padded_length, value}, _math_width_set: true}},
-                else: :error
+              :error
           end
         else
           :error
@@ -689,17 +674,6 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         size = Map.get(style, :_math_context, %{size: style.font_size}).size
 
         case HtmlValidator.parse_css_number(value) do
-          {_number, "ex"} ->
-            parent =
-              Map.get(style, :_math_context, %{font: Map.get(style, :font_face), size: size})
-
-            with {:ok, value} <- math_length(value, %{font_face: parent.font, font_size: size}),
-                 true <- value >= 0 do
-              {:ok, value}
-            else
-              _ -> :error
-            end
-
           {number, "%"} when number >= 0 ->
             case HtmlValidator.parse_css_number(value, size / 100) do
               {scaled, "%"} -> {:ok, scaled}
@@ -708,8 +682,40 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
           _ ->
             case HtmlValidator.parse_css_length(value, :nonnegative, size) do
-              {:ok, {:rem, ratio}} -> {:ok, ratio * style._root_font_size}
-              result -> result
+              {:ok, {:rem, ratio}} ->
+                {:ok, ratio * style._root_font_size}
+
+              :error ->
+                result =
+                  with {:ok, calculation} <-
+                         NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(
+                           value,
+                           :padding
+                         ),
+                       do:
+                         NativeElixirPdfUtilities.Validators.CssLengthValidator.resolve(
+                           calculation,
+                           size,
+                           style
+                           |> Map.put(:font_size, size)
+                           |> Map.put(
+                             :font_face,
+                             Map.get(style, :_math_context, %{font: Map.get(style, :font_face)}).font
+                           )
+                           |> then(fn context ->
+                             Map.put_new_lazy(context, :line_height, fn ->
+                               HtmlValidator.normal_line_height(context)
+                             end)
+                           end)
+                         )
+
+                case result do
+                  {:error, {:invalid_layout, _}} -> :error
+                  other -> other
+                end
+
+              result ->
+                result
             end
         end
     end
@@ -3422,19 +3428,19 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @spec math_length(term(), map()) ::
           {:ok, term()} | :error | {:error, Diagnostics.detailed_error()}
   def math_length(value, style) do
-    case HtmlValidator.parse_css_number(value) do
-      {_number, "ex"} ->
-        with {:ok, x_height} <- FontValidator.prepare_x_height(style.font_face) do
-          scale = x_height * style.font_size
+    case HtmlValidator.parse_css_length(value, :margin, style.font_size) do
+      :error ->
+        with {:ok, calculation} <-
+               NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(value, :margin),
+             do:
+               NativeElixirPdfUtilities.Validators.CssLengthValidator.resolve(
+                 calculation,
+                 nil,
+                 style
+               )
 
-          case HtmlValidator.parse_css_number(value, scale) do
-            {number, "ex"} -> {:ok, number}
-            _ -> :error
-          end
-        end
-
-      _ ->
-        HtmlValidator.parse_css_length(value, :margin, style.font_size)
+      result ->
+        result
     end
   end
 
