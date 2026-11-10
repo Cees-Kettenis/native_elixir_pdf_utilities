@@ -45,7 +45,7 @@ or page furniture. Unsupported widget transforms return diagnostics.
 | --- | --- |
 | Selectors | Namespaces, tags, classes, IDs, attributes, descendant/child/sibling combinators, `:is()`/`:where()`/`:not()`/`:has()`, filtered positions, `:lang()`/`:dir()` and initial control/link/disclosure states |
 | Styles | Cascade, inheritance, CSS-wide keywords, `all`, `!important`, layers, nesting, `@scope`, custom properties, `@property`, `var()` and `currentColor` |
-| Layout | Block, inline, inline-block, flex, grid, sizing, margins, padding and gaps |
+| Layout | Block, inline, inline-block/table, flex, grid, flow-root, contents, logical box axes, sizing, margins, padding and gaps |
 | Text | Fonts, alignment, spacing, wrapping, whitespace, list markers and solid text decorations |
 | Boxes | Colors, borders, rounded corners and background images |
 | Generated content | `::before`, `::after`, strings, `attr()`, `counter()` and counter reset/increment/set controls |
@@ -101,10 +101,32 @@ contexts cannot invent missing font or viewport metrics.
 
 ### Positioning and transforms
 
-Static, relative and absolute positioning and 2D `transform` lists are supported.
-Transforms move artwork without reflowing surrounding content. Fixed positioning
-is limited to MathML owners and static popover artwork. Floats, 3D transforms,
-perspective and animations are unsupported.
+Static, relative, absolute, fixed and printed sticky positioning are supported.
+Fixed artwork repeats on each page. Native controls appear on their first page only.
+A transformed containing block keeps its fixed
+children local. Sticky uses the initial print scrollport before pagination and
+retains its normal flow allocation. No scrolling is simulated. Transforms move
+artwork without reflow. Isolation, layout/paint containment and positioned stacking
+contexts preserve paint order. Full containment, floats, 3D transforms, perspective
+and animations are unsupported. Child-document form repetition restrictions still apply.
+
+Logical sizes, edges and insets follow `writing-mode` and `direction` during the
+cascade. These box axes do not provide vertical glyph orientation or full bidi
+text layout. Aspect ratios use the selected content or border box, and definite
+ratio-derived heights resolve descendant percentages. Flow roots contain margins;
+ordinary blocks collapse adjoining positive and negative margin sets.
+
+`visibility:hidden` preserves allocation and allows visible descendants;
+`force-hidden` suppresses the entire subtree. Hidden artwork creates no links or
+fields. Collapsed table tracks retain intrinsic sizing before removal; collapsed
+flex items retain a cross-axis strut. CSS table and ruby roles gain anonymous owners.
+
+Overflow axes and clip margins keep paint and annotation coordinates together.
+Text ellipses respect shaped clusters and painted positions. Static `line-clamp`
+uses the 21 March 2023 Overflow 4 grammar, including `max-lines`, `block-ellipsis`
+and `continue:discard`. Ordinary descendants share the line budget; independent
+formatting contexts keep their own line counts. `max-lines` alone does not force
+page breaks. These features do not add interactive scrolling.
 
 ## Render options
 

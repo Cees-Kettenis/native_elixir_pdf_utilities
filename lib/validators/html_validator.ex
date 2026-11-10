@@ -6497,28 +6497,74 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec parse_aspect_ratio(String.t()) :: {:ok, float()} | :error
+  @spec parse_aspect_ratio(String.t()) :: {:ok, number() | :auto | {:auto, number()}} | :error
   def parse_aspect_ratio(value) do
-    tokens = value |> String.trim() |> String.split("/", trim: true) |> Enum.map(&String.trim/1)
+    terms = NativeElixirPdfUtilities.Validators.CssMathValidator.component_terms(value, true)
 
-    case tokens do
-      [ratio] ->
-        case parse_css_number(ratio) do
-          {number, ""} when number > 0 -> {:ok, number}
-          _ -> :error
+    {autos, ratio_terms} =
+      Enum.split_with(terms, fn term ->
+        case parse_css_identifier(term) do
+          {:ok, name, ""} -> String.downcase(name, :ascii) == "auto"
+          _ -> false
         end
+      end)
 
-      [width, height] ->
-        with {width, ""} when width > 0 <- parse_css_number(width),
-             {height, ""} when height > 0 <- parse_css_number(height) do
-          ratio = aspect_ratio_dimension(width, height, :height, :css)
-          if ratio > 0, do: {:ok, ratio}, else: :error
-        else
-          _ -> :error
-        end
+    ratio =
+      case ratio_terms do
+        [] when length(autos) == 1 ->
+          {:ok, :auto}
 
-      _ ->
-        :error
+        [width] ->
+          case NativeElixirPdfUtilities.Validators.CssMathValidator.scalar_in_range(
+                 width,
+                 :number,
+                 0,
+                 nil
+               ) do
+            {:ok, number} when number == 0 -> {:ok, :auto}
+            {:ok, number} when number > 0 -> {:ok, number}
+            _ -> :error
+          end
+
+        [width, "/", height] ->
+          with {:ok, width} <-
+                 NativeElixirPdfUtilities.Validators.CssMathValidator.scalar_in_range(
+                   width,
+                   :number,
+                   0,
+                   nil
+                 ),
+               {:ok, height} <-
+                 NativeElixirPdfUtilities.Validators.CssMathValidator.scalar_in_range(
+                   height,
+                   :number,
+                   0,
+                   nil
+                 ) do
+            if width == 0 or height == 0 do
+              {:ok, :auto}
+            else
+              ratio = aspect_ratio_dimension(width, height, :height, :css)
+              if ratio > 0, do: {:ok, ratio}, else: :error
+            end
+          else
+            _ -> :error
+          end
+
+        _ ->
+          :error
+      end
+
+    ratio =
+      if autos != [] and hd(terms) not in autos and List.last(terms) not in autos,
+        do: :error,
+        else: ratio
+
+    case {autos, ratio} do
+      {[], {:ok, value}} -> {:ok, value}
+      {[_], {:ok, :auto}} -> {:ok, :auto}
+      {[_], {:ok, value}} -> {:ok, {:auto, value}}
+      _ -> :error
     end
   end
 
@@ -8206,7 +8252,54 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :ok
       end
 
-    with :ok <- gauge_result,
+    geometry_result =
+      case node do
+        %{style: style}
+        when not is_map_key(style, :writing_mode) and
+               not is_map_key(style, :direction) and not is_map_key(style, :visibility) and
+               not is_map_key(style, :_flow_root) and not is_map_key(style, :_display_outer) and
+               not is_map_key(style, :_display_role) and not is_map_key(style, :_force_hidden) and
+               not is_map_key(style, :isolation) and
+               not is_map_key(style, :contain) and not is_map_key(style, :_stacking_item) and
+               not is_map_key(style, :overflow_x) and not is_map_key(style, :overflow_y) and
+               not is_map_key(style, :overflow_clip_margin) and
+               not is_map_key(style, :text_overflow) and
+               not is_map_key(style, :block_ellipsis) and not is_map_key(style, :max_lines) and
+               not is_map_key(style, :continue) and not is_map_key(style, :aspect_ratio) and
+               not is_map_key(style, :_containing_direction) and
+               not is_map_key(style, :_containing_writing_mode) ->
+          :ok
+
+        %{style: style} when is_map(style) ->
+          source = Map.get(node, :tag, "text")
+
+          with :ok <-
+                 NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_ratio(
+                   style,
+                   source
+                 ),
+               :ok <-
+                 NativeElixirPdfUtilities.Validators.CssDisplayValidator.validate_style(
+                   style,
+                   source
+                 ),
+               :ok <-
+                 NativeElixirPdfUtilities.Validators.CssStackingValidator.validate_style(
+                   style,
+                   source
+                 ),
+               do:
+                 NativeElixirPdfUtilities.Validators.CssOverflowValidator.validate_style(
+                   style,
+                   source
+                 )
+
+        _ ->
+          :ok
+      end
+
+    with :ok <- geometry_result,
+         :ok <- gauge_result,
          :ok <- table_border_result,
          :ok <- heading_result,
          :ok <- caption_result,

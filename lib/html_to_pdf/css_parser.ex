@@ -69,7 +69,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   @css_opaque_pattern HtmlValidator.css_opaque_pattern()
   @page_rule_regex Regex.compile!(
-                     "#{@css_opaque_pattern}(*SKIP)(*F)|@page\\s*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}])*)\\}",
+                     "#{@css_opaque_pattern}(*SKIP)(*F)|@page\\s*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}])*+)\\}",
                      "ui"
                    )
   @page_rule_candidate_regex Regex.compile!(
@@ -77,11 +77,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                                "ui"
                              )
   @font_face_rule_regex Regex.compile!(
-                          "#{@css_opaque_pattern}(*SKIP)(*F)|@font-face\\s*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}])*)\\}",
+                          "#{@css_opaque_pattern}(*SKIP)(*F)|@font-face\\s*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}])*+)\\}",
                           "ui"
                         )
   @css_block_regex Regex.compile!(
-                     "#{@css_opaque_pattern}(*SKIP)(*F)|\\{(?:#{@css_opaque_pattern}|[^{}])*\\}",
+                     "#{@css_opaque_pattern}(*SKIP)(*F)|\\{(?:#{@css_opaque_pattern}|[^{}])*+\\}",
                      "u"
                    )
 

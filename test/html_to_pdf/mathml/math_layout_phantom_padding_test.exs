@@ -382,7 +382,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
 
     assert {:error, {:invalid_css, diagnostic}} =
              HtmlToPdf.render(
-               "<math><mphantom style='visibility:visible'><mn>1</mn></mphantom></math>"
+               "<math><mphantom style='visibility:invalid'><mn>1</mn></mphantom></math>"
              )
 
     assert diagnostic.stage == :css and diagnostic.message =~ "visibility"
@@ -393,5 +393,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
 
     assert diagnostic.message =~ "max_font_math_work"
     assert diagnostic.operation == :measure_math
+  end
+
+  test "visibility rebuilds logical text through native groups without hidden glyphs" do
+    for content <- [
+          "<mtext><span style='display:inline-flex'><span>A</span><span>B</span></span></mtext>",
+          "<mtext><svg width='70' height='24'><text x='1' y='18' font-family='DejaVu Sans'>Svg</text></svg></mtext>",
+          "<mtext><span style='display:inline-block;width:30pt'>Native</span></mtext>",
+          "<mtext><iframe style='width:80pt;height:20pt' srcdoc=\"<p>Child</p>\"></iframe></mtext>",
+          "<mrow style='background:yellow'><mn>2</mn></mrow>",
+          "<mfrac><mn>2</mn><mn>3</mn></mfrac><mspace width='2pt' />",
+          "<mtext>ffi</mtext><mo>&#x2062;</mo>"
+        ] do
+      assert {:ok, measured} =
+               styled_math("<math><mn style='visibility:hidden'>9</mn>#{content}</math>")
+
+      refute measured.actual_text =~ "9"
+
+      if String.contains?(content, "<svg"),
+        do: assert(measured.actual_text == ""),
+        else: assert(measured.actual_text != "", content)
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<math><mn style='visibility:hidden'>9</mn>#{content}</math>",
+                 system_font_discovery: false
+               )
+
+      assert is_binary(pdf)
+    end
   end
 end

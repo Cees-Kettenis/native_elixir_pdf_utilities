@@ -21,4 +21,46 @@ html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
 <section id="computed_custom_properties" style="position:absolute;left:0pt;top:260pt;width:240pt;height:180pt;box-sizing:border-box"><div style="--base:red;--alias:var(--base)"><div class="child" style="--base:blue"></div><div class="child" style="--base:green;--alias:var(--base)"></div></div></section>
 <!-- quoted_at_rules.html, original canvas 360 x 180 pt -->
 <section id="quoted_at_rules" style="position:absolute;left:240pt;top:260pt;width:360pt;height:180pt;box-sizing:border-box"><p></p></section>
+<!-- Flexbox 1 (2025-10-14) preserves the collapsed item's cross-axis strut. -->
+<section style="position:absolute;left:0pt;top:240pt;width:240pt;height:20pt"><div data-collapse-reference="strut" style="display:flex;width:100pt;background:green"><div style="visibility:collapse;width:40pt;height:16pt"></div><div style="width:20pt;height:8pt;background:blue"></div></div></section>
+<!-- CSS 2.1 table collapse keeps intrinsic sizing and removes collapsed tracks. -->
+<section style="position:absolute;left:0pt;top:180pt;width:240pt;height:60pt">
+<div style="position:absolute;left:190pt;top:30pt;font:8pt sans-serif;line-height:10pt"><span style="display:ruby-base">Base</span><span style="display:ruby-text;font-size:4pt">Read</span></div>
+<div style="position:absolute;left:190pt;top:0;width:50pt;font-size:8pt;line-height:10pt">L<table style="display:inline-table;width:24pt;border-spacing:0"><tr><td style="padding:0;vertical-align:baseline;background:#eee">A</td><td style="padding:0;vertical-align:baseline;background:#eee">B</td></tr></table>R</div>
+<table style="position:absolute;left:0pt;top:0pt;table-layout:fixed;width:80pt;border-spacing:0"><colgroup><col style="visibility:collapse"><col></colgroup><tr><td style="padding:0;height:12pt;background:red"></td><td style="padding:0;height:12pt;background:blue"></td></tr></table>
+<table style="position:absolute;left:100pt;top:0pt;width:80pt;border-spacing:0"><tr><td style="padding:0;height:12pt;background:red"></td></tr><tr style="visibility:collapse"><td style="padding:0;height:12pt;background:blue"></td></tr><tr><td style="padding:0;height:12pt;background:green"></td></tr></table>
+</section>
+<!-- CSS Logical 1 (2025-12-04), Display 4 (2025-11-06), Positioned/Overflow 3
+     (2025-10-07), and Overflow 4 (2023-03-21). These regions reuse blank
+     sheet space; the four original samples and their source inputs stay intact. -->
+<section style="position:absolute;left:250pt;top:310pt;width:100pt;height:50pt;direction:rtl">
+  <div style="position:relative;inline-size:80pt;block-size:40pt;background:#eee">
+    <div style="position:absolute;inset-inline-start:5pt;inset-block-start:4pt;inline-size:20pt;block-size:16pt;background:green;border-inline-end:2pt solid blue"></div>
+  </div>
+</section>
+<section style="position:absolute;left:350pt;top:310pt;width:110pt;height:50pt">
+  <div style="position:absolute;left:84pt;top:0;width:20pt;padding:2pt;box-sizing:border-box;aspect-ratio:2;background:blue"><div style="height:50%;background:red"></div></div>
+  <div style="position:absolute;left:84pt;top:16pt;width:20pt;padding:2pt;box-sizing:border-box;aspect-ratio:auto 2;background:aqua"></div>
+  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC" style="position:absolute;left:84pt;top:34pt;padding:2pt;box-sizing:border-box;max-width:14pt">
+  <div style="display:block flow-root;width:80pt;background:#e6b8af"><div style="height:12pt;margin-block-start:10pt;background:#45818e"></div></div>
+  <div style="height:8pt;margin-top:8pt;margin-bottom:-4pt;background:#6aa84f"></div><div style="height:8pt;margin-top:6pt;background:#674ea7"></div>
+</section>
+<section style="position:absolute;left:470pt;top:310pt;width:120pt;height:50pt">
+  <div style="position:absolute;left:70pt;top:0;visibility:force-hidden;width:20pt;height:20pt"><svg width="20" height="20"><rect width="20" height="20" fill="red" visibility="visible"/></svg></div>
+  <div style="visibility:hidden;height:30pt;background:red"><div style="visibility:visible;inline-size:30pt;block-size:12pt;background:green"></div><input name="invisible" style="width:40pt;height:10pt"></div><div style="width:40pt;height:8pt;background:blue"></div>
+</section>
+<section style="position:absolute;left:250pt;top:370pt;width:110pt;height:60pt;font-size:10pt;line-height:12pt">
+  <div style="width:80pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">office office office</div>
+  <div style="position:absolute;left:0;top:44pt;width:60pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span data-ellipsis-reference="positioned" style="position:relative;left:30pt">ABCDEFGH</span></div>
+  <div data-clamp-reference="soft-wrap" style="width:60pt;line-clamp:2">First line<br>Second line<br>Third line</div>
+</section>
+<section style="position:absolute;left:370pt;top:370pt;width:100pt;height:60pt">
+  <div style="position:relative;direction:rtl;width:80pt;height:40pt;background:#eee;isolation:isolate">
+    <div style="position:absolute;inset:5pt 10pt 5pt 10pt;width:auto;height:auto;background:#3d85c6"></div>
+    <div style="position:absolute;left:10pt;right:20pt;top:10pt;width:20pt;height:20pt;background:#6aa84f;z-index:1;direction:ltr"></div>
+  </div>
+</section>
+<section style="position:absolute;left:480pt;top:370pt;width:110pt;height:60pt">
+  <div style="width:40pt;height:12pt;overflow:clip visible;overflow-clip-margin:5pt;background:#ffe599"><div style="position:relative;left:-8pt;width:60pt;height:30pt;background:#45818e"></div></div>
+</section>
 </body></html>

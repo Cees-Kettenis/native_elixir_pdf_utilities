@@ -219,6 +219,37 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   @doc false
+  @spec box_geometry_reference(String.t()) :: String.t()
+  def box_geometry_reference(html) do
+    # Independently authored references for dated specifications that Chromium
+    # does not render: Overflow 4 (2023-03-21) soft-wrap clamping, Overflow 3
+    # (2025-10-07) clip margins on one axis, Flexbox 1 (2025-10-14) collapsed
+    # struts, and Display 4 (2025-11-06) forced subtree invisibility.
+    # Overflow 3 (2025-10-07) section 5.1 applies ellipsing after relative
+    # movement. Chromium clips this shifted span without adding the marker.
+    # At 10pt DejaVu Sans, AB plus the 1em ellipsis fits the remaining 30pt;
+    # ABC plus that marker does not. Authored AB… supplies an independent reference.
+    html
+    |> String.replace(
+      ~s(<span data-ellipsis-reference="positioned" style="position:relative;left:30pt">ABCDEFGH</span>),
+      ~s(<span style="position:relative;left:30pt">AB…</span>)
+    )
+    |> String.replace(
+      ~s(<div data-clamp-reference="soft-wrap" style="width:60pt;line-clamp:2">First line<br>Second line<br>Third line</div>),
+      ~s(<div style="width:60pt;height:24pt">First line<br>Second…</div>)
+    )
+    |> String.replace(
+      "overflow:clip visible;overflow-clip-margin:5pt",
+      "overflow:visible;clip-path:inset(-100pt -5pt -100pt -5pt)"
+    )
+    |> String.replace(
+      ~s(<div data-collapse-reference="strut" style="display:flex;width:100pt;background:green"><div style="visibility:collapse;width:40pt;height:16pt"></div><div style="width:20pt;height:8pt;background:blue"></div></div>),
+      ~s(<div style="width:100pt;height:16pt;background:green"><div style="width:20pt;height:8pt;background:blue"></div></div>)
+    )
+    |> String.replace("visibility:force-hidden", "opacity:0")
+  end
+
+  @doc false
   @spec gauge_reference(String.t()) :: String.t()
   def gauge_reference(html) do
     # Chromium 152 overflows max-min for these finite meter endpoints and paints

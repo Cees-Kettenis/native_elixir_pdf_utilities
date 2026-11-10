@@ -1885,8 +1885,8 @@ An initial popover remains closed when scripts are disabled:
 
 Author CSS can reveal static popover artwork with supported sizing and positioning,
 including the popover's fixed-position defaults. This does not activate the
-popover or simulate browser top-layer behavior. General fixed positioning remains
-unsupported for arbitrary HTML elements. See
+popover or simulate browser top-layer behavior. Fixed artwork on other HTML elements
+also repeats across printed pages; native controls appear on their first page only. See
 [positioning and transforms](html-to-pdf-compatibility.md#positioning-and-transforms).
 
 ### Named colors and horizontal rules

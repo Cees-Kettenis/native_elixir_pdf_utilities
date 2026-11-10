@@ -86,7 +86,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
 
   @doc false
   @spec inherit(map()) :: map()
-  def inherit(style), do: Map.merge(@inherited, Map.take(style, Map.keys(@inherited)))
+  def inherit(style) do
+    visibility =
+      if Map.get(style, :_svg_element, false),
+        do: Map.get(style, :svg_visibility, Map.get(style, :visibility, :visible)),
+        else: Map.get(style, :visibility, Map.get(style, :svg_visibility, :visible))
+
+    @inherited
+    |> Map.merge(Map.take(style, Map.keys(@inherited)))
+    |> Map.put(:svg_visibility, visibility)
+  end
 
   @doc false
   @spec defaults(map()) :: map()
@@ -249,8 +258,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
           end
 
         case parsed do
-          {:ok, parsed} -> {:ok, Map.put(style, key, parsed)}
-          :error -> invalid(property, "invalid SVG property value #{inspect(value)}")
+          {:ok, parsed} ->
+            style = Map.put(style, key, parsed)
+
+            {:ok,
+             if(property == "visibility", do: Map.put(style, :visibility, parsed), else: style)}
+
+          :error ->
+            invalid(property, "invalid SVG property value #{inspect(value)}")
         end
       else
         :unhandled
@@ -384,12 +399,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
         end
 
       {"visibility", value} ->
-        case value do
-          "visible" -> {:ok, :visible}
-          "hidden" -> {:ok, :hidden}
-          "collapse" -> {:ok, :collapse}
-          _ -> :error
-        end
+        NativeElixirPdfUtilities.Validators.CssDisplayValidator.visibility(value)
 
       {property, value}
       when property in ~w(opacity fill-opacity stroke-opacity stop-opacity flood-opacity) ->

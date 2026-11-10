@@ -245,6 +245,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathCssTableCompositionTest do
     html =
       "<style>html,body{margin:0}</style><math><mtable style='table-layout:fixed;width:30pt;border-spacing:0'><mtr><mtd style='padding:0;overflow:hidden'><mtext><a href='https://matrix.test/clip'>123456789</a></mtext></mtd></mtr></mtable></math>"
 
+    assert {:ok, box} = measured(html)
+
+    native =
+      for %{kind: :native, box: %{type: :drawing_group} = group} <- box.drawing_items, do: group
+
+    assert [group] = native
+
+    assert [
+             %{
+               type: :glyph_group,
+               x: group_x,
+               boxes: [%{type: :text, x: text_x, text: "123456789"}]
+             }
+           ] = group.boxes
+
+    assert group_x == 0.0 and text_x == 0.0
+
     assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
     assert {:ok, document} = Reader.read_validated(pdf)
 

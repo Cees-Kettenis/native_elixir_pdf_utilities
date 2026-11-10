@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
   @moduledoc "Owns shared calculated box dimensions and computed root sizing metadata."
-  alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.{Diagnostics, Limits}
 
   alias NativeElixirPdfUtilities.Validators.{
     CssMathValidator,
@@ -20,6 +20,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
     :min_height,
     :max_height,
     :box_sizing,
+    :aspect_ratio,
+    :writing_mode,
+    :direction,
     :padding,
     :margin,
     :border_widths,
@@ -246,6 +249,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
                   :box_sizing ->
                     value in [:content_box, :border_box]
 
+                  :aspect_ratio ->
+                    validate_ratio(%{aspect_ratio: value}, "document_root_sizing") == :ok
+
+                  axis when axis in [:writing_mode, :direction] ->
+                    NativeElixirPdfUtilities.Validators.CssDisplayValidator.valid_style?(%{
+                      axis => value
+                    })
+
                   flag when flag in [:margin_inline_auto, :margin_block_auto] ->
                     validate_auto_margins(%{flag => value}, "document_root_sizing") == :ok
 
@@ -342,31 +353,68 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
   @doc "Validates canonical automatic-margin flags for computed styles and root sizing."
   @spec validate_auto_margins(map(), String.t()) :: :ok | {:error, {atom(), map()}}
   def validate_auto_margins(style, source) do
-    Enum.reduce_while(
-      [{:margin_inline_auto, [:left, :right]}, {:margin_block_auto, [:top, :bottom]}],
-      :ok,
-      fn {property, sides}, :ok ->
-        case Map.fetch(style, property) do
-          :error ->
-            {:cont, :ok}
+    case style do
+      style
+      when not is_map_key(style, :margin_inline_auto) and
+             not is_map_key(style, :margin_block_auto) and not is_map_key(style, :_margin_struts) and
+             not is_map_key(style, :_collapses_through) ->
+        :ok
 
-          {:ok, flags} ->
-            if is_map(flags) and Enum.sort(Map.keys(flags)) == Enum.sort(sides) and
-                 Enum.all?(flags, fn {_side, flag} -> is_boolean(flag) end),
-               do: {:cont, :ok},
-               else:
-                 {:halt,
-                  Diagnostics.error(
-                    :layout,
-                    :invalid_layout,
-                    "#{property} requires exactly boolean #{Enum.join(sides, " and ")} entries; use validated automatic-margin intent",
-                    operation: :layout,
-                    module: __MODULE__,
-                    source: source
-                  )}
+      _ ->
+        struts = Map.get(style, :_margin_struts, %{})
+
+        valid? =
+          is_boolean(Map.get(style, :_collapses_through, false)) and is_map(struts) and
+            Enum.all?(struts, fn {edge, value} ->
+              edge in [:top, :bottom] and
+                case value do
+                  {positive, negative} ->
+                    is_number(positive) and is_number(negative) and positive >= 0 and
+                      negative <= 0 and positive <= Limits.get(:max_css_numeric_magnitude) and
+                      -negative <= Limits.get(:max_css_numeric_magnitude)
+
+                  number ->
+                    is_number(number) and abs(number) <= Limits.get(:max_css_numeric_magnitude)
+                end
+            end)
+
+        if valid? do
+          Enum.reduce_while(
+            [{:margin_inline_auto, [:left, :right]}, {:margin_block_auto, [:top, :bottom]}],
+            :ok,
+            fn {property, sides}, :ok ->
+              case Map.fetch(style, property) do
+                :error ->
+                  {:cont, :ok}
+
+                {:ok, flags} ->
+                  if is_map(flags) and Enum.sort(Map.keys(flags)) == Enum.sort(sides) and
+                       Enum.all?(flags, fn {_side, flag} -> is_boolean(flag) end),
+                     do: {:cont, :ok},
+                     else:
+                       {:halt,
+                        Diagnostics.error(
+                          :layout,
+                          :invalid_layout,
+                          "#{property} requires exactly boolean #{Enum.join(sides, " and ")} entries; use validated automatic-margin intent",
+                          operation: :layout,
+                          module: __MODULE__,
+                          source: source
+                        )}
+              end
+            end
+          )
+        else
+          Diagnostics.error(
+            :layout,
+            :invalid_layout,
+            "margin collapse sets require bounded positive/negative extrema and boolean collapse-through state; recompute styles",
+            operation: :layout,
+            module: __MODULE__,
+            source: source
+          )
         end
-      end
-    )
+    end
   end
 
   @doc false
@@ -382,20 +430,87 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
     {Map.get(flags, start, false), Map.get(flags, finish, false)}
   end
 
+  @doc "Validates canonical preferred-ratio metadata before any used-size arithmetic."
+  @spec validate_ratio(map(), String.t()) :: :ok | {:error, {atom(), map()}}
+  def validate_ratio(style, source) do
+    valid =
+      case Map.get(style, :aspect_ratio, :auto) do
+        :auto -> true
+        {:auto, ratio} -> valid_ratio?(ratio)
+        ratio -> valid_ratio?(ratio)
+      end
+
+    if valid,
+      do: :ok,
+      else:
+        Diagnostics.error(
+          :layout,
+          :invalid_layout,
+          "aspect ratio requires :auto or a positive computed ratio; recompute styles",
+          module: __MODULE__,
+          operation: :layout,
+          source: source
+        )
+  end
+
+  defp valid_ratio?(ratio) do
+    if is_number(ratio) and ratio > 0 do
+      HtmlValidator.check_render_resource(:max_css_numeric_magnitude, ratio, :layout)
+      match?({:ok, _}, HtmlValidator.normalize_geometry_number(ratio))
+    else
+      false
+    end
+  end
+
+  @doc "Selects the preferred ratio, preserving natural replaced ratios for auto plus an authored fallback."
+  @spec preferred_ratio(map(), number() | nil) :: number() | nil
+  def preferred_ratio(style, natural \\ nil) do
+    case Map.get(style, :aspect_ratio, :auto) do
+      :auto -> natural
+      {:auto, fallback} -> natural || fallback
+      ratio -> ratio
+    end
+  end
+
+  @doc "Selects the ratio's sizing box; auto and natural ratios always use content-box dimensions."
+  @spec ratio_box(map()) :: :content_box | :border_box
+  def ratio_box(style) do
+    case Map.get(style, :aspect_ratio, :auto) do
+      ratio when is_number(ratio) -> Map.get(style, :box_sizing, :content_box)
+      _ -> :content_box
+    end
+  end
+
   @doc "Computes the starting automatic margin from actual free space for a validated axis."
   @spec auto_margin_offset(map(), :width | :height, number(), :flow | :positioned) :: number()
   def auto_margin_offset(style, axis, free, policy) do
-    free = if policy == :flow, do: max(free, 0.0), else: free
+    direction =
+      if policy == :flow,
+        do: Map.get(style, :_containing_direction, Map.get(style, :direction, :ltr)),
+        else: Map.get(style, :direction, :ltr)
 
-    case margin_flags(style, axis) do
-      {true, true} ->
-        if policy == :positioned and axis == :width and free < 0, do: 0.0, else: free / 2
+    rtl? = axis == :width and direction == :rtl
 
-      {true, false} ->
-        free
+    cond do
+      policy == :flow and free < 0 ->
+        if rtl?, do: free, else: 0.0
 
-      _ ->
-        0.0
+      true ->
+        case margin_flags(style, axis) do
+          {true, true} ->
+            if policy == :positioned and axis == :width and free < 0,
+              do: if(rtl?, do: free, else: 0.0),
+              else: free / 2
+
+          {true, false} ->
+            free
+
+          {false, false} when policy == :flow ->
+            if rtl?, do: free, else: 0.0
+
+          _ ->
+            0.0
+        end
     end
   end
 

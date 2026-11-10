@@ -55,13 +55,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InterruptedInlineTest do
     assert {:ok, layout} = Layout.layout(styled, page_size: {240, 180}, margin: 12)
     assert {:ok, [page]} = Pagination.paginate(layout)
 
-    for label <- ["Inner child", "Outer child", "Block content"] do
+    assert Enum.count(page.boxes, &(Map.get(&1, :text) == "Block content")) == 1
+
+    for label <- ["Inner", "Outer"] do
       assert Enum.count(page.boxes, &(Map.get(&1, :text) == label)) == 1
+    end
+
+    assert Enum.count(page.boxes, &(Map.get(&1, :text) == "child")) == 2
+    # CSS Positioned Layout 3, 7 October 2025, shrink-to-fit width. The
+    # retained Chromium reference wraps both labels at these narrow insets.
+    for label <- ["Inner", "Outer"] do
+      first = Enum.find(page.boxes, &(Map.get(&1, :text) == label))
+
+      assert Enum.any?(page.boxes, fn box ->
+               Map.get(box, :text) == "child" and box.x == first.x and
+                 abs(first.y - box.y - 10) < 0.01
+             end)
     end
 
     assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
     assert {:ok, text} = Text.extract(pdf)
-    assert text =~ "Inner child" and text =~ "Outer child"
+    assert Regex.match?(~r/Inner\s+child/u, text) and Regex.match?(~r/Outer\s+child/u, text)
   end
 
   test "split inline alignment keeps struts and source fragments through the page break" do

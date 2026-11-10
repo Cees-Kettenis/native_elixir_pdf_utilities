@@ -324,8 +324,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
        {"empty_flex_height.html", {0, 0, 240, 240}},
        {"distributed_gaps.html", {300, 0, 240, 240}},
        {"computed_custom_properties.html", {0, 260, 240, 180}},
-       {"quoted_at_rules.html", {240, 260, 360, 180}}
-     ], ["@media print {BOGUS}"], ["Hidden"]}
+       {"quoted_at_rules.html", {240, 260, 360, 180}},
+       {"collapsed table rows and columns", {0, 180, 240, 60}},
+       {"collapsed flex cross-axis strut", {0, 240, 240, 20}},
+       {"logical sizing and insets", {250, 310, 100, 50}},
+       {"formatting contexts and margin sets", {350, 310, 110, 50}},
+       {"visibility and hidden controls", {470, 310, 120, 50}},
+       {"shaped ellipsis and line clamping", {250, 370, 110, 60}},
+       {"opposing insets and isolated stacking", {370, 370, 100, 60}},
+       {"independent overflow axes and clip margin", {480, 370, 110, 60}}
+     ], ["@media print {BOGUS}", "First line", "Second …"], ["Hidden", "Third line"]}
   ]
 
   @external_resource Path.join(@fixtures_dir, "sheets.json")
@@ -1168,6 +1176,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     {"html_gauge_boxes.html",
      [
        chromium_transform: &PdfVisualCompare.gauge_reference/1,
+       regions: [
+         {"page-fixed repetition", {392, 252, 8, 8}},
+         {"initial printed sticky", {372, 252, 28, 8}}
+       ],
        max_changed_ratio: 0.01,
        max_average_delta: 0.01
      ]},
@@ -2334,6 +2346,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     combined_names =
       for {_sheet, regions, _present, _absent} <- @compact_fixture_groups,
           {original, _bounds} <- regions,
+          String.ends_with?(original, ".html"),
           do: original
 
     sheet_names =
@@ -3668,6 +3681,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     if fixture_name in ["html_gauges.html", "html_gauge_boxes.html"] do
       assert page_count == if(fixture_name == "html_gauges.html", do: 1, else: 3)
 
+      if fixture_name == "html_gauge_boxes.html" do
+        assert Enum.map(stats.pages, &Enum.at(&1.regions, 0).native_ink_pixels) == [64, 64, 64]
+        assert Enum.map(stats.pages, &Enum.at(&1.regions, 1).native_ink_pixels) == [128, 64, 64]
+      end
+
       captions =
         if fixture_name == "html_gauges.html" do
           [
@@ -4985,6 +5003,10 @@ for group <- 0..7 do
         stats =
           PdfVisualCompare.assert_browser_match!(Path.join(@fixtures_dir, @compact_fixture),
             regions: @compact_regions,
+            chromium_transform:
+              if(@compact_fixture == "compact_layout.html",
+                do: &PdfVisualCompare.box_geometry_reference/1
+              ),
             max_changed_ratio: 0.01,
             max_average_delta: 0.01
           )

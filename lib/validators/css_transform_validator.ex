@@ -450,12 +450,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
     end
   end
 
-  @doc "Records the actual used element border box before ordinary relative placement."
+  @doc "Records the actual border box for transforms and containing blocks before relative placement."
   @spec mark_border_box(map(), [map()], map()) :: [map()]
   def mark_border_box(style, boxes, bounds) do
-    if Map.get(style, :css_transform, :none) == :none do
-      boxes
-    else
+    needs_bounds? =
+      case style do
+        %{css_transform: transform} when transform != :none ->
+          true
+
+        %{_stacking_order: _} ->
+          NativeElixirPdfUtilities.Validators.CssStackingValidator.containing_block?(
+            style,
+            :absolute
+          )
+
+        _ ->
+          false
+      end
+
+    if needs_bounds? do
       {breaks, boxes} = Enum.split_while(boxes, &(Map.get(&1, :type) == :page_break))
 
       boxes =
@@ -473,6 +486,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
       [first | rest] = boxes
       breaks ++ [Map.put(first, :css_transform_border_box, bounds) | rest]
+    else
+      boxes
     end
   end
 

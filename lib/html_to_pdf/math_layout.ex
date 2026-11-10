@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, Layout}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, Layout, Visibility}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
@@ -19,7 +19,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
   def measure(node, context \\ %{}) do
     with_context(fn ->
       with {:ok, prepared} <- MathLayoutValidator.prepare_element(node, context),
-           measured = measure_prepared(prepared, prepared.stretch_constraint),
+           measured = measure_visible(prepared, node),
            :ok <- MathLayoutValidator.validate_measured_geometry(measured) do
         {:ok, measured}
       end
@@ -34,6 +34,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
          {:ok, measured} <- measure(request.source, request.context) do
       {:ok, [%{request.atom | style: Map.put(request.atom.style, :_math_box, measured)}]}
     end
+  end
+
+  defp measure_visible(prepared, source) do
+    key = {__MODULE__, :visibility}
+
+    hidden = fn hidden, node ->
+      Map.get(Map.get(node, :style, %{}), :visibility, :visible) in [
+        :hidden,
+        :force_hidden,
+        :collapse
+      ] or
+        Map.get(Map.get(node, :style, %{}), :_force_hidden, false) or
+        Enum.any?(Map.get(node, :children, []), &hidden.(hidden, &1))
+    end
+
+    previous = Process.put(key, hidden.(hidden, source))
+
+    try do
+      measure_prepared(prepared, prepared.stretch_constraint)
+    after
+      if previous == nil, do: Process.delete(key), else: Process.put(key, previous)
+    end
+  end
+
+  defp visible_math_text(items) do
+    text = fn text, box ->
+      case box do
+        %{_css_hidden_artwork: true} ->
+          ""
+
+        %{type: :glyph_group, actual_text: actual} ->
+          actual
+
+        %{boxes: children} ->
+          Enum.map_join(children, &text.(text, &1))
+
+        _ ->
+          Map.get(
+            box,
+            :_css_actual_text,
+            Map.get(box, :_math_actual_text, Map.get(box, :text, ""))
+          )
+      end
+    end
+
+    {parts, _} =
+      Enum.map_reduce(items, MapSet.new(), fn item, seen ->
+        case item do
+          %{kind: :glyph, logical_group: id, logical_text: actual} ->
+            {if(MapSet.member?(seen, id), do: "", else: actual), MapSet.put(seen, id)}
+
+          %{kind: :glyph, text: actual} ->
+            {actual, seen}
+
+          %{kind: :native, box: box} ->
+            {text.(text, box), seen}
+
+          %{kind: :logical, actual_text: actual} ->
+            {actual, seen}
+
+          _ ->
+            {"", seen}
+        end
+      end)
+
+    Enum.join(parts)
   end
 
   defp measure_prepared(prepared, constraint \\ nil) do
@@ -138,6 +204,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             else
               []
             end
+
+          rule =
+            Enum.map(rule, fn item -> %{item | box: Visibility.mark(item.box, prepared.style)} end)
 
           positioned = fn field ->
             Enum.flat_map(offsets, fn {child, x, y} ->
@@ -489,6 +558,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
               []
             end
 
+          rule =
+            Enum.map(rule, fn item -> %{item | box: Visibility.mark(item.box, prepared.style)} end)
+
           positioned = fn field ->
             Enum.flat_map(offsets, fn {child, x, y} ->
               Enum.map(Map.fetch!(child, field), &%{&1 | x: &1.x + x, y: &1.y + y})
@@ -822,16 +894,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
       )
 
     measured =
-      if Map.get(prepared, :kind) in [:token, :operator] do
-        group = make_ref()
-        logical = %{logical_group: group, logical_text: measured.actual_text}
-
-        measured
-        |> Map.update!(:drawing_items, fn items ->
-          Enum.map(items, fn item ->
-            if item.kind == :glyph, do: Map.merge(item, logical), else: item
-          end)
-        end)
+      if (Map.get(prepared.style, :visibility, :visible) in [:hidden, :force_hidden, :collapse] or
+            Map.get(prepared.style, :_force_hidden, false)) and
+           prepared.kind in [:glyph, :operator] do
+        %{measured | glyphs: [], drawing_items: [], actual_text: ""}
       else
         measured
       end
@@ -842,6 +908,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
         Map.put(measured, :drawing_items, [
           %{kind: :logical, actual_text: measured.actual_text, x: 0.0, y: 0.0}
         ])
+      else
+        measured
+      end
+
+    measured =
+      if Process.get({__MODULE__, :visibility}, false),
+        do: %{measured | actual_text: visible_math_text(measured.drawing_items)},
+        else: measured
+
+    measured =
+      if Map.get(prepared, :kind) in [:token, :operator] do
+        group = make_ref()
+        logical = %{logical_group: group, logical_text: measured.actual_text}
+
+        measured
+        |> Map.update!(:drawing_items, fn items ->
+          Enum.map(items, fn item ->
+            if item.kind == :glyph, do: Map.merge(item, logical), else: item
+          end)
+        end)
       else
         measured
       end

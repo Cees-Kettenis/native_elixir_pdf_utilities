@@ -463,6 +463,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                       }
                     })
                 end
+                |> then(fn fragment ->
+                  # A source ending exactly at a page boundary can retain an
+                  # anchor on the next fragment without any background area.
+                  if fragment.type == :rect and fragment.height == 0 do
+                    fragment
+                    |> Map.drop([
+                      :fill_color,
+                      :stroke_color,
+                      :stroke_width,
+                      :border_widths,
+                      :border_colors,
+                      :border_styles,
+                      :border_radius,
+                      :border_cutout
+                    ])
+                    |> Map.merge(%{type: :flow_marker, width: 0.0})
+                  else
+                    fragment
+                  end
+                end)
                 |> Map.merge(
                   Map.take(paint, [pagination_order, :fieldset_paint_id, :fieldset_ancestors])
                 )

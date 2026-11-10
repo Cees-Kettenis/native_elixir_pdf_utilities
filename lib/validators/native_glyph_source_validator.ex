@@ -248,6 +248,33 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
     selected
   end
 
+  @doc "Returns source byte boundaries shared by extended graphemes and the selected font's actual shaping clusters."
+  @spec cluster_boundaries(map()) :: [non_neg_integer()]
+  def cluster_boundaries(run) do
+    HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(run.text), :layout)
+    scalars = String.codepoints(run.text)
+    characters = Enum.map(scalars, &%{displayed: &1, fragments: []})
+
+    shaped =
+      shape_characters(characters, run.style.font_face, Map.get(run.style, :letter_spacing, 0.0))
+
+    {ends, _, _} =
+      Enum.reduce(shaped, {[], scalars, 0}, fn cluster, {ends, remaining, offset} ->
+        {consumed, remaining} = Enum.split(remaining, cluster.consumed)
+        offset = offset + Enum.reduce(consumed, 0, &(byte_size(&1) + &2))
+        {[offset | ends], remaining, offset}
+      end)
+
+    {grapheme_ends, _} =
+      Enum.map_reduce(String.graphemes(run.text), 0, fn grapheme, offset ->
+        offset = offset + byte_size(grapheme)
+        {offset, offset}
+      end)
+
+    boundaries = MapSet.new(ends)
+    [0 | Enum.filter(grapheme_ends, &MapSet.member?(boundaries, &1))]
+  end
+
   @doc "Returns the actual embedded-font glyph clusters selected for a native paint text box."
   @spec paint_runs(map(), map(), number()) :: [map()]
   @spec paint_runs(map(), map(), number(), map() | nil) :: [map()]

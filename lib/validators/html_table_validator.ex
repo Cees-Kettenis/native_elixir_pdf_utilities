@@ -3530,6 +3530,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                           }
                         }
 
+                        hint =
+                          if Map.get(column_style, :visibility) == :collapse or
+                               Map.get(style, :visibility) == :collapse,
+                             do: Map.put(hint, :visibility_collapse, true),
+                             else: hint
+
                         {:cont, {:ok, Enum.reverse(List.duplicate(hint, span), prepared)}}
                       else
                         error -> {:halt, error}
@@ -3568,7 +3574,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
              %{
                rows: rows,
                has_spanning_cells: spanning_cells?,
-               columns: Enum.map(columns, &Map.take(&1, [:width])),
+               columns: Enum.map(columns, &Map.take(&1, [:width, :visibility_collapse])),
                column_presentation: Enum.map(columns, & &1.presentation),
                collapsed_edges:
                  if(Map.get(table_style, :border_collapse) == :collapse,
@@ -3587,6 +3593,81 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           invalid_table(%{}, "table formation requires a list of styled children")
       end
     end)
+  end
+
+  @doc "Forms anonymous CSS table parents after source semantics and selector matching are complete."
+  @spec prepare_anonymous_children([map()], map()) :: [map()]
+  def prepare_anonymous_children(children, parent_style) do
+    parent = Map.get(parent_style, :display, :block)
+
+    if Map.has_key?(parent_style, :_math_element) or
+         parent in [
+           :table,
+           :inline_table,
+           :table_row,
+           :table_row_group,
+           :table_column_group,
+           :flex,
+           :inline_flex,
+           :grid,
+           :inline_grid
+         ] or
+         not Enum.any?(children, &css_internal_box?/1) do
+      children
+    else
+      meaningful =
+        Enum.map(children, fn child ->
+          case child do
+            %{type: :text, text: text} ->
+              if(HtmlValidator.trim_ascii_whitespace(text) == "", do: :space, else: :ordinary)
+
+            %{style: %{display: :none}} ->
+              :space
+
+            %{style: %{display: _}} ->
+              if(css_internal_box?(child), do: :internal, else: :ordinary)
+          end
+        end)
+
+      {flags, _} =
+        Enum.map_reduce(Enum.reverse(meaningful), :ordinary, fn kind, following ->
+          {if(kind == :space, do: following, else: kind),
+           if(kind == :space, do: following, else: kind)}
+        end)
+
+      children
+      |> Enum.zip(Enum.reverse(flags))
+      |> Enum.chunk_by(fn {_child, kind} -> kind == :internal end)
+      |> Enum.flat_map(fn siblings ->
+        nodes = Enum.map(siblings, &elem(&1, 0))
+
+        if elem(hd(siblings), 1) == :internal do
+          display = if parent == :inline, do: :inline_table, else: :table
+          [anonymous_table_box(parent_style, display, nodes)]
+        else
+          nodes
+        end
+      end)
+    end
+  end
+
+  defp css_internal_box?(child) do
+    case child do
+      %{style: %{display: display}}
+      when display in [
+             :table_row,
+             :table_cell,
+             :table_row_group,
+             :table_column,
+             :table_column_group,
+             :table_caption
+           ] ->
+        Map.get(child, :tag) not in ~w(td th tr thead tbody tfoot col colgroup caption) and
+          Map.get(child, :namespace) != :mathml
+
+      _ ->
+        false
+    end
   end
 
   # CSS 2.2 section 17.2.1 forms boxes after selector matching. The authored

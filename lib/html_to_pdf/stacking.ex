@@ -11,7 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Stacking do
 
         order ->
           z = Map.get(style, :z_index, :auto)
-          isolated? = is_integer(z) or Map.get(style, :css_transform, :none) != :none
+          isolated? = NativeElixirPdfUtilities.Validators.CssStackingValidator.context?(style)
           level = if is_integer(z), do: z, else: 0
           entry = {order, level}
 
@@ -37,7 +37,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Stacking do
     |> Map.get(:_stacking_contexts, [])
     |> Enum.reverse()
     |> Enum.reduce(boxes, fn {order, level}, boxes ->
-      attach(boxes, %{_stacking_order: order, z_index: level})
+      attach(boxes, %{_stacking_order: order, z_index: level, _stacking_item: true})
     end)
   end
 

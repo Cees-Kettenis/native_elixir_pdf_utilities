@@ -4,6 +4,11 @@ html,body {margin:0;padding:0;font-family:"DejaVu Sans";font-size:10pt;line-heig
 p {margin:0;}
 progress,meter {width:72pt;}
 </style></head><body>
+<!-- Positioned Layout 3 (2025-10-07): reuse the blank lower-right area of
+     this existing independent three-page capture. The sticky marker consumes
+     zero net flow; only the page-fixed marker repeats. -->
+<div style="position:sticky;top:240pt;left:360pt;width:8pt;height:8pt;margin-bottom:-8pt;background:green"></div>
+<div style="position:fixed;top:240pt;left:380pt;width:8pt;height:8pt;background:blue"></div>
 <p>Absent progress <progress></progress> after</p>
 <p>Empty progress <progress value=""></progress> after</p>
 <p>Numeric prefix <progress max="+2suffix" value=" .5tail"></progress> after</p>

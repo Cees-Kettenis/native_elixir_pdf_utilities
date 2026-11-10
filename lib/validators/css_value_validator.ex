@@ -27,7 +27,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           margin padding border-width border-style border-radius border-spacing
           text-align text-transform white-space word-break word-wrap overflow-wrap line-break
           break-before page-break-before break-after page-break-after break-inside page-break-inside
-          content-visibility resize appearance display box-sizing position z-index object-fit overflow aspect-ratio
+          content-visibility visibility resize appearance writing-mode direction display box-sizing position z-index isolation contain object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
           border-collapse caption-side table-layout flex-direction flex-wrap gap row-gap column-gap
           justify-content align-items align-self justify-self justify-items align-content order
           flex-grow flex-shrink flex-basis flex grid-column grid-row grid-column-start grid-column-end
@@ -47,7 +47,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                                 @source_position_properties ++
                                 @source_color_properties ++
                                 @source_remaining_properties ++
-                                ~w(font-size font-family font all background-image list-style-image)
+                                ~w(font-size font-family font all background-image list-style-image) ++
+                                NativeElixirPdfUtilities.Validators.CssLogicalValidator.properties()
   @medium_border_width 2.25
   @doc false
   @spec custom_property_declaration?(term()) :: boolean()
@@ -256,6 +257,36 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                 not is_nil(CssCascadeValidator.keyword(value)) ->
               {:ok,
                Map.merge(tokens, %{kind: :cascade_keyword, dependencies: [:cascade_context]})}
+
+            NativeElixirPdfUtilities.Validators.CssLogicalValidator.logical?(property) ->
+              with {:ok, physical} <-
+                     NativeElixirPdfUtilities.Validators.CssLogicalValidator.expand(
+                       property,
+                       value,
+                       %{}
+                     ) do
+                Enum.reduce_while(physical, {:ok, []}, fn {name, component}, {:ok, results} ->
+                  case prepare_unapplied_declaration(
+                         %{record | declaration: {name, component}},
+                         budget
+                       ) do
+                    {:ok, prepared} -> {:cont, {:ok, [prepared | results]}}
+                    error -> {:halt, error}
+                  end
+                end)
+                |> case do
+                  {:ok, prepared} ->
+                    {:ok,
+                     Map.merge(tokens, %{
+                       kind: :logical_properties,
+                       values: Enum.reverse(prepared),
+                       dependencies: [:writing_mode, :direction]
+                     })}
+
+                  error ->
+                    error
+                end
+              end
 
             custom_property_declaration?(record) ->
               {:ok, Map.put(tokens, :kind, :custom_property_tokens)}
@@ -564,7 +595,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
          {:ok, style} <- CssMathValidator.resolve_scalars(style),
          {:ok, style} <- CssLengthValidator.resolve_edges(style),
          {:ok, style} <- CssSizingValidator.compute_dimensions(style),
-         do: CssPositionValidator.compute_style(style)
+         {:ok, style} <- CssPositionValidator.compute_style(style),
+         do: NativeElixirPdfUtilities.Validators.CssOverflowValidator.compute_style(style)
   end
 
   @doc "Returns the property and value of an ordinary, important or source-wrapped declaration, or nil for a malformed declaration."
@@ -698,6 +730,49 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp validate_cascade_steps(style, declarations, budget, consumer, failure) do
+    axis_declarations =
+      if declarations == [],
+        do: [],
+        else:
+          Enum.filter(declarations, fn declaration ->
+            case declaration_pair(declaration) do
+              {property, _} -> property in ["writing-mode", "direction", "all"]
+              _ -> false
+            end
+          end)
+
+    result =
+      if axis_declarations != [] and not Map.get(style, :_logical_axes_ready, false) do
+        inputs =
+          Enum.filter(declarations, fn declaration ->
+            case declaration_pair(declaration) do
+              {property, _} ->
+                property in ["writing-mode", "direction", "all"] or
+                  String.starts_with?(property, "--")
+
+              _ ->
+                false
+            end
+          end)
+
+        with {:ok, axes} <-
+               validate_cascade_steps(
+                 Map.put(style, :_logical_axes_ready, true),
+                 inputs,
+                 budget,
+                 fn _, validated -> {:ok, validated} end,
+                 failure
+               ),
+             do: {:ok, Map.merge(style, Map.take(axes, [:writing_mode, :direction]))}
+      else
+        {:ok, style}
+      end
+
+    with {:ok, style} <- result,
+         do: validate_computed_cascade_steps(style, declarations, budget, consumer, failure)
+  end
+
+  defp validate_computed_cascade_steps(style, declarations, budget, consumer, failure) do
     if declarations == [] and style._custom_properties == %{} and
          Map.get(style, :_property_registrations, %{}) == %{} do
       prepare_cascade_defaults(style)
@@ -718,6 +793,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               {property, _value} ->
                 property in [
                   "color",
+                  "writing-mode",
+                  "direction",
                   "font-size",
                   "font",
                   "all",
@@ -729,6 +806,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               {property, _value, :important} ->
                 property in [
                   "color",
+                  "writing-mode",
+                  "direction",
                   "font-size",
                   "font",
                   "all",
@@ -1112,10 +1191,39 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec validate_resolved(map(), String.t(), String.t()) ::
           {:ok, map()} | :error | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
   def validate_resolved(style, property, value) do
-    case if(is_binary(value),
-           do: CssCascadeValidator.wide(style, property, value),
-           else: :unhandled
-         ) do
+    alias NativeElixirPdfUtilities.Validators.CssLogicalValidator
+    logical = CssLogicalValidator.expand(property, value, style)
+
+    case logical do
+      {:ok, declarations} ->
+        if CssCascadeValidator.keyword(value) == "inherit" do
+          with {:ok, inherited} <- CssLogicalValidator.inherit_style(style, property) do
+            {:ok,
+             Enum.reduce(
+               CssLogicalValidator.physical_properties(property, style),
+               inherited,
+               &remember_svg_specified(&2, &1, value)
+             )}
+          end
+        else
+          Enum.reduce_while(declarations, {:ok, style}, fn {physical, value}, {:ok, result} ->
+            case validate_resolved(result, physical, value) do
+              {:ok, result} -> {:cont, {:ok, result}}
+              error -> {:halt, error}
+            end
+          end)
+        end
+
+      :error ->
+        :error
+
+      :unhandled ->
+        validate_physical_resolved(style, property, value)
+    end
+  end
+
+  defp validate_physical_resolved(style, property, value) do
+    case CssCascadeValidator.wide(style, property, value) do
       :unhandled -> validate_property(style, property, value)
       {:ok, validated} -> {:ok, remember_svg_specified(validated, property, value)}
     end
@@ -1151,6 +1259,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             properties = style |> Map.get(:_custom_properties, %{}) |> Map.put(property, value)
             {:ok, Map.put(style, :_custom_properties, properties)}
 
+          property when property in ["writing-mode", "direction"] ->
+            with {:ok, {field, axis}} <-
+                   NativeElixirPdfUtilities.Validators.CssLogicalValidator.parse_axis(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.put(style, field, axis)}
+
           "color" ->
             with {:ok, color} <-
                    HtmlValidator.parse_css_color_declaration(
@@ -1173,6 +1289,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           "appearance" ->
             with {:ok, appearance} <- HtmlValidator.parse_control_appearance(value),
                  do: {:ok, Map.put(style, :appearance, appearance)}
+
+          "visibility" ->
+            with {:ok, visibility} <-
+                   NativeElixirPdfUtilities.Validators.CssDisplayValidator.visibility(value),
+                 do: {:ok, Map.put(style, :visibility, visibility)}
 
           "content-visibility" ->
             case String.downcase(HtmlValidator.trim_ascii_whitespace(value), :ascii) do
@@ -1526,8 +1647,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           "object-position" ->
             put_two_axis_position(style, :object_position, value)
 
-          "overflow" ->
-            put_overflow(style, value)
+          property when property in ["isolation", "contain"] ->
+            with {:ok, key, value} <-
+                   NativeElixirPdfUtilities.Validators.CssStackingValidator.prepare(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.put(style, key, value)}
+
+          property
+          when property in ~w(overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp) ->
+            with {:ok, properties} <-
+                   NativeElixirPdfUtilities.Validators.CssOverflowValidator.prepare(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, properties)}
 
           "aspect-ratio" ->
             with {:ok, aspect_ratio} <- HtmlValidator.parse_aspect_ratio(value),
@@ -1765,7 +1900,29 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_display(style, value) do
-    style = Map.delete(style, :_ruby_annotation)
+    alias NativeElixirPdfUtilities.Validators.CssDisplayValidator
+    parsed = CssDisplayValidator.prepare(value)
+
+    {value, properties} =
+      case parsed do
+        {:ok, properties} ->
+          name = properties.display |> Atom.to_string() |> String.replace("_", "-")
+          {name, properties}
+
+        :error ->
+          {value, %{}}
+      end
+
+    style =
+      style
+      |> Map.drop([
+        :_ruby_annotation,
+        :_flow_root,
+        :_display_role,
+        :_display_outer,
+        :table_section
+      ])
+      |> Map.merge(properties)
 
     case value |> String.trim() |> String.downcase() do
       value when value in ["math", "inline math", "block math"] ->
@@ -1805,8 +1962,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         {:ok, style |> ensure_box_style() |> Map.put(:display, :inline_block)}
 
       display
-      when display in ["table", "inline-table", "table-row", "table-cell", "table-row-group"] and
-             is_map_key(style, :_math_context) ->
+      when display in [
+             "table",
+             "inline-table",
+             "table-row",
+             "table-cell",
+             "table-row-group",
+             "table-header-group",
+             "table-footer-group",
+             "table-column",
+             "table-column-group",
+             "table-caption"
+           ] ->
         display =
           Map.fetch!(
             %{
@@ -1814,7 +1981,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               "inline-table" => :inline_table,
               "table-row" => :table_row,
               "table-cell" => :table_cell,
-              "table-row-group" => :table_row_group
+              "table-row-group" => :table_row_group,
+              "table-header-group" => :table_header_group,
+              "table-footer-group" => :table_footer_group,
+              "table-column" => :table_column,
+              "table-column-group" => :table_column_group,
+              "table-caption" => :table_caption
             },
             display
           )
@@ -1969,7 +2141,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       "absolute" ->
         {:ok, Map.put(style, :position, :absolute)}
 
-      "fixed" when is_map_key(style, :_popover) or is_map_key(style, :_math_element) ->
+      "sticky" ->
+        {:ok, Map.put(style, :position, :sticky)}
+
+      "fixed" ->
         {:ok, Map.put(style, :position, :fixed)}
 
       _ ->
@@ -2020,15 +2195,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     with {:ok, position} <-
            parse_two_axis_position(value, style.font_size, property == :background_position) do
       {:ok, Map.put(style, property, position)}
-    end
-  end
-
-  defp put_overflow(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "visible" -> {:ok, Map.put(style, :overflow, :visible)}
-      "hidden" -> {:ok, Map.put(style, :overflow, :hidden)}
-      "auto" when is_map_key(style, :_popover) -> {:ok, Map.put(style, :overflow, :auto)}
-      _ -> {:error, :invalid_document}
     end
   end
 

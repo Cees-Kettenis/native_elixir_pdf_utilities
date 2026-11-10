@@ -412,7 +412,13 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
               %{tag: "body", style: style} ->
                 # The propagated value belongs to the viewport; its source body has
                 # used overflow:visible and keeps ordinary margin collapsing.
-                %{node | style: Map.put(style, :overflow, :visible)}
+                %{
+                  node
+                  | style:
+                      style
+                      |> Map.put(:overflow, :visible)
+                      |> Map.drop([:overflow_x, :overflow_y])
+                }
 
               _ ->
                 node

@@ -2928,7 +2928,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                HtmlToPdf.render(~s(<div style="aspect-ratio: #{ratio}">test</div>))
     end
 
-    for ratio <- ["0", "-1", "invalid", "1e-320 / 1e9"] do
+    for ratio <- ["-1", "invalid", "1e-320 / 1e9"] do
       assert {:error, {:invalid_css, %{operation: :render}}} =
                HtmlToPdf.render(~s(<div style="aspect-ratio: #{ratio}">test</div>))
     end
@@ -3950,11 +3950,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                stage: :css,
                reason: :invalid_css,
                line: 1,
-               source: "display: table-row-group",
+               source: "display: invalid-table-role",
                message: message
-             }}} = HtmlToPdf.render(~s(<p style="display: table-row-group">Bad</p>))
+             }}} = HtmlToPdf.render(~s(<p style="display: invalid-table-role">Bad</p>))
 
-    assert message == ~s(line 1: declaration "display: table-row-group" is invalid or unsupported)
+    assert message ==
+             ~s(line 1: declaration "display: invalid-table-role" is invalid or unsupported)
   end
 
   test "render returns detailed layout option diagnostics" do
@@ -4135,7 +4136,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   test "render identifies an invalid declaration after a semicolon-containing URL" do
     html =
-      ~s|<p style="background-image: url(data:image/png;base64,AAAA); display: table-row-group">Bad display</p>|
+      ~s|<p style="background-image: url(data:image/png;base64,AAAA); display: invalid-table-role">Bad display</p>|
 
     assert {:error,
             {:invalid_css,
@@ -4143,9 +4144,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                stage: :css,
                reason: :invalid_css,
                line: 1,
-               source: "display: table-row-group",
+               source: "display: invalid-table-role",
                message:
-                 ~s(line 1: declaration "display: table-row-group" is invalid or unsupported)
+                 ~s(line 1: declaration "display: invalid-table-role" is invalid or unsupported)
              }}} = HtmlToPdf.render(html)
   end
 

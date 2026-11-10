@@ -40,7 +40,8 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
             with {:ok, _request} <- HtmlValidator.prepare_measured_child(node, context, %{}) do
               # The canonical measured-child validator already admitted the styled subtree.
               {groups, pending} =
-                Enum.reduce(children, {[], []}, fn child, {groups, pending} ->
+                Enum.reduce(expand_container_columns(children), {[], []}, fn child,
+                                                                             {groups, pending} ->
                   HtmlValidator.reserve_render_resource(
                     :max_html_tree_work,
                     length(groups) + length(pending) + 1,
@@ -53,6 +54,17 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
 
                     %{tag: "rt", style: %{_ruby_annotation: true}} ->
                       cond do
+                        Map.get(child, :_ruby_same_base, false) and groups != [] ->
+                          {List.update_at(
+                             groups,
+                             -1,
+                             &%{
+                               &1
+                               | annotations:
+                                   &1.annotations ++ [Map.delete(child, :_ruby_same_base)]
+                             }
+                           ), pending}
+
                         pending != [] ->
                           {groups ++ [%{base: pending, annotations: [child]}], []}
 
@@ -116,6 +128,70 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
     end
   catch
     {:render_resource_limit, error} -> error
+  end
+
+  # CSS Ruby 1, 31 December 2022, sections 2.1 and 2.3. Container
+  # roles pair columns before the existing horizontal group measurement.
+  # Legacy HTML rtc keeps its established fallback unless CSS assigns a role.
+  defp expand_container_columns(children) do
+    case children do
+      [] ->
+        []
+
+      [%{style: %{_display_role: :ruby_base_container}} = base | rest] ->
+        {rows, rest} =
+          Enum.split_while(rest, &match?(%{style: %{_display_role: :ruby_text_container}}, &1))
+
+        bases = base.children
+        annotations = Enum.map(rows, & &1.children)
+        count = Enum.max([length(bases) | Enum.map(annotations, &length/1)])
+
+        HtmlValidator.reserve_render_resource(
+          :max_html_tree_work,
+          count * max(length(annotations), 1),
+          :layout
+        )
+
+        columns =
+          if count == 0,
+            do: [],
+            else:
+              Enum.flat_map(0..(count - 1), fn index ->
+                base = Enum.at(bases, index)
+
+                readings =
+                  Enum.with_index(annotations)
+                  |> Enum.flat_map(fn {row, level} ->
+                    case Enum.at(row, index) do
+                      nil ->
+                        []
+
+                      annotation ->
+                        [
+                          %{
+                            annotation
+                            | tag: "rt",
+                              style: Map.put(annotation.style, :_ruby_annotation, true)
+                          }
+                          |> Map.put(:_ruby_same_base, level > 0)
+                        ]
+                    end
+                  end)
+
+                if(base, do: [base], else: []) ++ readings
+              end)
+
+        columns ++ expand_container_columns(rest)
+
+      [%{style: %{_display_role: :ruby_text_container}} = row | rest] ->
+        [
+          %{row | tag: "rt", style: Map.put(row.style, :_ruby_annotation, true)}
+          | expand_container_columns(rest)
+        ]
+
+      [child | rest] ->
+        [child | expand_container_columns(rest)]
+    end
   end
 
   @doc "Computes the selected font's normalized typographic em box for horizontal ruby placement."

@@ -4545,16 +4545,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Enum.all?([red, blue, green], &(Map.get(&1, :position_anchor) == :root))
   end
 
-  test "layout rejects positioned children whose containing or own display is unsupported" do
+  test "layout supports table containing blocks and rejects unsupported positioned displays" do
     html = """
     <table style="position: relative">
-      <tr><td><div style="position: absolute; left: 0; top: 0">No table positioning</div></td></tr>
+      <tr><td><div style="position: absolute; left: 0; top: 0">Table positioning</div></td></tr>
     </table>
     """
 
     assert {:ok, dom} = HtmlParser.parse_detailed(html)
     assert {:ok, styled_tree} = Style.compute_detailed(dom, [])
-    assert Layout.layout(styled_tree) == {:error, :invalid_layout}
+    assert {:ok, layout} = Layout.layout(styled_tree)
+
+    assert Enum.any?(
+             layout.boxes,
+             &(Map.get(&1, :text) == "Table positioning" and Map.get(&1, :out_of_flow, false))
+           )
 
     unsupported = %{
       type: :document,

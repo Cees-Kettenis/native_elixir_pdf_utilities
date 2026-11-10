@@ -5672,7 +5672,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
              %{
                stage: :css,
                reason: :invalid_css,
-               source: "display: table-row-group"
+               source: "display: invalid-table-role"
              }}} =
              Style.compute_detailed(%{
                type: :document,
@@ -5681,7 +5681,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    type: :element,
                    tag: "style",
                    attributes: %{},
-                   children: [%{type: :text, text: "body { display: table-row-group; }"}]
+                   children: [%{type: :text, text: "body { display: invalid-table-role; }"}]
                  },
                  %{
                    type: :element,
@@ -5695,7 +5695,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   test "compute_detailed preserves semicolons inside URLs when locating invalid declarations" do
     data_url = "data:image/png;base64,AAAA"
-    invalid_declaration = "display: table-row-group"
+    invalid_declaration = "display: invalid-table-role"
 
     for html <- [
           ~s|<p style="background-image: url(#{data_url}); #{invalid_declaration}">Inline</p>|,
@@ -5711,7 +5711,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  line: 1,
                  source: ^invalid_declaration,
                  message:
-                   ~s(line 1: declaration "display: table-row-group" is invalid or unsupported)
+                   ~s(line 1: declaration "display: invalid-table-role" is invalid or unsupported)
                }}} = Style.compute_detailed(dom)
     end
   end
@@ -6180,7 +6180,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "height: -1pt",
       "max-width: nope",
       "min-height: nope",
-      "overflow: scroll",
+      "overflow: drifting",
       "border-top-color: nope",
       "border-color: red nope",
       "border-style: solid nope",
@@ -6192,7 +6192,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "vertical-align: sideways",
       "line-break: strict",
       "color: #0000007",
-      "aspect-ratio: 0 / 1",
+      "aspect-ratio: -1 / 1",
       "aspect-ratio: 1 / 2 / 3",
       "border-collapse: maybe",
       "border-spacing: -1pt",
@@ -6409,7 +6409,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
           "background-image: gradient(red, blue)",
           "background-size: auto auto auto",
           "background-repeat: space",
-          "position: fixed",
+          "position: floating",
           "z-index: front",
           "object-fit: invalid",
           "object-position: nowhere",

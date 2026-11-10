@@ -5,10 +5,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
 
   @sides ~w(top right bottom left)
-  @simple ~w(color accent-color appearance content-visibility resize box-sizing border-radius
+  @simple ~w(color accent-color appearance content-visibility visibility resize box-sizing border-radius
     text-transform quotes content counter-reset counter-increment counter-set letter-spacing
     vertical-align width height min-width max-width min-height max-height orphans widows
-    position z-index object-fit object-position overflow aspect-ratio border-collapse
+    writing-mode direction position z-index isolation contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
     border-spacing caption-side table-layout flex-direction flex-wrap row-gap column-gap
     justify-content align-items align-self justify-self justify-items align-content order
     flex-grow flex-shrink flex-basis grid-template-columns grid-template-rows grid-auto-columns
@@ -35,7 +35,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
               [:_line_height_parent],
               [:_line_height_root]
             ],
-            "display" => [[:display], [:_math_display], [:_math_formatting], [:_ruby_annotation]],
+            "display" => [
+              [:display],
+              [:_math_display],
+              [:_math_formatting],
+              [:_ruby_annotation],
+              [:_flow_root],
+              [:_display_role],
+              [:_display_outer],
+              [:table_section]
+            ],
             "text-align" => [[:text_align], [:_text_align_initial]],
             "background-color" => [[:background_color]],
             "background-image" => [[:background_image], [:background_image_source]],
@@ -77,6 +86,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             end)
           end)
   @shorthands %{
+                "overflow" => ~w(overflow-x overflow-y),
+                "line-clamp" => ~w(max-lines block-ellipsis continue),
                 "margin" => Enum.map(@sides, &("margin-" <> &1)),
                 "padding" => Enum.map(@sides, &("padding-" <> &1)),
                 "border-width" => Enum.map(@sides, &("border-" <> &1 <> "-width")),
@@ -110,13 +121,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   @inherited ~w(color accent-color font-size font-family font-style font-weight line-height
     letter-spacing text-align text-transform quotes white-space word-break overflow-wrap line-break
     orphans widows caption-side border-collapse border-spacing list-style-type list-style-position
-    list-style-image math-style math-shift math-depth)
+    list-style-image visibility block-ellipsis writing-mode direction math-style math-shift math-depth)
   @inherited_fields @inherited
                     |> Enum.flat_map(fn property ->
                       Enum.map(Map.fetch!(@fields, property), &hd/1)
                     end)
                     |> Enum.uniq()
                     |> Enum.reject(&(&1 == :line_height_explicit))
+                    |> Kernel.++([:_force_hidden])
 
   @doc "Returns inherited computed CSS fields from the shared property policy."
   @spec inherited_fields() :: [atom()]
@@ -131,6 +143,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
     String.starts_with?(property, "--") or property == "all" or
       Map.has_key?(@fields, property) or Map.has_key?(@shorthands, property) or
+      NativeElixirPdfUtilities.Validators.CssLogicalValidator.logical?(property) or
       Map.has_key?(SvgStyleValidator.presentation_properties(), property)
   end
 
@@ -247,14 +260,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
     cond do
       property == "all" ->
-        Map.keys(@fields) ++
+        (Map.keys(@fields) -- ["direction"]) ++
           if(Map.get(context, :_svg_element, false),
             do: Map.keys(SvgStyleValidator.presentation_properties()),
             else: []
           )
 
       true ->
-        Map.get(@shorthands, property, [property])
+        case NativeElixirPdfUtilities.Validators.CssLogicalValidator.physical_properties(
+               property,
+               context
+             ) do
+          nil -> Map.get(@shorthands, property, [property])
+          physical -> Enum.flat_map(physical, &targets(&1, context))
+        end
     end
   end
 
@@ -263,7 +282,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   def plan(declarations, context, keywords \\ %{}) do
     # Only winner selection is shared. Variables, fonts and resources retain each element's context.
     RenderCache.fetch_stylesheet(
-      {__MODULE__, declarations, Map.get(context, :_svg_element, false), keywords},
+      {__MODULE__, declarations, Map.get(context, :_svg_element, false),
+       Map.get(context, :writing_mode, :horizontal_tb), Map.get(context, :direction, :ltr),
+       keywords},
       fn ->
         records =
           Enum.with_index(declarations, fn declaration, index ->
@@ -579,7 +600,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
     if keyword &&
          ((Map.has_key?(@fields, Map.get(@aliases, property, property)) ||
-             Map.has_key?(@shorthands, property) || property == "all") or
+             Map.has_key?(@shorthands, property) || property == "all" ||
+             NativeElixirPdfUtilities.Validators.CssLogicalValidator.logical?(property)) or
             (Map.get(context, :_svg_element, false) and
                Map.has_key?(SvgStyleValidator.presentation_properties(), property))) do
       initial = initial(context)
@@ -650,6 +672,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         line_height: 14.4,
         line_height_normal: true,
         display: :inline,
+        writing_mode: :horizontal_tb,
+        direction: :ltr,
         text_align: :left,
         _text_align_initial: true,
         text_transform: :none,
@@ -669,11 +693,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         widows: 2,
         appearance: :none,
         content_visibility: :visible,
+        visibility: :visible,
         resize: :none,
         content: :none,
         counter_reset: [],
         counter_increment: [],
         counter_set: [],
+        isolation: :auto,
+        contain: [],
+        overflow_x: :visible,
+        overflow_y: :visible,
+        overflow_clip_margin: {:padding_box, 0.0},
+        text_overflow: :clip,
+        block_ellipsis: :clip,
+        max_lines: :none,
+        continue: :auto,
         overflow: :visible,
         aspect_ratio: :auto,
         object_fit: :fill,
@@ -736,6 +770,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     if present, do: inherited, else: initial
   end
 
+  @doc "Returns a physical property's canonical computed field for logical inheritance."
+  @spec primary_field(String.t(), map()) :: [atom()]
+  def primary_field(property, context), do: hd(property_fields(property, context))
+
   defp property_fields(property, context) do
     property = Map.get(@aliases, property, property)
 
@@ -743,7 +781,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
       if Map.get(context, :_svg_element, false),
         do: Map.get(SvgStyleValidator.presentation_properties(), property)
 
-    if svg, do: [[svg]], else: Map.get(@fields, property)
+    cond do
+      svg == :svg_visibility -> [[:svg_visibility], [:visibility]]
+      svg -> [[svg]]
+      true -> Map.get(@fields, property)
+    end
   end
 
   defp copy_path(result, source, path) do

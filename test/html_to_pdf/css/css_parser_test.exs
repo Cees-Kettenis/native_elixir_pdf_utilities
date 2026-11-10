@@ -708,6 +708,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
              CssParser.parse_detailed("@font-face { font-family: X; }")
   end
 
+  test "page-rule extraction cannot backtrack exponentially through an unmatched quoted block" do
+    source = "x{" <> String.duplicate(~s(\"quoted\" ), 512) <> "@page invalid;"
+    assert {:error, :invalid_css} = CssParser.page_options(source)
+  end
+
   test "page_options extracts supported page size and margin defaults" do
     assert {:ok, options} =
              CssParser.page_options("""

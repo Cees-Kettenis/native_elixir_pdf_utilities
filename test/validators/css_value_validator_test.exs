@@ -510,4 +510,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
 
     assert diagnostic.operation == :parse and diagnostic.source == "<template for='a'>"
   end
+
+  test "overflow clip math preserves the shared resource-limit diagnostic" do
+    Limits.install(Map.put(Limits.effective(), :max_css_work, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.Validators.CssOverflowValidator.prepare(
+               "overflow-clip-margin",
+               "calc(1000000000pt * 1000000000)"
+             )
+
+    assert diagnostic.reason == :resource_limit_exceeded
+  end
 end

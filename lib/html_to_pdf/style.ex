@@ -1950,11 +1950,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         ),
                         %{
                           type: :element,
-                          tag: tag,
+                          tag:
+                            case Map.get(element_style, :_display_role) do
+                              :ruby -> "ruby"
+                              :ruby_base -> "rb"
+                              :ruby_text -> "rt"
+                              :ruby_base_container -> "rbc"
+                              :ruby_text_container -> "rtc"
+                              _ -> tag
+                            end,
                           style: element_style,
                           children: rendered_children
                         }
                       )
+
+                    element =
+                      case element do
+                        %{style: %{display: :list_item, _display_outer: outer} = style}
+                        when outer in [:inline, :run_in] ->
+                          {markers, gap} =
+                            NativeElixirPdfUtilities.HtmlToPdf.ListMarker.nodes(
+                              style,
+                              text_style(style),
+                              :disc,
+                              1
+                            )
+
+                          %{
+                            element
+                            | style:
+                                Map.put(
+                                  style,
+                                  :display,
+                                  if(Map.get(style, :_flow_root, false),
+                                    do: :inline_block,
+                                    else: :inline
+                                  )
+                                ),
+                              children: markers ++ gap ++ element.children
+                          }
+
+                        _ ->
+                          element
+                      end
 
                     result =
                       if element_style.display == :contents do
@@ -5175,6 +5213,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
               {:ok,
                validated
+               |> NativeElixirPdfUtilities.Validators.CssDisplayValidator.compute_style()
                |> Map.drop([:_cascade_ua, :_cascade_inherited])
                |> resolve_rem_values()
                |> resolve_font_relative_defaults()
@@ -5187,7 +5226,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             end
           else
             with {:ok, style} <- apply_declarations(style, hints ++ declarations, rules.cache),
-                 style = Map.drop(style, [:_cascade_ua, :_cascade_inherited]),
+                 style =
+                   style
+                   |> NativeElixirPdfUtilities.Validators.CssDisplayValidator.compute_style()
+                   |> Map.drop([:_cascade_ua, :_cascade_inherited]),
                  # Defaults contain no rem values; inherited lengths are already resolved.
                  style =
                    if(

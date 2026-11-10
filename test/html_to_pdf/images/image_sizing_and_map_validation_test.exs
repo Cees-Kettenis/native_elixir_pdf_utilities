@@ -189,4 +189,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageSizingAndMapValidationTest do
     assert length(ImageMapGeometry.clip_quads([[{-10, 10}, {10, -10}, {30, 10}, {10, 30}]], clip)) >
              1
   end
+
+  test "replaced min and max dimensions constrain the selected content box before ratio transfer" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+
+    for {limit, width, height} <- [
+          {"max-width:18pt", 8, 4},
+          {"min-width:40pt", 30, 15},
+          {"max-height:14pt", 8, 4},
+          {"min-height:30pt", 40, 20}
+        ] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed(
+                 "<img src='#{@image}' style='padding:5pt;box-sizing:border-box;#{limit}'>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom, system_font_discovery: false)
+      assert {:ok, result} = Layout.layout(tree, page_size: {200, 200}, margin: 0)
+      image = Enum.find(result.boxes, &(&1.type == :image))
+      assert_in_delta image.width, width, 0.75
+      assert_in_delta image.height, height, 0.75
+    end
+  end
 end
