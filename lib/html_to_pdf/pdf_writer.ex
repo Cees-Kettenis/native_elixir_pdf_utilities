@@ -2777,45 +2777,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp subset_font_resources(resources, subset?) do
-    case subset? do
-      false ->
-        {:ok, resources}
+    NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+      Enum.reduce_while(resources, {:ok, %{}}, fn {key, resource}, {:ok, prepared} ->
+        case Map.get(resource, :font_face) do
+          %{type: :embedded} = font ->
+            glyph_ids = resource.encoding.cid_to_gid |> Map.values() |> Enum.uniq() |> Enum.sort()
 
-      true ->
-        NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
-          Enum.reduce_while(resources, {:ok, %{}}, fn {key, resource}, {:ok, prepared} ->
-            case Map.get(resource, :font_face) do
-              %{type: :embedded} = font ->
-                glyph_ids =
-                  resource.encoding.cid_to_gid |> Map.values() |> Enum.uniq() |> Enum.sort()
+            {result, resource} =
+              case font.data do
+                <<"OTTO", _::binary>> ->
+                  {NativeElixirPdfUtilities.HtmlToPdf.Font.Cff.subset(font, glyph_ids, subset?),
+                   Map.put(resource, :outline_format, :cff)}
 
-                case TrueTypeSubset.subset(font, glyph_ids) do
-                  {:ok, data} when data == font.data ->
-                    {:cont, {:ok, Map.put(prepared, key, resource)}}
+                _ ->
+                  result =
+                    if subset?, do: TrueTypeSubset.subset(font, glyph_ids), else: {:ok, font.data}
 
-                  {:ok, data} ->
-                    digest = :crypto.hash(:sha256, :erlang.term_to_binary({font.id, glyph_ids}))
+                  result =
+                    case result do
+                      {:ok, data} -> {:ok, data, data != font.data}
+                      error -> error
+                    end
 
-                    prefix =
-                      for <<byte <- binary_part(digest, 0, 6)>>,
-                        into: "",
-                        do: <<?A + rem(byte, 26)>>
+                  {result, resource}
+              end
 
-                    resource = %{resource | pdf_name: prefix <> "+" <> resource.pdf_name}
-
-                    {:cont,
-                     {:ok, Map.put(prepared, key, Map.put(resource, :font_file_data, data))}}
-
-                  {:error, _reason} = error ->
-                    {:halt, error}
-                end
-
-              _ ->
+            case result do
+              {:ok, data, _subsetted?} when data == font.data ->
                 {:cont, {:ok, Map.put(prepared, key, resource)}}
+
+              {:ok, data, subsetted?} ->
+                digest = :crypto.hash(:sha256, :erlang.term_to_binary({font.id, glyph_ids}))
+
+                prefix =
+                  for <<byte <- binary_part(digest, 0, 6)>>, into: "", do: <<?A + rem(byte, 26)>>
+
+                resource =
+                  if subsetted?,
+                    do: %{resource | pdf_name: prefix <> "+" <> resource.pdf_name},
+                    else: resource
+
+                {:cont, {:ok, Map.put(prepared, key, Map.put(resource, :font_file_data, data))}}
+
+              {:error, _reason} = error ->
+                {:halt, error}
             end
-          end)
-        end)
-    end
+
+          _ ->
+            {:cont, {:ok, Map.put(prepared, key, resource)}}
+        end
+      end)
+    end)
   end
 
   defp font_objects(font_resources, compress?) do
@@ -2934,27 +2946,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp embedded_font_objects(resource, font, compress?) do
+    cff? = Map.get(resource, :outline_format) == :cff
+    file_data = Map.get(resource, :font_file_data, font.data)
+
     [
       {resource.object_id, embedded_type0_font_object(resource)},
       {resource.descendant_object_id, embedded_cid_font_object(resource, font)},
       {resource.descriptor_object_id, embedded_descriptor_object(resource, font)},
       {resource.font_file_object_id,
-       stream_object(
-         Map.get(resource, :font_file_data, font.data),
-         compress?,
-         &FontCache.compressed/1
+       if(cff?,
+         do:
+           stream_object(
+             file_data,
+             compress?,
+             " /Subtype /CIDFontType0C",
+             1_024,
+             &FontCache.compressed/1
+           ),
+         else: stream_object(file_data, compress?, &FontCache.compressed/1)
        )},
-      {resource.cid_to_gid_object_id, cid_to_gid_object(resource, compress?)},
+      {resource.cid_to_gid_object_id,
+       if(cff?,
+         do: cff_encoding_object(resource, compress?),
+         else: cid_to_gid_object(resource, compress?)
+       )},
       {resource.to_unicode_object_id, to_unicode_object(resource, compress?)}
     ]
   end
 
   defp embedded_type0_font_object(resource) do
-    "<< /Type /Font /Subtype /Type0 /BaseFont /#{resource.pdf_name} /Encoding /Identity-H /DescendantFonts [#{resource.descendant_object_id} 0 R] /ToUnicode #{resource.to_unicode_object_id} 0 R >>"
+    encoding =
+      if Map.get(resource, :outline_format) == :cff,
+        do: "#{resource.cid_to_gid_object_id} 0 R",
+        else: "/Identity-H"
+
+    "<< /Type /Font /Subtype /Type0 /BaseFont /#{resource.pdf_name} /Encoding #{encoding} /DescendantFonts [#{resource.descendant_object_id} 0 R] /ToUnicode #{resource.to_unicode_object_id} 0 R >>"
   end
 
   defp embedded_cid_font_object(resource, font) do
-    "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /#{resource.pdf_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor #{resource.descriptor_object_id} 0 R /W #{cid_widths(resource, font)} /CIDToGIDMap #{resource.cid_to_gid_object_id} 0 R >>"
+    {subtype, mapping} =
+      if Map.get(resource, :outline_format) == :cff,
+        do: {"CIDFontType0", ""},
+        else: {"CIDFontType2", " /CIDToGIDMap #{resource.cid_to_gid_object_id} 0 R"}
+
+    "<< /Type /Font /Subtype /#{subtype} /BaseFont /#{resource.pdf_name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor #{resource.descriptor_object_id} 0 R /W #{cid_widths(resource, font)}#{mapping} >>"
   end
 
   defp embedded_descriptor_object(resource, font) do
@@ -2962,7 +2997,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     ascent = scale_metric(font.ascent, font.units_per_em)
     descent = scale_metric(font.descent, font.units_per_em)
 
-    "<< /Type /FontDescriptor /FontName /#{resource.pdf_name} /Flags 4 /FontBBox [#{x_min} #{y_min} #{x_max} #{y_max}] /ItalicAngle 0 /Ascent #{ascent} /Descent #{descent} /CapHeight #{ascent} /StemV 80 /FontFile2 #{resource.font_file_object_id} 0 R >>"
+    file_key = if Map.get(resource, :outline_format) == :cff, do: "FontFile3", else: "FontFile2"
+
+    "<< /Type /FontDescriptor /FontName /#{resource.pdf_name} /Flags 4 /FontBBox [#{x_min} #{y_min} #{x_max} #{y_max}] /ItalicAngle 0 /Ascent #{ascent} /Descent #{descent} /CapHeight #{ascent} /StemV 80 /#{file_key} #{resource.font_file_object_id} 0 R >>"
   end
 
   defp to_unicode_object(resource, compress?) do
@@ -3083,11 +3120,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     stream_object(data, compress?)
   end
 
+  defp cff_encoding_object(resource, compress?) do
+    sections =
+      resource.encoding.cid_to_gid
+      |> Enum.sort()
+      |> Enum.chunk_every(@cmap_section_size)
+      |> Enum.map_join("\n", fn mappings ->
+        "#{length(mappings)} begincidchar\n" <>
+          Enum.map_join(mappings, "\n", fn {code, glyph} -> "<#{hex16(code)}> #{glyph}" end) <>
+          "\nendcidchar"
+      end)
+
+    stream =
+      "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def\n/CMapName /Native-CFF-Encoding def\n/CMapType 1 def\n/WMode 0 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" <>
+        sections <> "\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend"
+
+    stream_object(stream, compress?)
+  end
+
   defp cid_widths(resource, font) do
     WriterValidator.reserve_container_entries(2 * map_size(resource.encoding.cid_to_gid))
 
     widths =
       resource.encoding.cid_to_gid
+      |> then(fn mappings ->
+        if Map.get(resource, :outline_format) == :cff,
+          do: mappings |> Map.values() |> Enum.uniq() |> Map.new(&{&1, &1}),
+          else: mappings
+      end)
       |> Enum.sort_by(fn {cid, _glyph_id} -> cid end)
       |> Enum.map(fn {cid, glyph_id} ->
         width =

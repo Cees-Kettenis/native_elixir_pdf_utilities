@@ -26,6 +26,8 @@ and [testing](testing.md) for requirements. Paths below are relative to `scripts
 | Browser sheet equivalence | `MIX_ENV=test mise exec -- mix run scripts/fixtures/check-browser-sheet-equivalence.exs` |
 | Browser page equivalence | `MIX_ENV=test mise exec -- mix run scripts/fixtures/check-browser-page-equivalence.exs` |
 | Browser sheets | `MIX_ENV=test mise exec -- mix run scripts/fixtures/build-browser-sheets.exs` |
+| CFF font corpus and Type 2 reference vectors | `python scripts/fixtures/build-cff-fonts.py` with fontTools 4.66.1 |
+| CFF standard character mappings | `python scripts/data/build-cff-mappings.py` with fontTools 4.66.1, then `mise exec -- mix format lib/html_to_pdf/font/cff_data.ex` |
 | HTML/PDF examples | `mise exec -- mix run scripts/examples/generate-html-to-pdf.exs` |
 
 Raise `QUALITY_MATRIX_JOBS` for additional runtimes only when resources allow.

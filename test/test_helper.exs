@@ -27,3 +27,5 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("table_geometry.ex"))
 
 Code.require_file(Paths.support("math_paint_geometry.ex"))
+
+Code.require_file(Paths.support("cff_fixture.ex"))

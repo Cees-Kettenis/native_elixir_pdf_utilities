@@ -339,3 +339,10 @@ RustlerPrecompiled verifies the downloaded archive against that manifest.
 These hashes identify the expected downloads. Verifying the Rust dependencies
 compiled into a binary also requires the corresponding build inputs or build
 provenance.
+
+## CFF character mappings
+
+The CFF standard strings, predefined charsets and StandardEncoding mappings in
+`lib/html_to_pdf/font/cff_data.ex` follow Adobe Technical Note 5176. The generator
+uses fontTools under its MIT license. Its notice is retained in
+`priv/licenses/cff-character-mappings-MIT.txt`.

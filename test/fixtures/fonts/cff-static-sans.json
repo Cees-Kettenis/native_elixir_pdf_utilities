@@ -1,0 +1,66 @@
+{
+  "source_sha256": "e29f775ef53602cc4eb5c4b2b1195d3a72da588540e92fa57c494046ad7ab406",
+  "font_sha256": "3f6e71c3780c47b043c5c6e8d039e5c84013622137e4756eac6ecb98a9d09946",
+  "units_per_em": 2048,
+  "glyph_order": [
+    ".notdef",
+    "space",
+    "zero",
+    "H",
+    "x"
+  ],
+  "glyphs": {
+    ".notdef": {
+      "bounds": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "advance": 1229
+    },
+    "space": {
+      "bounds": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "advance": 651
+    },
+    "zero": {
+      "bounds": [
+        135,
+        -29,
+        1167,
+        1520
+      ],
+      "advance": 1303
+    },
+    "H": {
+      "bounds": [
+        201,
+        0,
+        1339,
+        1493
+      ],
+      "advance": 1540
+    },
+    "x": {
+      "bounds": [
+        59,
+        0,
+        1145,
+        1120
+      ],
+      "advance": 1212
+    }
+  },
+  "cff_sha256": "4dc788151254325e4300c0851d6a08886bf020f75384facb00e52fccc74c883d",
+  "generator": "scripts/fixtures/build-cff-fonts.py",
+  "source_font": "selected-container-sans.ttf",
+  "fonttools_version": "4.66.1",
+  "license": "test/fixtures/fonts/selected-container-LICENSE.txt",
+  "cid_font_sha256": "f7ec3166a4a68f97fbcee0d0a62e4514a4094daab6b697abd40cb64439b604f7",
+  "cid_cff_sha256": "9eaabfcdd16f92c5d4f538c9701024d57af4bebeef232456c5860f8cf289cd9b"
+}

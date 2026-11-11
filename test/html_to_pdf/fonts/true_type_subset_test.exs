@@ -94,7 +94,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
     assert {:error, {:invalid_document, %{operation: :glyph_bounds, message: message}}} =
              Font.glyph_bounds(%{type: :built_in})
 
-    assert message =~ "embedded TrueType"
+    assert message =~ "embedded outline font"
 
     assert {:error, {:invalid_document, %{stage: :font, operation: :glyph_bounds}}} =
              Font.glyph_bounds(nil)

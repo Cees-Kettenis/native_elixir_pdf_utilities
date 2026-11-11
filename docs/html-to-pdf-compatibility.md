@@ -148,7 +148,7 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | `:system_font_discovery` | `true` | Look up installed fonts |
 | `:unsupported_glyphs` | `:replace` | Replace missing characters or use `:error` |
 | `:compress_streams` | `true` | Compress eligible PDF streams |
-| `:subset_fonts` | `true` | Embed only needed TrueType outlines when permitted |
+| `:subset_fonts` | `true` | Embed only needed TrueType or CFF outlines when permitted |
 | `:forms` | `:interactive` | Editable fields or `:static` artwork |
 | `:metadata` | HTML title | Document information such as title and author |
 | `:outlines` | Disabled | `:headings` or an explicit bookmark list |
@@ -234,9 +234,15 @@ replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 | --- | --- |
 | Default | DejaVu Sans; installed-font discovery enabled |
 | Consistent output | Supply fonts and set `system_font_discovery: false` |
-| Custom fonts | Embeddable static TrueType, WOFF 1 and selected TrueType collection faces; [registration example](html-to-pdf-examples.md#register-a-font) |
+| Custom fonts | Embeddable static TrueType and CFF OpenType, WOFF 1 and selected collection faces; [registration example](html-to-pdf-examples.md#register-a-font) |
 | Face selection | Ordered families; CSS directional weight and width matching, weight/width ranges, italic/oblique descriptors and Unicode ranges. Supply `collection_index` to select a collection face, starting at zero |
 | Missing characters | Fallback fonts, then replacement; use `unsupported_glyphs: :error` to fail |
+
+CFF 1 fonts preserve source charstrings, hints and local/global subroutine ownership
+when converted to CID-keyed PDF fonts. Each document character code keeps its own
+Unicode extraction map, including aliases sharing one glyph. Legacy `seac`
+composition and nondeterministic Type 2 `random` programs currently return an
+unsupported-font diagnostic rather than approximate artwork. CFF2 remains excluded.
 
 ## MathML in HTML
 
@@ -265,7 +271,7 @@ replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 | JavaScript, media playback, canvas drawing APIs | Static HTML and images |
 | Embedded PDFs, XFA, JavaScript form actions | Supported HTML and PDF forms |
 | Named pages, page-margin boxes, CSS page counters | Page options and header/footer templates |
-| WOFF2, variable fonts, CFF OpenType | Embeddable static TrueType fonts |
+| WOFF2, variable fonts | Embeddable static TrueType and CFF OpenType fonts |
 | Complex shaping, bidirectional text, vertical writing | A renderer supporting those scripts and layouts |
 
 Embedded content and framesets have restricted static support. SVG, control

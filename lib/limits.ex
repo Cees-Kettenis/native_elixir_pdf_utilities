@@ -77,6 +77,10 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_font_source_bytes: 10_000_000,
     max_font_decoded_bytes: 40_000_000,
     max_font_container_work: 100_000_000,
+    max_font_cff_work: 1_000_000,
+    max_font_outline_coordinate: 1_000_000,
+    max_font_numeric_magnitude: 4_294_967_295,
+    max_font_glyph_depth: 64,
     max_aggregate_font_source_bytes: 40_000_000,
     max_font_count: 128,
     max_font_candidates: 256,
@@ -251,6 +255,10 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_font_source_bytes
           | :max_font_decoded_bytes
           | :max_font_container_work
+          | :max_font_cff_work
+          | :max_font_outline_coordinate
+          | :max_font_numeric_magnitude
+          | :max_font_glyph_depth
           | :max_aggregate_font_source_bytes
           | :max_font_count
           | :max_font_candidates

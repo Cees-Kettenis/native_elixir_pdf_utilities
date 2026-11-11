@@ -26,6 +26,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         }
   @type built_in_font :: %{type: :built_in, family: String.t(), pdf_name: String.t()}
   @type embedded_font :: %{
+          optional(:outline_format) => :cff,
+          optional(:cff) => map(),
           type: :embedded,
           family: String.t(),
           weight: number(),

@@ -1,0 +1,1065 @@
+{
+  "generator": "scripts/fixtures/build-cff-fonts.py",
+  "fonttools_version": "4.66.1",
+  "local_subrs": [
+    "959f050b"
+  ],
+  "global_subrs": [
+    "a9b3050b"
+  ],
+  "vectors": [
+    {
+      "name": "line_pairs",
+      "program": "f8889fa915959fa981050e",
+      "bounds": [
+        20,
+        30,
+        60,
+        50
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              30,
+              50
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              60,
+              40
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "horizontal_lines",
+      "program": "f8889fa915959fa9060e",
+      "bounds": [
+        20,
+        30,
+        60,
+        50
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              30,
+              30
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              30,
+              50
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              60,
+              50
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "vertical_lines",
+      "program": "f8889fa915959fa9070e",
+      "bounds": [
+        20,
+        30,
+        40,
+        70
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              20,
+              40
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              40,
+              40
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              40,
+              70
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "cubic_extrema",
+      "program": "f8889fa915eff75ceffb5cef8b080e",
+      "bounds": [
+        20,
+        30,
+        320,
+        118.8888888888889
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              120,
+              230
+            ],
+            [
+              220,
+              30
+            ],
+            [
+              320,
+              30
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "curve_line",
+      "program": "f8889fa915959fa9b3bdc7d1db180e",
+      "bounds": [
+        20,
+        30,
+        180,
+        230
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              50
+            ],
+            [
+              60,
+              90
+            ],
+            [
+              110,
+              150
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              180,
+              230
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "line_curve",
+      "program": "f8889fa915959fa9b3bdc7d1db190e",
+      "bounds": [
+        20,
+        30,
+        180,
+        230
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              30,
+              50
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              60,
+              90
+            ],
+            [
+              110,
+              150
+            ],
+            [
+              180,
+              230
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "vertical_curves",
+      "program": "f8889fa915959fa9b3bdc7d1db1a0e",
+      "bounds": [
+        20,
+        30,
+        100,
+        310
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              20,
+              40
+            ],
+            [
+              40,
+              70
+            ],
+            [
+              40,
+              110
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              40,
+              160
+            ],
+            [
+              100,
+              230
+            ],
+            [
+              100,
+              310
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "vertical_optional",
+      "program": "f8889fa91590959fa9b31a0e",
+      "bounds": [
+        20,
+        30,
+        45,
+        110
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              25,
+              40
+            ],
+            [
+              45,
+              70
+            ],
+            [
+              45,
+              110
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "horizontal_curves",
+      "program": "f8889fa915959fa9b3bdc7d1db1b0e",
+      "bounds": [
+        20,
+        30,
+        280,
+        130
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              30
+            ],
+            [
+              50,
+              60
+            ],
+            [
+              90,
+              60
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              140,
+              60
+            ],
+            [
+              200,
+              130
+            ],
+            [
+              280,
+              130
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "horizontal_optional",
+      "program": "f8889fa91590959fa9b31b0e",
+      "bounds": [
+        20,
+        30,
+        90,
+        65
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              35
+            ],
+            [
+              50,
+              65
+            ],
+            [
+              90,
+              65
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "alternating_hv",
+      "program": "f8889fa915959fa9b3bdc7d1db1f0e",
+      "bounds": [
+        20,
+        30,
+        190,
+        220
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              30
+            ],
+            [
+              50,
+              60
+            ],
+            [
+              50,
+              100
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              50,
+              150
+            ],
+            [
+              110,
+              220
+            ],
+            [
+              190,
+              220
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "alternating_hv_optional",
+      "program": "f8889fa915959fa9b3901f0e",
+      "bounds": [
+        20,
+        30,
+        55,
+        100
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              30
+            ],
+            [
+              50,
+              60
+            ],
+            [
+              55,
+              100
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "alternating_vh",
+      "program": "f8889fa915959fa9b3bdc7d1db1e0e",
+      "bounds": [
+        20,
+        30,
+        190,
+        220
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              20,
+              40
+            ],
+            [
+              40,
+              70
+            ],
+            [
+              80,
+              70
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              130,
+              70
+            ],
+            [
+              190,
+              140
+            ],
+            [
+              190,
+              220
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "alternating_vh_optional",
+      "program": "f8889fa915959fa9b3901e0e",
+      "bounds": [
+        20,
+        30,
+        80,
+        75
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              20,
+              40
+            ],
+            [
+              40,
+              70
+            ],
+            [
+              80,
+              75
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "hflex",
+      "program": "f8889fa915959fa9b3bdc7d10c220e",
+      "bounds": [
+        20,
+        30,
+        270,
+        60
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              30
+            ],
+            [
+              50,
+              60
+            ],
+            [
+              90,
+              60
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              140,
+              60
+            ],
+            [
+              200,
+              30
+            ],
+            [
+              270,
+              30
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "flex",
+      "program": "f8889fa915959fa9b3bdc7d1dbe5eff702f70cbd0c230e",
+      "bounds": [
+        20,
+        30,
+        380,
+        450
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              50
+            ],
+            [
+              60,
+              90
+            ],
+            [
+              110,
+              150
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              180,
+              230
+            ],
+            [
+              270,
+              330
+            ],
+            [
+              380,
+              450
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "hflex1",
+      "program": "f8889fa915959fa9b3bdc7d1dbe50c240e",
+      "bounds": [
+        20,
+        30,
+        330,
+        112.75555555555556
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              50
+            ],
+            [
+              60,
+              90
+            ],
+            [
+              110,
+              90
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              170,
+              90
+            ],
+            [
+              240,
+              170
+            ],
+            [
+              330,
+              30
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "flex1_horizontal",
+      "program": "f8889fa915958c9f8da98eb38fbd90c70c250e",
+      "bounds": [
+        20,
+        30,
+        230,
+        40.12998312412651
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              31
+            ],
+            [
+              50,
+              33
+            ],
+            [
+              80,
+              36
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              120,
+              40
+            ],
+            [
+              170,
+              45
+            ],
+            [
+              230,
+              30
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "flex1_vertical",
+      "program": "f8889fa9158c958d9f8ea98fb390bdc70c250e",
+      "bounds": [
+        20,
+        30,
+        30.12998312412651,
+        240
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              21,
+              40
+            ],
+            [
+              23,
+              60
+            ],
+            [
+              26,
+              90
+            ]
+          ]
+        ],
+        [
+          "curveTo",
+          [
+            [
+              30,
+              130
+            ],
+            [
+              35,
+              180
+            ],
+            [
+              20,
+              240
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    },
+    {
+      "name": "local_and_global_subrs",
+      "program": "f8889fa915200a201d0e",
+      "bounds": [
+        20,
+        30,
+        60,
+        90
+      ],
+      "width": 600,
+      "commands": [
+        [
+          "moveTo",
+          [
+            [
+              20,
+              30
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              30,
+              50
+            ]
+          ]
+        ],
+        [
+          "lineTo",
+          [
+            [
+              60,
+              90
+            ]
+          ]
+        ],
+        [
+          "closePath",
+          []
+        ]
+      ]
+    }
+  ]
+}

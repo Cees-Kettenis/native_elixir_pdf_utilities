@@ -1595,9 +1595,31 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             loader = fn ->
               reserve_source(data)
 
-              NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator.prepare_glyph_bounds(
-                data
-              )
+              case data do
+                <<"OTTO", _::binary>> ->
+                  case prepare_ttf(data) do
+                    {:ok, %{cff: cff}} ->
+                      {:ok, cff.glyph_bounds}
+
+                    {:error, _} = error ->
+                      error
+
+                    _ ->
+                      Diagnostics.error(
+                        :font,
+                        :invalid_font,
+                        "CFF font is missing required OpenType metrics",
+                        operation: :glyph_bounds,
+                        module: __MODULE__,
+                        source: "OpenType CFF"
+                      )
+                  end
+
+                _ ->
+                  NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator.prepare_glyph_bounds(
+                    data
+                  )
+              end
             end
 
             {cached_data, result} = memo({:glyph_bounds, id}, fn -> {data, loader.()} end)
@@ -1609,7 +1631,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             Diagnostics.error(
               :font,
               :invalid_document,
-              "glyph bounds require an embedded TrueType font",
+              "glyph bounds require an embedded outline font",
               module: __MODULE__,
               operation: :glyph_bounds
             )
@@ -1708,7 +1730,9 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                  glyph_count
                ),
              {:ok, embedding_flags} <- font_embedding_flags(data, tables),
-             {:ok, ligatures} <- prepare_latin_ligatures(data, tables, glyph_count, cmap) do
+             {:ok, ligatures} <- prepare_latin_ligatures(data, tables, glyph_count, cmap),
+             {:ok, outline} <-
+               prepare_outline_format(data, tables, maxp, glyph_count, units_per_em) do
           {:ok,
            %{
              units_per_em: units_per_em,
@@ -1723,11 +1747,46 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
              bbox: bbox,
              embedding_flags: embedding_flags,
              variable_font?: Map.has_key?(tables, "fvar")
-           }}
+           }
+           |> Map.merge(outline)}
         end
 
       _ ->
         :error
+    end
+  end
+
+  defp prepare_outline_format(data, tables, maxp, glyph_count, units) do
+    case data do
+      <<"OTTO", _::binary>> ->
+        with true <-
+               maxp == <<0x0000_5000::32, glyph_count::16>> and not Map.has_key?(tables, "glyf") and
+                 not Map.has_key?(tables, "loca"),
+             {:ok, cff} <- table(data, tables, "CFF "),
+             {:ok, face} <-
+               NativeElixirPdfUtilities.Validators.CffCharstringValidator.prepare_metrics(
+                 cff,
+                 glyph_count,
+                 units
+               ) do
+          {:ok, %{outline_format: :cff, cff: face}}
+        else
+          {:error, _} = error ->
+            error
+
+          _ ->
+            Diagnostics.error(
+              :font,
+              :invalid_font,
+              "CFF OpenType requires a CFF 1 table, maxp 0.5 and no TrueType outline tables",
+              module: __MODULE__,
+              operation: :prepare_cff_source,
+              source: "OpenType CFF"
+            )
+        end
+
+      _ ->
+        {:ok, %{}}
     end
   end
 
@@ -1772,14 +1831,14 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     end
   end
 
-  @doc "Admits one standalone TrueType directory for loading, metrics and subsetting. This library requires unique tags and validates every range, including opaque custom tables."
+  @doc "Admits one standalone TrueType or CFF OpenType directory for loading, metrics and subsetting. This library requires unique tags and validates every range, including opaque custom tables."
   @spec prepare_table_directory(term()) ::
           {:ok, non_neg_integer(), %{binary() => {non_neg_integer(), non_neg_integer()}}}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_table_directory(data) do
     case data do
       <<scaler::32, count::16, _search::16, _selector::16, _shift::16, rest::binary>>
-      when scaler in [0x0001_0000, 0x7472_7565] and count > 0 and
+      when scaler in [0x0001_0000, 0x7472_7565, 0x4F54_544F] and count > 0 and
              byte_size(rest) >= count * 16 ->
         directory_bytes = 12 + count * 16
 
