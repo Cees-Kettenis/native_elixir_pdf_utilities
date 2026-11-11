@@ -3197,6 +3197,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              assert Font.text_width("B", font, 10) == 7.0
            end)
 
+    for identity <- [:missing, nil, false] do
+      anonymous =
+        if identity == :missing, do: Map.delete(font, :id), else: Map.put(font, :id, identity)
+
+      assert Font.with_measurement_cache(fn ->
+               assert Font.text_width("A", anonymous, 10) == 6.0
+               assert Font.text_width("A", %{anonymous | widths: [0, 900, 700]}, 10) == 9.0
+               assert Font.text_width("A", anonymous, 10) == 6.0
+             end)
+    end
+
     Limits.install(%{Limits.effective() | max_layout_measurement_cache_entries: 1})
 
     assert Font.with_measurement_cache(fn ->
@@ -3988,31 +3999,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              )
   end
 
-  test "rejects variable fonts instead of using their default instance" do
+  test "rejects malformed variation metadata with actionable source context" do
     variable_font =
       valid_tables()
       |> Map.put("fvar", <<1::16, 0::16>>)
       |> ttf_fixture()
 
     assert {:error,
-            {:invalid_document,
-             %{
-               stage: :font,
-               reason: :invalid_document,
-               source: "Variable Sans",
-               message:
-                 "font \"Variable Sans\" uses OpenType variations; provide a static font instance for PDF embedding"
-             }}} =
+            {:invalid_font, %{stage: :font, source: "OpenType variations", message: message}}} =
              Font.load_registry(fonts: [%{family: "Variable Sans", data: variable_font}])
 
+    assert message =~ "fvar header"
+
     assert {:error,
-            {:invalid_document,
+            {:invalid_font,
              %{
                stage: :font,
-               reason: :invalid_document,
-               operation: :render,
-               module: NativeElixirPdfUtilities.HtmlToPdf,
-               source: "Variable Sans"
+               operation: :instantiate_font,
+               module: NativeElixirPdfUtilities.Validators.FontVariationValidator,
+               source: "OpenType variations"
              }}} =
              NativeElixirPdfUtilities.HtmlToPdf.render("<p>hello</p>",
                fonts: [%{family: "Variable Sans", data: variable_font}]

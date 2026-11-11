@@ -134,50 +134,69 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
     end
   end
 
+  @doc "Measures admitted SVG artwork with the existing renderer's vector bounds before allocating a raster."
+  @spec measure_bounds(binary(), String.t(), map()) ::
+          {:ok, tuple() | nil} | {:error, {atom(), map()}}
+  def measure_bounds(source, id, context \\ %{mode: :image}) do
+    with {:ok, request} <- SvgConverterValidator.prepare_bounds(source, id, context) do
+      with_staging(fn directory ->
+        path = Path.join(directory, "bounds.svg")
+
+        with :ok <- File.write(path, request.source, [:binary, :exclusive]) do
+          Resvg.query_all(path, skip_system_fonts: true, resources_dir: directory)
+          |> SvgConverterValidator.bounds_result(id)
+        end
+      end)
+    end
+  end
+
   # The converter accepts font files, so snapshot only bytes already authorized
   # by the canonical font validator. No caller path is read here.
   defp convert(request) do
+    with_staging(fn directory ->
+      with {:ok, files} <-
+             Enum.reduce_while(request.fonts, {:ok, []}, fn bytes, {:ok, files} ->
+               path = Path.join(directory, Integer.to_string(length(files)) <> ".ttf")
+
+               case File.write(path, bytes, [:binary, :exclusive]) do
+                 :ok -> {:cont, {:ok, [path | files]}}
+                 error -> {:halt, error}
+               end
+             end),
+           {:ok, fontdb} <-
+             Resvg.init_fontdb(
+               request.options ++ [font_files: Enum.reverse(files), skip_system_fonts: true]
+             ),
+           result <-
+             Resvg.svg_string_to_png_binary(
+               request.source,
+               request.options ++
+                 [resources_dir: directory, skip_system_fonts: true, fontdb: fontdb]
+             ) do
+        SvgValidator.conversion_result(result)
+      end
+    end)
+  end
+
+  defp with_staging(operation) do
     directory =
       Path.join(
         System.tmp_dir!(),
         "nepu-svg-#{System.pid()}-" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
       )
 
-    case File.mkdir(directory) do
-      :ok ->
+    result =
+      with :ok <- File.mkdir(directory) do
         try do
-          with :ok <- File.chmod(directory, 0o700),
-               {:ok, files} <-
-                 Enum.reduce_while(request.fonts, {:ok, []}, fn bytes, {:ok, files} ->
-                   path = Path.join(directory, Integer.to_string(length(files)) <> ".ttf")
-
-                   case File.write(path, bytes, [:binary, :exclusive]) do
-                     :ok -> {:cont, {:ok, [path | files]}}
-                     error -> {:halt, error}
-                   end
-                 end),
-               {:ok, fontdb} <-
-                 Resvg.init_fontdb(
-                   request.options ++
-                     [font_files: Enum.reverse(files), skip_system_fonts: true]
-                 ),
-               result <-
-                 Resvg.svg_string_to_png_binary(
-                   request.source,
-                   request.options ++
-                     [resources_dir: directory, skip_system_fonts: true, fontdb: fontdb]
-                 ) do
-            SvgValidator.conversion_result(result)
-          else
-            {:error, reason} ->
-              SvgConverterValidator.staging_error(reason)
-          end
+          with :ok <- File.chmod(directory, 0o700), do: operation.(directory)
         after
           File.rm_rf(directory)
         end
+      end
 
-      {:error, reason} ->
-        SvgConverterValidator.staging_error(reason)
+    case result do
+      {:error, reason} when is_atom(reason) -> SvgConverterValidator.staging_error(reason)
+      result -> result
     end
   end
 end

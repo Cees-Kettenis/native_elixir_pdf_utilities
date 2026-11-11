@@ -5,25 +5,50 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.CffData
   alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator}
 
+  @doc "Returns the fixed Type 2 subroutine bias for an admitted INDEX count."
+  @spec subroutine_bias(non_neg_integer()) :: 107 | 1131 | 32768
+  def subroutine_bias(count) do
+    cond do
+      count < 1240 -> 107
+      count < 33900 -> 1131
+      true -> 32768
+    end
+  end
+
   @doc "Reads a bounded CFF 1 INDEX, preserving its individual object boundaries."
-  @spec prepare_index(term(), term()) ::
+  @spec prepare_index(term(), term(), 1 | 2) ::
           {:ok, tuple(), non_neg_integer()} | {:error, {atom(), map()}}
-  def prepare_index(data, offset) do
+  def prepare_index(data, offset, version \\ 1) do
     with_data(data, fn ->
-      {objects, finish} = index(data, offset)
+      unless version in [1, 2], do: invalid("CFF INDEX version must be one or two", "CFF INDEX")
+      {objects, finish} = index(data, offset, if(version == 1, do: 2, else: 4))
       {:ok, objects, finish}
     end)
   end
 
   @doc "Reads CFF DICT operands and operators without executing their semantics."
-  @spec prepare_dictionary(term()) :: {:ok, map()} | {:error, {atom(), map()}}
-  def prepare_dictionary(data) do
-    with_data(data, fn -> {:ok, dictionary(data)} end)
+  @spec prepare_dictionary(term(), map() | nil) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_dictionary(data, context \\ nil) do
+    with_data(data, fn -> {:ok, dictionary(data, context)} end)
   end
 
   @doc "Admits CFF 1 dictionary, character-program and subroutine ownership. This does not execute or enable embedding of its programs."
-  @spec prepare(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
-  def prepare(data, glyph_count) do
+  @spec prepare(term(), term(), [number()]) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare(data, glyph_count, coordinates \\ []) do
+    case data do
+      <<2, _::binary>> ->
+        NativeElixirPdfUtilities.Validators.Cff2FontValidator.prepare(
+          data,
+          glyph_count,
+          coordinates
+        )
+
+      _ ->
+        prepare_cff1(data, glyph_count)
+    end
+  end
+
+  defp prepare_cff1(data, glyph_count) do
     with_data(data, fn ->
       unless is_integer(glyph_count) and glyph_count in 1..65_535,
         do:
@@ -190,16 +215,16 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
     end)
   end
 
-  defp index(data, offset) do
-    <<count::16>> = read(data, offset, 2)
+  defp index(data, offset, count_bytes \\ 2) do
+    count = :binary.decode_unsigned(read(data, offset, count_bytes))
     FontValidator.reserve(:max_font_cff_work, count + 2)
 
     if count == 0 do
-      {{}, offset + 2}
+      {{}, offset + count_bytes}
     else
-      <<size>> = read(data, offset + 2, 1)
+      <<size>> = read(data, offset + count_bytes, 1)
       unless size in 1..4, do: invalid("CFF INDEX offset size must be 1..4", "CFF INDEX")
-      positions = read(data, offset + 3, (count + 1) * size)
+      positions = read(data, offset + count_bytes + 1, (count + 1) * size)
       offsets = for <<value::unsigned-big-integer-size(^size * 8) <- positions>>, do: value
       [first | _] = offsets
 
@@ -208,7 +233,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
              do: invalid("CFF INDEX offsets must be ascending and start at one", "CFF INDEX")
 
       size_of_data = List.last(offsets) - 1
-      start = offset + 3 + byte_size(positions)
+      start = offset + count_bytes + 1 + byte_size(positions)
       read(data, start, size_of_data)
       FontValidator.reserve(:max_font_cff_work, byte_size(positions) + size_of_data)
 
@@ -221,14 +246,15 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
     end
   end
 
-  defp dictionary(data) do
+  defp dictionary(data, context \\ nil) do
     # Admit the complete encoded dictionary before scanning variable-size real
     # operands. Its 48-operand stack is a fixed CFF protocol bound.
     FontValidator.reserve(:max_font_cff_work, byte_size(data))
-    dictionary_items(data, [], %{})
+    context = context || %{version: 1, store: {}, vsindex: 0, kind: :cff1}
+    dictionary_items(data, [], %{}, context)
   end
 
-  defp dictionary_items(data, operands, values) do
+  defp dictionary_items(data, operands, values, context) do
     case data do
       <<>> ->
         unless operands == [],
@@ -237,21 +263,72 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
         values
 
       <<12, escaped, rest::binary>> ->
-        dictionary_items(rest, [], Map.put(values, {12, escaped}, Enum.reverse(operands)))
+        if context.version == 2 and Map.has_key?(values, {12, escaped}),
+          do: invalid("CFF2 DICT keys must be unique", "CFF2 DICT")
+
+        dictionary_items(
+          rest,
+          [],
+          Map.put(values, {12, escaped}, Enum.reverse(operands)),
+          context
+        )
 
       <<12>> ->
         invalid("CFF DICT escape operator is truncated", "CFF DICT")
 
-      <<operator, rest::binary>> when operator <= 21 ->
-        dictionary_items(rest, [], Map.put(values, operator, Enum.reverse(operands)))
+      <<22, rest::binary>> when context.version == 2 and context.kind == :private ->
+        if Map.has_key?(values, 22) or Map.get(context, :blend_seen?, false),
+          do:
+            invalid(
+              "CFF2 Private vsindex may occur only once before blending",
+              "CFF2 Private DICT"
+            )
+
+        case operands do
+          [index] when is_integer(index) and index >= 0 and index < tuple_size(context.store) ->
+            dictionary_items(rest, [], Map.put(values, 22, [index]), %{context | vsindex: index})
+
+          _ ->
+            invalid(
+              "CFF2 Private vsindex selects an unavailable variation data table",
+              "CFF2 Private DICT"
+            )
+        end
+
+      <<23, rest::binary>> when context.version == 2 and context.kind == :private ->
+        case NativeElixirPdfUtilities.Validators.VariationStoreValidator.blend(
+               Enum.reverse(operands),
+               context.store,
+               context.vsindex
+             ) do
+          {:ok, blended} ->
+            dictionary_items(
+              rest,
+              Enum.reverse(blended),
+              values,
+              Map.put(context, :blend_seen?, true)
+            )
+
+          error ->
+            throw({:cff_invalid, error})
+        end
+
+      <<operator, rest::binary>>
+      when operator <= 21 or (context.version == 2 and operator in [24, 25]) ->
+        if context.version == 2 and Map.has_key?(values, operator),
+          do: invalid("CFF2 DICT keys must be unique", "CFF2 DICT")
+
+        dictionary_items(rest, [], Map.put(values, operator, Enum.reverse(operands)), context)
 
       _ ->
-        unless length(operands) < 48,
-          do: invalid("CFF DICT exceeds its fixed 48-operand stack", "CFF DICT")
+        maximum = if context.version == 2, do: 513, else: 48
+
+        unless length(operands) < maximum,
+          do: invalid("CFF DICT exceeds its fixed #{maximum}-operand stack", "CFF DICT")
 
         {number, rest} = operand(data)
         FontValidator.check(:max_font_numeric_magnitude, ceil(abs(number)))
-        dictionary_items(rest, [number | operands], values)
+        dictionary_items(rest, [number | operands], values, context)
     end
   end
 
@@ -350,12 +427,18 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
     matrix =
       if Map.has_key?(values, {12, 7}), do: vector(values, {12, 7}, nil, 6, "CFF FD FontMatrix")
 
+    seed = number(private, {12, 19}, 0, "CFF initialRandomSeed")
+
+    unless is_integer(seed) and seed in -2_147_483_648..2_147_483_647,
+      do: invalid("CFF initialRandomSeed requires a signed 32-bit integer", "CFF Private DICT")
+
     {%{
        dictionary: values,
        private: private,
        local_subrs: local_subrs,
        default_width: number(private, 20, 0, "CFF defaultWidthX"),
        nominal_width: number(private, 21, 0, "CFF nominalWidthX"),
+       random_seed: seed,
        font_matrix: matrix
      }, owners}
   end
@@ -496,7 +579,17 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
     end
   end
 
-  defp fd_select(data, start, glyph_count, font_count) do
+  @doc "Admits CFF font-dictionary selection, including CFF2's 32-bit range format."
+  @spec prepare_fd_select(binary(), non_neg_integer(), pos_integer(), pos_integer(), 1 | 2) ::
+          {:ok, tuple(), non_neg_integer()} | {:error, {atom(), map()}}
+  def prepare_fd_select(data, start, glyph_count, font_count, version) do
+    with_data(data, fn ->
+      {select, finish} = fd_select(data, start, glyph_count, font_count, version)
+      {:ok, select, finish}
+    end)
+  end
+
+  defp fd_select(data, start, glyph_count, font_count, version \\ 1) do
     <<format>> = read(data, start, 1)
 
     {indices, finish} =
@@ -505,12 +598,24 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
           bytes = read(data, start + 1, glyph_count)
           {:binary.bin_to_list(bytes), start + 1 + glyph_count}
 
-        3 ->
-          <<count::16>> = read(data, start + 1, 2)
+        format when format == 3 or (format == 4 and version == 2) ->
+          count_width = if format == 3, do: 2, else: 4
+          entry_width = if format == 3, do: 3, else: 6
+          count = :binary.decode_unsigned(read(data, start + 1, count_width))
           unless count > 0, do: invalid("CFF FDSelect ranges must not be empty", "CFF FDSelect")
-          bytes = read(data, start + 3, count * 3)
-          <<sentinel::16>> = read(data, start + 3 + byte_size(bytes), 2)
-          ranges = for <<first::16, font <- bytes>>, do: {first, font}
+          FontValidator.reserve(:max_font_cff_work, count)
+          bytes = read(data, start + 1 + count_width, count * entry_width)
+
+          sentinel =
+            :binary.decode_unsigned(
+              read(data, start + 1 + count_width + byte_size(bytes), count_width)
+            )
+
+          ranges =
+            if format == 3,
+              do: for(<<first::16, font <- bytes>>, do: {first, font}),
+              else: for(<<first::32, font::16 <- bytes>>, do: {first, font})
+
           [{first, _} | _] = ranges
 
           unless first == 0 and sentinel == glyph_count and
@@ -527,7 +632,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
             |> Enum.chunk_every(2, 1, :discard)
             |> Enum.flat_map(fn [{a, font}, {b, _}] -> List.duplicate(font, b - a) end)
 
-          {indices, start + 3 + byte_size(bytes) + 2}
+          {indices, start + 1 + count_width * 2 + byte_size(bytes)}
 
         _ ->
           invalid("CFF 1 FDSelect format must be 0 or 3", "CFF FDSelect")

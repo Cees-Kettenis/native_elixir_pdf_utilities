@@ -191,6 +191,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
       assert diagnostic.operation == :convert
       assert diagnostic.message =~ "could not stage approved SVG font bytes"
       assert diagnostic.message =~ "enametoolong"
+
+      assert {:error, {:invalid_document, bounds_diagnostic}} =
+               SvgRasterizer.measure_bounds(
+                 String.replace(source, "<rect", "<rect id='ink'"),
+                 "ink"
+               )
+
+      assert bounds_diagnostic.message =~ "enametoolong"
     after
       if previous, do: System.put_env("TMPDIR", previous), else: System.delete_env("TMPDIR")
       File.rm_rf!(base)

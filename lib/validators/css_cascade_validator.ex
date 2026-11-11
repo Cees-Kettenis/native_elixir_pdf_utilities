@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
 
   @sides ~w(top right bottom left)
+  @font_controls NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties()
   @simple ~w(color accent-color appearance content-visibility visibility resize box-sizing border-radius
     text-transform quotes content counter-reset counter-increment counter-set letter-spacing
     vertical-align width height min-width max-width min-height max-height orphans widows
@@ -65,6 +66,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             "text-decoration-style" => [[:text_decoration_style]],
             "text-decoration-thickness" => [[:text_decoration_thickness]]
           })
+          |> Map.merge(
+            NativeElixirPdfUtilities.Validators.CssFontControlsValidator.cascade_fields()
+          )
           |> then(fn fields ->
             Enum.reduce(@sides, fields, fn side, fields ->
               edge = String.to_atom(side)
@@ -98,7 +102,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                   for(side <- @sides, kind <- ~w(width color style), do: "border-#{side}-#{kind}"),
                 "background" =>
                   ~w(background-color background-image background-position background-size background-repeat),
-                "font" => ~w(font-size line-height font-family font-weight font-style font-width),
+                "font" =>
+                  ~w(font-size line-height font-family font-weight font-style font-width) ++
+                    NativeElixirPdfUtilities.Validators.CssFontControlsValidator.font_resets(),
+                "font-variant" =>
+                  NativeElixirPdfUtilities.Validators.CssFontControlsValidator.variant_properties(),
+                "font-synthesis" =>
+                  NativeElixirPdfUtilities.Validators.CssFontControlsValidator.synthesis_properties(),
                 "list-style" => ~w(list-style-type list-style-position list-style-image),
                 "text-decoration" =>
                   ~w(text-decoration-line text-decoration-color text-decoration-style text-decoration-thickness),
@@ -123,7 +133,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   @inherited ~w(color accent-color font-size font-family font-style font-weight font-width line-height
     letter-spacing text-align text-transform quotes white-space word-break overflow-wrap line-break
     orphans widows caption-side border-collapse border-spacing list-style-type list-style-position
-    list-style-image visibility block-ellipsis writing-mode direction math-style math-shift math-depth)
+    list-style-image visibility block-ellipsis writing-mode direction math-style math-shift math-depth) ++
+               @font_controls
   @inherited_fields @inherited
                     |> Enum.flat_map(fn property ->
                       Enum.map(Map.fetch!(@fields, property), &hd/1)
@@ -670,6 +681,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         font_style: :normal,
         font_width: 100,
         font_oblique: nil,
+        font_controls: %{},
         font_family: nil,
         font_face: nil,
         letter_spacing: 0.0,

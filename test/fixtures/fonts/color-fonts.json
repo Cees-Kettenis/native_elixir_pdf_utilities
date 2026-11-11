@@ -1,0 +1,129 @@
+{
+  "generator": "FontTools 4.66.1; original drawings and RGBA pixels",
+  "files": {
+    "selected-sbix.ttf": {
+      "sha256": "4fef48c6bd9bb65b50a2bc27a43d0553d704f649c3ca2cbf19022b390b4cf6b5",
+      "glyphs": {
+        "H": 2,
+        "x": 3,
+        "zero": 4
+      },
+      "strikes": [
+        20,
+        40
+      ]
+    },
+    "selected-cbdt.ttf": {
+      "sha256": "0150c3bead11cfa728b6ba6a529e6199bb0d089bdc27666135272d0d552119ed",
+      "glyphs": {
+        "H": 2,
+        "x": 3,
+        "zero": 4
+      },
+      "strikes": [
+        20,
+        40
+      ]
+    },
+    "selected-colr.ttf": {
+      "sha256": "cefdd5b3f1c2522770b0df120593f2b208cf21768cf513366c3d244f7d67b5eb",
+      "palette_types": [
+        1,
+        2
+      ],
+      "palettes": [
+        [
+          [
+            240,
+            41,
+            31,
+            255
+          ],
+          [
+            20,
+            71,
+            240,
+            128
+          ]
+        ],
+        [
+          [
+            26,
+            191,
+            51,
+            255
+          ],
+          [
+            242,
+            178,
+            26,
+            255
+          ]
+        ]
+      ]
+    },
+    "selected-colr-v1.ttf": {
+      "sha256": "9321540e031b113bd27f19e37ec625529dfba5f29442308d6b88ef2ae253c8da",
+      "palette_types": [
+        1,
+        2
+      ],
+      "palettes": [
+        [
+          [
+            240,
+            41,
+            31,
+            255
+          ],
+          [
+            20,
+            71,
+            240,
+            128
+          ]
+        ],
+        [
+          [
+            26,
+            191,
+            51,
+            255
+          ],
+          [
+            242,
+            178,
+            26,
+            255
+          ]
+        ]
+      ]
+    },
+    "selected-svg.ttf": {
+      "sha256": "f9c3e2e537f4003044edf68d4af33eb58a9c671ec4d14ab15d5e3a030d4c7bbf",
+      "glyphs": [
+        2,
+        3
+      ],
+      "gzip": false,
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\"><defs><linearGradient id=\"ink\"><stop offset=\"0\" stop-color=\"var(--color0, red)\"/><stop offset=\"1\" stop-color=\"var(--color1, blue)\"/></linearGradient></defs><g id=\"glyph2\"><rect x=\"80\" y=\"-700\" width=\"100\" height=\"700\" fill=\"url(#ink)\"/><rect x=\"420\" y=\"-700\" width=\"100\" height=\"700\" fill=\"currentColor\"/><rect x=\"180\" y=\"-400\" width=\"240\" height=\"100\" fill=\"url(#ink)\"/></g><g id=\"glyph3\"><circle cx=\"300\" cy=\"-250\" r=\"250\" fill=\"var(--color0, red)\"/></g></svg>"
+    },
+    "selected-svg-gzip.ttf": {
+      "sha256": "299d7fb93a73ce52f874fb73481afec8792c13f9e9c11acc407a2acaadea9fd7",
+      "glyphs": [
+        2,
+        3
+      ],
+      "gzip": true,
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\"><defs><linearGradient id=\"ink\"><stop offset=\"0\" stop-color=\"var(--color0, red)\"/><stop offset=\"1\" stop-color=\"var(--color1, blue)\"/></linearGradient></defs><g id=\"glyph2\"><rect x=\"80\" y=\"-700\" width=\"100\" height=\"700\" fill=\"url(#ink)\"/><rect x=\"420\" y=\"-700\" width=\"100\" height=\"700\" fill=\"currentColor\"/><rect x=\"180\" y=\"-400\" width=\"240\" height=\"100\" fill=\"url(#ink)\"/></g><g id=\"glyph3\"><circle cx=\"300\" cy=\"-250\" r=\"250\" fill=\"var(--color0, red)\"/></g></svg>"
+    },
+    "selected-bitmap-only.ttf": {
+      "sha256": "4fe71bc17a5c3ccc4c20b03bf8f1b5cb544f0c6a248eaae880c31267fbdb523a",
+      "source": "selected-cbdt.ttf",
+      "absent": [
+        "glyf",
+        "loca"
+      ]
+    }
+  }
+}

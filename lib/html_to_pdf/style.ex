@@ -99,6 +99,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     :_inherited_font,
     :_position_viewport,
     :_property_registrations,
+    :_font_definitions,
     :image,
     :svg_image,
     :_text_decorations,
@@ -426,6 +427,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   compiled_rules =
                     compile_selector_rules(rules)
                     |> Map.put(
+                      :font_definitions,
+                      NativeElixirPdfUtilities.Validators.CssFontRuleValidator.combine(
+                        stylesheet_entries
+                      )
+                    )
+                    |> Map.put(
                       :registrations,
                       NativeElixirPdfUtilities.Validators.CssCascadeValidator.registrations(
                         stylesheet_entries
@@ -655,6 +662,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                      compiled =
                        compile_selector_rules(rules)
+                       |> Map.put(
+                         :font_definitions,
+                         NativeElixirPdfUtilities.Validators.CssFontRuleValidator.combine(
+                           context_entries
+                         )
+                       )
                        |> Map.put(
                          :registrations,
                          NativeElixirPdfUtilities.Validators.CssCascadeValidator.registrations(
@@ -3912,6 +3925,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :_text_decorations,
           :_custom_properties,
           :_font_registry,
+          :_font_definitions,
           :_base_select,
           :_root_font_size,
           :_root_font_face,
@@ -5080,6 +5094,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       |> Map.put(:_cascade_ua, style)
       |> Map.put(:_cascade_inherited, inherited)
       |> Map.put(:_property_registrations, Map.get(rules.rules, :registrations, %{}))
+      |> then(fn style ->
+        case Map.get(rules.rules, :font_definitions, %{}) do
+          definitions when map_size(definitions) == 0 -> style
+          definitions -> Map.put(style, :_font_definitions, definitions)
+        end
+      end)
       |> Map.put(:_position_viewport, Map.get(rules, :position_viewport))
 
     inline_style =
@@ -5130,7 +5150,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   specificity: {0, 0, 0},
                   order: 0,
                   declaration_index: declaration_index,
-                  definition_scope: Map.get(node, :tree_scope_id),
+                  definition_scope: Map.get(node, :shadow_scope_id),
                   encapsulation: 0
                 }
 
@@ -5703,7 +5723,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              Map.fetch!(style, :font_style),
              registry,
              cache
-           ) do
+           ),
+         {:ok, style} <-
+           (case Map.get(style, :font_controls) do
+              %{:"size-adjust" => {_, :from_font}} ->
+                NativeElixirPdfUtilities.Validators.FontMetricValidator.prepare_reference(
+                  font_face,
+                  style
+                )
+
+              _ ->
+                {:ok, style}
+            end),
+         {:ok, font_face} <-
+           NativeElixirPdfUtilities.Validators.FontRenderingValidator.prepare(font_face, style) do
       {:ok,
        style
        |> Map.put(:_font_registry, registry)

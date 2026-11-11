@@ -162,7 +162,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                      page_options: page_options,
                      cascade: %{
                        layers: Enum.filter(cascade.layers, &Map.get(&1, :condition_active, true)),
-                       registrations: registrations
+                       registrations: registrations,
+                       font_definitions:
+                         NativeElixirPdfUtilities.Validators.CssFontRuleValidator.prepare(
+                           Enum.filter(cascade.font_rules, &Map.get(&1, :condition_active, true))
+                         )
                      }
                    }}
                 end
@@ -249,7 +253,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                    cascade.layers,
                    &(source_active?(&1.offset, media) and Map.get(&1, :condition_active, true))
                  ),
-               registrations: registrations
+               registrations: registrations,
+               font_definitions:
+                 NativeElixirPdfUtilities.Validators.CssFontRuleValidator.prepare(
+                   Enum.filter(
+                     cascade.font_rules,
+                     &(source_active?(&1.offset, media) and Map.get(&1, :condition_active, true))
+                   )
+                 )
              },
              authored_rules: rules,
              authored_fonts: fonts,

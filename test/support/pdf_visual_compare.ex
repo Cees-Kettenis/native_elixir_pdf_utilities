@@ -1581,7 +1581,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
     regions =
       for {name, {source_x, source_y, source_width, source_height}} <-
-            Keyword.get(opts, :regions, []) do
+            opts
+            |> Keyword.get(:page_regions, %{})
+            |> Map.get(page_number, Keyword.get(opts, :regions, [])) do
         scale =
           if Keyword.get(opts, :svg_reference) == :png,
             do: Keyword.fetch!(opts, :dpi) / 72,

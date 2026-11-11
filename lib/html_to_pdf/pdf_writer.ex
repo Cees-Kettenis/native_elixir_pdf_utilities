@@ -135,7 +135,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       HtmlValidator.with_render_budget(fn ->
         case WriterValidator.prepare(pages, opts) do
           {:ok, context} ->
-            with {:ok, pages, controls} <-
+            with {:ok, context} <-
+                   NativeElixirPdfUtilities.Validators.ColorFontValidator.prepare(context, opts),
+                 {:ok, pages, controls} <-
                    NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
                      context.pages,
                      Keyword.put(opts, :__retain_html_identity__, true)
@@ -196,6 +198,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     Font.with_measurement_cache(fn ->
       HtmlValidator.with_render_budget(fn ->
         with {:ok, context} <- WriterValidator.prepare_appearances(frames, first_object_id),
+             {:ok, context} <-
+               NativeElixirPdfUtilities.Validators.ColorFontValidator.prepare(context, []),
              {fonts, next} <- font_resources(context.pages, first_object_id),
              {:ok, fonts} <- subset_font_resources(fonts, context.subset_fonts) do
           frames = prepare_images(context.pages)
@@ -921,13 +925,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         coordinate_scale = if paint == nil, do: 1.0, else: paint.css_pixels_per_point
         text_operator = text_operator(box, font_resource, coordinate_scale)
 
+        synthesis =
+          case Map.get(box, :font_face) do
+            %{type: :embedded, synthesis: synthesis} -> synthesis
+            _ -> %{weight: false, shear: 0}
+          end
+
         text =
           case paint do
             nil ->
               {text_x, text_y} = DrawingGeometry.text_position(box, page_height)
+              text_y = text_y + Font.baseline_offset(Map.get(box, :font_face, %{}), box.font_size)
 
               [
                 "BT",
+                if(synthesis.weight,
+                  do: [" 2 Tr ", format_number(font_size / 32), " w"],
+                  else: []
+                ),
                 " /",
                 font_resource.name,
                 " ",
@@ -940,11 +955,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                 " ",
                 format_number(blue),
                 " rg",
-                " ",
-                format_number(text_x),
-                " ",
-                format_number(text_y),
-                " Td",
+                if(synthesis.shear == 0,
+                  do: [" ", format_number(text_x), " ", format_number(text_y), " Td"],
+                  else: [
+                    " 1 0 ",
+                    format_number(synthesis.shear),
+                    " 1 ",
+                    format_number(text_x),
+                    " ",
+                    format_number(text_y),
+                    " Tm"
+                  ]
+                ),
                 text_operator,
                 " ET"
               ]
@@ -963,7 +985,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                 format_number(paint.css_scale),
                 " 0 0 ",
                 format_number(paint.css_scale),
-                " 0 0 cm BT /",
+                " 0 0 cm BT ",
+                if(synthesis.weight,
+                  do: ["2 Tr ", format_number(paint.size / 32), " w "],
+                  else: []
+                ),
+                "/",
                 font_resource.name,
                 " ",
                 format_number(paint.size),
@@ -974,7 +1001,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                 " ",
                 format_number(blue),
                 " rg ",
-                "1 0 0 -1 ",
+                if(synthesis.shear == 0,
+                  do: "1 0 0 -1 ",
+                  else: ["1 0 ", format_number(synthesis.shear), " -1 "]
+                ),
                 format_number(paint.x),
                 " ",
                 format_number(paint.y),
@@ -982,6 +1012,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                 text_operator,
                 " ET Q"
               ]
+          end
+
+        text =
+          if synthesis.weight or synthesis.shear != 0 do
+            stroke =
+              if synthesis.weight do
+                parts = [
+                  format_number(red),
+                  " ",
+                  format_number(green),
+                  " ",
+                  format_number(blue),
+                  " RG "
+                ]
+
+                case opacity_resource(box.color, :stroke, graphics_state_resources) do
+                  nil -> parts
+                  resource -> [parts, "/", resource.name, " gs "]
+                end
+              else
+                []
+              end
+
+            ["q ", stroke, text, " Q"]
+          else
+            text
           end
 
         text =
@@ -1006,12 +1062,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp painted_font_size(box) do
+    used_size = Font.used_size(Map.get(box, :font_face, %{}), box.font_size)
+
     case WriterValidator.css_source_text?(box) do
       true ->
-        Float.floor(box.font_size / @css_pixel_points * 100) / 100 * @css_pixel_points
+        Float.floor(used_size / @css_pixel_points * 100) / 100 * @css_pixel_points
 
       false ->
-        box.font_size
+        used_size
     end
   end
 
@@ -1030,10 +1088,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               do: box.text,
               else: Font.shape_ligatures(box.text, font, Map.get(box, :letter_spacing, 0))
 
+          used_size = Font.used_size(font, size)
+
           shaped_size =
             if css_advances?,
-              do: Float.floor(size / 0.75 * 64) / 64 * 0.75,
-              else: size
+              do: Float.floor(used_size / 0.75 * 64) / 64 * 0.75,
+              else: used_size
 
           painted_size = painted_font_size(box)
 
@@ -1139,10 +1199,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   defp glyph_text_operator(box, glyph_ids, resource) do
     font = resource.font_face
 
+    used_size = Font.used_size(font, box.font_size)
+
     shaped_size =
       if Map.get(box, :snap_to_css_pixel_grid, false),
-        do: Float.floor(box.font_size / 0.75 * 64) / 64 * 0.75,
-        else: box.font_size
+        do: Float.floor(used_size / 0.75 * 64) / 64 * 0.75,
+        else: used_size
 
     painted_size = painted_font_size(box)
 
@@ -2644,7 +2706,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     group_keys ++
       case box.type do
         :text ->
-          opacity_resource_keys(box.color, :fill)
+          opacity_resource_keys(box.color, :fill) ++
+            case Map.get(box, :font_face) do
+              %{type: :embedded, synthesis: %{weight: true}} ->
+                opacity_resource_keys(box.color, :stroke)
+
+              _ ->
+                []
+            end
 
         :rect ->
           border_colors =
@@ -3426,9 +3495,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       end
 
     decode = if Map.get(image, :inverted_cmyk, false), do: " /Decode [1 0 1 0 1 0 1 0]", else: ""
+    interpolation = if Map.get(image, :interpolate, false), do: " /Interpolate true", else: ""
 
     entries =
-      " /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{color_space} /BitsPerComponent #{image.bits_per_component}#{filter}#{smask}#{decode}#{color_transform}"
+      " /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace #{color_space} /BitsPerComponent #{image.bits_per_component}#{filter}#{smask}#{decode}#{color_transform}#{interpolation}"
 
     stream_object(image_color_data(image), image.format == :png, entries, 0)
   end
@@ -3524,8 +3594,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   end
 
   defp image_mask_object(image) do
+    interpolation = if Map.get(image, :interpolate, false), do: " /Interpolate true", else: ""
+
     entries =
-      " /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace /DeviceGray /BitsPerComponent #{image.bits_per_component}"
+      " /Type /XObject /Subtype /Image /Width #{image.width_px} /Height #{image.height_px} /ColorSpace /DeviceGray /BitsPerComponent #{image.bits_per_component}#{interpolation}"
 
     stream_object(Map.fetch!(image, :alpha_data), true, entries, 0)
   end
@@ -3584,6 +3656,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       :crypto.hash(:sha256, image.data) |> Base.encode16(case: :lower)
     else
       :crypto.hash(:sha256, [
+        if(Map.get(image, :interpolate, false), do: "interpolate", else: []),
         :erlang.term_to_binary(
           {image.format, image.width_px, image.height_px, image.color_space,
            image.bits_per_component, Map.get(image, :color_transform),

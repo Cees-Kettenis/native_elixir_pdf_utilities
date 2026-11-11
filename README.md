@@ -40,7 +40,7 @@ of memory accounting and native cancellation. Applications control concurrency.
 5. [Outlines and bookmarks](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-outlines.md) - read or replace bookmarks, detect headings in existing PDFs, and generate bookmarks from HTML headings. Merging, transforms, and splitting preserve supported outlines.
 6. [Stamping and page numbers](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-stamping.md) - adds text stamps, translucent watermarks, page numbers, and PDF artwork overlays to existing PDFs through incremental updates.
 7. [Reader](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/pdf-reader.md) and [text extraction](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/text-extraction.md) - strictly resolve embedded Unicode text from classic and modern PDFs.
-8. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports configured fonts and cross-platform discovery of installed system fonts. Rendering after compilation does not require Chromium, wkhtmltopdf, Node, SaaS calls, or a Rust toolchain. First-party runtime code is Elixir, including CSS colors, Unicode line breaking and HTML form-value validation. SVG images use the existing Resvg converter. Local asset loading works on Windows, macOS, and Linux.
+8. [HTML to PDF](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-compatibility.md) - renders a strict, document-oriented HTML/CSS subset to native PDF bytes, with [examples](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/main/docs/html-to-pdf-examples.md) for common workflows. It supports TrueType, CFF/CFF2, WOFF/WOFF2, selected variable-font instances and static color glyphs, with cross-platform discovery of installed system fonts. Rendering after compilation does not require Chromium, wkhtmltopdf, Node, SaaS calls, or a Rust toolchain. First-party runtime code is Elixir, including CSS colors, Unicode line breaking and HTML form-value validation. SVG images use the existing Resvg converter. Local asset loading works on Windows, macOS, and Linux.
 
 9. [PDF forms](docs/pdf-forms.md) - generates named AcroForm fields from HTML by default, inspects and fills existing fields, and flattens selected fields.
 10. [Attachments](docs/pdf-attachments.md) - embeds caller-approved file bytes with MIME detection and lists embedded metadata.
@@ -64,7 +64,7 @@ end
 
 The library source is MIT licensed. Bundled DejaVu font files use the Bitstream
 Vera license; WHATWG character-reference data and Adobe glyph-name data retain
-their respective BSD 3-Clause notices. See the complete
+their respective BSD 3-Clause notices. Brotli dictionary and transform data retain Google's MIT notice. See the complete
 [license texts](docs/licenses.md).
 
 Text extraction bounds aggregate decoded UTF-8 operands with `max_extracted_text_bytes` and

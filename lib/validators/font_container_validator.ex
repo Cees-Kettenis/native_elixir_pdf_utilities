@@ -5,7 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
   alias NativeElixirPdfUtilities.Validators.FontValidator
 
-  @doc "Admits WOFF 1 and a selected TrueType collection face as standalone sfnt bytes."
+  @doc "Admits WOFF, WOFF2 and a selected collection face as standalone sfnt bytes."
   @spec prepare(term(), non_neg_integer()) :: {:ok, binary()} | {:error, {atom(), map()}}
   def prepare(data, face_index \\ 0) do
     FontValidator.with_budget(fn ->
@@ -14,6 +14,12 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
       case {data, face_index} do
         {<<"wOFF", _::binary>>, 0} ->
           prepare_woff(data)
+
+        {<<"wOF2", _::binary>>, index} when is_integer(index) and index >= 0 ->
+          with {:ok, scaler, tables} <-
+                 NativeElixirPdfUtilities.Validators.Woff2Validator.prepare(data, index) do
+            admit_rebuild(scaler, tables)
+          end
 
         {<<"ttcf", _::binary>>, index} when is_integer(index) and index >= 0 ->
           prepare_collection(data, index)

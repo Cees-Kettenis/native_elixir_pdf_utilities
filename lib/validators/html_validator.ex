@@ -191,7 +191,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec normal_line_height(map()) :: number()
   def normal_line_height(style) do
+    font = Map.fetch!(style, :font_face)
     font_size = Map.fetch!(style, :font_size)
+
+    font_size =
+      if Map.has_key?(font, :metric_scale), do: Font.line_size(font, font_size), else: font_size
 
     %{
       type: :embedded,
@@ -200,7 +204,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       line_gap: line_gap,
       units_per_em: units_per_em
     } =
-      Map.fetch!(style, :font_face)
+      Map.get(font, :layout_metrics, font)
 
     ascent_pixels = round(ascent / units_per_em * font_size / 0.75)
     descent_pixels = round(-descent / units_per_em * font_size / 0.75)
@@ -211,10 +215,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec text_baseline_depth(map()) :: number()
   def text_baseline_depth(style) do
+    font = Map.fetch!(style, :font_face)
     font_size = Map.fetch!(style, :font_size)
+
+    font_size =
+      if Map.has_key?(font, :metric_scale), do: Font.line_size(font, font_size), else: font_size
+
     line_height = Map.fetch!(style, :line_height)
 
-    case {Map.get(style, :_math_flow, false), Map.fetch!(style, :font_face)} do
+    case {Map.get(style, :_math_flow, false), Map.get(font, :layout_metrics, font)} do
       {true, _} ->
         0.0
 
@@ -242,7 +251,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             case Font.glyph_bounds(face) do
               {:ok, bounds} ->
                 {_left, _bottom, _right, top} = elem(bounds, glyph)
-                top / units * Map.fetch!(style, :font_size)
+                top / units * Font.used_size(face, Map.fetch!(style, :font_size))
 
               error ->
                 error
@@ -1627,8 +1636,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def with_render_budget(fun) do
     key = {__MODULE__, :render_budget}
 
-    case Process.get(key) do
-      nil ->
+    case :erlang.get(key) do
+      value when value in [:undefined, nil] ->
         Process.put(key, %{})
         Process.delete({__MODULE__, :validated_dom})
 
@@ -8831,15 +8840,43 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       case grapheme do
         %{text: text, layout_whitespace?: layout_whitespace?}
         when is_binary(text) and is_boolean(layout_whitespace?) ->
-          supported? = layout_whitespace? or Enum.any?(candidates, &Font.supports_text?(&1, text))
+          selected =
+            if layout_whitespace?,
+              do: hd(candidates),
+              else:
+                Enum.find(
+                  candidates,
+                  &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
+                    &1,
+                    text
+                  )
+                )
 
-          replacement_supported? =
-            not supported? and unsupported_glyphs == :replace and
-              Enum.any?(candidates, &Font.supports_text?(&1, replacement_character))
+          supported? = selected != nil
 
-          case supported? or replacement_supported? do
-            true -> {:cont, :ok}
-            false -> {:halt, unsupported_glyph(text)}
+          replacement =
+            if not supported? and unsupported_glyphs == :replace,
+              do:
+                Enum.find(
+                  candidates,
+                  &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
+                    &1,
+                    replacement_character
+                  )
+                )
+
+          case supported? or replacement != nil do
+            true ->
+              case NativeElixirPdfUtilities.Validators.FontRenderingValidator.validate_execution(
+                     selected || replacement,
+                     text
+                   ) do
+                :ok -> {:cont, :ok}
+                error -> {:halt, error}
+              end
+
+            false ->
+              {:halt, unsupported_glyph(text)}
           end
 
         _ ->

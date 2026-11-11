@@ -28,7 +28,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font.Selection do
           directional_range(first, last, weight, weight < 400)
       end
 
-    {width_rank, style_rank(font, style, Map.get(selection, :oblique)), weight_rank}
+    style_font =
+      cond do
+        style == :italic and Map.get(font, :variation_italic?, false) and
+            Map.get(selection, :oblique) == nil ->
+          Map.put(font, :style, :italic)
+
+        Map.has_key?(font, :variation_oblique) ->
+          font |> Map.put(:style, :italic) |> Map.put(:oblique, font.variation_oblique)
+
+        true ->
+          font
+      end
+
+    {width_rank, style_rank(style_font, style, Map.get(selection, :oblique)), weight_rank}
   end
 
   defp directional_range(first, last, desired, descending?) do

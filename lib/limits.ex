@@ -78,6 +78,10 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_font_decoded_bytes: 40_000_000,
     max_font_container_work: 100_000_000,
     max_font_cff_work: 1_000_000,
+    max_font_brotli_work: 100_000_000,
+    max_font_variation_work: 100_000_000,
+    max_font_color_work: 100_000_000,
+    font_color_sweep_segments: 2_048,
     max_font_outline_coordinate: 1_000_000,
     max_font_numeric_magnitude: 4_294_967_295,
     max_font_glyph_depth: 64,
@@ -255,6 +259,10 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_font_source_bytes
           | :max_font_decoded_bytes
           | :max_font_container_work
+          | :max_font_brotli_work
+          | :max_font_variation_work
+          | :max_font_color_work
+          | :font_color_sweep_segments
           | :max_font_cff_work
           | :max_font_outline_coordinate
           | :max_font_numeric_magnitude

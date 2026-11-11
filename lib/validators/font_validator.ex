@@ -35,6 +35,49 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     end
   end
 
+  @doc "Infers physical variation matching ranges for supplied fonts while retaining authored CSS face descriptor bounds."
+  @spec prepare_variation_matching(map(), map()) :: {:ok, map()}
+  def prepare_variation_matching(parsed, config) do
+    case {parsed, config} do
+      {%{variation_axes: _axes}, %{css_face: true}} ->
+        {:ok, parsed}
+
+      {%{variation_axes: axes}, config} ->
+        parsed =
+          Enum.reduce(axes, parsed, fn axis, parsed ->
+            case axis.tag do
+              "wght" ->
+                Map.put(
+                  parsed,
+                  :weight_range,
+                  Map.get(config, :weight_range, {axis.minimum, axis.maximum})
+                )
+
+              "wdth" ->
+                Map.put(
+                  parsed,
+                  :width_range,
+                  Map.get(config, :width_range, {axis.minimum, axis.maximum})
+                )
+
+              "ital" ->
+                Map.put(parsed, :variation_italic?, axis.minimum <= 0 and axis.maximum >= 1)
+
+              "slnt" ->
+                Map.put(parsed, :variation_oblique, {-axis.maximum, -axis.minimum})
+
+              _ ->
+                parsed
+            end
+          end)
+
+        {:ok, parsed}
+
+      _ ->
+        {:ok, parsed}
+    end
+  end
+
   @doc "Normalizes supported font options through the canonical font configuration rules."
   @spec prepare_options(term()) ::
           {:ok, keyword()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -159,9 +202,20 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         weight = Map.get(font, :weight, Map.get(font, "weight", 400))
         style = Map.get(font, :style, Map.get(font, "style", :normal))
         collection_index = Map.get(font, :collection_index, Map.get(font, "collection_index", 0))
+        settings = Map.get(font, :variation_settings, Map.get(font, "variation_settings", %{}))
+        instance = Map.get(font, :named_instance, Map.get(font, "named_instance"))
 
         with true <- is_integer(collection_index) and collection_index >= 0,
              true <- Map.get(font, :css_face, false) in [true, false],
+             {:ok, metrics} <-
+               NativeElixirPdfUtilities.Validators.FontMetricValidator.prepare_descriptors(font),
+             {:ok, defaults} <-
+               NativeElixirPdfUtilities.Validators.CssFontControlsValidator.prepare_defaults(font),
+             {:ok, variation_request} <-
+               NativeElixirPdfUtilities.Validators.FontVariationValidator.prepare_request(
+                 settings,
+                 instance
+               ),
              {:ok, family} <- prepare_family(family),
              {:ok, source} <- normalize_font_source(path, data),
              {:ok, properties} <-
@@ -174,13 +228,24 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           {:ok,
            source
            |> Map.merge(properties)
+           |> Map.merge(metrics)
+           |> Map.merge(defaults)
            |> Map.put(:family, family)
            |> then(fn config ->
              if collection_index == 0,
                do: config,
                else: Map.put(config, :collection_index, collection_index)
            end)
-           |> Map.merge(Map.take(font, [:css_face]))}
+           |> Map.merge(Map.take(font, [:css_face]))
+           |> then(fn config ->
+             if variation_request.settings == %{} and variation_request.instance == nil,
+               do: config,
+               else:
+                 Map.merge(config, %{
+                   variation_settings: variation_request.settings,
+                   named_instance: variation_request.instance
+                 })
+           end)}
         else
           _ -> :error
         end
@@ -377,32 +442,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
               with {:ok, _font} <- memo({:validated_ttf, data}, fn -> prepare_ttf(data) end),
                    {:ok, tables} <- table_directory(data),
                    {:ok, names} <- table(data, tables, "name"),
-                   <<format::16, count::16, storage::16, _::binary>> <- names,
-                   true <-
-                     format in [0, 1] and count > 0 and storage >= 6 + count * 12 and
-                       storage <= byte_size(names) do
-                reserve(:max_font_math_work, count)
-
-                records =
-                  for index <- 0..(count - 1),
-                      <<platform::16, encoding::16, language::16, name_id::16, length::16,
-                        offset::16>> = binary_part(names, 6 + index * 12, 12),
-                      name_id in [1, 16],
-                      storage + offset + length <= byte_size(names) do
-                    unicode? = platform == 0 or (platform == 3 and encoding in [0, 1])
-                    mac? = platform == 1 and encoding == 0
-
-                    %{
-                      id: name_id,
-                      unicode?: unicode?,
-                      mac?: mac?,
-                      english?:
-                        (platform == 3 and language == 0x0409) or (mac? and language == 0),
-                      offset: storage + offset,
-                      length: length
-                    }
-                  end
-
+                   {:ok, records} <- font_name_records(names, [1, 16]) do
                 identity = :crypto.hash(:sha256, names)
 
                 decode = fn record ->
@@ -460,6 +500,56 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           )
       end
     end)
+  end
+
+  @doc "Reads admitted localized name strings using the shared Unicode and MacRoman font-name decoder."
+  @spec prepare_name_strings(binary(), non_neg_integer()) :: {:ok, [String.t()]} | :error
+  def prepare_name_strings(data, name_id) do
+    with_budget(fn ->
+      with {:ok, tables} <- table_directory(data),
+           {:ok, names} <- table(data, tables, "name"),
+           {:ok, records} <- font_name_records(names, [name_id]) do
+        identity = :crypto.hash(:sha256, names)
+
+        {:ok,
+         records
+         |> Enum.map(&decode_family_record(names, identity, &1))
+         |> Enum.filter(&(is_binary(&1) and &1 != ""))
+         |> Enum.uniq()}
+      end
+    end)
+  end
+
+  defp font_name_records(names, ids) do
+    with <<format::16, count::16, storage::16, _::binary>> <- names,
+         true <-
+           format in [0, 1] and count > 0 and storage >= 6 + count * 12 and
+             storage <= byte_size(names) do
+      reserve(:max_font_math_work, count)
+
+      records =
+        for index <- 0..(count - 1),
+            <<platform::16, encoding::16, language::16, name_id::16, length::16, offset::16>> =
+              binary_part(names, 6 + index * 12, 12),
+            name_id in ids,
+            storage + offset + length <= byte_size(names) do
+          unicode? = platform == 0 or (platform == 3 and encoding in [0, 1])
+          mac? = platform == 1 and encoding == 0
+
+          %{
+            id: name_id,
+            unicode?: unicode?,
+            mac?: mac?,
+            english?: (platform == 3 and language == 0x0409) or (mac? and language == 0),
+            offset: storage + offset,
+            length: length
+          }
+        end
+
+      {:ok, Enum.filter(records, &(&1.unicode? or &1.mac?))}
+    else
+      _ -> :error
+    end
   end
 
   # Name records can alias the same bytes. Decode only candidates needed by
@@ -1362,6 +1452,41 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             nil
         end
 
+      script_metrics =
+        case table(data, tables, "OS/2") do
+          {:ok, os2} ->
+            for {name, offset} <- [subscript: 10, superscript: 18], into: %{} do
+              {name,
+               with {:ok, x_size} <- read_i16(os2, offset),
+                    {:ok, y_size} <- read_i16(os2, offset + 2),
+                    {:ok, x_offset} <- read_i16(os2, offset + 4),
+                    {:ok, y_offset} <- read_i16(os2, offset + 6),
+                    true <- x_size > 0 and y_size > 0 do
+                 %{x_size: x_size, y_size: y_size, x_offset: x_offset, y_offset: y_offset}
+               else
+                 _ -> nil
+               end}
+            end
+
+          :error ->
+            %{subscript: nil, superscript: nil}
+        end
+
+      aspect_metrics =
+        case table(data, tables, "OS/2") do
+          {:ok, os2} ->
+            for {name, offset} <- [x_height: 86, cap_height: 88], into: %{} do
+              {name,
+               case read_i16(os2, offset) do
+                 {:ok, value} when value > 0 -> value
+                 _ -> nil
+               end}
+            end
+
+          :error ->
+            %{x_height: nil, cap_height: nil}
+        end
+
       max_width =
         case table(data, tables, "hhea") do
           {:ok, hhea} ->
@@ -1381,7 +1506,11 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
          strike: strike,
          average_width: average_width,
          typographic_height: typographic_height,
-         max_width: max_width
+         max_width: max_width,
+         x_height: aspect_metrics.x_height,
+         cap_height: aspect_metrics.cap_height,
+         subscript: script_metrics.subscript,
+         superscript: script_metrics.superscript
        }}
     end
   end
@@ -1463,6 +1592,10 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
                         Limits.get(:max_css_numeric_magnitude)))
 
             if valid? do
+              baseline =
+                baseline + NativeElixirPdfUtilities.HtmlToPdf.Font.baseline_offset(font, size)
+
+              size = NativeElixirPdfUtilities.HtmlToPdf.Font.used_size(font, size)
               ink = ids |> Enum.map(&elem(bounds, &1)) |> Enum.reject(&(&1 == {0, 0, 0, 0}))
 
               case ink do
@@ -1704,7 +1837,67 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     end
   end
 
-  @doc false
+  @doc "Instantiates supported variation sources before the common static sfnt admission."
+  @spec prepare_font_source(term()) :: {:ok, binary(), map()} | {:error, {atom(), map()}} | :error
+  def prepare_font_source(data) do
+    with {:ok, tables} <- table_directory(data),
+         {:ok, bytes, metadata} <-
+           (cond do
+              Map.has_key?(tables, "fvar") or Map.has_key?(tables, "CFF2") ->
+                NativeElixirPdfUtilities.Validators.FontVariationValidator.prepare(data)
+
+              not Map.has_key?(tables, "glyf") and not Map.has_key?(tables, "CFF ") and
+                  (Map.has_key?(tables, "sbix") or Map.has_key?(tables, "CBDT")) ->
+                with {:ok, bytes} <-
+                       NativeElixirPdfUtilities.Validators.BitmapFontValidator.prepare_source(
+                         data
+                       ),
+                     do: {:ok, bytes, %{bitmap_only?: true}}
+
+              true ->
+                {:ok, data, %{}}
+            end),
+         {:ok, parsed} <- prepare_ttf(bytes) do
+      {:ok, bytes, Map.merge(parsed, metadata)}
+    end
+  end
+
+  @doc "Prepares a selected variable instance while retaining the source face's configuration and identity."
+  @spec prepare_font_instance(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_font_instance(font, settings, named_instance) do
+    with_budget(fn ->
+      case font do
+        %{type: :embedded, data: data, family: family} when is_binary(data) ->
+          with {:ok, bytes, metadata} <-
+                 NativeElixirPdfUtilities.Validators.FontVariationValidator.prepare(
+                   Map.get(font, :variation_source, data),
+                   settings,
+                   named_instance
+                 ),
+               {:ok, parsed} <- prepare_ttf(bytes) do
+            hash = NativeElixirPdfUtilities.HtmlToPdf.FontCache.identity(family, bytes)
+
+            {:ok,
+             font
+             |> Map.drop([:cff, :outline_format])
+             |> Map.merge(parsed)
+             |> Map.merge(metadata)
+             |> Map.merge(%{data: bytes, id: hash, pdf_name: "Instance-" <> hash})}
+          end
+
+        _ ->
+          Diagnostics.error(
+            :font,
+            :invalid_font,
+            "font instance selection requires an embedded sfnt face",
+            module: __MODULE__,
+            operation: :instantiate_font
+          )
+      end
+    end)
+  end
+
+  @doc "Parses static TrueType and CFF OpenType metrics, character maps and embedding permissions."
   @spec prepare_ttf(term()) ::
           {:ok, map()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_ttf(data) do
@@ -1748,7 +1941,11 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
              embedding_flags: embedding_flags,
              variable_font?: Map.has_key?(tables, "fvar")
            }
-           |> Map.merge(outline)}
+           |> Map.merge(outline)
+           |> then(fn face ->
+             tags = Enum.filter(["sbix", "CBDT", "COLR", "SVG "], &Map.has_key?(tables, &1))
+             if tags == [], do: face, else: Map.put(face, :color_tables, tags)
+           end)}
         end
 
       _ ->

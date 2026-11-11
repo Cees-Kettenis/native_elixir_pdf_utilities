@@ -113,12 +113,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     assert prepared.font_faces == []
     assert [font] = prepared.authored_fonts
     refute font.active
-    assert font.face.sources == ["first.ttf", ~S|a\2c b.otf|]
+    assert font.face.sources == ["skip.woff2", "first.ttf", ~S|a\2c b.otf|]
 
     assert Enum.map(font.candidates, & &1.role) == [
              :superseded,
              :unsupported,
-             :unsupported,
+             :fallback_candidate,
              :fallback_candidate,
              :fallback_candidate
            ]
@@ -189,10 +189,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
 
     assert {:error, {:invalid_css, font_error}} =
              CssParser.prepare_source_stylesheet(
-               "@media screen{@font-face{font-family:X;src:url(x.woff2)}}"
+               "@media screen{@font-face{font-family:X;src:url(x.woff3)}}"
              )
 
-    assert font_error.source == "src:url(x.woff2)"
+    assert font_error.source == "src:url(x.woff3)"
 
     assert {:error, {:invalid_css, page_error}} =
              CssParser.prepare_source_stylesheet("@media screen{@page{margin:bananas}}")
@@ -261,7 +261,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     for {css, snippet, column} <- [
           {"@font-face{font-family:X;font-style:italic!important;font-style:normal;src:url(x.ttf)}",
            "font-style:italic!important", 26},
-          {"@font-face{font-family:X;src:url(x.ttf);src:url(x.woff2)}", "src:url(x.woff2)", 41}
+          {"@font-face{font-family:X;src:url(x.ttf);src:url(x.woff3)}", "src:url(x.woff3)", 41}
         ] do
       assert {:error, {:invalid_css, diagnostic}} = CssParser.prepare_source_stylesheet(css)
       assert diagnostic.source == snippet and diagnostic.line == 1 and diagnostic.column == column

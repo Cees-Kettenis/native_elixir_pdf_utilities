@@ -1,23 +1,25 @@
 defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
   @moduledoc false
+  import Bitwise
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.CffData
   alias NativeElixirPdfUtilities.Validators.{CffFontValidator, FontValidator}
 
   @doc "Executes every owned CFF 1 Type 2 glyph under the font work budget, retaining static outlines, advances and exact cubic bounds."
-  @spec prepare(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
-  def prepare(data, glyph_count) do
+  @spec prepare(term(), term(), [number()]) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare(data, glyph_count, coordinates \\ []) do
     FontValidator.with_budget(fn ->
       try do
-        with {:ok, face} <- CffFontValidator.prepare(data, glyph_count) do
+        with {:ok, face} <- CffFontValidator.prepare(data, glyph_count, coordinates) do
+          version = Map.get(face, :version, 1)
           # Charstring/subroutine lengths, operand/hint stacks and subroutine
           # nesting below are fixed Type 2 protocol bounds, not tuning options.
           Enum.each(
             [face.global_subrs | Enum.map(Tuple.to_list(face.fonts), & &1.local_subrs)],
             fn programs ->
               Enum.each(Tuple.to_list(programs), fn program ->
-                unless byte_size(program) <= 65_535,
+                unless version == 2 or byte_size(program) <= 65_535,
                   do:
                     invalid(
                       "Type 2 subroutine exceeds its fixed 65,535-byte program size",
@@ -34,7 +36,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
             for glyph <- 0..(glyph_count - 1) do
               program = elem(face.charstrings, glyph)
 
-              unless byte_size(program) <= 65_535,
+              unless version == 2 or byte_size(program) <= 65_535,
                 do: invalid("Type 2 glyph exceeds its fixed 65,535-byte program size", face.name)
 
               font = elem(face.fonts, elem(face.fd_select, glyph))
@@ -43,7 +45,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
                 x: 0,
                 y: 0,
                 stack: [],
-                width: nil,
+                width: if(version == 2, do: 0),
                 hints: 0,
                 transient: %{},
                 commands: [],
@@ -52,7 +54,14 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
                 source: "#{face.name} glyph #{glyph}",
                 seac: nil,
                 cid?: face.cid?,
-                identifiers: identifiers
+                identifiers: identifiers,
+                random_seed: font.random_seed + glyph,
+                random?: false,
+                version: version,
+                store: Map.get(face, :store, {}),
+                vsindex: Map.get(font, :vsindex, 0),
+                vsindex_used?: false,
+                blend_seen?: false
               }
 
               state = execute(program, [], state, font, face.global_subrs)
@@ -62,7 +71,8 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
                 width: state.width,
                 bbox: state.bbox || {0, 0, 0, 0},
                 seac: state.seac,
-                component_depth: 1
+                component_depth: 1,
+                static?: state.random? or state.seac != nil
               }
             end
             |> List.to_tuple()
@@ -101,36 +111,14 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
             |> Tuple.to_list()
             |> Enum.with_index()
             |> Enum.map(fn {glyph, index} ->
-              [a, b, c, d, e, f] = face.font_matrix
-              font = elem(face.fonts, elem(face.fd_select, index))
-
-              [g, h, i, j, k, l] =
-                if face.cid?, do: font.font_matrix || [1, 0, 0, 1, 0, 0], else: [1, 0, 0, 1, 0, 0]
-
-              transform = fn x, y ->
-                {units_per_em * (a * (g * x + i * y + k) + c * (h * x + j * y + l) + e),
-                 units_per_em * (b * (g * x + i * y + k) + d * (h * x + j * y + l) + f)}
-              end
-
               FontValidator.reserve(:max_font_cff_work, length(glyph.commands))
 
               commands =
-                Enum.map(glyph.commands, fn command ->
-                  case command do
-                    :close ->
-                      :close
-
-                    {kind, x, y} ->
-                      {x, y} = transform.(x, y)
-                      {kind, x, y}
-
-                    {:curve, x1, y1, x2, y2, x3, y3} ->
-                      {x1, y1} = transform.(x1, y1)
-                      {x2, y2} = transform.(x2, y2)
-                      {x3, y3} = transform.(x3, y3)
-                      {:curve, x1, y1, x2, y2, x3, y3}
-                  end
-                end)
+                NativeElixirPdfUtilities.HtmlToPdf.Font.Outline.cff_design_commands(
+                  face,
+                  index,
+                  units_per_em
+                )
 
               command_bounds(commands, face.name)
             end)
@@ -151,7 +139,14 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
 
     case program do
       <<>> ->
-        invalid("Type 2 program ends without endchar or return", state.source)
+        if state.version == 2 do
+          case frames do
+            [] -> close_path(state)
+            [next | frames] -> execute(next, frames, state, font, globals)
+          end
+        else
+          invalid("Type 2 program ends without endchar or return", state.source)
+        end
 
       <<value, rest::binary>> when value in 32..246 ->
         execute(rest, frames, push(state, value - 139), font, globals)
@@ -168,18 +163,44 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
       <<255, value::signed-32, rest::binary>> ->
         execute(rest, frames, push(state, value / 65_536), font, globals)
 
+      <<15, rest::binary>> when state.version == 2 ->
+        if state.vsindex_used? or state.blend_seen?,
+          do: invalid("CFF2 vsindex may occur only once and before the first blend", state.source)
+
+        {index, state} = pop(state)
+        index = whole(index, state.source)
+
+        unless index >= 0 and index < tuple_size(state.store),
+          do: invalid("CFF2 vsindex selects an unavailable variation data table", state.source)
+
+        execute(rest, frames, %{state | vsindex: index, vsindex_used?: true}, font, globals)
+
+      <<16, rest::binary>> when state.version == 2 ->
+        case NativeElixirPdfUtilities.Validators.VariationStoreValidator.blend(
+               Enum.reverse(state.stack),
+               state.store,
+               state.vsindex
+             ) do
+          {:ok, values} ->
+            execute(
+              rest,
+              frames,
+              %{state | stack: Enum.reverse(values), blend_seen?: true},
+              font,
+              globals
+            )
+
+          error ->
+            throw({:cff_charstring_invalid, error})
+        end
+
       <<operator, rest::binary>> when operator in [10, 29] ->
         {index, state} = pop(state)
         index = whole(index, state.source)
         subrs = if operator == 10, do: font.local_subrs, else: globals
         count = tuple_size(subrs)
 
-        bias =
-          cond do
-            count < 1240 -> 107
-            count < 33900 -> 1131
-            true -> 32768
-          end
+        bias = NativeElixirPdfUtilities.Validators.CffFontValidator.subroutine_bias(count)
 
         index = index + bias
 
@@ -192,12 +213,18 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
         execute(elem(subrs, index), [rest | frames], state, font, globals)
 
       <<11, _rest::binary>> ->
+        if state.version == 2,
+          do: invalid("CFF2 subroutines return implicitly and cannot use return", state.source)
+
         case frames do
           [next | frames] -> execute(next, frames, state, font, globals)
           [] -> invalid("Type 2 return has no calling subroutine", state.source)
         end
 
       <<14, _rest::binary>> ->
+        if state.version == 2,
+          do: invalid("CFF2 glyphs terminate implicitly and cannot use endchar", state.source)
+
         {args, state} = arguments(state, font, :endchar)
         state = close_path(state)
 
@@ -280,6 +307,9 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
         execute(rest, frames, state, font, globals)
 
       <<12, operator, rest::binary>> ->
+        if state.version == 2 and operator not in [34, 35, 36, 37],
+          do: invalid("CFF2 escape operator is reserved", state.source)
+
         state = escaped(operator, state)
         execute(rest, frames, state, font, globals)
 
@@ -487,17 +517,15 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
         push(state, if(v1 <= v2, do: first, else: second))
 
       23 ->
-        throw(
-          {:cff_charstring_invalid,
-           Diagnostics.error(
-             :font,
-             :unsupported_font,
-             "Type 2 random programs cannot provide stable static outline bounds",
-             module: __MODULE__,
-             operation: :prepare_cff_outlines,
-             source: state.source
-           )}
-        )
+        # Type 2 leaves the generator algorithm implementation-defined. Freeze
+        # one reproducible sequence per glyph and emit its evaluated path so
+        # PDF consumers use the same geometry as measurement and bounds.
+        seed = state.random_seed &&& 0xFFFF_FFFF
+        seed = if seed == 0, do: 1, else: seed
+        seed = bxor(seed, seed <<< 13) &&& 0xFFFF_FFFF
+        seed = bxor(seed, seed >>> 17)
+        seed = bxor(seed, seed <<< 5) &&& 0xFFFF_FFFF
+        push(%{state | random_seed: seed, random?: true}, (rem(seed, 65535) + 1) / 65536)
 
       27 ->
         {value, after_pop} = pop(state)
@@ -578,8 +606,10 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
   defp push(state, value) do
     FontValidator.check(:max_font_numeric_magnitude, ceil(abs(value)))
 
-    unless length(state.stack) < 48,
-      do: invalid("Type 2 exceeds its fixed 48-operand stack", state.source)
+    maximum = if state.version == 2, do: 513, else: 48
+
+    unless length(state.stack) < maximum,
+      do: invalid("Type 2 exceeds its fixed #{maximum}-operand stack", state.source)
 
     %{state | stack: [value | state.stack]}
   end
@@ -798,6 +828,21 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
           curve(state, [a - state.x, b - state.y, c - a, d - b, e - c, f - d])
       end
     end).bbox || {0, 0, 0, 0}
+  end
+
+  @doc "Validates finite design-unit path coordinates and calculates exact cubic ink bounds."
+  @spec prepare_command_bounds([tuple() | :close], String.t()) ::
+          {:ok, tuple()} | {:error, {atom(), map()}}
+  def prepare_command_bounds(commands, source) do
+    FontValidator.with_budget(fn ->
+      try do
+        FontValidator.reserve(:max_font_cff_work, length(commands))
+        {:ok, command_bounds(commands, source)}
+      rescue
+        ArithmeticError ->
+          failure("CFF path arithmetic exceeds a finite representable result", source)
+      end
+    end)
   end
 
   defp invalid(message, source), do: throw({:cff_charstring_invalid, failure(message, source)})

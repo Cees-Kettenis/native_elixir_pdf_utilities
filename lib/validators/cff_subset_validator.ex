@@ -33,16 +33,6 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
           not Enum.all?(glyph_ids, &(is_integer(&1) and &1 >= 0 and &1 < count)) ->
             invalid("CFF subset contains an out-of-range glyph ID")
 
-          Enum.any?(Tuple.to_list(face.glyphs), &(&1.seac != nil)) ->
-            Diagnostics.error(
-              :font,
-              :unsupported_font,
-              "CFF embedding of legacy seac composition is not yet supported",
-              operation: :write_pdf,
-              module: __MODULE__,
-              source: face.name
-            )
-
           true ->
             subset? = subset? and (parsed.embedding_flags &&& 0x0100) == 0
 
@@ -51,137 +41,173 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
                 do: Enum.uniq([0 | glyph_ids]) |> Enum.sort(),
                 else: Enum.to_list(0..(count - 1))
 
-            programs = Enum.map(retained, &elem(face.charstrings, &1))
-            # Bound copied INDEX payloads before constructing their binaries.
-            # The final exact check below also charges dictionaries/offsets.
-            payload_bytes =
-              Enum.sum(Enum.map(programs, &byte_size/1)) +
-                Enum.sum(Enum.map(Tuple.to_list(face.strings), &byte_size/1)) +
-                Enum.sum(Enum.map(Tuple.to_list(face.global_subrs), &byte_size/1)) +
-                Enum.sum(
-                  Enum.map(Tuple.to_list(face.fonts), fn font ->
-                    Enum.sum(Enum.map(Tuple.to_list(font.local_subrs), &byte_size/1))
-                  end)
-                )
+            programs =
+              Enum.map(retained, fn glyph ->
+                value = elem(face.glyphs, glyph)
 
-            FontValidator.check(:max_font_subset_bytes, payload_bytes)
-            # CIDs are original OpenType glyph IDs. Multiple document character
-            # codes can map to the same CID without duplicating its program.
-            charset = <<0, for(glyph <- tl(retained), into: <<>>, do: <<glyph::16>>)::binary>>
+                if value.static? do
+                  font = elem(face.fonts, elem(face.fd_select, glyph))
+                  program = Cff.program(value, font.nominal_width)
 
-            select =
-              <<0,
-                for(glyph <- retained, into: <<>>, do: <<elem(face.fd_select, glyph)>>)::binary>>
-
-            strings = Cff.index(registry_strings)
-            names = Cff.index([face.name])
-            globals = Cff.index(Tuple.to_list(face.global_subrs))
-            charstrings = Cff.index(programs)
-
-            {privates, subrs} =
-              face.fonts
-              |> Tuple.to_list()
-              |> Enum.map(fn font ->
-                local = Cff.index(Tuple.to_list(font.local_subrs))
-                private = Map.delete(font.private, 19)
-                private = if font.local_subrs == {}, do: private, else: Map.put(private, 19, [0])
-                bytes = Cff.dictionary(private)
-
-                bytes =
-                  if font.local_subrs == {},
-                    do: bytes,
-                    else: Cff.dictionary(Map.put(private, 19, [byte_size(bytes)]))
-
-                {bytes, local}
-              end)
-              |> Enum.unzip()
-
-            dictionaries =
-              face.fonts
-              |> Tuple.to_list()
-              |> Enum.with_index()
-              |> Enum.map(fn {font, index} ->
-                values =
-                  if face.cid?, do: Map.take(font.dictionary, [{12, 7}, {12, 38}]), else: %{}
-
-                Map.put(values, 18, [byte_size(Enum.at(privates, index)), 0])
+                  program
+                else
+                  elem(face.charstrings, glyph)
+                end
               end)
 
-            array = Cff.index(Enum.map(dictionaries, &Cff.dictionary/1))
+            if Enum.any?(programs, &(byte_size(&1) > 65535)) do
+              programs =
+                Enum.map(retained, fn id ->
+                  commands =
+                    NativeElixirPdfUtilities.HtmlToPdf.Font.Outline.cff_design_commands(
+                      face,
+                      id,
+                      parsed.units_per_em
+                    )
 
-            top =
-              face.top
-              |> Map.take([
-                0,
-                1,
-                2,
-                3,
-                4,
-                5,
-                {12, 0},
-                {12, 1},
-                {12, 2},
-                {12, 3},
-                {12, 4},
-                {12, 5},
-                {12, 7},
-                {12, 8},
-                {12, 21},
-                {12, 22}
-              ])
-              |> Map.merge(%{
-                15 => [0],
-                17 => [0],
-                {12, 30} => [registry_sid, ordering_sid, 0],
-                {12, 34} => [count],
-                {12, 36} => [0],
-                {12, 37} => [0]
-              })
+                  FontValidator.reserve(:max_font_subset_work, length(commands))
+                  Cff.program(%{commands: commands, width: Enum.at(parsed.widths, id)}, 0)
+                end)
 
-            prefix =
-              4 + byte_size(names) + byte_size(Cff.index([Cff.dictionary(top)])) +
-                byte_size(strings) + byte_size(globals)
+              bytes = Cff.static_face(programs, parsed.units_per_em, parsed.bbox, retained)
+              FontValidator.check(:max_font_subset_bytes, byte_size(bytes))
+              {:ok, %{parts: [bytes], subset?: subset?}}
+            else
+              # Bound copied INDEX payloads before constructing their binaries.
+              # The final exact check below also charges dictionaries/offsets.
+              payload_bytes =
+                Enum.sum(Enum.map(programs, &byte_size/1)) +
+                  Enum.sum(Enum.map(Tuple.to_list(face.strings), &byte_size/1)) +
+                  Enum.sum(Enum.map(Tuple.to_list(face.global_subrs), &byte_size/1)) +
+                  Enum.sum(
+                    Enum.map(Tuple.to_list(face.fonts), fn font ->
+                      Enum.sum(Enum.map(Tuple.to_list(font.local_subrs), &byte_size/1))
+                    end)
+                  )
 
-            offsets = %{
-              charset: prefix,
-              select: prefix + byte_size(charset),
-              charstrings: prefix + byte_size(charset) + byte_size(select),
-              array: prefix + byte_size(charset) + byte_size(select) + byte_size(charstrings)
-            }
+              FontValidator.check(:max_font_subset_bytes, payload_bytes)
+              # CIDs are original OpenType glyph IDs. Multiple document character
+              # codes can map to the same CID without duplicating its program.
+              charset = <<0, for(glyph <- tl(retained), into: <<>>, do: <<glyph::16>>)::binary>>
 
-            start = offsets.array + byte_size(array)
+              select =
+                <<0,
+                  for(glyph <- retained, into: <<>>, do: <<elem(face.fd_select, glyph)>>)::binary>>
 
-            {dictionaries, _finish} =
-              Enum.map_reduce(Enum.with_index(dictionaries), start, fn {values, index}, offset ->
-                private = Enum.at(privates, index)
-                local = Enum.at(subrs, index)
+              strings = Cff.index(registry_strings)
+              names = Cff.index([face.name])
+              globals = Cff.index(Tuple.to_list(face.global_subrs))
+              charstrings = Cff.index(programs)
 
-                {Map.put(values, 18, [byte_size(private), offset]),
-                 offset + byte_size(private) + byte_size(local)}
-              end)
+              {privates, subrs} =
+                face.fonts
+                |> Tuple.to_list()
+                |> Enum.map(fn font ->
+                  local = Cff.index(Tuple.to_list(font.local_subrs))
+                  private = Map.delete(font.private, 19)
 
-            top =
-              top
-              |> Map.put(15, [offsets.charset])
-              |> Map.put(17, [offsets.charstrings])
-              |> Map.put({12, 36}, [offsets.array])
-              |> Map.put({12, 37}, [offsets.select])
+                  private =
+                    if font.local_subrs == {}, do: private, else: Map.put(private, 19, [0])
 
-            plan = [
-              <<1, 0, 4, 4>>,
-              names,
-              Cff.index([Cff.dictionary(top)]),
-              strings,
-              globals,
-              charset,
-              select,
-              charstrings,
-              Cff.index(Enum.map(dictionaries, &Cff.dictionary/1)),
-              Enum.zip_with(privates, subrs, fn a, b -> [a, b] end)
-            ]
+                  bytes = Cff.dictionary(private)
 
-            FontValidator.check(:max_font_subset_bytes, IO.iodata_length(plan))
-            {:ok, %{parts: plan, subset?: subset?}}
+                  bytes =
+                    if font.local_subrs == {},
+                      do: bytes,
+                      else: Cff.dictionary(Map.put(private, 19, [byte_size(bytes)]))
+
+                  {bytes, local}
+                end)
+                |> Enum.unzip()
+
+              dictionaries =
+                face.fonts
+                |> Tuple.to_list()
+                |> Enum.with_index()
+                |> Enum.map(fn {font, index} ->
+                  values =
+                    if face.cid?, do: Map.take(font.dictionary, [{12, 7}, {12, 38}]), else: %{}
+
+                  Map.put(values, 18, [byte_size(Enum.at(privates, index)), 0])
+                end)
+
+              array = Cff.index(Enum.map(dictionaries, &Cff.dictionary/1))
+
+              top =
+                face.top
+                |> Map.take([
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  {12, 0},
+                  {12, 1},
+                  {12, 2},
+                  {12, 3},
+                  {12, 4},
+                  {12, 5},
+                  {12, 7},
+                  {12, 8},
+                  {12, 21},
+                  {12, 22}
+                ])
+                |> Map.merge(%{
+                  15 => [0],
+                  17 => [0],
+                  {12, 30} => [registry_sid, ordering_sid, 0],
+                  {12, 34} => [count],
+                  {12, 36} => [0],
+                  {12, 37} => [0]
+                })
+
+              prefix =
+                4 + byte_size(names) + byte_size(Cff.index([Cff.dictionary(top)])) +
+                  byte_size(strings) + byte_size(globals)
+
+              offsets = %{
+                charset: prefix,
+                select: prefix + byte_size(charset),
+                charstrings: prefix + byte_size(charset) + byte_size(select),
+                array: prefix + byte_size(charset) + byte_size(select) + byte_size(charstrings)
+              }
+
+              start = offsets.array + byte_size(array)
+
+              {dictionaries, _finish} =
+                Enum.map_reduce(Enum.with_index(dictionaries), start, fn {values, index},
+                                                                         offset ->
+                  private = Enum.at(privates, index)
+                  local = Enum.at(subrs, index)
+
+                  {Map.put(values, 18, [byte_size(private), offset]),
+                   offset + byte_size(private) + byte_size(local)}
+                end)
+
+              top =
+                top
+                |> Map.put(15, [offsets.charset])
+                |> Map.put(17, [offsets.charstrings])
+                |> Map.put({12, 36}, [offsets.array])
+                |> Map.put({12, 37}, [offsets.select])
+
+              plan = [
+                <<1, 0, 4, 4>>,
+                names,
+                Cff.index([Cff.dictionary(top)]),
+                strings,
+                globals,
+                charset,
+                select,
+                charstrings,
+                Cff.index(Enum.map(dictionaries, &Cff.dictionary/1)),
+                Enum.zip_with(privates, subrs, fn a, b -> [a, b] end)
+              ]
+
+              FontValidator.check(:max_font_subset_bytes, IO.iodata_length(plan))
+              {:ok, %{parts: plan, subset?: subset?}}
+            end
         end
       else
         :limit_exceeded ->
@@ -196,6 +222,31 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
           )
       end
     end)
+  end
+
+  @doc "Checks generated CFF 1 program and INDEX format invariants before serialization."
+  @spec validate_static_programs([binary()], [binary()]) :: :ok
+  def validate_static_programs(programs, subrs) do
+    unless length(subrs) <= 65535 and Enum.all?(programs ++ subrs, &(byte_size(&1) <= 65535)) do
+      throw(
+        {:font_resource_limit,
+         Diagnostics.error(
+           :font,
+           :unsupported_font,
+           "expanded static outline exceeds CFF 1 program or subroutine INDEX capacity",
+           module: __MODULE__,
+           operation: :write_pdf,
+           source: "CFF 1"
+         )}
+      )
+    end
+
+    FontValidator.check(
+      :max_font_subset_bytes,
+      Enum.sum(Enum.map(programs ++ subrs, &byte_size/1))
+    )
+
+    :ok
   end
 
   defp identity_registry(strings) do

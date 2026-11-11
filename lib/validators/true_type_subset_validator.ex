@@ -127,6 +127,48 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
   end
 
   # Account for every retained payload occurrence, not unique source ranges.
+  @doc "Decodes all owned TrueType glyphs for selected-instance outline processing."
+  @spec prepare_outlines(term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_outlines(data) do
+    FontValidator.with_budget(fn ->
+      if is_binary(data) do
+        with {:ok, scaler, tables} <- table_directory(data),
+             {:ok, head} <- required_table(tables, "head"),
+             {:ok, maxp} <- required_table(tables, "maxp"),
+             {:ok, glyf} <- required_table(tables, "glyf"),
+             {:ok, loca} <- required_table(tables, "loca"),
+             {:ok, count, format} <- font_header(head, maxp),
+             {:ok, offsets} <- glyph_offsets(loca, glyf, count, format) do
+          Enum.chunk_every(offsets, 2, 1, :discard)
+          |> Enum.reduce_while({:ok, []}, fn [first, last], {:ok, glyphs} ->
+            case NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator.prepare(
+                   binary_part(glyf, first, last - first),
+                   count
+                 ) do
+              {:ok, glyph} -> {:cont, {:ok, [glyph | glyphs]}}
+              error -> {:halt, error}
+            end
+          end)
+          |> case do
+            {:ok, glyphs} ->
+              {:ok,
+               %{
+                 scaler: scaler,
+                 tables: Map.new(tables),
+                 glyphs: Enum.reverse(glyphs) |> List.to_tuple()
+               }}
+
+            error ->
+              error
+          end
+        end
+      else
+        invalid("outline decoding requires standalone TrueType bytes")
+      end
+    end)
+  end
+
+  # Account for every retained payload occurrence, not unique source ranges.
   # This runs before glyph copying, padding, checksumming and font assembly.
   defp admit_rebuild(tables, offsets, retained, location_format, glyph_count) do
     glyf_bytes =

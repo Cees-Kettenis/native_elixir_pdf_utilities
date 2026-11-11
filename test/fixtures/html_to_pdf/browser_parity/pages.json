@@ -5094,10 +5094,10 @@
   },
   {
     "name": "mathml_annotation_css_alternatives_reference_pages",
+    "html_sha256": "a6f9be727618a7d601cef80ed4b8d987b9eebb8f176dc60c6d08543b50a84dd1",
     "directory": "html_to_pdf/browser_parity",
     "page_mode": "named",
     "page_css": "size:612pt 792pt;margin:0",
-    "html_sha256": "1e1e49aa32dc54d4e27bf9b0b5e720e6138caf9e079d86b3f5d2da97b3aea142",
     "proof": {
       "browser": "Chromium 155.0.8059.79 built on Debian GNU/Linux 13 (trixie)",
       "rasterizer": "pdftoppm version 25.03.0\nCopyright 2005-2025 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC",
@@ -5277,7 +5277,7 @@
       },
       {
         "name": "font_supplementary_unicode.html",
-        "sha256": "5070b52910c3088507c984e704918bc5ab187fcc21a48505833efce1373e5a71",
+        "sha256": "42f8508d908c044a1fbd29da5d36842b59254550ea7decbefb995c9b3cc7fe51",
         "page_count": 2,
         "page_css": " size:612pt 792pt; margin:0; ",
         "media_boxes": [

@@ -54,6 +54,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
             Diagnostics.with_context(diagnostic, operation: :resolve_fonts, module: __MODULE__)}}
       end
     end)
+  catch
+    {:font_selection_error, error} -> error
   end
 
   defp prepare_candidates(%{type: :document, children: children} = document) do
@@ -85,6 +87,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
               candidates =
                 [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]
+                |> then(fn fonts ->
+                  case NativeElixirPdfUtilities.Validators.FontRenderingValidator.prepare_candidates(
+                         fonts,
+                         style
+                       ) do
+                    {:ok, fonts} -> fonts
+                    error -> throw({:font_selection_error, error})
+                  end
+                end)
                 |> Enum.uniq_by(&{Font.pdf_name(&1), Map.get(&1, :unicode_range)})
 
               {candidates, Map.put(cached_candidates, key, {selected, candidates})}
@@ -96,6 +107,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         # provenance still follows individual graphemes through normalization.
         graphemes =
           if text != "" and not Map.has_key?(style, :_source_glyph_characters) and
+               not Map.has_key?(selected, :synthetic_variants) and
                Font.supports_text?(selected, text) do
             [%{text: text, layout_whitespace?: false}]
           else
@@ -177,10 +189,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                   {List.first(candidates), grapheme.text}
 
                 false ->
-                  case Enum.find(candidates, &Font.supports_text?(&1, grapheme.text)) do
+                  case Enum.find(
+                         candidates,
+                         &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
+                           &1,
+                           grapheme.text
+                         )
+                       ) do
                     nil when unsupported_glyphs == :replace ->
                       replacement_face =
-                        Enum.find(candidates, &Font.supports_text?(&1, @replacement_character))
+                        Enum.find(
+                          candidates,
+                          &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
+                            &1,
+                            @replacement_character
+                          )
+                        )
 
                       {replacement_face, @replacement_character}
 
@@ -195,6 +219,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
               if source && text != grapheme.text,
                 do: [%{displayed: text, fragments: Enum.flat_map(source, & &1.fragments)}],
                 else: source
+
+            font_face =
+              if Map.has_key?(font_face, :synthetic_variants) do
+                # Coverage admission prepared this same selected face and
+                # grapheme in the active budget. Reuse its successful memo.
+                {:ok, font} =
+                  NativeElixirPdfUtilities.Validators.FontRenderingValidator.prepare_grapheme(
+                    font_face,
+                    text
+                  )
+
+                font
+              else
+                font_face
+              end
 
             append_run(runs, node, style, font_face, text, source)
           end)

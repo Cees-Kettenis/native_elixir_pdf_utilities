@@ -1224,6 +1224,57 @@ See [Fonts and text](html-to-pdf-compatibility.md#fonts-and-text) for fallback a
 
 ## Document features
 
+### Variable fonts and controls
+
+Supply licensed font bytes, then select a static instance through CSS or the font
+configuration. The PDF contains the selected outlines and Unicode mapping.
+
+```elixir
+font_bytes = File.read!("report-variable.woff2")
+
+{:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render("""
+<p style='font-family:Report;font-weight:650;
+          font-variation-settings:"wdth" 110;font-kerning:none'>Report 2026</p>
+""", fonts: [%{family: "Report", data: font_bytes}],
+     system_font_discovery: false)
+```
+
+A configuration can set `variation_settings: %{"wght" => 650}` or
+`named_instance: "Book"`. Numeric named-instance indexes start at zero. Unknown
+localized instance names behave as automatic selection; out-of-range numeric
+indexes return a diagnostic. Explicit axis settings override the named instance,
+and coordinates are clamped to the font's declared axis ranges.
+
+Font metric options use percentages, including numeric values:
+
+```elixir
+font = %{family: "Report", data: font_bytes,
+         size_adjust: 110, ascent_override: "85%",
+         descent_override: 20, line_gap_override: 0}
+```
+
+The equivalent `@font-face` descriptors use CSS percentages. These affect used
+font size and line metrics while the computed CSS `font-size` stays unchanged.
+Use `font-size-adjust: cap-height from-font` to keep the first selected face's
+cap-height aspect when falling back to another font.
+
+For a COLR/CPAL font, a named palette can override individual entries:
+
+```html
+<style>
+@font-palette-values --ReportColors {
+  font-family: Report;
+  base-palette: dark;
+  override-colors: 0 #148a35, 1 rgba(20,70,240,.5);
+}
+.report-mark { font-family: Report; font-palette: --ReportColors; }
+</style>
+```
+
+Feature controls preserve their precedence and font-face defaults. An active
+feature that needs general OpenType shaping returns a diagnostic instead of
+silently rendering the wrong glyph. See [font support and limitations](html-to-pdf-compatibility.md#fonts-and-text).
+
 ### Set PDF metadata
 
 Add document information so saved PDFs are identifiable outside your application. Open the PDF's properties to inspect the author, subject, keywords, and creation date:

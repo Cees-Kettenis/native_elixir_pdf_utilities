@@ -53,6 +53,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt do
 
   defp checksum_words(data, total) do
     case data do
+      <<a::32, b::32, c::32, d::32, e::32, f::32, g::32, h::32, i::32, j::32, k::32, l::32, m::32,
+        n::32, o::32, p::32, remaining::binary>> ->
+        checksum_words(
+          remaining,
+          total + a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p
+        )
+
       <<first::32, second::32, third::32, fourth::32, remaining::binary>> ->
         checksum_words(remaining, total + first + second + third + fourth)
 

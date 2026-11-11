@@ -38,6 +38,30 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserFixturePageValidator do
           refute Regex.match?(~r/<(?:frameset|script)\b/i, body)
 
           css = Regex.replace(~r/@page\s*\{[^{}]*\}/s, css, "")
+          font_rules = ~r/@font-(?:face|palette-values)[^{]*\{[^{}]*\}/s
+          global_css = Regex.scan(font_rules, css) |> List.flatten() |> Enum.join()
+
+          script_reference =
+            ~r/@supports\s*\(font-synthesis-position:auto\)\s*\{(?:\s*\.font-format-script-(?:native|reference)\{display:(?:block|none);\}\s*)+\}/s
+
+          global_css =
+            global_css <> (Regex.scan(script_reference, css) |> List.flatten() |> Enum.join())
+
+          svg_reference =
+            ~r/@supports\s*font-tech\(color-SVG\)\s*\{(?:\s*\.font-format-svg-(?:native|reference)\{display:(?:block|none);\}\s*)+\}/s
+
+          global_css =
+            global_css <> (Regex.scan(svg_reference, css) |> List.flatten() |> Enum.join())
+
+          if global_css != "" do
+            assert metadata["name"] == "font_supplementary_unicode.html",
+                   "Font-rule page composition requires independently verified family ownership"
+          end
+
+          css = Regex.replace(font_rules, css, "")
+          css = Regex.replace(script_reference, css, "")
+          css = Regex.replace(svg_reference, css, "")
+          css = if global_css == "", do: css, else: Regex.replace(~r/\/\*.*?\*\//s, css, "")
           refute Regex.match?(~r/@|\b(?:var|counter|counters)\s*\(|:root/, css)
 
           refute Regex.match?(~r/position\s*:\s*fixed|\bpopover\b/i, source),
@@ -94,6 +118,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserFixturePageValidator do
 
           {%{
              metadata: metadata,
+             global_css: global_css,
              body: body,
              css: rules,
              marker: marker,

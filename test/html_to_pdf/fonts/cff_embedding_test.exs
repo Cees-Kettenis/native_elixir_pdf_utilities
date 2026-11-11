@@ -229,10 +229,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
     assert_in_delta span.end_x - span.x, Font.text_width("Hx0", source, 24), 0.001
   end
 
-  test "unsupported legacy embedding and exhausted registry space return diagnostics",
+  test "legacy composition is flattened before CID embedding and registry limits retain diagnostics",
        %{data: data} do
-    # This is deliberately valid at the outline-parser boundary, but the PDF
-    # emitter must not relabel a name-keyed seac program as CID-keyed.
+    # A CID-keyed program cannot retain seac. Emit the resolved component paths.
     seac = <<139, 139, 204, 205, 14>>
 
     raw =
@@ -244,8 +243,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
 
     input = rebuild(data, "CFF ", fn _ -> raw end)
     assert {:ok, [source]} = Font.load_configured_faces([%{family: "Legacy", data: input}])
-    assert {:error, {:unsupported_font, %{message: message}}} = Cff.subset(source, [4], true)
-    assert message =~ "seac"
+    assert {:ok, output, true} = Cff.subset(source, [4], true)
+    assert {:ok, face} = CffCharstringValidator.prepare(output, 2)
+    assert elem(face.glyphs, 1).seac == nil
     raw = CffFixture.face_fixture(glyph_count: 5, strings: List.duplicate("", 64608))
     input = rebuild(data, "CFF ", fn _ -> raw end)
     assert {:ok, [source]} = Font.load_configured_faces([%{family: "Full strings", data: input}])

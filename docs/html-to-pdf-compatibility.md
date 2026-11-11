@@ -234,15 +234,39 @@ replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 | --- | --- |
 | Default | DejaVu Sans; installed-font discovery enabled |
 | Consistent output | Supply fonts and set `system_font_discovery: false` |
-| Custom fonts | Embeddable static TrueType and CFF OpenType, WOFF 1 and selected collection faces; [registration example](html-to-pdf-examples.md#register-a-font) |
+| Custom fonts | Embeddable TrueType, CFF/CFF2 OpenType, WOFF/WOFF2 and selected collection faces; [registration example](html-to-pdf-examples.md#register-a-font) |
 | Face selection | Ordered families; CSS directional weight and width matching, weight/width ranges, italic/oblique descriptors and Unicode ranges. Supply `collection_index` to select a collection face, starting at zero |
 | Missing characters | Fallback fonts, then replacement; use `unsupported_glyphs: :error` to fail |
 
 CFF 1 fonts preserve source charstrings, hints and local/global subroutine ownership
 when converted to CID-keyed PDF fonts. Each document character code keeps its own
 Unicode extraction map, including aliases sharing one glyph. Legacy `seac`
-composition and nondeterministic Type 2 `random` programs currently return an
-unsupported-font diagnostic rather than approximate artwork. CFF2 remains excluded.
+composition is evaluated before embedding. Type 2 `random` uses a reproducible
+per-glyph sequence, seeded from `initialRandomSeed` and the glyph ID; its evaluated
+outline is frozen in the PDF. Large evaluated programs use bounded subroutines.
+
+Variable fonts become static instances before layout and embedding. Axis values
+are clamped to their declared ranges; named instances, `avar` mappings, TrueType
+`gvar` outlines, CFF2 blends and horizontal, vertical and global variation metrics
+use the selected coordinates. CSS weight, width, style, optical sizing and explicit
+variation settings participate in selection. Font configuration examples are in
+[variable fonts and controls](html-to-pdf-examples.md#variable-fonts-and-controls).
+
+| Control | Support |
+| --- | --- |
+| Features and language | Feature/variation settings, kerning, variant subproperties, language overrides and named `@font-feature-values` definitions share one selection plan |
+| Execution | Existing Latin ligatures and legacy kerning can be enabled or disabled. Active font features requiring general OpenType shaping return an unsupported-font diagnostic |
+| Synthesis | Permitted synthetic bold, oblique, caps and script-position glyphs; `font-synthesis` and its subproperties can disable synthesis |
+| Font metrics | `size-adjust`, ascent/descent/line-gap overrides and `font-size-adjust`, including a primary-face `from-font` reference for fallback |
+| Color bitmaps | `sbix` PNG/JPEG, duplicate glyphs and density selection; applicable CBDT/CBLC PNG and 32-bit BGRA records with strike metrics |
+| Color vectors | COLR v0 layers; bounded COLR v1 paint graphs, gradients, transforms and composition; CPAL light/dark and named `@font-palette-values` overrides |
+| SVG glyphs | Static plain/gzip SVG, selected glyph IDs, palette/current-color substitution and embedded PNG/JPEG. No animation or external file/network resources |
+
+Color artwork retains logical Unicode and an invisible selected text run for PDF
+selection geometry. Font embedding restrictions still apply. TIFF and
+other unimplemented bitmap encodings return a diagnostic. Color rendering does
+not provide general emoji sequence shaping: variation-selector, ZWJ and
+script-dependent substitutions still require the later shaping path.
 
 ## MathML in HTML
 
@@ -271,7 +295,7 @@ unsupported-font diagnostic rather than approximate artwork. CFF2 remains exclud
 | JavaScript, media playback, canvas drawing APIs | Static HTML and images |
 | Embedded PDFs, XFA, JavaScript form actions | Supported HTML and PDF forms |
 | Named pages, page-margin boxes, CSS page counters | Page options and header/footer templates |
-| WOFF2, variable fonts | Embeddable static TrueType and CFF OpenType fonts |
+| General OpenType shaping and emoji sequence matching | Supported Latin text, static selected font instances and individual covered color glyphs |
 | Complex shaping, bidirectional text, vertical writing | A renderer supporting those scripts and layouts |
 
 Embedded content and framesets have restricted static support. SVG, control

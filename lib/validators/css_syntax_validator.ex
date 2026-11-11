@@ -236,7 +236,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
             replacement = rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: "")
             {replacement, namespaces, false}
 
-          {name, _} when name in ["font-face", "page"] ->
+          {name, _}
+          when name in ["font-face", "page", "font-feature-values", "font-palette-values"] ->
             {rule.source, namespaces, false}
 
           {_unknown, _} ->

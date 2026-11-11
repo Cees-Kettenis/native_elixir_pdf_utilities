@@ -155,4 +155,82 @@ defmodule NativeElixirPdfUtilities.TestSupport.CffFixture do
     body = Enum.map(blocks, fn {key, bytes} -> if key == :fds, do: fd_array, else: bytes end)
     IO.iodata_to_binary([<<1, 0, 4, 4>>, names, index([dictionary(top)]), strings, globals, body])
   end
+
+  @doc "Builds a CFF2 fixture with explicit 32-bit INDEX, private/subroutine, FDSelect and variation-store ownership."
+  @spec face2_fixture(keyword()) :: binary()
+  def face2_fixture(options \\ []) do
+    programs = Keyword.get(options, :charstrings, [<<>>, <<>>])
+    fonts = Keyword.get(options, :font_count, 1)
+    local = Keyword.get(options, :local_subrs)
+    private = Keyword.get(options, :private, %{})
+    private = if local == nil, do: private, else: Map.put_new(private, 19, [0])
+    private_size = byte_size(dictionary(private))
+
+    private =
+      if local != nil and private[19] == [0],
+        do: Map.put(private, 19, [private_size]),
+        else: private
+
+    private = dictionary(private)
+    local = if local == nil, do: <<>>, else: index2(local)
+    globals = index2(Keyword.get(options, :global_subrs, []))
+    select = Keyword.get(options, :fd_select, <<>>)
+    store = Keyword.get(options, :store, <<>>)
+
+    store =
+      if store == <<>>,
+        do: store,
+        else: <<Keyword.get(options, :store_length, byte_size(store))::16, store::binary>>
+
+    top = %{17 => [0], {12, 36} => [0]}
+    top = if select == <<>>, do: top, else: Map.put(top, {12, 37}, [0])
+    top = if store == <<>>, do: top, else: Map.put(top, 24, [0])
+    extra = Keyword.get(options, :top, %{})
+    top = Map.merge(top, extra) |> Map.reject(fn {_, value} -> value == nil end)
+    private_offset = 5 + byte_size(dictionary(top)) + byte_size(globals)
+
+    fd =
+      Map.merge(
+        %{18 => [byte_size(private), private_offset]},
+        Keyword.get(options, :font_dictionary, %{})
+      )
+
+    fdarray = index2(List.duplicate(dictionary(fd), fonts))
+    chars = index2(programs)
+    array_offset = private_offset + byte_size(private) + byte_size(local)
+    char_offset = array_offset + byte_size(fdarray)
+    select_offset = char_offset + byte_size(chars)
+    store_offset = select_offset + byte_size(select)
+
+    top =
+      Enum.reduce(
+        [
+          {17, char_offset},
+          {{12, 36}, array_offset},
+          {{12, 37}, select_offset},
+          {24, store_offset}
+        ],
+        top,
+        fn {key, offset}, top ->
+          if Map.has_key?(top, key) and not Map.has_key?(extra, key),
+            do: Map.put(top, key, [offset]),
+            else: top
+        end
+      )
+      |> dictionary()
+
+    <<2, 0, 5, byte_size(top)::16, top::binary, globals::binary, private::binary, local::binary,
+      fdarray::binary, chars::binary, select::binary, store::binary>>
+  end
+
+  @doc "Encodes a CFF2 INDEX using its fixed 32-bit object count."
+  @spec index2([binary()]) :: binary()
+  def index2(objects) do
+    if objects == [] do
+      <<0::32>>
+    else
+      <<_count::16, body::binary>> = index(objects)
+      <<length(objects)::32, body::binary>>
+    end
+  end
 end

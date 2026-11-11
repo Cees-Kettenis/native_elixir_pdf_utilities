@@ -2399,6 +2399,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     fixture_path = Path.join(@fixtures_dir, fixture_name)
 
     thresholds =
+      if fixture_name == "font_supplementary_unicode.html" do
+        # Reuse the blank second page of this retained Unicode scenario. The
+        # font rules define unique families, so the shared page group's
+        # other originals keep their source, physical fonts and assertions.
+        rows =
+          ~w(woff2_transformed woff2_literal woff2_cff truetype_instance cff2_instance metric_override aspect_adjustment synthetic_bold synthetic_oblique sbix cbdt colr_layers colr_palette colr_gradients colr_dark)
+
+        regions =
+          Enum.with_index(rows, fn row, index ->
+            {row, if(index == 7, do: {342, 322, 140, 64}, else: {182, 84 + index * 34, 100, 32})}
+          end) ++
+            [
+              {"synthetic_caps", {342, 424, 45, 32}},
+              {"synthetic_super", {342, 484, 45, 40}},
+              {"synthetic_sub", {342, 526, 45, 40}},
+              {"svg_glyph", {342, 594, 45, 40}},
+              {"shrinking_radial", {342, 560, 45, 32}},
+              {"petite_caps", {442, 424, 45, 32}},
+              {"synthetic_unicase", {442, 492, 45, 32}},
+              {"optical_size", {442, 526, 90, 64}}
+            ]
+
+        assets =
+          Map.new(
+            ~w(selected-transformed.woff2 selected-literal.woff2 selected-cff.woff2 selected-variable.ttf selected-variable-cff2.otf selected-sbix.ttf selected-cbdt.ttf selected-colr.ttf selected-colr-v1.ttf selected-svg-gzip.ttf selected-control-axes.ttf),
+            fn file ->
+              {"../../fonts/" <> file, {:bytes, File.read!(Paths.fixture("fonts/" <> file))}}
+            end
+          )
+
+        region_thresholds =
+          Map.new(regions, fn {row, _} ->
+            {row, %{max_changed_ratio: 0.12, max_average_delta: 0.03}}
+          end)
+
+        # New font samples use the helper's existing glyph/image tolerances:
+        # Chromium converts these fonts to Type 3 artwork, while the native
+        # PDF retains hintable CID fonts and decoded color bitmaps. The original
+        # whole-document 1% thresholds remain unchanged; independent table,
+        # outline, advance, palette and PNG assertions constrain each format.
+        thresholds
+        |> Keyword.put(:page_regions, %{2 => regions})
+        |> Keyword.put(:region_thresholds, region_thresholds)
+        |> Keyword.put(:render_opts, assets: assets)
+      else
+        thresholds
+      end
+
+    thresholds =
       if fixture_name in ~w(html_optional_tags.html html_static_elements.html html_horizontal_rules.html html_mixed_link_button_content.html html_table_formation.html html_list_attributes.html ruby_optional_tags.html html_legacy_raw_text.html) do
         Keyword.update(thresholds, :render_opts, [html_recovery: true], fn opts ->
           Keyword.put(opts, :html_recovery, true)
@@ -2477,6 +2526,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
         for label <- ["Print-ready report", "Viewport", "Print conditions", "Root units"],
             do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
+      end
+    end
+
+    if fixture_name == "font_supplementary_unicode.html" do
+      assert page_count == 2
+      assert length(Enum.at(pages, 1).regions) == 23
+
+      for engine <- ["native", "chromium"] do
+        assert {:ok, extracted} =
+                 NativeElixirPdfUtilities.Text.extract_file_spans(
+                   Path.join(artifact_dir, engine <> ".pdf"),
+                   actual_text: true
+                 )
+
+        spans = Enum.at(extracted.pages, 1).spans
+
+        for index <- 0..14 do
+          {left, top, width, height} = Enum.at(Enum.at(pages, 1).regions, index).bounds
+
+          assert Enum.filter(
+                   spans,
+                   &(&1.x >= left and &1.x < left + width and &1.y > top and
+                       &1.y <= top + height)
+                 )
+                 |> Enum.map_join(& &1.text)
+                 |> String.replace(~r/\s/u, "") == if(index == 9, do: "Hx", else: "Hx0")
+        end
       end
     end
 
@@ -5123,6 +5199,7 @@ for group <- 0..7 do
       @fixture_name fixture_name
       @thresholds thresholds
       if fixture_name == "flex_shorthand_overrides.html", do: @tag(:flex_shorthand_overrides)
+      if fixture_name == "font_supplementary_unicode.html", do: @tag(:font_formats)
       if fixture_name == "svg_leading_decimal_dimensions.html", do: @tag(:svg_leading_decimals)
 
       if fixture_name in [

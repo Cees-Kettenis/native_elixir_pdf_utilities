@@ -14,7 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
     RenderCache.fetch_stylesheet(
       {__MODULE__, source, namespaces},
       fn ->
-        state = %{rules: [], layers: [], registrations: []}
+        state = %{rules: [], layers: [], registrations: [], font_rules: []}
 
         context = %{
           parent: nil,
@@ -153,6 +153,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
             NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(body)
 
         flatten(rule.declarations, %{child | condition_active: active}, state)
+
+      {kind, body}
+      when kind in ["font-feature-values", "font-palette-values"] and rule.block and
+             is_nil(context.parent) ->
+        record = %{
+          kind: kind,
+          name: body,
+          declarations: rule.declarations,
+          offset: rule_at,
+          condition_active: context.condition_active
+        }
+
+        %{state | font_rules: [record | state.font_rules]}
 
       {"property", body} when rule.block and is_nil(context.parent) ->
         registration = %{

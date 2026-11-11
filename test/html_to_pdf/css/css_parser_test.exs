@@ -607,7 +607,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
     assert regular == %{
              family: "Report Sans",
-             sources: ["../fonts/report.ttf"],
+             sources: ["../fonts/report.woff2", "../fonts/report.ttf"],
              weight: 400,
              style: :normal
            }
@@ -660,7 +660,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert remote.sources == ["https://example.com/x.ttf"]
 
     for css <- [
-          "@font-face { font-family: X; src: url(x.woff2) format(woff2); }",
+          "@font-face { font-family: X; src: url(x.woff3) format(woff3); }",
           "@font-face { font-family: X; src: url(x.png) format(truetype); }",
           "@font-face { font-family: X; font-weight: bold; }",
           "@font-face { font-family: ''; src: url(x.ttf); }",
@@ -683,12 +683,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert {:error,
             {:invalid_css,
              %{
-               source: "src: url(x.woff2) format(woff2)",
+               source: "src: url(x.woff3) format(woff3)",
                message:
-                 "line 1: @font-face declaration \"src: url(x.woff2) format(woff2)\" is invalid or unsupported"
+                 "line 1: @font-face declaration \"src: url(x.woff3) format(woff3)\" is invalid or unsupported"
              }}} =
              CssParser.parse_detailed(
-               "@font-face { font-family: X; src: url(x.woff2) format(woff2); }"
+               "@font-face { font-family: X; src: url(x.woff3) format(woff3); }"
              )
 
     assert {:error,

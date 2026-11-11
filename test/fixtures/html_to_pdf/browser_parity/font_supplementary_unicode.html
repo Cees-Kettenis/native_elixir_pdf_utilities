@@ -6,6 +6,31 @@ html, body { margin:0; padding:0; }
 body { padding:24pt; font-family:"DejaVu Sans"; font-size:12pt; line-height:18pt; }
 p { margin:0 0 12pt; }
 .math-font { font-family:"STIX Two Math"; font-size:20pt; line-height:30pt; }
+/* Original font fixture bytes and independent expectations live in test/fixtures/fonts.
+ * CSS Fonts 4, 1 February 2024; OpenType 1.9.1. No additional capture/page. */
+@font-face{font-family:FormatWoff2;src:url("../../fonts/selected-transformed.woff2") format("woff2");}
+@font-face{font-family:FormatLiteral;src:url("../../fonts/selected-literal.woff2") format("woff2");}
+@font-face{font-family:FormatCffWoff2;src:url("../../fonts/selected-cff.woff2") format("woff2");}
+@font-face{font-family:FormatVariable;src:url("../../fonts/selected-variable.ttf") format("truetype");font-weight:100 900;font-stretch:75% 125%;}
+@font-face{font-family:FormatCff2;src:url("../../fonts/selected-variable-cff2.otf") format("opentype");font-weight:100 900;font-stretch:75% 125%;}
+@font-face{font-family:FormatSbix;src:url("../../fonts/selected-sbix.ttf") format("truetype");}
+@font-face{font-family:FormatCbdt;src:url("../../fonts/selected-cbdt.ttf") format("truetype");}
+@font-face{font-family:FormatColr;src:url("../../fonts/selected-colr.ttf") format("truetype");}
+@font-face{font-family:FormatPaint;src:url("../../fonts/selected-colr-v1.ttf") format("truetype");}
+@font-face{font-family:FormatSvg;src:url("../../fonts/selected-svg-gzip.ttf") format("truetype");}
+@font-face{font-family:FormatOptical;src:url("../../fonts/selected-control-axes.ttf") format("truetype");}
+@font-face{font-family:FormatAdjusted;src:url("../../fonts/selected-transformed.woff2");size-adjust:125%;ascent-override:80%;descent-override:20%;line-gap-override:0%;}
+@font-palette-values --FormatBrand{font-family:FormatColr;base-palette:dark;override-colors:0 #148a35;}
+.font-format-script-native{display:none;}
+.font-format-svg-native{display:none;}
+@supports (font-synthesis-position:auto) {
+.font-format-script-native{display:block;}
+.font-format-script-reference{display:none;}
+}
+@supports font-tech(color-SVG) {
+.font-format-svg-native{display:block;}
+.font-format-svg-reference{display:none;}
+}
 </style></head><body>
 <p>Selected font characters retain their Unicode values.</p>
 <p class="math-font">A 𝑥 𝑦 𝑧 𝛼 𝛽 𝛾</p>
@@ -15,4 +40,54 @@ p { margin:0 0 12pt; }
 <div style="break-before:page">
 <p class="math-font">𝑥 𝑦 𝑧 𝛼 𝛽 𝛾</p>
 <p>Supplementary code points survive PDF extraction and page boundaries.</p>
+
+<!-- This second-page extension uses the existing two-page capture. Each row
+     retains its own pixel denominator and text assertions in its owning test. -->
+<div style="position:relative;height:550pt;margin-top:24pt;font-size:24pt;line-height:30pt">
+<div style="position:absolute;top:0pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">WOFF2 transformed</span><span style='position:absolute;left:160pt;top:0;font-family:FormatWoff2;'>Hx0</span></div>
+<div style="position:absolute;top:34pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">WOFF2 literal</span><span style='position:absolute;left:160pt;top:0;font-family:FormatLiteral;'>Hx0</span></div>
+<div style="position:absolute;top:68pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">WOFF2 CFF</span><span style='position:absolute;left:160pt;top:0;font-family:FormatCffWoff2;'>Hx0</span></div>
+<div style="position:absolute;top:102pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">TrueType interior</span><span style='position:absolute;left:160pt;top:0;font-family:FormatVariable;font-variation-settings:"wght" 650,"wdth" 112.5;'>Hx0</span></div>
+<div style="position:absolute;top:136pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">CFF2 interior</span><span style='position:absolute;left:160pt;top:0;font-family:FormatCff2;font-variation-settings:"wght" 650,"wdth" 112.5;'>Hx0</span></div>
+<div style="position:absolute;top:170pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">Metric override</span><span style='position:absolute;left:160pt;top:0;font-family:FormatAdjusted;'>Hx0</span></div>
+<div style="position:absolute;top:204pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">Aspect adjustment</span><span style='position:absolute;left:160pt;top:0;font-family:FormatWoff2;font-size-adjust:cap-height .6;'>Hx0</span></div>
+<div style="position:absolute;top:238pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">Synthetic bold</span><span style='position:absolute;left:320pt;top:0;font-family:FormatWoff2;font-weight:700;font-size:48pt;line-height:60pt;'>Hx0</span></div>
+<div style="position:absolute;top:272pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">Synthetic oblique</span><span style='position:absolute;left:160pt;top:0;font-family:FormatWoff2;font-style:oblique 14deg;'>Hx0</span></div>
+<div style="position:absolute;top:306pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">Sbix strike</span><span style='position:absolute;left:160pt;top:0;font-family:FormatSbix;'>Hx</span></div>
+<div style="position:absolute;top:340pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">CBDT strike</span><span style='position:absolute;left:160pt;top:0;font-family:FormatCbdt;'>Hx0</span></div>
+<div style="position:absolute;top:374pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">COLR layers</span><span style='position:absolute;left:160pt;top:0;font-family:FormatColr;'>Hx0</span></div>
+<div style="position:absolute;top:408pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">COLR palette</span><span style='position:absolute;left:160pt;top:0;font-family:FormatColr;font-palette:--FormatBrand;'>Hx0</span></div>
+<div style="position:absolute;top:442pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">COLR gradients</span><span style='position:absolute;left:160pt;top:0;font-family:FormatPaint;'>Hx0</span></div>
+<div style="position:absolute;top:476pt;left:0;width:500pt;height:32pt"><span style="font:10pt/30pt DejaVu Sans">COLR dark</span><span style='position:absolute;left:160pt;top:0;font-family:FormatPaint;font-palette:dark;'>Hx0</span></div>
+<div style="position:absolute;left:320pt;top:340pt;font-family:FormatWoff2;font-variant-caps:all-small-caps">H</div>
+<div style="position:absolute;left:380pt;top:340pt;font:10pt/30pt DejaVu Sans">Caps</div>
+<!-- Chromium does not synthesize font-variant-position here. The fallback
+SVG uses the authored H outlines retained in selected-variable.ttf,
+scale 0.65, shift +/-0.35 em and the 30pt line's 22.5pt pixel-rounded baseline. -->
+<div style="position:absolute;left:320pt;top:408pt;width:40pt;height:40pt">
+<svg class="font-format-script-reference" xmlns="http://www.w3.org/2000/svg" width="40pt" height="40pt" viewBox="0 0 40 40"><g transform="translate(0 14.1) scale(.0156,-.0156)"><path d="M80 0H180V700H80Z M420 0H520V700H420Z M180 300H420V400H180Z"/></g></svg>
+<span class="font-format-script-native" style='position:absolute;left:0;top:0;font-family:FormatVariable;font-variation-settings:"wght" 400,"wdth" 100;font-variant-position:super'>H</span></div>
+<div style="position:absolute;left:380pt;top:408pt;font:10pt/30pt DejaVu Sans">Super</div>
+<!-- Chromium does not synthesize font-variant-position here. The fallback
+SVG uses the authored H outlines retained in selected-variable.ttf,
+scale 0.65, shift +/-0.35 em and the 30pt line's 22.5pt pixel-rounded baseline. -->
+<div style="position:absolute;left:320pt;top:442pt;width:40pt;height:40pt">
+<svg class="font-format-script-reference" xmlns="http://www.w3.org/2000/svg" width="40pt" height="40pt" viewBox="0 0 40 40"><g transform="translate(0 30.9) scale(.0156,-.0156)"><path d="M80 0H180V700H80Z M420 0H520V700H420Z M180 300H420V400H180Z"/></g></svg>
+<span class="font-format-script-native" style='position:absolute;left:0;top:0;font-family:FormatVariable;font-variation-settings:"wght" 400,"wdth" 100;font-variant-position:sub'>H</span></div>
+<div style="position:absolute;left:380pt;top:442pt;font:10pt/30pt DejaVu Sans">Sub</div>
+<!-- Chromium has no OpenType SVG glyph execution. This independent static
+reference uses the original SVG table retained in selected-svg.ttf and the
+quantized CPAL record colors; the native branch selects the gzip SVG font. -->
+<div style="position:absolute;left:320pt;top:510pt;width:40pt;height:40pt">
+<svg class="font-format-svg-reference" xmlns="http://www.w3.org/2000/svg" width="40pt" height="40pt" viewBox="0 0 40 40"><defs><linearGradient id="font-format-svg-ink"><stop offset="0" stop-color="rgb(240,41,31)"/><stop offset="1" stop-color="rgba(20,71,240,0.5019607843)"/></linearGradient></defs><g transform="translate(0 22.5) scale(.024)"><rect x="80" y="-700" width="100" height="700" fill="url(#font-format-svg-ink)"/><rect x="420" y="-700" width="100" height="700"/><rect x="180" y="-400" width="240" height="100" fill="url(#font-format-svg-ink)"/></g></svg>
+<span class="font-format-svg-native" style="position:absolute;left:0;top:0;font-family:FormatSvg">H</span></div>
+<div style="position:absolute;left:380pt;top:510pt;font:10pt/30pt DejaVu Sans">SVG glyph</div>
+<!-- Extra controls occupy the retained page's unused right column. The radial
+     glyph uses two concentric circles with decreasing radii, encoded by
+     FontTools independently of the native gradient sampler. -->
+<div style="position:absolute;left:320pt;top:476pt;font-family:FormatPaint">É</div>
+<div style="position:absolute;left:420pt;top:340pt;font-family:FormatWoff2;font-variant-caps:petite-caps">H</div>
+<div style="position:absolute;left:420pt;top:408pt;font-family:FormatWoff2;font-variant-caps:unicase">H</div>
+<div style="position:absolute;left:420pt;top:442pt;font-family:FormatOptical;font-optical-sizing:auto;font-size:48pt;line-height:60pt">H</div>
+</div>
 </div></body></html>

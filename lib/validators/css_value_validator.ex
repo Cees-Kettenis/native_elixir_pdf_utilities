@@ -23,6 +23,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     :inset,
     :outset
   ]
+  @font_control_properties NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties() ++
+                             ["font-variant", "font-synthesis"]
   @source_wide_keywords ~w(inherit initial unset revert revert-layer)
   @source_layout_properties ~w(width height min-width max-width min-height max-height
           margin padding border-width border-style border-radius border-spacing
@@ -41,7 +43,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @source_position_properties ~w(object-position background-position)
   @source_color_properties ~w(color background-color background)
   @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style font-width font-stretch text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position grid-template-columns grid-template-rows grid-auto-columns grid-auto-rows)
-  @source_scalar_properties ~w(background-repeat font-weight font-style font-width font-stretch quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position)
+  @source_scalar_properties ~w(background-repeat font-weight font-style font-width font-stretch quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position) ++
+                              @font_control_properties
   @source_decoration_properties ~w(text-decoration text-decoration-line text-decoration-style text-decoration-thickness text-decoration-color)
   @source_symbolic_properties @source_layout_properties ++
                                 @source_edge_properties ++
@@ -49,6 +52,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                                 @source_color_properties ++
                                 @source_remaining_properties ++
                                 ~w(font-size font-family font all background-image list-style-image) ++
+                                @font_control_properties ++
                                 NativeElixirPdfUtilities.Validators.CssLogicalValidator.properties()
   @medium_border_width 2.25
   @doc false
@@ -1590,6 +1594,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           "font-family" ->
             {:ok, Map.put(style, :font_families, value)}
 
+          property when property in @font_control_properties ->
+            case NativeElixirPdfUtilities.Validators.CssFontControlsValidator.prepare(
+                   property,
+                   value
+                 ) do
+              {:ok, properties} ->
+                {:ok, Map.update(style, :font_controls, properties, &Map.merge(&1, properties))}
+
+              :error ->
+                {:error, :invalid_document}
+            end
+
           property
           when property in ~w(text-decoration text-decoration-line text-decoration-color text-decoration-thickness text-decoration-style) ->
             case HtmlValidator.parse_css_text_decoration(
@@ -1824,7 +1840,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
            CssCascadeValidator.project(
              style,
              CssCascadeValidator.initial(style),
-             ~w(font-weight font-style font-width line-height)
+             ~w(font-weight font-style font-width line-height) ++
+               NativeElixirPdfUtilities.Validators.CssFontControlsValidator.font_resets()
            ),
          {:ok, initial} <-
            put_font_style(
@@ -1833,6 +1850,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
            ),
          {:ok, initial} <- put_font_weight(initial, components.selection.weight),
          {:ok, initial} <- validate_property(initial, "font-width", components.selection.width),
+         {:ok, initial} <-
+           validate_property(initial, "font-variant-caps", components.selection.caps),
          computed = Map.merge(initial, components.properties),
          {:ok, computed} <- validate_property(computed, "line-height", components.line_height),
          {:ok, computed} <- validate_property(computed, "font-family", components.family) do

@@ -77,8 +77,9 @@ defmodule NativeElixirPdfUtilities.Validators.SourceSizeValidator do
               result -> result
             end) do
       pixels = font_size / 0.75
-      unit_scale = pixels / font.units_per_em
-      x_height = pixels * x_height_ratio
+      used_pixels = Font.line_size(font, pixels)
+      unit_scale = used_pixels / font.units_per_em
+      x_height = used_pixels * x_height_ratio
 
       cap_height =
         case Map.get(font.cmap, ?H) do
@@ -92,14 +93,14 @@ defmodule NativeElixirPdfUtilities.Validators.SourceSizeValidator do
       # CSS mandates a one-em fallback when the water ideograph is unavailable.
       ideographic =
         if Map.get(font.cmap, ?水, 0) == 0,
-          do: pixels,
+          do: used_pixels,
           else: Font.text_width("水", font, pixels)
 
       metrics = %{
         ex: x_height,
         ch:
           if(Map.get(font.cmap, ?0, 0) == 0,
-            do: pixels / 2,
+            do: used_pixels / 2,
             else: Font.text_width("0", font, pixels)
           ),
         cap: cap_height,

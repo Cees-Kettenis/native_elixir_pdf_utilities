@@ -349,12 +349,16 @@ return the original PDF do not consume another revision.
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
-| `max_font_decoded_bytes` | 40,000,000 | Reconstructed sfnt bytes admitted from one compressed font or collection face |
+| `max_font_decoded_bytes` | 40,000,000 | Decoded font/table/program bytes, including Brotli output and selected static instances |
 | `max_font_numeric_magnitude` | 4,294,967,295 | Absolute CFF dictionary/operand values and arithmetic results, checked before reuse |
-| `max_font_outline_coordinate` | 1,000,000 | Absolute decoded CFF path/control coordinates in design units |
-| `max_font_glyph_depth` | 64 | CFF seac component resolution; nested seac is prohibited by the format and the separate Type 2 subroutine stack has a fixed protocol depth of ten |
+| `max_font_outline_coordinate` | 1,000,000 | Absolute decoded CFF path/control and resolved TrueType composite coordinates in design units |
+| `max_font_glyph_depth` | 64 | TrueType/color component depth and CFF seac resolution; nested seac is prohibited by the format and the separate Type 2 subroutine stack has a fixed protocol depth of ten |
 | `max_font_cff_work` | 1,000,000 | CFF indexes/dictionaries and ownership checks, Type 2 execution, outline/component expansion and metric transforms per font-budget scope |
 | `max_font_container_work` | 100,000,000 | Cumulative directory, compressed/decompressed table and sfnt rebuild bytes in one font-budget scope |
+| `max_font_brotli_work` | 100,000,000 | Brotli framing, prefix/context decoding, dictionary transforms and output/history work per font-budget scope |
+| `max_font_variation_work` | 100,000,000 | Axis/store records, deltas, interpolation and instantiated glyph work per font-budget scope |
+| `max_font_color_work` | 100,000,000 | Bitmap/paint graph records, color layers, gradient sampling and glyph expansion per font-budget scope |
+| `font_color_sweep_segments` | 2,048 | Angular samples per complete COLR sweep-gradient turn |
 | `max_font_source_bytes` | 10,000,000 | One configured, document-selected, bundled, or discovered font |
 | `max_aggregate_font_source_bytes` | 40,000,000 | Distinct font byte payloads used during one render, including furniture |
 | `max_font_count` | 128 | Family/weight/style combinations, including bundled fallbacks |

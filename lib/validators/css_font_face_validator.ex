@@ -5,6 +5,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
   alias NativeElixirPdfUtilities.Validators.CssFontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  @control_descriptors ~w(font-feature-settings font-variation-settings font-language-override font-named-instance)
+  @metric_descriptors Map.keys(NativeElixirPdfUtilities.Validators.FontMetricValidator.fields())
+
   @doc false
   @spec validate([NativeElixirPdfUtilities.HtmlToPdf.CssParser.declaration()]) ::
           {:ok, NativeElixirPdfUtilities.HtmlToPdf.CssParser.font_face()}
@@ -236,7 +239,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
              "font-width",
              "font-stretch",
              "unicode-range"
-           ] ->
+           ] or property in @metric_descriptors or property in @control_descriptors ->
         true
 
       {"font-display", value} ->
@@ -311,6 +314,27 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
   end
 
   defp candidate_info(candidate) do
+    tokens = HtmlValidator.split_css_tokens(candidate)
+
+    {candidate, technologies} =
+      case List.last(tokens) do
+        token when is_binary(token) ->
+          case Regex.run(~r/\Atech\((.*)\)\z/isu, token, capture: :all_but_first) do
+            [body] ->
+              technologies =
+                HtmlValidator.split_css_comma(body, true)
+                |> Enum.map(&String.downcase(String.trim(&1), :ascii))
+
+              {Enum.drop(tokens, -1) |> Enum.join(" "), technologies}
+
+            _ ->
+              {candidate, []}
+          end
+
+        _ ->
+          {candidate, []}
+      end
+
     captures =
       Regex.named_captures(
         ~r/^(?<url>url\(\s*(?:"(?<double>[^"]+)"|'(?<single>[^']+)'|(?<bare>[^)'"\s]+))\s*\))(?:\s+format\(\s*(?:"(?<format_double>[^"]+)"|'(?<format_single>[^']+)'|(?<format_bare>[^)'"\s]+))\s*\))?$/ui,
@@ -326,7 +350,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
           url: captures["url"],
           reference: reference,
           format: format,
-          supported: supported_font_source?(reference, format),
+          supported:
+            supported_font_source?(reference, format) and
+              Enum.all?(technologies, &supports_technology?/1),
+          technologies: technologies,
           syntax_policy: :recognized_url_candidate_syntax
         }
 
@@ -374,12 +401,32 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
   @doc "Reports the static outline font formats accepted by the native font source validator."
   @spec supports_format?(String.t()) :: boolean()
   def supports_format?(format),
-    do: String.downcase(format, :ascii) in ["truetype", "opentype", "woff", "collection"]
+    do:
+      String.downcase(format, :ascii) in [
+        "truetype",
+        "opentype",
+        "woff",
+        "woff2",
+        "collection",
+        "truetype-variations",
+        "opentype-variations",
+        "woff-variations",
+        "woff2-variations"
+      ]
 
   @doc "Reports font technologies used by native layout, including Latin and Math OpenType features."
   @spec supports_technology?(String.t()) :: boolean()
   def supports_technology?(technology),
-    do: String.downcase(technology, :ascii) == "features-opentype"
+    do:
+      String.downcase(technology, :ascii) in [
+        "features-opentype",
+        "variations",
+        "color-colrv0",
+        "color-colrv1",
+        "color-svg",
+        "color-sbix",
+        "color-cbdt"
+      ]
 
   defp supported_font_source?(source, format) do
     normalized_format = String.downcase(format)
@@ -393,7 +440,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
         format -> supports_format?(format)
       end
 
-    supported_reference? and extension in [".ttf", ".otf", ".woff", ".ttc", ".otc"] and
+    supported_reference? and extension in [".ttf", ".otf", ".woff", ".woff2", ".ttc", ".otc"] and
       format_supported?
   end
 
@@ -413,15 +460,39 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
     |> Enum.reverse()
     |> Enum.reduce_while({:ok, %{weight: 400, style: :normal}}, fn {property, value},
                                                                    {:ok, properties} ->
-      if property in ["font-weight", "font-style", "font-width", "font-stretch", "unicode-range"] do
+      if property in ["font-weight", "font-style", "font-width", "font-stretch", "unicode-range"] or
+           property in @metric_descriptors or property in @control_descriptors do
         case descriptor_properties(property, value) do
           {:ok, parsed} ->
             keys =
               case property do
-                "font-weight" -> [:weight, :weight_range]
-                "font-style" -> [:style, :oblique]
-                "unicode-range" -> [:unicode_range]
-                _ -> [:width, :width_range]
+                "font-weight" ->
+                  [:weight, :weight_range]
+
+                "font-style" ->
+                  [:style, :oblique]
+
+                "unicode-range" ->
+                  [:unicode_range]
+
+                property when property in @control_descriptors ->
+                  case property do
+                    "font-feature-settings" -> [:feature_settings]
+                    "font-variation-settings" -> [:variation_settings]
+                    "font-language-override" -> [:language_override]
+                    "font-named-instance" -> [:named_instance]
+                  end
+
+                property when property in @metric_descriptors ->
+                  [
+                    Map.fetch!(
+                      NativeElixirPdfUtilities.Validators.FontMetricValidator.fields(),
+                      property
+                    )
+                  ]
+
+                _ ->
+                  [:width, :width_range]
               end
 
             {:cont, {:ok, Map.merge(Map.drop(properties, keys), parsed)}}
@@ -437,6 +508,47 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
 
   defp descriptor_properties(property, value) do
     case property do
+      "font-named-instance" ->
+        value = String.trim(value)
+
+        cond do
+          String.downcase(value, :ascii) == "auto" ->
+            {:ok, %{named_instance: nil}}
+
+          Regex.match?(
+            Regex.compile!("\\A" <> HtmlValidator.css_string_pattern() <> "\\z", "s"),
+            value
+          ) ->
+            {:ok, %{named_instance: HtmlValidator.decode_css_string(value)}}
+
+          true ->
+            :error
+        end
+
+      property when property in @control_descriptors ->
+        case NativeElixirPdfUtilities.Validators.CssFontControlsValidator.prepare(property, value) do
+          {:ok, control} ->
+            {key, value} = hd(Map.to_list(control))
+
+            option =
+              case key do
+                :"feature-settings" -> :feature_settings
+                :"variation-settings" -> :variation_settings
+                :"language-override" -> :language_override
+              end
+
+            {:ok, %{option => value}}
+
+          _ ->
+            :error
+        end
+
+      property when property in @metric_descriptors ->
+        NativeElixirPdfUtilities.Validators.FontMetricValidator.prepare_descriptor(
+          property,
+          value
+        )
+
       "font-weight" ->
         with {:ok, {first, last}} <-
                CssFontValidator.prepare_range(value, &CssFontValidator.prepare_absolute_weight/1) do

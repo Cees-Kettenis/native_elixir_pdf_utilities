@@ -1,0 +1,37 @@
+{
+  "generator": "FontTools 4.66.1",
+  "files": {
+    "selected-vertical-cff2.otf": {
+      "sha256": "85c0c3769a491195dd72b7ad087a7867b172f6274be9ff76cd3a12b22392924e",
+      "source": "selected-variable-cff2.otf",
+      "source_sha256": "29f542136500bb6d1e58c0dc0e10753df2e6ef30c04ecb0db2f1f1fda08c856a",
+      "advance": 1100.0,
+      "bearing": 100,
+      "origins": {
+        ".notdef": 920.0,
+        "space": 920.0,
+        "H": 970.0,
+        "x": 920.0,
+        "zero": 920.0,
+        "composite": 920.0
+      },
+      "glyph_order": [
+        ".notdef",
+        "space",
+        "H",
+        "x",
+        "zero",
+        "composite"
+      ]
+    },
+    "selected-gasp-variable.ttf": {
+      "sha256": "51e101c796754d9a21f8ac69f8991117bd7ead0dbb041b8bec653036fdb3e282",
+      "source": "selected-variable.ttf",
+      "source_sha256": "200b95b1766542d4a2f09fa3b0ccca262937ece5dc385128443a1e47d26d5e98",
+      "gasp": [
+        16.0,
+        65535
+      ]
+    }
+  }
+}

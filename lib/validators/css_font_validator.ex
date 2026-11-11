@@ -166,6 +166,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontValidator do
           token == "normal" ->
             {slots + 1, Map.delete(properties, :awaiting_angle), valid?}
 
+          token == "small-caps" and not Map.has_key?(properties, :caps) ->
+            {slots + 1, properties |> Map.put(:caps, token) |> Map.delete(:awaiting_angle),
+             valid?}
+
           token in ["italic", "oblique"] and not Map.has_key?(properties, :style) ->
             {slots + 1,
              properties |> Map.put(:style, token) |> Map.put(:awaiting_angle, token == "oblique"),
@@ -189,7 +193,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontValidator do
        %{
          style: Map.get(properties, :style, "normal"),
          weight: Map.get(properties, :weight, "normal"),
-         width: Map.get(properties, :width, "normal")
+         width: Map.get(properties, :width, "normal"),
+         caps: Map.get(properties, :caps, "normal")
        }}
     else
       :error

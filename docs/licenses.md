@@ -346,3 +346,13 @@ The CFF standard strings, predefined charsets and StandardEncoding mappings in
 `lib/html_to_pdf/font/cff_data.ex` follow Adobe Technical Note 5176. The generator
 uses fontTools under its MIT license. Its notice is retained in
 `priv/licenses/cff-character-mappings-MIT.txt`.
+
+## Brotli dictionary and transform data
+
+The Brotli static dictionary, context tables, dictionary transforms and codec
+fixture sources come from [Google Brotli v1.2.0](https://github.com/google/brotli/tree/v1.2.0)
+and retain its MIT license. The complete notice is in
+[brotli-MIT.txt](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/brotli-MIT.txt).
+The source hashes and development generator are recorded in
+[scripts/data/brotli-source.json](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/scripts/data/brotli-source.json).
+No download or external Brotli executable is used during rendering.

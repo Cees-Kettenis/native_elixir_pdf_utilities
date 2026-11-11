@@ -55,9 +55,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserFixturePages do
       end)
       |> Enum.unzip()
 
+    font_css = Enum.map_join(sources, & &1.global_css)
+    font_css = if font_css == "", do: "", else: font_css <> "\n    "
+
     html = """
     <!doctype html><html><head><meta charset="utf-8"><style>
-    @page{#{group["page_css"]}}
+    #{font_css}@page{#{group["page_css"]}}
     html,body{margin:0;padding:0;font-size:12pt}
     #{Enum.join(styles, "\n")}
     </style></head><body>#{Enum.join(bodies, "\n")}</body></html>

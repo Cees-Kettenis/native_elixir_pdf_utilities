@@ -1,0 +1,75 @@
+{
+  "generator": "FontTools 4.66.1",
+  "files": {
+    "selected-large-cff2.otf": {
+      "sha256": "a4636116607f3e8eecce3e628fd1bc8a9cb6a180d8369dcc0d6fe06467d9f128",
+      "source": "selected-variable-cff2.otf",
+      "cff2": true,
+      "glyphs": {
+        "H": {
+          "id": 2,
+          "bounds": [
+            80,
+            0,
+            81,
+            1375.0
+          ],
+          "width": 690.0
+        },
+        "zero": {
+          "id": 4,
+          "bounds": [
+            120.0,
+            0,
+            480.0,
+            700
+          ],
+          "width": 690.0
+        }
+      },
+      "source_sha256": "29f542136500bb6d1e58c0dc0e10753df2e6ef30c04ecb0db2f1f1fda08c856a"
+    },
+    "selected-large-seac.otf": {
+      "sha256": "f32849ddb775cfa6374f1daa05fc85ba5dd8267f49c554ea088f7ea2c0b26bb6",
+      "source": "cff-static-sans.otf",
+      "cff2": false,
+      "glyphs": {
+        "H": {
+          "id": 3,
+          "bounds": [
+            80,
+            0,
+            180,
+            700
+          ],
+          "width": 1540
+        },
+        "zero": {
+          "id": 2,
+          "bounds": [
+            80,
+            0,
+            1175,
+            1160
+          ],
+          "width": 1303
+        }
+      },
+      "source_sha256": "3f6e71c3780c47b043c5c6e8d039e5c84013622137e4756eac6ecb98a9d09946"
+    }
+  },
+  "random": {
+    "file": "selected-random.otf",
+    "sha256": "4d2f01c2e58ea09d08d8d3d42ed78b00d203c4e7b61c65ab6d0895891ca24241",
+    "source": "cff-static-sans.otf",
+    "source_sha256": "3f6e71c3780c47b043c5c6e8d039e5c84013622137e4756eac6ecb98a9d09946",
+    "seed": 7,
+    "sample": 0.25567626953125,
+    "bounds": [
+      -192.161865234375,
+      0,
+      207.838134765625,
+      700
+    ]
+  }
+}

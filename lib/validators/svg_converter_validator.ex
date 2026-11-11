@@ -63,8 +63,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                summary.filter_work.root,
                summary.root,
                dimensions,
-               Keyword.put(options, :scale, scale),
-               context
+               Keyword.put(options, :scale, scale)
              ),
            :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(source),
            :ok <- SvgFilterWorkValidator.reserve(work_root, dimensions, summary.filter_work),
@@ -113,6 +112,50 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   catch
     {:render_resource_limit, {:error, {reason, diagnostic}}} ->
       {:error, {reason, Diagnostics.with_context(diagnostic, source: "SVG")}}
+  end
+
+  @doc "Admits a self-contained SVG for vector-bound measurement without allocating a raster or loading fonts."
+  @spec prepare_bounds(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_bounds(source, id, context \\ %{mode: :image}) do
+    with true <- is_binary(id) and id != "",
+         {:ok, context} <- SvgValidator.validate_context(context),
+         {:ok, source, summary, _fonts} <-
+           prepare_source(source, context, HtmlValidator.new_image_budget(), 0, nil),
+         :ok <- validate_capabilities(summary) do
+      if summary.text == [] do
+        {:ok, %{source: source, id: id}}
+      else
+        invalid("SVG glyph bounds cannot recursively load text fonts: #{id}")
+      end
+    else
+      false -> invalid("SVG bounds require a nonempty element identifier")
+      error -> error
+    end
+  end
+
+  @doc "Validates the existing SVG renderer's selected vector bounds."
+  @spec bounds_result(term(), String.t()) :: {:ok, tuple() | nil} | {:error, {atom(), map()}}
+  def bounds_result(result, id) do
+    case result do
+      nodes when is_list(nodes) ->
+        case Enum.find(nodes, &(Map.get(&1, :id) == id)) do
+          nil ->
+            {:ok, nil}
+
+          %{x: x, y: y, width: width, height: height} ->
+            if Enum.all?(
+                 [x, y, width, height],
+                 &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
+               ) and width >= 0 and height >= 0,
+               do:
+                 {:ok,
+                  if(width == 0 or height == 0, do: nil, else: {x, y, x + width, y + height})},
+               else: invalid("SVG renderer returned invalid vector bounds: #{id}")
+        end
+
+      _ ->
+        invalid("SVG renderer could not measure selected vector bounds: #{id}")
+    end
   end
 
   @doc "Retains the genuine selected host text faces without converter-specific aliases."
@@ -218,7 +261,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   # An explicit two-dimensional raster target stretches the authored canvas per
   # CSS default object-fit fill; resvg would otherwise fit the smaller
   # dimension and letterbox the artwork inside the requested canvas.
-  defp stretch_raster_source(source, root, root_attributes, dimensions, options, context) do
+  defp stretch_raster_source(source, root, root_attributes, dimensions, options) do
     scale = Keyword.get(options, :scale, 1)
 
     with {:ok, overrides} <-
@@ -232,14 +275,17 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
           {:ok, source, root}
 
         overrides ->
-          with {:ok, _summary} <-
-                 SvgValidator.validate_processing(
-                   source,
-                   Map.take(context, [:mode, :parent_mode, :fonts, :resources])
-                 ) do
-            root = %{root | attributes: Map.merge(root.attributes, overrides)}
-            {:ok, SvgScene.authored_source(root), root}
-          end
+          # prepare_source already admitted this exact tree and embedded only
+          # approved bytes. Its rewritten data URIs are execution output, not
+          # new caller references to validate against the old opaque keys.
+          HtmlValidator.reserve_render_resource(
+            :max_aggregate_svg_source_bytes,
+            byte_size(source),
+            :style
+          )
+
+          root = %{root | attributes: Map.merge(root.attributes, overrides)}
+          {:ok, SvgScene.authored_source(root), root}
       end
     end
   end

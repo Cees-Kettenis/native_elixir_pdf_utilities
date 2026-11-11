@@ -114,11 +114,17 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     :pdf_name,
     :units_per_em,
     :widths,
+    :bitmap_widths,
     :default_width,
     :cmap,
     :ascent,
     :descent,
-    :bbox
+    :bbox,
+    :synthesis,
+    :metric_scale,
+    :layout_metrics,
+    :glyph_scale,
+    :baseline_shift
   ]
 
   @typedoc "Validated input consumed by the PDF byte writer."
@@ -272,8 +278,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   @doc false
   @spec prepare_image_paint(map(), number()) :: map() | nil
   def prepare_image_paint(box, page_height) do
-    case box do
-      %{type: :image, snap_to_css_pixel_grid: true} ->
+    case {box, css_source_text?(box)} do
+      {%{type: :image}, true} ->
         canvas = DrawingGeometry.css_print_canvas(page_height)
         pixels = canvas.css_pixels_per_point
         device = canvas.css_scale
@@ -393,9 +399,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             )
           end
 
+        baseline = baseline + Font.baseline_offset(box.font_face, box.font_size)
         x = box.x / 0.75
         y = (page_height - baseline) / 0.75
-        size = Float.floor(box.font_size / 0.75 * 100) / 100
+        size = Float.floor(Font.used_size(box.font_face, box.font_size) / 0.75 * 100) / 100
 
         spacing = Map.get(box, :letter_spacing, 0.0) / 0.75
 
@@ -499,6 +506,24 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     case result do
       {:ok, context} -> {:ok, Map.put(context, :pdf_forms, sources)}
       error -> error
+    end
+  end
+
+  @doc "Admits generated color-glyph artwork through the existing writer box rules before logical-text grouping."
+  @spec prepare_color_boxes([map()], number()) :: {:ok, [map()]} | {:error, {atom(), map()}}
+  def prepare_color_boxes(boxes, page_height) do
+    if Enum.all?(boxes, &valid_box?/1) do
+      {prepared, _} = normalize_boxes(boxes, 0, nil, page_height)
+      {:ok, List.flatten(prepared)}
+    else
+      Diagnostics.error(
+        :pdf,
+        :invalid_pdf_input,
+        "generated color glyph requires valid bounded writer artwork",
+        module: __MODULE__,
+        operation: :write_pdf,
+        source: "color glyph"
+      )
     end
   end
 
@@ -613,10 +638,11 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                                destination_pages
                              ) do
                         case validate_embedded_fonts(pages) do
-                          :ok ->
+                          {:ok, color_fonts?} ->
                             {:ok,
                              %{
                                pages: pages,
+                               color_fonts?: color_fonts?,
                                metadata: metadata,
                                outlines: outlines,
                                compress_streams: Keyword.get(opts, :compress_streams, true),
@@ -1044,8 +1070,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{css_source_positioned: positioned} ->
         is_boolean(positioned) and
           (not positioned or
-             (Map.get(box, :type) == :text and
-                match?(%{type: :embedded}, Map.get(box, :font_face)) and
+             ((Map.get(box, :type) == :image or
+                 (Map.get(box, :type) == :text and
+                    match?(%{type: :embedded}, Map.get(box, :font_face)))) and
                 Map.get(box, :snap_to_css_pixel_grid, false) == false)) and
           valid_box?(Map.delete(box, :css_source_positioned), parent_height)
 
@@ -1918,6 +1945,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                    if(color_space == :device_gray, do: 1, else: 3))
 
         valid_depth and valid_samples and valid_convention and is_boolean(inverted) and
+          is_boolean(Map.get(image, :interpolate, false)) and
           (not inverted or (format == :jpeg and color_space == :device_cmyk)) and
           case Map.get(image, :alpha_data) do
             nil ->
@@ -2257,8 +2285,16 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
             :error ->
               case valid_embedded_font_face?(face) do
-                true -> {:cont, {:ok, Map.put(faces, id, face), glyph_faces}}
-                false -> {:halt, {:error, "PDF writer requires valid embedded font data"}}
+                true ->
+                  case NativeElixirPdfUtilities.Validators.FontRenderingValidator.validate_paint(
+                         face
+                       ) do
+                    :ok -> {:cont, {:ok, Map.put(faces, id, face), glyph_faces}}
+                    error -> {:halt, error}
+                  end
+
+                false ->
+                  {:halt, {:error, "PDF writer requires valid embedded font data"}}
               end
           end
 
@@ -2267,8 +2303,13 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       end
     end)
     |> case do
-      {:ok, _faces, glyph_faces} -> validate_glyph_faces(pages, glyph_faces)
-      {:error, _message} = error -> error
+      {:ok, faces, glyph_faces} ->
+        with :ok <- validate_glyph_faces(pages, glyph_faces) do
+          {:ok, Enum.any?(faces, fn {_id, font} -> Map.has_key?(font, :color_tables) end)}
+        end
+
+      {:error, _message} = error ->
+        error
     end
   end
 

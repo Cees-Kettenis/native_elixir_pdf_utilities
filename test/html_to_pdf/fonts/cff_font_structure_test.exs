@@ -316,7 +316,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffFontStructureTest do
       assert {:error, {:invalid_font, diagnostic}} = CffFontValidator.prepare(data, glyph_count)
       assert %{stage: :font, reason: :invalid_font, message: message, source: source} = diagnostic
       assert is_binary(message) and is_binary(source)
-      assert diagnostic.module == CffFontValidator and diagnostic.operation == :prepare_cff_source
+
+      if match?(<<2, _::binary>>, data) do
+        assert diagnostic.module == NativeElixirPdfUtilities.Validators.Cff2FontValidator
+        assert diagnostic.operation == :prepare_cff2_source
+      else
+        assert diagnostic.module == CffFontValidator and
+                 diagnostic.operation == :prepare_cff_source
+      end
     end
 
     for length <- 0..(byte_size(original) - 1) do

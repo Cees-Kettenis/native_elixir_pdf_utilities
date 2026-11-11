@@ -1,0 +1,10 @@
+{
+  "source": "https://github.com/google/brotli/tree/v1.2.0",
+  "license": "priv/licenses/brotli-MIT.txt",
+  "files": {
+    "dictionary.bin": "20e42eb1b511c21806d4d227d07e5dd06877d8ce7b3a817f378f313653f35c70",
+    "Context.java": "862a4e8a0310b02c55f6a85e6a1aeb580a4f1a1bebc10b51e60b5ddb3229817c",
+    "Transform.java": "b43509c93ff67ed195a6ab45c90ae751bf4b52f28be52998d82d72071558a619",
+    "LICENSE": "3d180008e36922a4e8daec11c34c7af264fed5962d07924aea928c38e8663c94"
+  }
+}

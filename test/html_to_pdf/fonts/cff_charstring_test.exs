@@ -191,13 +191,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringTest do
       assert is_binary(source) and is_binary(message)
     end
 
-    assert {:error, {:unsupported_font, %{message: message}}} =
+    assert {:ok, face} =
              CffCharstringValidator.prepare(
                CffFixture.face_fixture(glyph_count: 1, charstrings: [<<12, 23, 14>>]),
                1
              )
 
-    assert message =~ "random"
+    assert elem(face.glyphs, 0).static?
+    assert elem(face.glyphs, 0).width > 100
+    assert elem(face.glyphs, 0).width <= 101
   end
 
   test "recursive subroutines, expanded work and coordinates stop at their owning limits" do

@@ -62,9 +62,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssPrintConditionsTest do
     for query <- [
           "font-format(truetype)",
           "font-format(opentype)",
+          "font-format(woff2)",
           "font-tech(features-opentype)",
           "(font-format(truetype) and selector(div:has(span)))",
-          "not font-tech(variations)",
+          "font-tech(variations)",
+          "font-tech(color-COLRv1)",
+          "not font-tech(unknown)",
           "(width:calc-size(max-content, size / 2))",
           "(width:2ch)"
         ] do
@@ -72,10 +75,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPrintConditionsTest do
     end
 
     for query <- [
-          "font-format(woff2)",
           "font-format(\"truetype\")",
-          "font-tech(color-COLRv1)",
-          "font-tech(variations)",
+          "font-tech(color-unknown)",
           "font-tech(features-opentype, variations)",
           "font-format()",
           "(width:calc(1pt + 1deg))"
