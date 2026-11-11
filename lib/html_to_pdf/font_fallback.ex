@@ -85,7 +85,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
               candidates =
                 [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]
-                |> Enum.uniq_by(&Font.pdf_name/1)
+                |> Enum.uniq_by(&{Font.pdf_name(&1), Map.get(&1, :unicode_range)})
 
               {candidates, Map.put(cached_candidates, key, {selected, candidates})}
           end

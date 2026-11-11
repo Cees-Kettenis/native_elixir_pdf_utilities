@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Validators.CssReferenceValidator
+  alias NativeElixirPdfUtilities.Validators.CssFontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @doc false
@@ -13,24 +14,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
       nil ->
         family = font_family_descriptor(declarations)
         sources = font_source_descriptor(declarations)
-        weight = font_weight_descriptor(declarations)
-        style = font_style_descriptor(declarations)
+        selection = font_selection_descriptors(declarations)
 
-        case {family, sources, weight, style} do
-          {{:ok, family}, {:ok, sources}, {:ok, weight}, {:ok, style}} ->
-            {:ok, %{family: family, sources: sources, weight: weight, style: style}}
+        case {family, sources, selection} do
+          {{:ok, family}, {:ok, sources}, {:ok, properties}} ->
+            {:ok, Map.merge(%{family: family, sources: sources}, properties)}
 
           _ ->
             property =
-              Enum.find_value(
-                [
-                  {"font-family", family},
-                  {"src", sources},
-                  {"font-weight", weight},
-                  {"font-style", style}
-                ],
-                fn {property, result} -> if result == {:error, :invalid_css}, do: property end
-              )
+              case selection do
+                {:error, property} -> property
+                _ -> if family == {:error, :invalid_css}, do: "font-family", else: "src"
+              end
 
             index =
               declarations
@@ -200,10 +195,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
             valid? =
               if index != last[property] do
                 case property do
-                  "font-family" -> match?({:ok, _}, font_family_descriptor([declaration]))
-                  "font-weight" -> match?({:ok, _}, font_weight_descriptor([declaration]))
-                  "font-style" -> match?({:ok, _}, font_style_descriptor([declaration]))
-                  _ -> true
+                  "font-family" ->
+                    match?({:ok, _}, font_family_descriptor([declaration]))
+
+                  property
+                  when property in [
+                         "font-weight",
+                         "font-style",
+                         "font-width",
+                         "font-stretch",
+                         "unicode-range"
+                       ] ->
+                    match?({:ok, _}, descriptor_properties(property, elem(declaration, 1)))
+
+                  _ ->
+                    true
                 end
               else
                 true
@@ -221,7 +227,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
 
   defp supported_font_descriptor?(declaration) do
     case declaration do
-      {property, _value} when property in ["font-family", "src", "font-weight", "font-style"] ->
+      {property, _value}
+      when property in [
+             "font-family",
+             "src",
+             "font-weight",
+             "font-style",
+             "font-width",
+             "font-stretch",
+             "unicode-range"
+           ] ->
         true
 
       {"font-display", value} ->
@@ -358,7 +373,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
 
   @doc "Reports the static outline font formats accepted by the native font source validator."
   @spec supports_format?(String.t()) :: boolean()
-  def supports_format?(format), do: String.downcase(format, :ascii) in ["truetype", "opentype"]
+  def supports_format?(format),
+    do: String.downcase(format, :ascii) in ["truetype", "opentype", "woff", "collection"]
 
   @doc "Reports font technologies used by native layout, including Latin and Math OpenType features."
   @spec supports_technology?(String.t()) :: boolean()
@@ -377,7 +393,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
         format -> supports_format?(format)
       end
 
-    supported_reference? and extension in [".ttf", ".otf"] and format_supported?
+    supported_reference? and extension in [".ttf", ".otf", ".woff", ".ttc", ".otc"] and
+      format_supported?
   end
 
   defp first_capture(captures, names) do
@@ -389,37 +406,62 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
     end)
   end
 
-  defp font_weight_descriptor(declarations) do
-    case declarations |> Enum.reverse() |> List.keyfind("font-weight", 0) do
-      nil ->
-        {:ok, 400}
+  defp font_selection_descriptors(declarations) do
+    declarations
+    |> Enum.reverse()
+    |> Enum.uniq_by(&elem(&1, 0))
+    |> Enum.reverse()
+    |> Enum.reduce_while({:ok, %{weight: 400, style: :normal}}, fn {property, value},
+                                                                   {:ok, properties} ->
+      if property in ["font-weight", "font-style", "font-width", "font-stretch", "unicode-range"] do
+        case descriptor_properties(property, value) do
+          {:ok, parsed} ->
+            keys =
+              case property do
+                "font-weight" -> [:weight, :weight_range]
+                "font-style" -> [:style, :oblique]
+                "unicode-range" -> [:unicode_range]
+                _ -> [:width, :width_range]
+              end
 
-      {"font-weight", value} ->
-        case String.downcase(String.trim(value)) do
-          "normal" -> {:ok, 400}
-          "bold" -> {:ok, 700}
-          value -> parsed_font_weight(Integer.parse(value))
+            {:cont, {:ok, Map.merge(Map.drop(properties, keys), parsed)}}
+
+          :error ->
+            {:halt, {:error, property}}
         end
-    end
+      else
+        {:cont, {:ok, properties}}
+      end
+    end)
   end
 
-  defp parsed_font_weight(parsed) do
-    case parsed do
-      {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
-      _ -> {:error, :invalid_css}
-    end
-  end
+  defp descriptor_properties(property, value) do
+    case property do
+      "font-weight" ->
+        with {:ok, {first, last}} <-
+               CssFontValidator.prepare_range(value, &CssFontValidator.prepare_absolute_weight/1) do
+          {:ok,
+           if(first == last,
+             do: %{weight: first},
+             else: %{weight: first, weight_range: {first, last}}
+           )}
+        end
 
-  defp font_style_descriptor(declarations) do
-    case declarations |> Enum.reverse() |> List.keyfind("font-style", 0) do
-      nil ->
-        {:ok, :normal}
+      "font-style" ->
+        CssFontValidator.prepare_style(value, true)
 
-      {"font-style", value} ->
-        case String.downcase(String.trim(value)) do
-          "normal" -> {:ok, :normal}
-          "italic" -> {:ok, :italic}
-          _ -> {:error, :invalid_css}
+      "unicode-range" ->
+        with {:ok, ranges} <- CssFontValidator.prepare_unicode_range(value),
+             do: {:ok, %{unicode_range: ranges}}
+
+      _ ->
+        with {:ok, {first, last}} <-
+               CssFontValidator.prepare_range(value, &CssFontValidator.prepare_width/1) do
+          {:ok,
+           if(first == last,
+             do: %{width: first},
+             else: %{width: first, width_range: {first, last}}
+           )}
         end
     end
   end

@@ -349,6 +349,8 @@ return the original PDF do not consume another revision.
 
 | Setting | Default | Applies to |
 | --- | ---: | --- |
+| `max_font_decoded_bytes` | 40,000,000 | Reconstructed sfnt bytes admitted from one compressed font or collection face |
+| `max_font_container_work` | 100,000,000 | Cumulative directory, compressed/decompressed table and sfnt rebuild bytes in one font-budget scope |
 | `max_font_source_bytes` | 10,000,000 | One configured, document-selected, bundled, or discovered font |
 | `max_aggregate_font_source_bytes` | 40,000,000 | Distinct font byte payloads used during one render, including furniture |
 | `max_font_count` | 128 | Family/weight/style combinations, including bundled fallbacks |
@@ -358,7 +360,8 @@ return the original PDF do not consume another revision.
 | `max_system_font_cache_bytes` | 100,000,000 | Retained system-discovery cache entries |
 
 Configured font files, supplied bytes and resolved assets use the same font
-limits. Repeated sources can be reused within a render. Shared caches also have
+limits. Compressed container bytes and reconstructed face bytes both consume the
+aggregate source allowance. Repeated sources can be reused within a render. Shared caches also have
 entry-count and memory limits; resource failures are not cached.
 
 Uncached font-file parsing shares the requesting render's font-work allowance,

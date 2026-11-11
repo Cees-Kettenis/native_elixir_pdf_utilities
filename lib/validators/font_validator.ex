@@ -4,6 +4,36 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.MathFontValidator
+  alias NativeElixirPdfUtilities.Validators.CssFontValidator
+
+  @doc "Prepares the declared Unicode repertoire without changing the physical face's PDF character map."
+  @spec prepare_face_coverage(map(), map()) :: {:ok, map()}
+  def prepare_face_coverage(parsed, config) do
+    case Map.get(config, :unicode_range) do
+      nil ->
+        {:ok, parsed}
+
+      ranges ->
+        reserve(:max_font_cmap_work, length(ranges) + map_size(parsed.cmap))
+
+        {_ranges, coverage} =
+          parsed.cmap
+          |> Enum.sort()
+          |> Enum.reduce({ranges, %{}}, fn {codepoint, glyph}, {ranges, coverage} ->
+            ranges = Enum.drop_while(ranges, fn {_first, last} -> last < codepoint end)
+
+            case ranges do
+              [{first, _last} | _] when first <= codepoint ->
+                {ranges, Map.put(coverage, codepoint, glyph)}
+
+              _ ->
+                {ranges, coverage}
+            end
+          end)
+
+        {:ok, Map.put(parsed, :unicode_cmap, coverage)}
+    end
+  end
 
   @doc "Normalizes supported font options through the canonical font configuration rules."
   @spec prepare_options(term()) ::
@@ -128,14 +158,29 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         data = Map.get(font, :data, Map.get(font, "data"))
         weight = Map.get(font, :weight, Map.get(font, "weight", 400))
         style = Map.get(font, :style, Map.get(font, "style", :normal))
+        collection_index = Map.get(font, :collection_index, Map.get(font, "collection_index", 0))
 
-        with {:ok, family} <- prepare_family(family),
+        with true <- is_integer(collection_index) and collection_index >= 0,
+             true <- Map.get(font, :css_face, false) in [true, false],
+             {:ok, family} <- prepare_family(family),
              {:ok, source} <- normalize_font_source(path, data),
-             {:ok, weight} <- normalize_weight(weight),
-             {:ok, style} <- normalize_style(style) do
+             {:ok, properties} <-
+               CssFontValidator.prepare_face_properties(
+                 Map.merge(
+                   Map.take(font, [:width, :width_range, :weight_range, :oblique, :unicode_range]),
+                   %{weight: weight, style: style}
+                 )
+               ) do
           {:ok,
            source
-           |> Map.merge(%{family: family, weight: weight, style: style})}
+           |> Map.merge(properties)
+           |> Map.put(:family, family)
+           |> then(fn config ->
+             if collection_index == 0,
+               do: config,
+               else: Map.put(config, :collection_index, collection_index)
+           end)
+           |> Map.merge(Map.take(font, [:css_face]))}
         else
           _ -> :error
         end
@@ -188,38 +233,6 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
       _ ->
         :error
-    end
-  end
-
-  defp normalize_weight(weight) do
-    case weight do
-      weight when is_number(weight) and weight >= 100 and weight <= 900 ->
-        {:ok, weight}
-
-      "normal" ->
-        {:ok, 400}
-
-      "bold" ->
-        {:ok, 700}
-
-      weight when is_binary(weight) ->
-        case Integer.parse(String.trim(weight)) do
-          {weight, ""} when weight >= 100 and weight <= 900 -> {:ok, weight}
-          _ -> :error
-        end
-
-      _ ->
-        :error
-    end
-  end
-
-  defp normalize_style(style) do
-    case style do
-      :normal -> {:ok, :normal}
-      :italic -> {:ok, :italic}
-      "normal" -> {:ok, :normal}
-      "italic" -> {:ok, :italic}
-      _ -> :error
     end
   end
 
@@ -839,7 +852,18 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   def reserve_face(font) do
     key = {__MODULE__, :budget}
     budget = Process.get(key)
-    identity = {font.family, font.weight, font.style}
+
+    identity =
+      {font.family, font.weight, font.style,
+       Map.take(font, [
+         :weight_range,
+         :width,
+         :width_range,
+         :oblique,
+         :unicode_range,
+         :collection_index
+       ])}
+
     faces = MapSet.put(budget.faces, identity)
     check(:max_font_count, MapSet.size(faces))
     Process.put(key, %{budget | faces: faces})

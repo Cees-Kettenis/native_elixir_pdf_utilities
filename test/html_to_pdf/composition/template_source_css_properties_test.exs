@@ -100,8 +100,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     {"letter-spacing", "25%"},
     {"line-height", "-2"},
     {"vertical-align", "2bananas"},
-    {"font-weight", "750"},
-    {"font-style", "oblique"},
+    {"font-weight", "1001"},
+    {"font-style", "oblique 100deg"},
     {"text-decoration", "underline underline"},
     {"text-decoration-line", "underline none"},
     {"text-decoration-style", "unknown"},
@@ -200,7 +200,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     callback_owner = self()
 
     for declaration <- [
-          "font-style:oblique",
+          "font-style:oblique 100deg",
           "border:bananas",
           "text-decoration:underline underline",
           "border-top:transparent red"

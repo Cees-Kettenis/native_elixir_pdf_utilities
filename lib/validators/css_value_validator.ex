@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.CssCascadeValidator
+  alias NativeElixirPdfUtilities.Validators.CssFontValidator
   alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator
   alias NativeElixirPdfUtilities.Validators.CssReferenceValidator
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
@@ -39,8 +40,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                             @source_padding_properties ++ @source_border_width_properties
   @source_position_properties ~w(object-position background-position)
   @source_color_properties ~w(color background-color background)
-  @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position grid-template-columns grid-template-rows grid-auto-columns grid-auto-rows)
-  @source_scalar_properties ~w(background-repeat font-weight font-style quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position)
+  @source_remaining_properties ~w(accent-color border-color border-top-color border-right-color border-bottom-color border-left-color text-decoration-color letter-spacing line-height vertical-align font-weight font-style font-width font-stretch text-decoration text-decoration-line text-decoration-style text-decoration-thickness background-size background-repeat border border-top border-right border-bottom border-left top right bottom left quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position grid-template-columns grid-template-rows grid-auto-columns grid-auto-rows)
+  @source_scalar_properties ~w(background-repeat font-weight font-style font-width font-stretch quotes content counter-reset counter-increment counter-set list-style list-style-type list-style-position)
   @source_decoration_properties ~w(text-decoration text-decoration-line text-decoration-style text-decoration-thickness text-decoration-color)
   @source_symbolic_properties @source_layout_properties ++
                                 @source_edge_properties ++
@@ -827,7 +828,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           else
             Enum.split_with(dependent_declarations, fn declaration ->
               {property, _} = declaration_pair(declaration)
-              property in ["font-family", "font-style", "font-weight", "line-height"]
+
+              property in [
+                "font-family",
+                "font-style",
+                "font-weight",
+                "font-width",
+                "font-stretch",
+                "line-height"
+              ]
             end)
           end
 
@@ -1572,6 +1581,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           "font-style" ->
             put_font_style(style, value)
 
+          property when property in ["font-width", "font-stretch"] ->
+            case CssFontValidator.prepare_width(value) do
+              {:ok, width} -> {:ok, Map.put(style, :font_width, width)}
+              :error -> {:error, :invalid_document}
+            end
+
           "font-family" ->
             {:ok, Map.put(style, :font_families, value)}
 
@@ -1809,14 +1824,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
            CssCascadeValidator.project(
              style,
              CssCascadeValidator.initial(style),
-             ~w(font-weight font-style line-height)
+             ~w(font-weight font-style font-width line-height)
            ),
          {:ok, initial} <-
            put_font_style(
              initial,
-             if("italic" in components.prefix, do: "italic", else: "normal")
+             components.selection.style
            ),
-         {:ok, initial} <- put_font_weight(initial, List.first(components.weight) || "normal"),
+         {:ok, initial} <- put_font_weight(initial, components.selection.weight),
+         {:ok, initial} <- validate_property(initial, "font-width", components.selection.width),
          computed = Map.merge(initial, components.properties),
          {:ok, computed} <- validate_property(computed, "line-height", components.line_height),
          {:ok, computed} <- validate_property(computed, "font-family", components.family) do
@@ -1875,23 +1891,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           end
 
         prefix = Enum.map(prefix, &String.downcase(&1, :ascii))
-        weight = Enum.reject(prefix, &(&1 in ["normal", "italic"]))
-        # The font grammar has four optional style/variant/weight/stretch slots.
-        valid =
-          Enum.count(prefix, &(&1 == "italic")) <= 1 and length(weight) <= 1 and
-            length(prefix) <= 4 and family != "" and line_height != nil
 
-        if valid do
+        with true <- family != "" and line_height != nil,
+             {:ok, selection} <- CssFontValidator.prepare_shorthand_prefix(prefix) do
           {:ok,
            %{
-             prefix: prefix,
-             weight: weight,
+             selection: selection,
              properties: properties,
              line_height: line_height,
              family: family
            }}
         else
-          {:error, :invalid_document}
+          _ -> {:error, :invalid_document}
         end
 
       _ ->
@@ -2865,29 +2876,27 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_font_weight(style, value) do
-    normalized = value |> String.trim() |> String.downcase()
+    parent = Map.get(style, :_cascade_inherited, style)
 
-    cond do
-      normalized == "normal" ->
-        {:ok, Map.put(style, :font_weight, 400)}
-
-      normalized == "bold" ->
-        {:ok, Map.put(style, :font_weight, 700)}
-
-      Regex.match?(~r/^[1-9]00$/u, normalized) ->
-        {weight, ""} = Integer.parse(normalized)
-        {:ok, Map.put(style, :font_weight, weight)}
-
-      true ->
-        {:error, :invalid_document}
+    case CssFontValidator.prepare_weight(value, Map.get(parent, :font_weight, 400)) do
+      {:ok, weight} -> {:ok, Map.put(style, :font_weight, weight)}
+      :error -> {:error, :invalid_document}
     end
   end
 
   defp put_font_style(style, value) do
-    case String.downcase(String.trim(value)) do
-      "normal" -> {:ok, Map.put(style, :font_style, :normal)}
-      "italic" -> {:ok, Map.put(style, :font_style, :italic)}
-      _ -> {:error, :invalid_document}
+    case CssFontValidator.prepare_style(value) do
+      {:ok, properties} ->
+        angle =
+          case Map.get(properties, :oblique) do
+            {angle, _} -> angle
+            nil -> nil
+          end
+
+        {:ok, Map.merge(style, %{font_style: properties.style, font_oblique: angle})}
+
+      :error ->
+        {:error, :invalid_document}
     end
   end
 

@@ -234,7 +234,8 @@ replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 | --- | --- |
 | Default | DejaVu Sans; installed-font discovery enabled |
 | Consistent output | Supply fonts and set `system_font_discovery: false` |
-| Custom fonts | Embeddable static TrueType; [registration example](html-to-pdf-examples.md#register-a-font) |
+| Custom fonts | Embeddable static TrueType, WOFF 1 and selected TrueType collection faces; [registration example](html-to-pdf-examples.md#register-a-font) |
+| Face selection | Ordered families; CSS directional weight and width matching, weight/width ranges, italic/oblique descriptors and Unicode ranges. Supply `collection_index` to select a collection face, starting at zero |
 | Missing characters | Fallback fonts, then replacement; use `unsupported_glyphs: :error` to fail |
 
 ## MathML in HTML
@@ -264,7 +265,7 @@ replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 | JavaScript, media playback, canvas drawing APIs | Static HTML and images |
 | Embedded PDFs, XFA, JavaScript form actions | Supported HTML and PDF forms |
 | Named pages, page-margin boxes, CSS page counters | Page options and header/footer templates |
-| WOFF/WOFF2, variable fonts, CFF OpenType | Embeddable static TrueType fonts |
+| WOFF2, variable fonts, CFF OpenType | Embeddable static TrueType fonts |
 | Complex shaping, bidirectional text, vertical writing | A renderer supporting those scripts and layouts |
 
 Embedded content and framesets have restricted static support. SVG, control

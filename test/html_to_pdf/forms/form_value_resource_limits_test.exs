@@ -252,6 +252,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueResourceLimitsTest do
     assert Process.info(self(), :max_heap_size) == caller
   end
 
+  test "expanded expression bytes exhaust the limit after source admission" do
+    pattern = String.duplicate("\\p{Assigned}", 128)
+    assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, pattern, [])
+    limits = %{request.limits | max_html_form_value_memory_bytes: 1_100_000}
+
+    owner = self()
+
+    {worker, monitor} =
+      spawn_monitor(fn ->
+        # Keep binary GC from killing this probe before the explicit byte check.
+        # The production worker's heap-cap coverage remains in the adjacent test.
+        Process.flag(:min_bin_vheap_size, 16_000_000)
+        Process.flag(:min_heap_size, 10_000)
+        :erlang.garbage_collect()
+
+        result =
+          try do
+            HtmlFormValueValidator.evaluate(%{request | limits: limits})
+          catch
+            {:form_limit, limit} -> {:limit, limit}
+          end
+
+        Process.flag(:max_heap_size, %{size: 0, kill: false, error_logger: false})
+        send(owner, {self(), result})
+      end)
+
+    assert_receive {^worker, {:limit, :max_html_form_value_memory_bytes}}, 5_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}
+  end
+
   test "expanded character properties stop at the byte check or GC heap cap" do
     assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "\\p{Assigned}", [])
     limits = %{request.limits | max_html_form_value_memory_bytes: 8_000}

@@ -1,0 +1,110 @@
+{
+  "generator": "scripts/fixtures/build-font-containers.py",
+  "fonttools": "4.66.1",
+  "license": "selected-container-LICENSE.txt",
+  "sources": {
+    "DejaVuSans.ttf": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e",
+    "DejaVuSansMono.ttf": "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582"
+  },
+  "faces": [
+    {
+      "file": "selected-container-sans.ttf",
+      "glyph_order": [
+        ".notdef",
+        "space",
+        "zero",
+        "H",
+        "x"
+      ],
+      "metrics": {
+        "32": [
+          651,
+          0
+        ],
+        "48": [
+          1303,
+          135
+        ],
+        "72": [
+          1540,
+          201
+        ],
+        "120": [
+          1212,
+          59
+        ]
+      },
+      "tables": {
+        "hhea": "62a3f2f63eb6abd1781046a6d5447ca65996bfddf33ffbd9a1357616b0ca6955",
+        "maxp": "606194943391bcd11685516cfab3b148cbf0b50d05cebee14e9ef8f9a5048b5b",
+        "OS/2": "63b126c304e996fd8cecd66d603863fd597f9b169195010af00ff897525f94e3",
+        "hmtx": "100205db09614433943c1484b2f3be9977da884abf21e6cb2d86b98a8e20ed6d",
+        "cmap": "3cab385b9ef83954397b8c67462f0af71bc208b21a4a34b427a9bb3d4a412ce2",
+        "fpgm": "ef2bbb131b050c024c54eba425c900bb97f2f0f5a54258d9cebf1bb139bf28f5",
+        "prep": "a683d604aab58b8d6d7fe4ce1c705836f24ae85e3bcb91691bb5cb6e4407b96c",
+        "cvt ": "857075c3f367703a43b3eebc0badf2a3d0050c6314cbbb837b5b4ee1c5fb5158",
+        "loca": "50b12c88ca4916da8c155bea5dd935f0a06525e99b9507c994a95b7bbe4306e1",
+        "glyf": "39b88a5d6d77a66a48a4d2b75038efbcdcea4cb802471616bc67c09cd030b6a2",
+        "name": "35aa27d737456daa089d90c853a3c475bb254395526e8a9265cefe19ba44856a",
+        "post": "0bdf09d27d2f77f4134adee30ff70d230467c59d7cb47c593ad9a8609770eb14",
+        "gasp": "fa3a38cf37ba7443e57d44732c9e63082d42f317a72ad001974ebcd1c9b41e6e",
+        "GDEF": "050b32de7ed9836228ee38dfd4111506d66dff7306e56fcd86238854af00c017",
+        "GPOS": "cd6e7df551d23b72dc7e2d2ac24a54ec076711c36c99c3efe116602d14835fb8",
+        "GSUB": "84d936973a7d61b4fb303d3e8ce940343656dccb2e2ddb4cc24c9809d5ab85da",
+        "MATH": "46da3a64a8f3e945bf7e09fc41a76c08d6839961c16e2343eda252b97d084040"
+      }
+    },
+    {
+      "file": "selected-container-mono.ttf",
+      "glyph_order": [
+        ".notdef",
+        "space",
+        "zero",
+        "H",
+        "x"
+      ],
+      "metrics": {
+        "32": [
+          1233,
+          0
+        ],
+        "48": [
+          1233,
+          133
+        ],
+        "72": [
+          1233,
+          137
+        ],
+        "120": [
+          1233,
+          76
+        ]
+      },
+      "tables": {
+        "hhea": "f64df2104603ff3814750f23693382b2fa1609b6a536b9bc072dd80628ad2b9e",
+        "maxp": "f40f28e699d1b961dca7b8350b911ddd67d36c01854593d44ec15c0b59d64f7f",
+        "OS/2": "c05ef11146fbb6e22b0c5f26ae7d0643c697a096313407de9a835ca797eba3fa",
+        "hmtx": "420deaddf70ed9b4b69896cdf838db31b7de83c3173779732398756273515304",
+        "cmap": "17195b22e1050adea610db3e8957299d4d4be1203157feb05fb59cd9cfccf4c5",
+        "fpgm": "42885299f0288e1a9ba166568eddfb2ec6615092e3adddc65426705332203e5e",
+        "prep": "1579d1512103f3c602809d47d9d7fe11b6cb3ba6a143f2514e7a94332fcd688e",
+        "cvt ": "14136560ff6213f819b80fee78d2db969210f8b2c9c481c1f347bd1503f3b35c",
+        "loca": "6e573e0720b0c72d423700feaf46cff219a14b773b28786b09c4c58757194aaa",
+        "glyf": "b17e09c5d275f2e2230c980e4edc95bd4434f96e7a9c13ef3740bc99f9f4fb4a",
+        "name": "34e7688f26b148a07a650b804a1aa82c3b92cdce7301aadc3904107f4b452ef2",
+        "post": "6a7825a8ffe031c493cd2d897656679a97a07ce2253db22b22df787785d97135",
+        "gasp": "fa3a38cf37ba7443e57d44732c9e63082d42f317a72ad001974ebcd1c9b41e6e",
+        "GDEF": "050b32de7ed9836228ee38dfd4111506d66dff7306e56fcd86238854af00c017",
+        "GPOS": "9c0ed2420aa3cee1513a071c8497b54246165c6cf343de417b93a5aefac5d9c5",
+        "GSUB": "3d9977fcc2b776e1d4e9ca389df0a02a2aa2ca4a53c13588a5eda030ac8ebfe8"
+      }
+    }
+  ],
+  "files": {
+    "selected-container-sans.ttf": "e29f775ef53602cc4eb5c4b2b1195d3a72da588540e92fa57c494046ad7ab406",
+    "selected-container-mono.ttf": "1209045879321ed86e9b646402327ebcb8e8ff540f709d22f62aca961a529d01",
+    "selected-container.woff": "7530a98ed1cfad29e4a577109f1d689d5213115503b68ca8429a3cdce5188805",
+    "selected-container.ttc": "eabc4d24a3b8cb5928b23e867975c2801478c304b1ae68a827287ef7c9e3b9c6"
+  }
+}

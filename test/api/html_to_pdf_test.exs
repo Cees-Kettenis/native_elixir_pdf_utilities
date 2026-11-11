@@ -3557,7 +3557,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       @font-face {
         font-family: Broken;
         src: url("broken.ttf");
-        font-style: oblique;
+        font-style: oblique 100deg;
       }
     </style>
     <p>Broken font</p>
@@ -3568,9 +3568,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              %{
                stage: :css,
                reason: :invalid_css,
-               source: "font-style: oblique",
+               source: "font-style: oblique 100deg",
                message:
-                 ~s(line 5: @font-face declaration "font-style: oblique" is invalid or unsupported)
+                 ~s(line 5: @font-face declaration "font-style: oblique 100deg" is invalid or unsupported)
              }}} = HtmlToPdf.render(html)
   end
 

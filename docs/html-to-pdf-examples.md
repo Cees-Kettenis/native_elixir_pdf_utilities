@@ -1127,7 +1127,7 @@ The renderer does not fetch remote assets. Your application controls fetching an
 
 ### Register a font
 
-Register a static TrueType font under your own family name. This example uses the bundled font so it runs immediately. Replace its path with your application font when needed:
+Register a static TrueType or WOFF 1 font under your own family name. For a TrueType collection, set `collection_index: 0` for its first face, or a later zero-based index. This example uses the bundled font so it runs immediately. Replace its path with your application font when needed:
 
 Save as `registered-font.html`.
 

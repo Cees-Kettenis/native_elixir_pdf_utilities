@@ -299,8 +299,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
   test "superseded supported font values use the existing responsible descriptor rules" do
     for {property, bad, good} <- [
           {"font-family", "''", "X"},
-          {"font-weight", "950", "400"},
-          {"font-style", "oblique", "normal"}
+          {"font-weight", "1001", "400"},
+          {"font-style", "oblique 100deg", "normal"}
         ] do
       declarations = [
         {"font-family", "X"},

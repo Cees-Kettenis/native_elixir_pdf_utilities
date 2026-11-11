@@ -20,7 +20,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
           |> Map.merge(%{
             "font-size" => [[:font_size]],
             "font-weight" => [[:font_weight]],
-            "font-style" => [[:font_style]],
+            "font-style" => [[:font_style], [:font_oblique]],
+            "font-width" => [[:font_width]],
             "font-family" => [
               [:font_families],
               [:font_family],
@@ -97,7 +98,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                   for(side <- @sides, kind <- ~w(width color style), do: "border-#{side}-#{kind}"),
                 "background" =>
                   ~w(background-color background-image background-position background-size background-repeat),
-                "font" => ~w(font-size line-height font-family font-weight font-style),
+                "font" => ~w(font-size line-height font-family font-weight font-style font-width),
                 "list-style" => ~w(list-style-type list-style-position list-style-image),
                 "text-decoration" =>
                   ~w(text-decoration-line text-decoration-color text-decoration-style text-decoration-thickness),
@@ -113,12 +114,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                 end)
               )
   @aliases %{
+    "font-stretch" => "font-width",
     "word-wrap" => "overflow-wrap",
     "page-break-before" => "break-before",
     "page-break-after" => "break-after",
     "page-break-inside" => "break-inside"
   }
-  @inherited ~w(color accent-color font-size font-family font-style font-weight line-height
+  @inherited ~w(color accent-color font-size font-family font-style font-weight font-width line-height
     letter-spacing text-align text-transform quotes white-space word-break overflow-wrap line-break
     orphans widows caption-side border-collapse border-spacing list-style-type list-style-position
     list-style-image visibility block-ellipsis writing-mode direction math-style math-shift math-depth)
@@ -666,6 +668,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         font_families: ["serif"],
         font_weight: 400,
         font_style: :normal,
+        font_width: 100,
+        font_oblique: nil,
         font_family: nil,
         font_face: nil,
         letter_spacing: 0.0,

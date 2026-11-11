@@ -75,6 +75,8 @@ defmodule NativeElixirPdfUtilities.Limits do
     max_rendered_pages: 1_000,
     max_rendered_pdf_bytes: 50_000_000,
     max_font_source_bytes: 10_000_000,
+    max_font_decoded_bytes: 40_000_000,
+    max_font_container_work: 100_000_000,
     max_aggregate_font_source_bytes: 40_000_000,
     max_font_count: 128,
     max_font_candidates: 256,
@@ -247,6 +249,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           | :max_rendered_pages
           | :max_rendered_pdf_bytes
           | :max_font_source_bytes
+          | :max_font_decoded_bytes
+          | :max_font_container_work
           | :max_aggregate_font_source_bytes
           | :max_font_count
           | :max_font_candidates

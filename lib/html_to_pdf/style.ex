@@ -759,6 +759,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       font_size: 12.0,
       font_style: :normal,
       font_weight: 400,
+      font_width: 100,
+      font_oblique: nil,
       letter_spacing: 0.0,
       line_height: 14.4,
       line_height_normal: true,
@@ -4658,6 +4660,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 font_face
                 |> Map.delete(:sources)
                 |> Map.put(:path, paths)
+                |> Map.put(:css_face, true)
                 |> Map.merge(Map.take(entry, [:shadow_scope_id, :shadow_parent_scope_id]))
 
               NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.record_font_recipe(
@@ -4675,6 +4678,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 font_face
                 |> Map.delete(:sources)
                 |> Map.put(:data, candidates)
+                |> Map.put(:css_face, true)
                 |> Map.merge(Map.take(entry, [:shadow_scope_id, :shadow_parent_scope_id]))
 
               NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.record_font_recipe(
@@ -5482,7 +5486,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         property = elem(CssValueValidator.declaration_pair(declaration), 0)
 
         if property in ["font-family", "font"] or
-             (property in ["all", "font-weight", "font-style"] and
+             (property in ["all", "font-weight", "font-style", "font-width", "font-stretch"] and
                 Map.get(validated, :_property_registrations, %{}) != %{}),
            do: put_font_face(validated, cache),
            else: {:ok, validated}
@@ -5680,6 +5684,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp put_font_face(style, cache) do
     registry = Map.fetch!(style, :_font_registry)
+
+    registry =
+      case {Map.get(style, :font_width, 100), Map.get(style, :font_oblique)} do
+        {100, nil} -> Map.delete(registry, :selection)
+        {width, oblique} -> Map.put(registry, :selection, %{width: width, oblique: oblique})
+      end
 
     registry =
       if Map.has_key?(registry, :scoped),

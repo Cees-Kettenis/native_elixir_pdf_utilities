@@ -27,9 +27,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
   the loader runs without caching.
   """
   @spec fetch(String.t(), loader()) :: load_result()
-  def fetch(path, loader) do
+  @spec fetch(String.t(), loader(), term()) :: load_result()
+  def fetch(path, loader, variant \\ nil) do
     FontValidator.with_budget(fn ->
-      FontValidator.memo({:file, Path.expand(path)}, fn ->
+      cache_key = if is_nil(variant), do: Path.expand(path), else: {Path.expand(path), variant}
+
+      FontValidator.memo({:file, cache_key}, fn ->
         absolute_path = Path.expand(path)
 
         FontValidator.reserve(:max_font_candidates, 1)
@@ -42,12 +45,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
             fingerprint = :crypto.hash(:sha256, data)
             FontValidator.reserve_source(data, fingerprint)
 
-            case cached(absolute_path, fingerprint) do
+            case cached(cache_key, fingerprint) do
               {:hit, result} ->
                 result
 
               :miss ->
-                load(absolute_path, fingerprint, data, loader)
+                load(cache_key, fingerprint, data, loader)
             end
 
           {:error, {_reason, _diagnostic}} = error ->

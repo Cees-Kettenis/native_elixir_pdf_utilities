@@ -8,8 +8,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
   alias NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font.Selection
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Validators.FontContainerValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @type font_style :: :normal | :italic
@@ -130,7 +132,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     FontValidator.prepare_configs(fonts)
   end
 
-  @doc "Loads only explicit caller TrueType configurations, without bundled fonts or system discovery."
+  @doc "Loads only explicit caller static TrueType, WOFF or collection configurations, without system discovery."
   @spec load_configured_faces(term()) :: {:ok, [embedded_font()]} | {:error, {atom(), map()}}
   def load_configured_faces(configs) do
     FontValidator.with_budget(fn ->
@@ -145,7 +147,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           NativeElixirPdfUtilities.Diagnostics.error(
             :font,
             :invalid_font,
-            "caller fonts require valid explicit TrueType configurations",
+            "caller fonts require valid explicit font configurations",
             module: __MODULE__,
             operation: :load_configured_faces
           )
@@ -178,11 +180,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   @doc """
-  Loads explicit TTF font options into a registry.
+  Loads explicit static TrueType, WOFF and collection font options into a registry.
 
   Accepted font entries are maps, keyword lists, or `{family, path}` tuples. Map
   and keyword entries must include `:family` and one or more `:path` or `:data`
-  candidates; `:weight` and `:style` are optional.
+  candidates; `:weight`, `:style`, `:width` and `:unicode_range` are optional.
+  Weight/width ranges use two-value strings or `:weight_range`/`:width_range` tuples.
+  `:collection_index` selects a collection face, starting at zero.
   """
   @spec load_registry(keyword()) ::
           {:ok, registry()}
@@ -244,9 +248,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     FontValidator.with_budget(fn ->
       family_value
       |> font_families()
-      |> Enum.map(&resolve_family(&1, weight, style, registry))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq_by(&pdf_name/1)
+      |> Enum.flat_map(fn family ->
+        case embedded_family_faces(family, weight, style, registry) do
+          [] -> List.wrap(resolve_family(family, weight, style, registry))
+          faces -> faces
+        end
+      end)
+      |> Enum.uniq_by(&{pdf_name(&1), Map.get(&1, :unicode_range)})
     end)
   end
 
@@ -270,8 +278,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
         grouped
         |> Map.fetch!(family)
         |> Enum.sort_by(fn font ->
-          style_penalty = if font.style == style, do: 0, else: 1_000
-          abs(font.weight - weight) + style_penalty
+          Selection.rank(font, weight, style, Map.get(registry, :selection, %{}))
         end)
       end)
     end)
@@ -293,7 +300,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           |> Enum.all?(&(&1 in 0x20..0x7E))
 
       {%{type: :embedded, cmap: cmap}, text} when is_map(cmap) and is_binary(text) ->
-        String.valid?(text, :fast_ascii) and supported_codepoints?(text, cmap)
+        String.valid?(text, :fast_ascii) and
+          supported_codepoints?(text, Map.get(font, :unicode_cmap, cmap))
 
       _ ->
         false
@@ -800,7 +808,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp font_key(font) do
-    {String.downcase(font.family), font.weight, font.style}
+    {String.downcase(font.family), font.weight, font.style, Map.get(font, :weight_range),
+     Map.get(font, :width), Map.get(font, :width_range), Map.get(font, :oblique),
+     Map.get(font, :unicode_range), if(Map.get(font, :css_face), do: font.id)}
   end
 
   defp load_font(font, ordinal \\ nil) do
@@ -809,15 +819,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     result =
       case font do
         %{path: paths} ->
-          load_first_supported_font(paths, Map.get(font, :source) == :bundled)
+          load_first_supported_font(
+            paths,
+            Map.get(font, :source) == :bundled,
+            Map.get(font, :collection_index, 0)
+          )
 
         %{data: candidates} ->
-          load_first_supported_data(candidates)
+          load_first_supported_data(candidates, Map.get(font, :collection_index, 0))
       end
 
     family = Map.fetch!(font, :family)
 
     with {:ok, data, parsed, selected} <- result,
+         :ok <- FontValidator.reserve_source(data),
+         {:ok, parsed} <- FontValidator.prepare_face_coverage(parsed, font),
          :ok <-
            HtmlValidator.validate_font_embedding(
              family,
@@ -838,6 +854,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
           pdf_name: pdf_safe_name(family) <> "-" <> hash,
           data: data
         })
+        |> Map.merge(
+          Map.take(font, [
+            :weight_range,
+            :width,
+            :width_range,
+            :oblique,
+            :unicode_range,
+            :css_face
+          ])
+        )
 
       {:ok, FontValidator.observe_loaded_font(font, ordinal, selected, loaded)}
     else
@@ -846,15 +872,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     end
   end
 
-  defp load_first_supported_font(paths, bundled?) do
+  defp load_first_supported_font(paths, bundled?, collection_index) do
     paths
     |> Enum.with_index()
-    |> Enum.reduce_while(:error, fn {path, ordinal}, :error ->
-      fetch = if bundled?, do: &FontCache.fetch_bundled/2, else: &FontCache.fetch/2
+    |> Enum.reduce_while(:error, fn {path, ordinal}, previous_failure ->
+      fetch =
+        if bundled?,
+          do: &FontCache.fetch_bundled/2,
+          else: fn path, loader ->
+            FontCache.fetch(
+              path,
+              loader,
+              if(collection_index == 0, do: nil, else: {:collection, collection_index})
+            )
+          end
 
       result =
         fetch.(path, fn data ->
-          with {:ok, parsed} <- FontValidator.prepare_ttf(data) do
+          with {:ok, data} <- FontContainerValidator.prepare(data, collection_index),
+               {:ok, parsed} <- FontValidator.prepare_ttf(data) do
             {:ok, {data, parsed}}
           else
             {:error, {_reason, _diagnostic}} = error -> error
@@ -864,25 +900,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
       case result do
         {:ok, {data, parsed}} -> {:halt, {:ok, data, parsed, ordinal}}
+        {:error, {:invalid_font, _diagnostic}} = error -> {:cont, error}
         {:error, {_reason, _diagnostic}} = error -> {:halt, error}
-        :error -> {:cont, :error}
+        :error -> {:cont, previous_failure}
       end
     end)
   end
 
-  defp load_first_supported_data(candidates) do
+  defp load_first_supported_data(candidates, collection_index) do
     candidates
     |> Enum.with_index()
-    |> Enum.reduce_while(:error, fn {data, ordinal}, :error ->
+    |> Enum.reduce_while(:error, fn {data, ordinal}, previous_failure ->
       FontValidator.reserve(:max_font_candidates, 1)
       FontValidator.reserve_source(data)
 
-      case FontValidator.memo({:parsed, :crypto.hash(:sha256, data)}, fn ->
-             FontValidator.prepare_ttf(data)
+      case FontValidator.memo({:parsed, :crypto.hash(:sha256, data), collection_index}, fn ->
+             with {:ok, data} <- FontContainerValidator.prepare(data, collection_index),
+                  {:ok, parsed} <- FontValidator.prepare_ttf(data),
+                  do: {:ok, data, parsed}
            end) do
-        {:ok, parsed} -> {:halt, {:ok, data, parsed, ordinal}}
+        {:ok, data, parsed} -> {:halt, {:ok, data, parsed, ordinal}}
+        {:error, {:invalid_font, _diagnostic}} = error -> {:cont, error}
         {:error, {_reason, _diagnostic}} = error -> {:halt, error}
-        :error -> {:cont, :error}
+        :error -> {:cont, previous_failure}
       end
     end)
   end
@@ -897,7 +937,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
       family when is_binary(family) ->
         family
-        |> String.split(",", trim: true)
+        |> HtmlValidator.split_css_comma()
         |> Enum.map(&normalize_family/1)
         |> Enum.reject(&(&1 == ""))
 
@@ -1039,6 +1079,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   end
 
   defp embedded_family(family, weight, style, registry) do
+    List.first(embedded_family_faces(family, weight, style, registry))
+  end
+
+  defp embedded_family_faces(family, weight, style, registry) do
     normalized_family = String.downcase(family)
 
     registry
@@ -1047,13 +1091,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     |> Enum.filter(&(String.downcase(&1.family) == normalized_family))
     |> case do
       [] ->
-        nil
+        []
 
       fonts ->
-        Enum.min_by(fonts, fn font ->
-          style_penalty = if font.style == style, do: 0, else: 1_000
-          abs(font.weight - weight) + style_penalty
+        selection = Map.get(registry, :selection, %{})
+        ranked = Enum.map(fonts, &{Selection.rank(&1, weight, style, selection), &1})
+        {best, _} = Enum.min_by(ranked, &elem(&1, 0))
+
+        ranked
+        |> Enum.filter(&(elem(&1, 0) == best))
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.with_index()
+        |> Enum.sort_by(fn {font, index} ->
+          if Map.get(font, :css_face), do: {0, -index}, else: {1, index}
         end)
+        |> Enum.map(&elem(&1, 0))
     end
   end
 

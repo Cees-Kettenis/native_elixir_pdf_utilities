@@ -160,8 +160,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
 
   test "invalid original font declarations are diagnosed even when host CSS overrides them" do
     for {property, invalid, override} <- [
-          {"font-weight", "450", "700"},
-          {"font-style", "oblique", "italic"},
+          {"font-weight", "1001", "700"},
+          {"font-style", "oblique 100deg", "italic"},
           {"font-size", "bad", "20px"},
           {"letter-spacing", "bad", "normal"}
         ] do

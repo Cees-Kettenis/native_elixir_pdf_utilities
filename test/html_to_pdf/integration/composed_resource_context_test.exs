@@ -201,11 +201,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedResourceContextTest do
   end
 
   test "ordinary font descriptor errors use the validator's exact superseded declaration index" do
-    css = "@font-face{font-family:X;src:url(x.ttf);font-style:normal;font-style:oblique}"
+    css = "@font-face{font-family:X;src:url(x.ttf);font-style:normal;font-style:oblique 100deg}"
 
     for prepare <- [&CssParser.prepare_stylesheet/1, &CssParser.prepare_source_stylesheet/1] do
       assert {:error, {:invalid_css, diagnostic}} = prepare.(css)
-      assert diagnostic.source == "font-style:oblique"
+      assert diagnostic.source == "font-style:oblique 100deg"
       assert diagnostic.stage == :css
     end
   end

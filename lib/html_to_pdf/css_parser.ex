@@ -58,10 +58,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         }
   @type stylesheet :: [rule()]
   @type font_face :: %{
-          family: String.t(),
-          sources: [String.t()],
-          weight: 100..900,
-          style: :normal | :italic
+          required(:family) => String.t(),
+          required(:sources) => [String.t()],
+          required(:weight) => number(),
+          required(:style) => :normal | :italic,
+          optional(:weight_range) => {number(), number()},
+          optional(:width) => number(),
+          optional(:width_range) => {number(), number()},
+          optional(:oblique) => {number(), number()},
+          optional(:unicode_range) => [{non_neg_integer(), non_neg_integer()}]
         }
   @type page_option ::
           {:page_size, PageGeometry.page_size_input()}

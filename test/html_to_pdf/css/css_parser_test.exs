@@ -665,10 +665,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           "@font-face { font-family: X; font-weight: bold; }",
           "@font-face { font-family: ''; src: url(x.ttf); }",
           "@font-face { src: url(x.ttf); }",
-          "@font-face { font-family: X; src: url(x.ttf); font-style: oblique; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-style: oblique 100deg; }",
           "@font-face { font-family: X; src: url(x.ttf); font-style: italic !important; }",
-          "@font-face { font-family: X; src: url(x.ttf); font-weight: 950; }",
-          "@font-face { font-family: X; src: url(x.ttf); unicode-range: U+0-FF; }",
+          "@font-face { font-family: X; src: url(x.ttf); font-weight: 1001; }",
+          "@font-face { font-family: X; src: url(x.ttf); unicode-range: U+FF-0; }",
           "@font-face { font-family: X; src: url(x.ttf); font-display: eager; }"
         ] do
       assert CssParser.font_faces(css) == {:error, :invalid_css}
