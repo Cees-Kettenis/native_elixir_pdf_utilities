@@ -1,5 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CffLargeProgramTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Pdf.Reader
@@ -10,7 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffLargeProgramTest do
     manifest = Paths.fixture("fonts/cff-large-fonts.json") |> File.read!() |> :json.decode()
 
     for {file, expected} <- manifest["files"] do
-      data = Paths.fixture("fonts/" <> file) |> File.read!()
+      data = FontCorpus.path(file) |> File.read!()
       config = %{family: "Large", data: data}
 
       config =
@@ -63,7 +64,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffLargeProgramTest do
   test "a seeded nonempty random program is frozen once and preserves its actual PDF outline" do
     manifest = Paths.fixture("fonts/cff-large-fonts.json") |> File.read!() |> :json.decode()
     expected = manifest["random"]
-    data = Paths.fixture("fonts/" <> expected["file"]) |> File.read!()
+    data = FontCorpus.path(expected["file"]) |> File.read!()
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Random", data: data}])
     glyph = elem(font.cff.glyphs, font.cmap[?H])
     assert glyph.static?

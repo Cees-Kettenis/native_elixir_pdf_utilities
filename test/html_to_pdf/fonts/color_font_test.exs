@@ -1,5 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
 
@@ -9,8 +10,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
     WriterValidator
   }
 
-  alias NativeElixirPdfUtilities.TestSupport.Paths
-
   setup do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
@@ -19,7 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
 
   test "independent sbix and CBDT strikes select density, keep alpha and extract real selected text" do
     for file <- ["selected-sbix.ttf", "selected-cbdt.ttf", "selected-bitmap-only.ttf"] do
-      data = Paths.fixture("fonts/" <> file) |> File.read!()
+      data = FontCorpus.path(file) |> File.read!()
       assert {:ok, [font]} = Font.load_configured_faces([%{family: "Color", data: data}])
       assert {:ok, strikes} = BitmapFontValidator.prepare(font)
       assert Enum.map(strikes, & &1.ppem_y) == [20, 40]
@@ -61,7 +60,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
   end
 
   test "CBDT device advances drive CSS measurement and reject substituted public metadata" do
-    data = Paths.fixture("fonts/selected-cbdt.ttf") |> File.read!()
+    data = FontCorpus.path("selected-cbdt.ttf") |> File.read!()
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: data}])
 
     assert {:ok, selected} =
@@ -118,7 +117,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
 
   test "COLR v0 palettes and nested v1 outlines/gradients produce alpha artwork with selected Unicode" do
     for file <- ["selected-colr.ttf", "selected-colr-v1.ttf"] do
-      data = Paths.fixture("fonts/" <> file) |> File.read!()
+      data = FontCorpus.path(file) |> File.read!()
       assert {:ok, [font]} = Font.load_configured_faces([%{family: "Vector", data: data}])
 
       assert {:ok, paint} =
@@ -169,7 +168,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
 
   test "plain and gzip SVG glyph documents retain selected IDs, palettes, full ink and monochrome fallback" do
     for file <- ["selected-svg.ttf", "selected-svg-gzip.ttf"] do
-      data = Paths.fixture("fonts/" <> file) |> File.read!()
+      data = FontCorpus.path(file) |> File.read!()
       assert {:ok, [font]} = Font.load_configured_faces([%{family: "SVG Font", data: data}])
 
       assert {:ok, paint} =
@@ -202,7 +201,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
   end
 
   test "SVG glyphs admit only embedded PNG/JPEG resources and distinguish transparent glyphs from missing definitions" do
-    input = Paths.fixture("fonts/selected-svg.ttf") |> File.read!()
+    input = FontCorpus.path("selected-svg.ttf") |> File.read!()
 
     assert {:ok, scaler, directory} =
              NativeElixirPdfUtilities.Validators.FontValidator.prepare_table_directory(input)

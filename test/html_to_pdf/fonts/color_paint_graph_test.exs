@@ -1,12 +1,13 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorPaintGraphTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
   alias NativeElixirPdfUtilities.Validators.{ColrFontValidator, ColrPaintValidator}
   alias NativeElixirPdfUtilities.TestSupport.Paths
 
   test "all COLR v1 paint formats and compact transforms agree with independently decoded FontTools matrices" do
     manifest = Paths.fixture("fonts/colr-paints.json") |> File.read!() |> :json.decode()
-    data = Paths.fixture("fonts/" <> manifest["file"]) |> File.read!()
+    data = FontCorpus.path(manifest["file"]) |> File.read!()
 
     assert {:ok, [font]} =
              Font.load_configured_faces([

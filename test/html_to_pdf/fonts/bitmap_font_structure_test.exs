@@ -3,12 +3,13 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("png_fixtur
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
   alias NativeElixirPdfUtilities.TestSupport.{FontFixture, PngFixture, Paths}
   alias NativeElixirPdfUtilities.Validators.{BitmapFontValidator, FontValidator}
 
   test "all CBLC index forms and applicable CBDT PNG/BGRA metrics agree with original one-pixel drawings" do
-    source = File.read!(Paths.fixture("fonts/selected-cbdt.ttf"))
+    source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
 
     for index <- 1..5, format <- [1, 2, 5, 6, 7, 17, 18, 19] do
@@ -56,7 +57,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
   end
 
   test "bitmap header, directory, sparse index, metrics and payload failures retain source diagnostics" do
-    source = File.read!(Paths.fixture("fonts/selected-cbdt.ttf"))
+    source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
     {bitmap, location} = cbdt(1, 17)
 
@@ -142,7 +143,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
   end
 
   test "sbix ownership, duplicate cycles and encoding errors cannot reach image decoding" do
-    source = File.read!(Paths.fixture("fonts/selected-sbix.ttf"))
+    source = File.read!(FontCorpus.path("selected-sbix.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Sbix", data: source}])
     {_scaler, tables} = FontFixture.tables(source)
     data = tables["sbix"]
@@ -172,7 +173,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
   test "JPEG strikes, BGRA transparency and dimensions share the public writer diagnostics" do
     limits = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    source = File.read!(Paths.fixture("fonts/selected-sbix.ttf"))
+    source = File.read!(FontCorpus.path("selected-sbix.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
     jpeg = File.read!(Paths.fixture("images/jpeg/restart_rgb.jpg"))
 
@@ -213,7 +214,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
       end
     end
 
-    source = File.read!(Paths.fixture("fonts/selected-cbdt.ttf"))
+    source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
 
     for {format, change, valid?} <- [

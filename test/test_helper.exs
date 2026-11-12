@@ -29,3 +29,6 @@ Code.require_file(Paths.support("table_geometry.ex"))
 Code.require_file(Paths.support("math_paint_geometry.ex"))
 
 Code.require_file(Paths.support("cff_fixture.ex"))
+
+Code.require_file(Paths.support("font_corpus.ex"))
+NativeElixirPdfUtilities.TestSupport.FontCorpus.prepare!()

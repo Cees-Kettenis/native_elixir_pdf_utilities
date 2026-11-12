@@ -1,5 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.VariationMetricsTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.TestSupport.Paths
@@ -9,7 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariationMetricsTest do
       Paths.fixture("fonts/variation-metrics-fonts.json") |> File.read!() |> :json.decode()
 
     for {file, expected} <- manifest["files"] do
-      data = Paths.fixture("fonts/" <> file) |> File.read!()
+      data = FontCorpus.path(file) |> File.read!()
 
       assert {:ok, [font]} =
                Font.load_configured_faces([

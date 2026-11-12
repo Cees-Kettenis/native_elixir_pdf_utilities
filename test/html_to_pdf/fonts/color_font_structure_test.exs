@@ -2,6 +2,7 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixtu
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
   alias NativeElixirPdfUtilities.TestSupport.{Paths, FontFixture}
@@ -15,7 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
   setup do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    data = File.read!(Paths.fixture("fonts/selected-colr.ttf"))
+    data = File.read!(FontCorpus.path("selected-colr.ttf"))
     {:ok, [font]} = Font.load_configured_faces([%{family: "Color", data: data}])
     {:ok, font: font}
   end
@@ -91,7 +92,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
     }
 
     assert {:ok, %{graph: {:solid, _}}} = ColrFontValidator.prepare(changed, id, {0, 0, 0, 1})
-    data = File.read!(Paths.fixture("fonts/selected-colr-paints.ttf"))
+    data = File.read!(FontCorpus.path("selected-colr-paints.ttf"))
     assert {:ok, [variable]} = Font.load_configured_faces([%{family: "Paints", data: data}])
     {_, tables} = FontFixture.tables(variable.data)
     colr = tables["COLR"]
@@ -231,7 +232,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
   end
 
   test "COLR base and clip ranges, missing deltas and no-variation sentinels preserve table ownership" do
-    data = File.read!(Paths.fixture("fonts/selected-colr-paints.ttf"))
+    data = File.read!(FontCorpus.path("selected-colr-paints.ttf"))
     manifest = File.read!(Paths.fixture("fonts/colr-paints.json")) |> :json.decode()
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Paints", data: data}])
     {_, tables} = FontFixture.tables(font.data)
@@ -325,7 +326,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
           {"selected-svg.ttf", %{"SVG " => <<>>}},
           {"selected-cbdt.ttf", %{"CBLC" => <<>>}}
         ] do
-      data = File.read!(Paths.fixture("fonts/" <> source))
+      data = File.read!(FontCorpus.path(source))
       assert {:ok, [font]} = Font.load_configured_faces([%{family: "Broken", data: data}])
       font = %{font | data: FontFixture.rebuild(data, changes)}
 

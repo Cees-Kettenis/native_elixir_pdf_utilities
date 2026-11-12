@@ -2,10 +2,11 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixtu
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, FontFallback, HtmlParser, Style, CssParser}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Selection
-  alias NativeElixirPdfUtilities.TestSupport.{Paths, FontFixture}
+  alias NativeElixirPdfUtilities.TestSupport.{FontFixture}
 
   alias NativeElixirPdfUtilities.Validators.{
     CssFontRuleValidator,
@@ -50,7 +51,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
     assert {:ok, %{reference_policy: :unresolved_syntax}} =
              CssFontFaceValidator.validate_source_candidate("")
 
-    data = File.read!(Paths.fixture("fonts/selected-control-axes.ttf"))
+    data = File.read!(FontCorpus.path("selected-control-axes.ttf"))
 
     assert {:ok, [font]} =
              Font.load_configured_faces([%{family: "Axes", data: data, css_face: true}])
@@ -126,7 +127,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
     tree = %{tree | children: [%{paragraph | children: [%{text | style: style}]}]}
     assert {:error, {:invalid_font, %{message: message}}} = FontFallback.resolve(tree)
     assert message =~ "feature"
-    data = File.read!(Paths.fixture("fonts/selected-colr.ttf"))
+    data = File.read!(FontCorpus.path("selected-colr.ttf"))
 
     assert {:error, {:unsupported_font, diagnostic}} =
              HtmlToPdf.render("<p style='font-family:Color;font-variant-emoji:text'>0</p>",
@@ -138,7 +139,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
   end
 
   test "fractional strike advances share CSS rounding and malformed color sources fail during measurement" do
-    data = File.read!(Paths.fixture("fonts/selected-cbdt.ttf"))
+    data = File.read!(FontCorpus.path("selected-cbdt.ttf"))
     {_, tables} = FontFixture.tables(data)
     # 21 ppem yields fractional 10 * 1000 / 21 design-unit advances.
     cblc = FontFixture.replace(tables["CBLC"], 52, <<21, 21>>)

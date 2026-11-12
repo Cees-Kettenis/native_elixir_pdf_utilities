@@ -5094,7 +5094,7 @@
   },
   {
     "name": "mathml_annotation_css_alternatives_reference_pages",
-    "html_sha256": "a6f9be727618a7d601cef80ed4b8d987b9eebb8f176dc60c6d08543b50a84dd1",
+    "html_sha256": "c2703b7dca1e312e2a104a3c365a236086a1d00af536607b7d4161708f614901",
     "directory": "html_to_pdf/browser_parity",
     "page_mode": "named",
     "page_css": "size:612pt 792pt;margin:0",
@@ -5277,7 +5277,7 @@
       },
       {
         "name": "font_supplementary_unicode.html",
-        "sha256": "42f8508d908c044a1fbd29da5d36842b59254550ea7decbefb995c9b3cc7fe51",
+        "sha256": "87f352ec44025142125854ac8a0f1a575115212ed2c677b31053fe304dd22d52",
         "page_count": 2,
         "page_css": " size:612pt 792pt; margin:0; ",
         "media_boxes": [

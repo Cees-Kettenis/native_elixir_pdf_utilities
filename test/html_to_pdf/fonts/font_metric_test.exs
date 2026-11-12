@@ -1,8 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontMetricTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
-  alias NativeElixirPdfUtilities.TestSupport.Paths
 
   alias NativeElixirPdfUtilities.Validators.{
     FontMetricValidator,
@@ -18,7 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontMetricTest do
   end
 
   test "all supported font aspects use physical metrics or defined missing-glyph defaults" do
-    data = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Metrics", data: data}])
     assert {:ok, 0.5} = FontMetricValidator.aspect(font, "ex-height")
     assert {:ok, 0.7} = FontMetricValidator.aspect(font, "cap-height")
@@ -58,7 +58,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontMetricTest do
     assert :error = FontMetricValidator.prepare_descriptor("size-adjust", :normal)
     assert :error = FontMetricValidator.prepare_descriptor("unknown", 10)
     assert :error = FontMetricValidator.prepare_descriptor("ascent-override", false)
-    data = File.read!(Paths.fixture("fonts/selected-container-sans.ttf"))
+    data = File.read!(FontCorpus.path("selected-container-sans.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Metrics", data: data}])
     assert FontMetricValidator.layout_size(Map.put(font, :metric_scale, 0), 24) == 0
     assert FontMetricValidator.baseline_offset(font, 24) == 0

@@ -2,6 +2,7 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixtu
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Font}
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
@@ -124,7 +125,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   end
 
   test "CSS axis controls instantiate the selected font and preserve text in PDF output" do
-    source = Paths.fixture("fonts/selected-variable.ttf") |> File.read!()
+    source = FontCorpus.path("selected-variable.ttf") |> File.read!()
 
     assert {:ok, dom} =
              HtmlParser.parse_detailed(
@@ -182,7 +183,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   end
 
   test "synthetic bold and oblique painting retains extraction and both fill/stroke alpha" do
-    data = File.read!(Paths.fixture("fonts/selected-container-sans.ttf"))
+    data = File.read!(FontCorpus.path("selected-container-sans.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Synthetic", data: data}])
 
     assert {:ok, synthetic} =
@@ -259,7 +260,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   end
 
   test "metric descriptors scale measurement and PDF paint while overrides govern line boxes" do
-    data = File.read!(Paths.fixture("fonts/selected-container-sans.ttf"))
+    data = File.read!(FontCorpus.path("selected-container-sans.ttf"))
     assert {:ok, [original]} = Font.load_configured_faces([%{family: "Metrics", data: data}])
 
     assert {:ok, [font]} =
@@ -473,7 +474,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   end
 
   test "automatic optical sizing uses the adjusted physical size and explicit axes retain precedence" do
-    data = File.read!(Paths.fixture("fonts/selected-control-axes.ttf"))
+    data = File.read!(FontCorpus.path("selected-control-axes.ttf"))
 
     assert {:ok, [font]} =
              Font.load_configured_faces([
@@ -536,7 +537,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   end
 
   test "petite fallback, unicase synthesis, missing capitals and emoji requests preserve explicit feature precedence" do
-    data = File.read!(Paths.fixture("fonts/selected-control-axes.ttf"))
+    data = File.read!(FontCorpus.path("selected-control-axes.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Controls", data: data}])
     font = Map.drop(font, [:variation_source, :variation_axes, :variation_coordinates])
     gsub = <<1::16, 0::16, 0::16, 10::16, 0::16, 1::16, "smcp", 0::16>>
@@ -643,7 +644,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   end
 
   test "feature table ownership failures and active GPOS kerning return recoverable diagnostics" do
-    data = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Broken features", data: data}])
 
     for bytes <- [<<>>, <<1::16, 0::16, 0::16, 10::16, 0::16, 100::16>>] do
@@ -723,7 +724,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
              Font.load_configured_faces([
                %{
                  family: "Reset",
-                 data: File.read!(Paths.fixture("fonts/selected-container-sans.ttf"))
+                 data: File.read!(FontCorpus.path("selected-container-sans.ttf"))
                }
              ])
 
@@ -750,7 +751,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
 
   test "fixed style axes retain slant fallback and permit synthesis when neither axis can provide a style" do
     alias NativeElixirPdfUtilities.TestSupport.FontFixture
-    data = File.read!(Paths.fixture("fonts/selected-control-axes.ttf"))
+    data = File.read!(FontCorpus.path("selected-control-axes.ttf"))
     {_, tables} = FontFixture.tables(data)
     ital_fixed = FontFixture.replace(tables["fvar"], 28, <<0::32>>)
 

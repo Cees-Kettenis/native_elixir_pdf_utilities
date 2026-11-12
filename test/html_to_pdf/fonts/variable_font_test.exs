@@ -1,5 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
@@ -20,7 +21,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
   end
 
   test "TrueType endpoint and interior instances preserve independent points, metrics, line metrics and PDF programs" do
-    input = Paths.fixture("fonts/selected-variable.ttf") |> File.read!()
+    input = FontCorpus.path("selected-variable.ttf") |> File.read!()
     manifest = Paths.fixture("fonts/variable-fonts.json") |> File.read!() |> :json.decode()
 
     for expected <- manifest["instances"] do
@@ -86,7 +87,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
   end
 
   test "CFF2 blend evaluation preserves independent fractional paths, widths and extracted Unicode in CID CFF output" do
-    input = Paths.fixture("fonts/selected-variable-cff2.otf") |> File.read!()
+    input = FontCorpus.path("selected-variable-cff2.otf") |> File.read!()
     manifest = Paths.fixture("fonts/variable-cff2-fonts.json") |> File.read!() |> :json.decode()
 
     for expected <- manifest["instances"] do
@@ -133,7 +134,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
   end
 
   test "named instances, clamping, source retention and explicit coordinates share one selection contract" do
-    data = Paths.fixture("fonts/selected-variable.ttf") |> File.read!()
+    data = FontCorpus.path("selected-variable.ttf") |> File.read!()
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Variable", data: data}])
     assert {:ok, heavy} = Font.instance(font, %{}, 1)
     assert heavy.variation_coordinates == %{"wght" => 900, "wdth" => 100}
@@ -157,7 +158,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
   end
 
   test "variation interpolation and reconstruction obey cumulative font work and byte allowances" do
-    data = Paths.fixture("fonts/selected-variable.ttf") |> File.read!()
+    data = FontCorpus.path("selected-variable.ttf") |> File.read!()
 
     for limit <- [:max_font_variation_work, :max_font_decoded_bytes] do
       limits = Limits.effective()

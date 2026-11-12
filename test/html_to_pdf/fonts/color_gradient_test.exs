@@ -1,8 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorGradientTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PngDecoder, PdfWriter}
-  alias NativeElixirPdfUtilities.TestSupport.Paths
 
   alias NativeElixirPdfUtilities.Validators.{
     ColrGradientValidator,
@@ -90,7 +90,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorGradientTest do
     assert is_binary(image.alpha_data)
     assert :binary.at(image.alpha_data, 8 * 16 + 8) > 200
     assert :binary.at(image.alpha_data, 0) == 0
-    data = File.read!(Paths.fixture("fonts/selected-colr.ttf"))
+    data = File.read!(FontCorpus.path("selected-colr.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Gradient", data: data}])
 
     for circles <- [[0, 0, 10, 0, 0, -10], [0, 0, -10, 0, 0, -20], [0, 0, 10, 0, 0, 10]] do

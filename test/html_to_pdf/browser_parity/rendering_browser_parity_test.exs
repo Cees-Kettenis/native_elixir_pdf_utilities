@@ -4,6 +4,7 @@ Code.require_file(Paths.support("browser_fixture_sheets.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
 
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
 
@@ -2425,7 +2426,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
           Map.new(
             ~w(selected-transformed.woff2 selected-literal.woff2 selected-cff.woff2 selected-variable.ttf selected-variable-cff2.otf selected-sbix.ttf selected-cbdt.ttf selected-colr.ttf selected-colr-v1.ttf selected-svg-gzip.ttf selected-control-axes.ttf),
             fn file ->
-              {"../../fonts/" <> file, {:bytes, File.read!(Paths.fixture("fonts/" <> file))}}
+              {FontCorpus.asset_url(file), {:bytes, File.read!(FontCorpus.path(file))}}
             end
           )
 

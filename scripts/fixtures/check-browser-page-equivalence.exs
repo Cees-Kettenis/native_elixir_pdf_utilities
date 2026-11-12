@@ -8,6 +8,9 @@ alias NativeElixirPdfUtilities.Text
 import ExUnit.Assertions
 ExUnit.start(autorun: false)
 
+Code.require_file(Paths.support("font_corpus.ex"))
+NativeElixirPdfUtilities.TestSupport.FontCorpus.prepare!()
+
 groups = :json.decode(File.read!(Paths.fixture("html_to_pdf/browser_parity/pages.json")))
 
 for group <- groups do

@@ -2,7 +2,7 @@
   "generator": "FontTools 4.66.1",
   "files": {
     "selected-large-cff2.otf": {
-      "sha256": "a4636116607f3e8eecce3e628fd1bc8a9cb6a180d8369dcc0d6fe06467d9f128",
+      "sha256": "6b529d6101371dcd7a348366dee2f57e310cdddc293c5fe603c19e1bc9cc9273",
       "source": "selected-variable-cff2.otf",
       "cff2": true,
       "glyphs": {
@@ -27,10 +27,11 @@
           "width": 690.0
         }
       },
-      "source_sha256": "29f542136500bb6d1e58c0dc0e10753df2e6ef30c04ecb0db2f1f1fda08c856a"
+      "source_sha256": "29f542136500bb6d1e58c0dc0e10753df2e6ef30c04ecb0db2f1f1fda08c856a",
+      "reference_sha256": "a4636116607f3e8eecce3e628fd1bc8a9cb6a180d8369dcc0d6fe06467d9f128"
     },
     "selected-large-seac.otf": {
-      "sha256": "f32849ddb775cfa6374f1daa05fc85ba5dd8267f49c554ea088f7ea2c0b26bb6",
+      "sha256": "83d7488d01bdc07f1346b898b967f844fdd07f049211da10ee28643cd1302097",
       "source": "cff-static-sans.otf",
       "cff2": false,
       "glyphs": {
@@ -55,12 +56,13 @@
           "width": 1303
         }
       },
-      "source_sha256": "3f6e71c3780c47b043c5c6e8d039e5c84013622137e4756eac6ecb98a9d09946"
+      "source_sha256": "3f6e71c3780c47b043c5c6e8d039e5c84013622137e4756eac6ecb98a9d09946",
+      "reference_sha256": "f32849ddb775cfa6374f1daa05fc85ba5dd8267f49c554ea088f7ea2c0b26bb6"
     }
   },
   "random": {
     "file": "selected-random.otf",
-    "sha256": "4d2f01c2e58ea09d08d8d3d42ed78b00d203c4e7b61c65ab6d0895891ca24241",
+    "sha256": "0685447069aa30850f8142f49dc2692c295023fedbd8ece24d1bc572fbce9edb",
     "source": "cff-static-sans.otf",
     "source_sha256": "3f6e71c3780c47b043c5c6e8d039e5c84013622137e4756eac6ecb98a9d09946",
     "seed": 7,
@@ -70,6 +72,8 @@
       0,
       207.838134765625,
       700
-    ]
-  }
+    ],
+    "reference_sha256": "4d2f01c2e58ea09d08d8d3d42ed78b00d203c4e7b61c65ab6d0895891ca24241"
+  },
+  "fixture_builder": "test/support/font_corpus.ex"
 }

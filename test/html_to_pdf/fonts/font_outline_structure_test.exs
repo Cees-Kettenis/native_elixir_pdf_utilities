@@ -2,6 +2,7 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixtu
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontOutlineStructureTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.TrueTypeGlyph
   alias NativeElixirPdfUtilities.TestSupport.{Paths, FontFixture}
@@ -16,7 +17,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontOutlineStructureTest do
     assert path =~ "L"
     assert {:error, {:invalid_font, _}} = FontOutlineValidator.prepare_path(cff, 65535)
 
-    data = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Quadratic", data: data}])
 
     for {points, expected} <- [

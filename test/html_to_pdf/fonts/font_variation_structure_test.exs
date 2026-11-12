@@ -3,12 +3,13 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("cff_fixtur
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
-  alias NativeElixirPdfUtilities.TestSupport.{Paths, FontFixture, CffFixture}
+  alias NativeElixirPdfUtilities.TestSupport.{FontFixture, CffFixture}
   alias NativeElixirPdfUtilities.Validators.FontVariationValidator
 
   test "fvar ranges, names, unique tags, record sizes and missing-instance requests share diagnostics" do
-    data = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
     {_, tables} = FontFixture.tables(data)
     fvar = tables["fvar"]
 
@@ -34,7 +35,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
     end
 
     assert {:error, {:invalid_font, _}} = FontVariationValidator.prepare(data, %{}, 99)
-    static = File.read!(Paths.fixture("fonts/selected-container-sans.ttf"))
+    static = File.read!(FontCorpus.path("selected-container-sans.ttf"))
     assert {:ok, ^static, %{}} = FontVariationValidator.prepare(static)
     assert {:error, {:invalid_font, _}} = FontVariationValidator.prepare(static, %{}, 0)
     assert {:error, {:invalid_font, _}} = FontVariationValidator.prepare_request([1], nil)
@@ -55,7 +56,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
   end
 
   test "avar versions, ownership and version-two cross-axis deltas use independent normalized arithmetic" do
-    data = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
     segment = <<3::16, -16384::signed-16, -16384::signed-16, 0::16, 0::16, 16384::16, 16384::16>>
     v1 = <<1::16, 0::16, 0::16, 2::16, segment::binary, segment::binary>>
     v2 = FontFixture.replace(v1, 0, <<2::16>>)
@@ -98,7 +99,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
   end
 
   test "vertical TrueType phantoms, partial metrics, explicit bearing maps and invalid metric fields" do
-    data = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
     {_, tables} = FontFixture.tables(data)
     vhea = FontFixture.replace(tables["hhea"], 34, <<1::16>>)
     vmtx = <<1000::16, 100::signed-16>> <> :binary.copy(<<100::signed-16>>, 5)
@@ -137,7 +138,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
   end
 
   test "MVAR record ordering, optional targets, gasp invariants and VORG origins reject unrepresentable results" do
-    data = File.read!(Paths.fixture("fonts/selected-gasp-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-gasp-variable.ttf"))
     {_, tables} = FontFixture.tables(data)
     mvar = tables["MVAR"]
 
@@ -163,7 +164,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
                FontVariationValidator.prepare(FontFixture.rebuild(data, changes), %{"wght" => 900})
     end
 
-    cff = File.read!(Paths.fixture("fonts/selected-vertical-cff2.otf"))
+    cff = File.read!(FontCorpus.path("selected-vertical-cff2.otf"))
     {_, cff_tables} = FontFixture.tables(cff)
 
     for vorg <- [
@@ -178,7 +179,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
   end
 
   test "CFF2 outline coexistence, maxp contract and emitted design bounds retain their format limits" do
-    data = File.read!(Paths.fixture("fonts/selected-variable-cff2.otf"))
+    data = File.read!(FontCorpus.path("selected-variable-cff2.otf"))
     {_, tables} = FontFixture.tables(data)
 
     for changes <- [%{"CFF " => <<>>}, %{"loca" => <<>>}, %{"maxp" => <<0x10000::32, 6::16>>}] do
@@ -213,7 +214,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
   test "instantiated coordinate fields, composite arguments and arithmetic failures return diagnostics" do
     limits = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    source = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    source = File.read!(FontCorpus.path("selected-variable.ttf"))
     {_, tables} = FontFixture.tables(source)
     # Six source glyphs; a private tuple changes all H points by 40,000 units.
     payload = <<0xCF>> <> :binary.copy(<<40000::signed-32>>, 16) <> <<0x8F>>
@@ -292,7 +293,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
 
     assert diagnostic.message =~ "cycle"
 
-    cff = File.read!(Paths.fixture("fonts/selected-variable-cff2.otf"))
+    cff = File.read!(FontCorpus.path("selected-variable-cff2.otf"))
     {_, cff_tables} = FontFixture.tables(cff)
 
     cff2 =
@@ -322,7 +323,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
   end
 
   test "default-instance name IDs, optional PostScript names and inactive axes follow fvar's static fallback" do
-    data = File.read!(Paths.fixture("fonts/selected-variable.ttf"))
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
     {_, tables} = FontFixture.tables(data)
     fvar = tables["fvar"]
     <<header::binary-size(56), instances::binary>> = fvar

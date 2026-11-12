@@ -294,3 +294,10 @@ font = Paths.project("priv/fonts/dejavu/DejaVuSans.ttf")
 | Other fixtures | Existing PDF, font, template and converter feature directories |
 | Temporary outputs | Unique feature/scenario directories in `tmp/`; create and clean up owned inputs |
 | Browser sibling files | Helper preserves the authored relative-resource base and removes temporary input after printing |
+
+Font tests share two small variable-font sources and six independently encoded
+WOFF2 samples. `test/support/font_corpus.ex` constructs color tables, metric/control
+variants, collection wrappers and long programs under ignored `tmp/font-corpus/`
+at suite startup. It needs no external encoder or installed test fonts. Separate
+fixture manifests retain the independently measured outlines, metrics and paint
+matrices. The browser page-equivalence command prepares the same corpus.

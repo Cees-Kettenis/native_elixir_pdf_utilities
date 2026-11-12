@@ -1,5 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
@@ -22,7 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
     manifest = Paths.fixture("fonts/woff2-fonts.json") |> File.read!() |> :json.decode()
 
     for {filename, expected} <- manifest["files"] do
-      input = Paths.fixture("fonts/" <> filename) |> File.read!()
+      input = FontCorpus.path(filename) |> File.read!()
       assert {:ok, data} = FontContainerValidator.prepare(input)
       assert Sfnt.checksum(data) == 0xB1B0_AFBA
       assert {:ok, _, directory} = FontValidator.prepare_table_directory(data)
@@ -61,7 +62,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
   end
 
   test "truncated headers and directories, invalid flavor, flags and indices retain decoder source context" do
-    original = Paths.fixture("fonts/selected-transformed.woff2") |> File.read!()
+    original = FontCorpus.path("selected-transformed.woff2") |> File.read!()
 
     cases = [
       {nil, 0},
@@ -86,7 +87,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
   end
 
   test "decompression and reconstruction obey shared size and work limits" do
-    input = Paths.fixture("fonts/selected-transformed.woff2") |> File.read!()
+    input = FontCorpus.path("selected-transformed.woff2") |> File.read!()
 
     for limit <- [:max_font_decoded_bytes, :max_font_container_work, :max_font_brotli_work] do
       limits = Limits.effective()
@@ -114,7 +115,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
       assert diagnostic.message != ""
     end
 
-    source = Paths.fixture("fonts/" <> manifest["source"]) |> File.read!()
+    source = FontCorpus.path(manifest["source"]) |> File.read!()
     assert {:ok, expected} = FontContainerValidator.prepare(source)
 
     assert {:ok, ^expected} =
@@ -131,7 +132,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
   test "collections share complete outline pairs and decode every 255UInt16 form" do
     manifest = Paths.fixture("fonts/woff2-fonts.json") |> File.read!() |> :json.decode()
     collection = manifest["collection"]
-    source = Paths.fixture("fonts/" <> collection["file"]) |> File.read!()
+    source = FontCorpus.path(collection["file"]) |> File.read!()
 
     for {tables, index} <- Enum.with_index(collection["tables"]) do
       assert {:ok, data} = FontContainerValidator.prepare(source, index)
@@ -149,13 +150,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
     manifest = Paths.fixture("fonts/woff2-edge-fonts.json") |> File.read!() |> :json.decode()
 
     assert {:ok, expected} =
-             Paths.fixture("fonts/selected-transformed.woff2")
+             FontCorpus.path("selected-transformed.woff2")
              |> File.read!()
              |> FontContainerValidator.prepare()
 
     for collection <- manifest["collections"] do
       assert {:ok, ^expected} =
-               Paths.fixture("fonts/" <> collection["file"])
+               FontCorpus.path(collection["file"])
                |> File.read!()
                |> FontContainerValidator.prepare()
     end
@@ -166,7 +167,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
 
     for {file, expected} <- manifest["files"] do
       assert {:ok, data} =
-               Paths.fixture("fonts/" <> file) |> File.read!() |> FontContainerValidator.prepare()
+               FontCorpus.path(file) |> File.read!() |> FontContainerValidator.prepare()
 
       assert {:ok, outlines} = TrueTypeSubsetValidator.prepare_outlines(data)
       assert {:ok, _, directory} = FontValidator.prepare_table_directory(data)

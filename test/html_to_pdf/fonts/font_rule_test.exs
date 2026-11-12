@@ -1,8 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontRuleTest do
   use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, Font, HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.{CssFontRuleValidator, FontRenderingValidator}
-  alias NativeElixirPdfUtilities.TestSupport.Paths
 
   test "font-face defaults, localized named instances and source technology hints share property grammar" do
     css = """
@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontRuleTest do
     assert face.feature_settings == %{"kern" => 0}
     assert face.language_override == "TRK "
     assert face.named_instance == "hEaVy"
-    data = Paths.fixture("fonts/selected-variable.ttf") |> File.read!()
+    data = FontCorpus.path("selected-variable.ttf") |> File.read!()
 
     assert {:ok, [font]} =
              Font.load_configured_faces([face |> Map.delete(:sources) |> Map.put(:data, data)])
@@ -120,7 +120,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontRuleTest do
     assert overrides[0] == {1.0, 0.0, 1.0, 1.0}
     assert overrides[1] == {0.0, 1.0, 0.0, 0.25}
     assert :normal = CssFontRuleValidator.palette(definitions, "Other", "--Brand")
-    data = Paths.fixture("fonts/selected-colr.ttf") |> File.read!()
+    data = FontCorpus.path("selected-colr.ttf") |> File.read!()
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Vector", data: data}])
 
     assert {:ok, font} =
@@ -167,7 +167,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontRuleTest do
     {red, green, blue, alpha} = color
     assert red == 0 and blue == 0 and alpha == 1
     assert_in_delta green, 128 / 255, 1.0e-10
-    data = File.read!(Paths.fixture("fonts/selected-colr.ttf"))
+    data = File.read!(FontCorpus.path("selected-colr.ttf"))
 
     assert {:ok, dom} =
              HtmlParser.parse_detailed(
