@@ -146,10 +146,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
 
     assert {:error, {:invalid_pdf_input, diagnostic}} =
              WriterValidator.prepare_paint_group_bounds(%{width: 60, height: 60}, [
-               %{rect | x: Limits.get(:max_pdf_numeric_magnitude)}
+               %{rect | x: Limits.get(:max_numeric_magnitude)}
              ])
 
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "invalid group viewport roles and unissued embedded descriptors fail", %{
@@ -212,12 +212,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
 
       assert {:ok, pdf} = PdfWriter.render([%{size: {240, 240}, boxes: [group]}])
       assert {:ok, [%{value: "A"}]} = Forms.fields(pdf)
-      Limits.install(%{Limits.effective() | max_clip_projection_work: 0})
+      Limits.install(%{Limits.effective() | max_work: 0})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                PdfWriter.render([%{size: {240, 240}, boxes: [group]}])
 
-      assert diagnostic.message =~ "max_clip_projection_work"
+      assert diagnostic.message =~ "max_work"
     end)
   end
 
@@ -248,12 +248,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
       assert diagnostic.message != ""
     end
 
-    Limits.install(%{Limits.effective() | max_rendered_text_bytes: 0})
+    Limits.install(%{Limits.effective() | max_output_bytes: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfWriter.render([%{size: {60, 60}, boxes: [box]}])
 
-    assert diagnostic.message =~ "max_rendered_text_bytes"
+    assert diagnostic.message =~ "max_output_bytes"
   end
 
   test "authored link corners remain clipped to the page and nested source plane", %{
@@ -305,14 +305,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
       work =
         HtmlValidator.with_render_budget(fn ->
           assert {:ok, _} = WriterValidator.prepare(pages, [])
-          Process.get({HtmlValidator, :render_budget}).max_clip_projection_work
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot().max_work
         end)
 
       assert work > 0
       original = Limits.effective()
-      Limits.install(%{original | max_clip_projection_work: work - 1})
+      Limits.install(%{original | max_work: work - 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
-      assert diagnostic.message =~ "max_clip_projection_work"
+      assert diagnostic.message =~ "max_work"
       Limits.install(original)
     end
   end
@@ -364,7 +364,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
     rect: rect
   } do
     box =
-      %{rect | x: Limits.get(:max_pdf_numeric_magnitude)}
+      %{rect | x: Limits.get(:max_numeric_magnitude)}
       |> Map.put(:css_border_surface, %{alpha: 1.0, clip: %{x: 0, y: 0, width: 60, height: 60}})
 
     assert {:error, {:invalid_pdf_input, diagnostic}} =

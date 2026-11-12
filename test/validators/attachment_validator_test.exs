@@ -61,9 +61,9 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
 
     assert {:error, _} = MimeValidator.prepare(zip, "a.zip", nil)
     {:ok, {_, zip}} = :zip.create(~c"a.zip", [{~c"a", ""}, {~c"b", ""}], [:memory])
-    Limits.install(Map.put(Limits.effective(), :max_mime_container_entries, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
     assert {:error, {:resource_limit_exceeded, _}} = MimeValidator.prepare(zip, "a.zip", nil)
-    Limits.install(Map.put(Limits.defaults(), :max_mime_container_bytes, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 1))
     assert {:error, {:resource_limit_exceeded, _}} = MimeValidator.prepare(zip, "a.zip", nil)
     Limits.install(Limits.defaults())
     {:ok, {_, duplicate}} = :zip.create(~c"a.zip", [{~c"a", ""}, {~c"a", ""}], [:memory])
@@ -167,15 +167,15 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
 
   test "checks aggregate and incremental limits", %{pdf: pdf, attached: attached} do
     file = %{filename: "two.txt", bytes: "two"}
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_attachments, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 1))
     assert {:error, _} = Attachments.embed(pdf, [file, %{file | filename: "three.txt"}])
     assert {:error, {:resource_limit_exceeded, _}} = Attachments.embed(attached, [file])
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_info_value_bytes, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_decoded_bytes, 1))
     assert {:error, {:resource_limit_exceeded, _}} = Attachments.embed(pdf, [file])
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_attachment_total_bytes, 2))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 2))
     assert {:error, {:resource_limit_exceeded, _}} = Attachments.embed(pdf, [file])
     assert {:error, {:resource_limit_exceeded, _}} = Attachments.list(attached)
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_name_tree_nodes, 1))
+    Limits.install(Limits.defaults())
     {:ok, context} = Reader.read_validated(attached)
     {:ok, names} = Reader.dictionary(context.document, context.catalog["Names"])
 
@@ -184,17 +184,18 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
         "Names" => %{"EmbeddedFiles" => %{"Kids" => [names["EmbeddedFiles"]]}}
       })
 
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 1))
     assert {:error, {:resource_limit_exceeded, _}} = Attachments.list(nested)
     Limits.install(Limits.defaults())
     {:ok, context} = Reader.read_validated(pdf)
     {:ok, existing} = AttachmentValidator.inspect_document(context)
     {:ok, prepared} = AttachmentValidator.prepare([file], [])
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_objects, context.document.trailer["Size"]))
+    Limits.install(Map.put(Limits.defaults(), :max_entries, context.document.trailer["Size"]))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              AttachmentValidator.prepare_write(context, existing, prepared)
 
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, byte_size(pdf)))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, byte_size(pdf)))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              Attachments.embed(pdf, [file])
@@ -225,12 +226,12 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
       size = byte_size(result)
       assert size > byte_size(source) + byte_size(file.bytes)
 
-      Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, size))
+      Limits.install(Map.put(Limits.defaults(), :max_input_bytes, size))
       assert {:ok, ^result} = Attachments.embed(source, [file])
       assert {:ok, files} = Attachments.list(result)
       assert Enum.any?(files, &(&1.filename == file.filename))
 
-      Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, size - 1))
+      Limits.install(Map.put(Limits.defaults(), :max_input_bytes, size - 1))
 
       assert {:error,
               {:resource_limit_exceeded,
@@ -243,9 +244,9 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
                }}} = Attachments.embed(source, [file])
 
       assert message =~ "requires #{size} bytes"
-      assert message =~ "min(max_pdf_input_bytes, max_rendered_pdf_bytes) (#{size - 1})"
+      assert message =~ "min(max_input_bytes, max_output_bytes) (#{size - 1})"
 
-      Limits.install(Map.put(Limits.defaults(), :max_pdf_input_bytes, byte_size(source)))
+      Limits.install(Map.put(Limits.defaults(), :max_input_bytes, byte_size(source)))
       assert {:ok, ^source} = Attachments.embed(source, [])
     end
   end
@@ -261,13 +262,36 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
     assert :ok = ModificationValidator.validate(context)
   end
 
+  test "prepared attachment additions include the existing file count", %{attached: pdf} do
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, existing} = AttachmentValidator.inspect_document(context)
+
+    assert {:ok, prepared} =
+             AttachmentValidator.prepare([%{filename: "new.txt", bytes: "new"}], [])
+
+    Limits.install(%{Limits.effective() | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             AttachmentValidator.prepare_write(context, existing, prepared)
+
+    assert diagnostic.stage == :limits and
+             diagnostic.message == "attachment count exceeds max_entries"
+  end
+
   test "aggregate budget includes files embedded by earlier calls", %{attached: pdf} do
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_attachment_total_bytes, 5))
+    original = Limits.effective()
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, existing} = AttachmentValidator.inspect_document(context)
+    assert {:ok, two} = AttachmentValidator.prepare([%{filename: "two.txt", bytes: "tw"}], [])
+    assert {:ok, three} = AttachmentValidator.prepare([%{filename: "two.txt", bytes: "two"}], [])
+    Limits.install(%{original | max_input_bytes: 5})
+    assert :ok = AttachmentValidator.prepare_write(context, existing, two)
 
-    assert {:error, {:resource_limit_exceeded, %{operation: :embed, message: message}}} =
-             Attachments.embed(pdf, [%{filename: "two.txt", bytes: "two"}])
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             AttachmentValidator.prepare_write(context, existing, three)
 
-    assert message =~ "max_pdf_attachment_total_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
+    Limits.install(original)
     assert {:ok, _} = Attachments.embed(pdf, [%{filename: "two.txt", bytes: "tw"}])
   end
 
@@ -276,7 +300,7 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
     {:ok, names} = Reader.dictionary(context.document, context.catalog["Names"])
     tree = %{"Kids" => [%{"Kids" => [names["EmbeddedFiles"]]}]}
     context = put_in(context.catalog["Names"], %{"EmbeddedFiles" => tree})
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_value_depth, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_depth, 1))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              AttachmentValidator.inspect_document(context)

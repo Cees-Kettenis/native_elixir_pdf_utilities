@@ -65,7 +65,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPaintTest do
     refute pdf =~ "/Subtype /Link"
     assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
     assert {:ok, _document} = Reader.read(pdf)
-    Limits.install(Map.put(Limits.effective(), :max_svg_raster_pixels, 0))
+    Limits.install(Map.put(Limits.effective(), :max_raster_pixels, 0))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(

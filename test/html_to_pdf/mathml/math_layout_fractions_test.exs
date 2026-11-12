@@ -417,8 +417,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
 
       limited =
         if kind == :font,
-          do: %{limits | max_font_math_work: 1},
-          else: %{limits | max_layout_boxes: 1}
+          do: %{limits | max_work: 1},
+          else: %{limits | max_entries: 1}
 
       Limits.install(limited)
 
@@ -493,9 +493,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutFractionsTest do
     assert missing.operation == :measure_math
     assert missing.message =~ "selected math font has no usable glyph for U+E777"
 
-    Limits.install(%{Limits.effective() | max_font_math_work: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
-    assert {:error, {:resource_limit_exceeded, %{stage: :font}}} =
+    assert {:error, {:resource_limit_exceeded, %{stage: :layout}}} =
              MathLayout.measure(fraction(children, c.style))
   end
 end

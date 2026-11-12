@@ -20,24 +20,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LinkAnnotationAdmissionTest do
           {"a(b)\\c\r\nd\ne\rf", 18}
         ] do
       allowance = encoded_bytes + 4
-      Limits.install(%{ctx.limits | max_rendered_pdf_bytes: allowance})
+      Limits.install(%{ctx.limits | max_input_bytes: allowance})
 
       assert :ok =
                HtmlValidator.with_render_budget(fn ->
                  WriterValidator.reserve_annotation_bytes(["<<", ">>"], uri)
                end)
 
-      Limits.install(%{ctx.limits | max_rendered_pdf_bytes: allowance - 1})
+      Limits.install(%{ctx.limits | max_input_bytes: allowance - 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlValidator.with_render_budget(fn ->
                  WriterValidator.reserve_annotation_bytes(["<<", ">>"], uri)
                end)
 
-      assert diagnostic.stage == :writer and diagnostic.message =~ "max_rendered_pdf_bytes"
+      assert diagnostic.stage == :writer and diagnostic.message =~ "max_input_bytes"
     end
 
-    Limits.install(%{ctx.limits | max_rendered_pdf_bytes: 19})
+    Limits.install(%{ctx.limits | max_input_bytes: 19})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              HtmlValidator.with_render_budget(fn ->
@@ -63,9 +63,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LinkAnnotationAdmissionTest do
     }
 
     pages = [%{size: {100, 100}, boxes: List.duplicate(box, 16)}]
-    Limits.install(%{ctx.limits | max_rendered_pdf_bytes: 12_000})
+    Limits.install(%{ctx.limits | max_input_bytes: 12_000})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
-    assert diagnostic.stage == :writer and diagnostic.message =~ "max_rendered_pdf_bytes"
+    assert diagnostic.stage == :writer and diagnostic.message =~ "max_input_bytes"
 
     Limits.install(ctx.limits)
     assert {:ok, pdf} = PdfWriter.render(pages)
@@ -79,7 +79,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LinkAnnotationAdmissionTest do
     assert {:ok, pdf} = PdfWriter.render(pages)
 
     for bytes <- [byte_size(pdf) - 1, byte_size(pdf)] do
-      Limits.install(%{ctx.limits | max_pdf_input_bytes: bytes})
+      Limits.install(%{ctx.limits | max_input_bytes: bytes})
 
       case bytes == byte_size(pdf) do
         true ->
@@ -88,17 +88,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LinkAnnotationAdmissionTest do
 
         false ->
           assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
-          assert diagnostic.stage == :writer and diagnostic.message =~ "max_pdf_input_bytes"
+          assert diagnostic.stage == :writer and diagnostic.message =~ "max_input_bytes"
       end
     end
 
-    Limits.install(%{ctx.limits | max_pdf_input_bytes: 9})
+    Limits.install(%{ctx.limits | max_input_bytes: 9})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                WriterValidator.reserve_annotation_bytes(["fixed"], "12345")
              end)
 
-    assert diagnostic.message =~ "max_pdf_input_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 end

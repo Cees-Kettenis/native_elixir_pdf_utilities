@@ -222,7 +222,7 @@ defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidator do
       rows when is_list(rows) ->
         with :ok <-
                FormInspectionValidator.reserve(
-                 :max_pdf_form_preparation_entries,
+                 :max_entries,
                  length(rows),
                  "ListBox"
                ) do
@@ -260,7 +260,7 @@ defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidator do
                      # multiply unchecked before a later reader sees the PDF.
                      :ok <-
                        FormInspectionValidator.reserve(
-                         :max_pdf_form_preparation_entries,
+                         :max_entries,
                          length(geometry) + length(color) +
                            if(background, do: tuple_size(background), else: 0) +
                            if(selection, do: tuple_size(selection), else: 0) + 5,
@@ -268,7 +268,7 @@ defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidator do
                        ),
                      :ok <-
                        FormInspectionValidator.reserve(
-                         :max_pdf_form_metadata_bytes,
+                         :max_decoded_bytes,
                          byte_size(label) + byte_size(family),
                          "ListBox"
                        ) do

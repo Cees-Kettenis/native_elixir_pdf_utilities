@@ -313,7 +313,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
     }
 
     NativeElixirPdfUtilities.Limits.install(
-      Map.put(limits, :max_font_numeric_magnitude, Integer.pow(10, 310))
+      Map.put(limits, :max_numeric_magnitude, Integer.pow(10, 310))
     )
 
     assert {:error, {:invalid_font, diagnostic}} =

@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
           do: invalid("Brotli requires binary source bytes and a nonnegative decoded length", 0)
 
         FontValidator.reserve_source(data)
-        FontValidator.check(:max_font_decoded_bytes, expected)
+        FontValidator.check(:max_decoded_bytes, expected)
 
         state = %{
           input: data,
@@ -329,7 +329,7 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
   end
 
   defp context_map(state, size) do
-    FontValidator.reserve(:max_font_brotli_work, size)
+    FontValidator.reserve(:max_work, size)
     {count, state} = variable_byte(state)
     count = count + 1
 
@@ -399,7 +399,7 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
   end
 
   defp huffman(state, alphabet) do
-    FontValidator.reserve(:max_font_brotli_work, alphabet)
+    FontValidator.reserve(:max_work, alphabet)
     {kind, state} = take(state, 2)
 
     if kind == 1 do
@@ -613,7 +613,7 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
   end
 
   defp take(state, bits) do
-    FontValidator.reserve(:max_font_brotli_work, 1)
+    FontValidator.reserve(:max_work, 1)
 
     if state.bit + bits > byte_size(state.input) * 8,
       do: invalid("Brotli bitstream is truncated", state.bit)
@@ -642,7 +642,7 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
     unless rem(state.bit, 8) == 0 and state.bit + length * 8 <= byte_size(state.input) * 8,
       do: invalid("Brotli byte payload is truncated", state.bit)
 
-    FontValidator.reserve(:max_font_brotli_work, length)
+    FontValidator.reserve(:max_work, length)
     {binary_part(state.input, div(state.bit, 8), length), %{state | bit: state.bit + length * 8}}
   end
 
@@ -654,7 +654,7 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
   end
 
   defp append(state, value) do
-    FontValidator.reserve(:max_font_brotli_work, 1)
+    FontValidator.reserve(:max_work, 1)
 
     # Meta-block admission owns the declared output bound. Literal, history
     # and dictionary counts have already been bounded by the remaining block.

@@ -153,7 +153,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsTest do
     assert diagnostic.source == "iframe" and diagnostic.operation == :prepare_hints
     assert {:error, {:invalid_document, _}} = HtmlValidator.iframe_hints(nil)
 
-    Limits.install(Map.put(Limits.effective(), :max_html_numeric_token_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -165,7 +165,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              EmbeddedViewportValidator.prepare_initialization(%{"marginwidth" => "12"}, :iframe)
 
-    assert diagnostic.source == "12" and diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.source == "12" and diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "invalid prepared scrollbar policy remains diagnostic for iframe and frame hosts" do

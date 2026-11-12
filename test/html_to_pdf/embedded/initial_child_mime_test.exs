@@ -205,14 +205,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeTest do
        %{root: root, png: png} do
     ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->
       limits = Limits.effective()
-      Limits.install(Map.put(limits, :max_image_source_bytes, byte_size(png) - 1))
+      Limits.install(Map.put(limits, :max_input_bytes, byte_size(png) - 1))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                EmbeddedViewport.prepare_iframe_document("image.png", parent)
 
       assert diagnostic.operation == :load_embedded_resource
       assert ResourceContext.current() == parent
-      Limits.install(Map.put(limits, :max_decoded_image_bytes, 1))
+      Limits.install(Map.put(limits, :max_decoded_bytes, 1))
       assert {:ok, prepared} = EmbeddedViewport.prepare_iframe_document("image.png", parent)
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =

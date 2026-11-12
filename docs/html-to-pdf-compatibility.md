@@ -46,7 +46,7 @@ or page furniture. Unsupported widget transforms return diagnostics.
 | Selectors | Namespaces, tags, classes, IDs, attributes, descendant/child/sibling combinators, `:is()`/`:where()`/`:not()`/`:has()`, filtered positions, `:lang()`/`:dir()` and initial control/link/disclosure states |
 | Styles | Cascade, inheritance, CSS-wide keywords, `all`, `!important`, layers, nesting, `@scope`, custom properties, `@property`, `var()` and `currentColor` |
 | Layout | Block, inline, inline-block/table, flex, grid, flow-root, contents, logical box axes, sizing, margins, padding and gaps |
-| Text | Fonts, alignment, spacing, wrapping, whitespace, list markers and solid text decorations |
+| Text | Fonts, alignment, spacing, wrapping, whitespace, list markers, text decorations, shadows and emphasis |
 | Boxes | Colors, borders, rounded corners and background images |
 | Generated content | `::before`, `::after`, strings, `attr()`, `counter()` and counter reset/increment/set controls |
 | Printing | Print media queries, static `@supports`, bare `@page` size/margins and page breaks |
@@ -111,8 +111,8 @@ contexts preserve paint order. Full containment, floats, 3D transforms, perspect
 and animations are unsupported. Child-document form repetition restrictions still apply.
 
 Logical sizes, edges and insets follow `writing-mode` and `direction` during the
-cascade. These box axes do not provide vertical glyph orientation or full bidi
-text layout. Aspect ratios use the selected content or border box, and definite
+cascade. Vertical and sideways text use the glyph orientation and font metrics
+described under typography below. Aspect ratios use the selected content or border box, and definite
 ratio-derived heights resolve descendant percentages. Flow roots contain margins;
 ordinary blocks collapse adjoining positive and negative margin sets.
 
@@ -209,7 +209,7 @@ therefore wrap differently or extend farther beyond the page.
 | Other sources | Supported data URIs; remote resources are never fetched |
 | Resolver request | `%{reference: reference, kind: kind}`; kind is `:image`, `:background_image` or `:font` |
 | Resolver return | `{:ok, bytes}`, `:not_found` or `{:error, reason}` |
-| Callback execution | Disposable operation worker; shares [operation limits](resource-limits.md#operation-time-and-memory) |
+| Callback execution | Disposable operation worker; shares [operation limits](resource-limits.md#operation-allowance) |
 
 [Asset examples](html-to-pdf-examples.md#load-local-images).
 
@@ -255,7 +255,7 @@ variation settings participate in selection. Font configuration examples are in
 | Control | Support |
 | --- | --- |
 | Features and language | Feature/variation settings, kerning, variant subproperties, language overrides and named `@font-feature-values` definitions share one selection plan |
-| Execution | Existing Latin ligatures and legacy kerning can be enabled or disabled. Active font features requiring general OpenType shaping return an unsupported-font diagnostic |
+| Execution | GSUB substitutions, ligatures and contextual/chaining/reverse lookups; GPOS pair, cursive, mark and contextual positioning. Script/language systems, variation-selected features and kerning controls participate in shaping |
 | Synthesis | Permitted synthetic bold, oblique, caps and script-position glyphs; `font-synthesis` and its subproperties can disable synthesis |
 | Font metrics | `size-adjust`, ascent/descent/line-gap overrides and `font-size-adjust`, including a primary-face `from-font` reference for fallback |
 | Color bitmaps | `sbix` PNG/JPEG, duplicate glyphs and density selection; applicable CBDT/CBLC PNG and 32-bit BGRA records with strike metrics |
@@ -264,9 +264,74 @@ variation settings participate in selection. Font configuration examples are in
 
 Color artwork retains logical Unicode and an invisible selected text run for PDF
 selection geometry. Font embedding restrictions still apply. TIFF and
-other unimplemented bitmap encodings return a diagnostic. Color rendering does
-not provide general emoji sequence shaping: variation-selector, ZWJ and
-script-dependent substitutions still require the later shaping path.
+other unimplemented bitmap encodings return a diagnostic. Emoji presentation,
+variation selectors and supported ZWJ sequences select a covering font for the
+complete cluster. Missing sequences follow the configured unsupported-glyph policy.
+
+Paragraph bidi resolution supports HTML `dir`, `bdi`, `bdo` and CSS `direction`
+and `unicode-bidi`. Lines retain logical extraction order while glyphs and links
+use visual positions. OpenType shaping includes Arabic joining, Syriac contextual
+forms and the supported Indic syllable stages. A selected font must contain the
+required glyphs and layout tables.
+
+Extended grapheme segmentation, bidi properties and line breaking use Unicode
+17.0.0 on every supported runtime. Line-breaking rules share the shaped cluster
+boundaries used by font fallback and painting. `word-break`, `overflow-wrap` and `line-break` select the
+admitted opportunities. Automatic hyphenation uses caller-supplied language
+patterns or exceptions; no dictionaries are downloaded or bundled. The
+`hyphenate-limit-*` controls bound word fragments, successive lines and page ends.
+
+Whitespace supports the legacy `white-space` values and independent collapse,
+wrap and trim controls. `tab-size` accepts nonnegative numbers, fractional stops
+and lengths. Stops use the containing block's space measure, including after
+wrapping. Preserved trailing spaces participate in fitting or hang according to
+the selected whitespace mode. Chinese and Japanese segment breaks between CJK
+text do not create word gaps; Korean text retains them.
+
+`word-spacing` adds signed lengths at word separators. `text-indent` accepts
+lengths, percentages, `hanging` and `each-line`. Logical `start`/`end` alignment,
+`text-align-last` and `text-justify` share the fitted line geometry. Justification
+expands complete shaping clusters or word separators and preserves cursive joins.
+Korean automatic justification uses word separators. `hanging-punctuation`
+excludes eligible edge punctuation from fitting and alignment.
+
+`text-wrap` and `text-wrap-style` support static `auto`, `stable`, `balance` and
+`pretty` behavior. Balanced wrapping keeps the ordinary line count and searches
+for a smaller fitting measure. Pretty wrapping uses that measure when the final
+line would contain a single word. Alignment and percentage indents continue to
+use the containing block's full width.
+
+`writing-mode` supports horizontal, vertical and sideways directions.
+`text-orientation` selects mixed, upright or sideways glyphs. Use
+`text-combine-upright: all` or `digits 2`, `digits 3`, `digits 4` to fit selected
+text into one vertical em box. Font `vert` and `vrt2` features supply vertical
+alternates when available. Orthogonal inline flex and grid containers resolve
+percentage, intrinsic and calculated inline sizes through the shared sizing rules.
+
+Ruby supports `ruby-align`, `ruby-position`, `ruby-merge` and `ruby-overhang`.
+Initial letters support `initial-letter`, `initial-letter-align` and
+`initial-letter-wrap`, including `::first-letter` selections with surrounding
+punctuation. Their source text and links remain part of the paragraph.
+
+Text decorations support solid, dotted, dashed, double and wavy lines, selected
+thickness and color, `text-underline-offset`, `text-underline-position` and
+`text-decoration-skip-ink: auto | none | all`. `text-shadow` accepts ordered
+colors, signed offsets and nonnegative blur radii. Blurred shadows use selected
+glyph outlines and the existing SVG converter. `text-emphasis` supports filled
+and open marks, custom strings, color and over/under or physical side placement.
+Marks skip whitespace and eligible punctuation and reserve line space.
+
+Inline alignment supports the `vertical-align` shorthand and its
+`alignment-baseline`, `baseline-shift` and `baseline-source` longhands.
+Percentage shifts use the element's line height; `baseline-source` selects an
+inline block's first or last baseline. `dominant-baseline` is inherited.
+Font BASE tables supply script-specific horizontal and vertical alignment
+metrics when present. Mathematical alignment uses the selected font's MATH
+axis or minus-sign bounds, with synthesized metrics for missing baselines.
+
+Advanced styled-tree callers using built-in PDF faces must select an embedded
+font for blurred text shadows and emphasis, which require glyph outlines and
+font metrics. Missing information returns an actionable font diagnostic.
 
 ## MathML in HTML
 
@@ -295,8 +360,6 @@ script-dependent substitutions still require the later shaping path.
 | JavaScript, media playback, canvas drawing APIs | Static HTML and images |
 | Embedded PDFs, XFA, JavaScript form actions | Supported HTML and PDF forms |
 | Named pages, page-margin boxes, CSS page counters | Page options and header/footer templates |
-| General OpenType shaping and emoji sequence matching | Supported Latin text, static selected font instances and individual covered color glyphs |
-| Complex shaping, bidirectional text, vertical writing | A renderer supporting those scripts and layouts |
 
 Embedded content and framesets have restricted static support. SVG, control
 styling and some layouts can differ from browsers. Check your generated PDF.

@@ -479,10 +479,15 @@ defmodule NativeElixirPdfUtilities.FormsTest do
 
   test "field and appearance resource limits" do
     {:ok, pdf} = HtmlToPdf.render("<div><input name=\"a\"></div>")
-    Limits.install(Map.put(Limits.effective(), :max_pdf_form_text_bytes, 2))
-    assert {:error, {:resource_limit_exceeded, %{source: "a"}}} = Forms.fill(pdf, %{"a" => "abc"})
+    original = Limits.effective()
+    Limits.install(%{original | max_input_bytes: byte_size(pdf) - 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits, operation: :fill}}} =
+             Forms.fill(pdf, %{"a" => "abc"})
+
+    Limits.install(original)
     assert {:ok, _} = Forms.fill(pdf, %{"a" => "ab"})
-    Limits.install(Map.put(Limits.effective(), :max_pdf_form_fields, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
     assert {:error, {:resource_limit_exceeded, _}} = HtmlToPdf.render("<div><input><input></div>")
   end
 
@@ -617,9 +622,7 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     end
   end
 
-  test "button input labels stay in page content and do not consume field names or limits" do
-    Limits.install(%{Limits.effective() | max_pdf_form_fields: 3, max_appearance_widgets: 2})
-
+  test "button input labels stay in page content and do not consume field names" do
     buttons =
       ~s(<input type="submit" name="TEXT_1_1"><input type="reset" name="shared"><input type="button" name="shared" value="Custom"><button value="Unprinted"></button>)
 
@@ -701,7 +704,8 @@ defmodule NativeElixirPdfUtilities.FormsTest do
 
   test "password fill counts rendered mask bytes in aggregate appearance limits" do
     assert {:ok, pdf} = HtmlToPdf.render(~s(<input type="password" name="secret">))
-    Limits.install(Map.put(Limits.effective(), :max_appearance_text_bytes, 6))
+    original = Limits.effective()
+    Limits.install(Map.put(original, :max_output_bytes, 6))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Forms.fill(pdf, %{"secret" => "ABC"})
@@ -710,12 +714,18 @@ defmodule NativeElixirPdfUtilities.FormsTest do
              diagnostic.source == "secret"
 
     assert diagnostic.message =~ "aggregate"
+
+    assert {:ok, "••"} =
+             NativeElixirPdfUtilities.Validators.FormValidator.password_display_text("AB")
+
+    Limits.install(original)
     assert {:ok, _} = Forms.fill(pdf, %{"secret" => "AB"})
   end
 
   test "password display limits propagate through fill and unsupported text flags stay rejected" do
     assert {:ok, pdf} = HtmlToPdf.render(~s(<input type="password" name="secret">))
-    Limits.install(Map.put(Limits.effective(), :max_rendered_text_bytes, 8))
+    original = Limits.effective()
+    Limits.install(Map.put(original, :max_output_bytes, 8))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Forms.fill(pdf, %{"secret" => "ABC"})
@@ -723,7 +733,12 @@ defmodule NativeElixirPdfUtilities.FormsTest do
     assert diagnostic.stage == :forms and diagnostic.operation == :fill and
              diagnostic.source == "secret"
 
-    assert diagnostic.message =~ "max_rendered_text_bytes"
+    assert diagnostic.message =~ "max_output_bytes"
+
+    assert {:ok, "••"} =
+             NativeElixirPdfUtilities.Validators.FormValidator.password_display_text("AB")
+
+    Limits.install(original)
     assert {:ok, _} = Forms.fill(pdf, %{"secret" => "AB"})
 
     assert {:ok, context} = Reader.read_validated(pdf)

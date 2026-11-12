@@ -111,6 +111,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
     end
   end
 
+  test "CFF cubic contours retain all control points in typography outline commands" do
+    program = <<139, 139, 21, 239, 239, 239, 39, 239, 139, 8, 14>>
+    data = CffFixture.face_fixture(glyph_count: 1, charstrings: [program])
+    assert {:ok, face} = CffCharstringValidator.prepare_metrics(data, 1, 1000)
+    font = %{outline_format: :cff, cff: face, units_per_em: 1000, widths: [500]}
+
+    assert {:ok, commands} =
+             NativeElixirPdfUtilities.Validators.FontOutlineValidator.prepare_commands(font, 0)
+
+    assert commands == [{0, [0, 0]}, {3, [100, 100, 200, 0, 300, 0]}, {4, []}]
+  end
+
   test "CFF metrics include top and per-FD affine matrices and exact cubic extrema", %{font: font} do
     assert {:ok, bounds} = FontValidator.prepare_glyph_bounds(font)
     assert elem(bounds, font.cmap[?x]) == {59.0, 0.0, 1145.0, 1120.0}
@@ -172,19 +184,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
                CffSubsetValidator.prepare(input, glyphs, subset)
     end
 
-    Limits.install(%{Limits.effective() | max_font_subset_work: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              Cff.subset(font, [1, 2], true)
 
-    assert message =~ "max_font_subset_work"
+    assert message =~ "max_work"
     Limits.install(Limits.defaults())
-    Limits.install(%{Limits.effective() | max_font_subset_bytes: 1})
+    Limits.install(%{Limits.effective() | max_decoded_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              Cff.subset(font, [font.cmap[?H]], true)
 
-    assert message =~ "max_font_subset_bytes"
+    assert message =~ "max_decoded_bytes"
   end
 
   test "CID-keyed source subroutines and FD dictionaries survive conversion", %{
@@ -270,7 +282,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
   end
 
   test "dictionary number encoding retains signed reals and positive exponents" do
-    Limits.install(%{Limits.effective() | max_font_numeric_magnitude: round(1.0e21)})
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: round(1.0e21)})
 
     assert {:ok, decoded} =
              CffFontValidator.prepare_dictionary(
@@ -306,8 +318,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
       assert {:ok, "H"} = Text.extract(pdf, layout: false)
       box = %{box | font_face: %{face | data: <<"OTTO", 0>>}}
 
-      assert {:error, {:invalid_font, %{stage: :font, operation: :write_pdf}}} =
+      assert {:error, {:invalid_font, diagnostic}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [box]}], subset_fonts: false)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.operation == :prepare_table_directory
+      assert diagnostic.source == "TrueType table directory"
+      assert diagnostic.message =~ "sfnt"
     end
   end
 

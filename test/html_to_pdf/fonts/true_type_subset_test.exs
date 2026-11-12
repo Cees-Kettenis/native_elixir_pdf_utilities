@@ -61,7 +61,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
       plan.glyph_count * 11 +
         (plan.glyph_count + 1) * if(plan.location_format == 0, do: 2, else: 4)
 
-    Limits.install(%{Limits.effective() | max_font_math_work: work})
+    Limits.install(%{Limits.effective() | max_work: work})
     assert {:ok, _registry} = Font.load_registry(system_font_discovery: false)
 
     assert {:ok, _} =
@@ -76,18 +76,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
                TrueTypeSubsetValidator.prepare_glyph_bounds(font.data)
              end)
 
-    assert message =~ "max_font_math_work"
-    Limits.install(%{Limits.effective() | max_font_math_work: work - 1})
+    assert message =~ "max_work"
+    Limits.install(%{Limits.effective() | max_work: work - 1})
 
     assert {:error, {:resource_limit_exceeded, %{operation: :glyph_bounds}}} =
              Font.glyph_bounds(font)
 
-    Limits.install(%{Limits.effective() | max_font_source_bytes: 1})
+    Limits.install(%{Limits.effective() | max_input_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: source_message}}} =
              Font.glyph_bounds(font)
 
-    assert source_message =~ "max_font_source_bytes"
+    assert source_message =~ "max_input_bytes"
   end
 
   test "glyph geometry rejects absent or malformed outline data with diagnostics", %{font: font} do
@@ -168,30 +168,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
     assert {:ok, plan} = TrueTypeSubsetValidator.prepare(aliased, [font.cmap[?A]])
     assert plan.output_bytes == byte_size(result)
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_font_subset_bytes, byte_size(result) - 1))
+    Limits.install(Map.put(limits, :max_decoded_bytes, byte_size(result) - 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              TrueTypeSubset.subset(aliased, [font.cmap[?A]])
 
-    assert diagnostic.message =~ "max_font_subset_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
 
     assert {:error, {:resource_limit_exceeded, _}} =
              TrueTypeSubsetValidator.prepare(aliased, [font.cmap[?A]])
 
-    Limits.install(Map.put(limits, :max_font_subset_bytes, byte_size(result)))
+    Limits.install(Map.put(limits, :max_decoded_bytes, byte_size(result)))
     assert {:ok, ^result} = TrueTypeSubset.subset(aliased, [font.cmap[?A]])
-    Limits.install(Map.put(limits, :max_font_subset_checksum_work, div(byte_size(result), 4)))
+    Limits.install(Map.put(limits, :max_work, div(byte_size(result), 4)))
     assert {:ok, ^result} = TrueTypeSubset.subset(aliased, [font.cmap[?A]])
-    Limits.install(Map.put(limits, :max_font_subset_checksum_work, div(byte_size(result), 4) - 1))
+    Limits.install(Map.put(limits, :max_work, div(byte_size(result), 4) - 1))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              TrueTypeSubsetValidator.prepare(aliased, [font.cmap[?A]])
 
-    assert message =~ "max_font_subset_checksum_work"
+    assert message =~ "max_work"
 
-    Limits.install(Map.put(limits, :max_font_subset_bytes, 2 * byte_size(result) - 1))
+    Limits.install(Map.put(limits, :max_decoded_bytes, 2 * byte_size(result) - 1))
 
-    Limits.install(Map.put(limits, :max_font_subset_bytes, 2 * byte_size(result) - 1))
+    Limits.install(Map.put(limits, :max_decoded_bytes, 2 * byte_size(result) - 1))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              FontValidator.with_budget(fn ->
@@ -199,7 +199,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
                TrueTypeSubset.subset(aliased, [font.cmap[?A]])
              end)
 
-    assert message =~ "max_font_subset_bytes"
+    assert message =~ "max_decoded_bytes"
 
     box = %{
       type: :text,
@@ -219,14 +219,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
              PdfWriter.render([%{size: {100, 100}, boxes: [box, second_box]}])
 
     assert diagnostic.operation == :write_pdf and diagnostic.source == "TrueType subset"
-    assert diagnostic.message =~ "max_font_subset_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
 
-    Limits.install(Map.put(limits, :max_font_subset_checksum_work, 1))
+    Limits.install(Map.put(limits, :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
 
-    assert message =~ "max_font_subset_checksum_work"
+    assert message =~ "max_work"
   end
 
   test "directory policy agrees for loading, glyph metrics and subsetting", %{font: font} do
@@ -363,14 +363,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
     refute pdf =~ ~r|/BaseFont /[A-Z]{6}\+|
     assert {:ok, "A"} = Text.extract(pdf, layout: false)
 
-    Limits.install(%{Limits.effective() | max_font_subset_work: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
     assert {:error,
             {:resource_limit_exceeded,
-             %{stage: :limits, message: "font subsetting exceeds max_font_subset_work"}}} =
+             %{stage: :limits, message: "font subsetting exceeds max_work"}}} =
              TrueTypeSubset.subset(font, [font.cmap[?é]])
 
-    Limits.install(%{Limits.effective() | max_font_subset_work: 3})
+    Limits.install(%{Limits.effective() | max_work: 3})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              TrueTypeSubset.subset(font, [font.cmap[?é]])
@@ -513,7 +513,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
         header <> <<0x0020::16, 72::16, 0::16, 0x0020::16, 72::16, 0::16, 0::16, 72::16, 0::16>>
       )
 
-    Limits.install(%{Limits.effective() | max_font_subset_work: 2})
+    Limits.install(%{Limits.effective() | max_work: 2})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              TrueTypeSubset.subset(repeated_components, [font.cmap[813]])

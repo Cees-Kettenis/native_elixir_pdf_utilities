@@ -45,7 +45,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
     assert {:ok, [width: 80, height: 20], 2} =
              SvgValidator.prepare_dimensions(attributes, [scale: {:up_to, 2}], nil)
 
-    Limits.install(%{limits | max_svg_raster_pixels: 1000})
+    Limits.install(%{limits | max_raster_pixels: 1000})
 
     assert {:ok, [width: 40, height: 10], 1} =
              SvgValidator.prepare_dimensions(attributes, [scale: {:up_to, 2}], nil)
@@ -56,7 +56,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
 
   test "optional density also respects decoded bytes and PNG working buffers", %{limits: limits} do
     attributes = %{"width" => "40", "height" => "10"}
-    Limits.install(%{limits | max_decoded_image_bytes: 2000})
+    Limits.install(%{limits | max_decoded_bytes: 2000})
 
     assert {:ok, [width: 40, height: 10], 1} =
              SvgValidator.prepare_dimensions(
@@ -67,7 +67,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
 
     assert SvgValidator.default_viewport_dimensions(40, 10) == [width: 40, height: 10]
 
-    Limits.install(%{limits | max_png_working_bytes: 30_000})
+    Limits.install(%{limits | max_operation_memory_bytes: 30_000})
 
     assert {:ok, [width: 40, height: 10], 1} =
              SvgValidator.prepare_dimensions(
@@ -80,6 +80,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
   end
 
   test "adaptive density does not admit oversized base canvases or malformed scale options" do
+    Limits.install(%{Limits.effective() | max_raster_pixels: 16_777_216})
+
     for attributes <- [
           %{"width" => "8193", "height" => "1"},
           %{"width" => "5000", "height" => "5000"}
@@ -105,7 +107,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
     html = "<img src='#{uri}'><img src='#{uri}'>"
     assert {:ok, dom} = HtmlParser.parse_detailed(html)
 
-    Limits.install(%{limits | max_aggregate_svg_raster_pixels: 10_000})
+    Limits.install(%{limits | max_raster_pixels: 15_000})
     assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
     assert length(styled.children) == 2
 
@@ -116,12 +118,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
       assert node.style.image.height_px == 1
     end
 
-    Limits.install(%{limits | max_aggregate_svg_raster_pixels: 9999})
+    Limits.install(%{limits | max_raster_pixels: 14_999})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Style.compute_detailed(dom, system_font_discovery: false)
 
-    assert diagnostic.message =~ "max_aggregate_svg_raster_pixels"
+    assert diagnostic.message =~ "max_raster_pixels"
   end
 
   test "public image background and inline SVG paths retain large thin canvases" do
@@ -160,7 +162,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
   end
 
   test "actual dense allocations still obey aggregate budgets", %{limits: limits} do
-    Limits.install(%{limits | max_aggregate_svg_raster_pixels: 4999})
+    Limits.install(%{limits | max_raster_pixels: 4999})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -171,6 +173,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
                )
              end)
 
-    assert diagnostic.message =~ "max_aggregate_svg_raster_pixels"
+    assert diagnostic.message =~ "max_raster_pixels"
   end
 end

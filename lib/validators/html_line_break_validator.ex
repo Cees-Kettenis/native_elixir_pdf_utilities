@@ -1,4 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
+  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeGrapheme
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
@@ -33,36 +34,103 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
           {:ok, [{non_neg_integer(), boolean()}]} | {:error, {atom(), Diagnostics.diagnostic()}}
   @spec opportunities(term(), term()) ::
           {:ok, [{non_neg_integer(), boolean()}]} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def opportunities(text, break_spaces? \\ false) do
-    case {text, break_spaces?} do
-      {text, break_spaces?} when is_binary(text) and is_boolean(break_spaces?) ->
-        HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
+  def opportunities(text, options \\ false) do
+    with {:ok, policy} <- prepare_policy(options) do
+      if is_binary(text) do
+        HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :layout)
 
         if String.valid?(text, :fast_ascii) do
-          result = UnicodeLineBreak.opportunities(text)
+          result =
+            if policy.line_break == :anywhere do
+              {breaks, _} =
+                Enum.map_reduce(UnicodeGrapheme.graphemes(text), 0, fn cluster, offset ->
+                  offset = offset + byte_size(cluster)
+                  {{offset, offset == byte_size(text)}, offset}
+                end)
+
+              breaks
+            else
+              UnicodeLineBreak.opportunities(text, policy)
+            end
 
           HtmlValidator.reserve_render_resource(
-            :max_layout_text_work,
+            :max_work,
             byte_size(text) + length(result),
             :layout
           )
 
-          # The Elixir scanner produces these offsets directly. Protocol
-          # admission is needed only for externally supplied offset lists.
           {:ok,
-           css_space_opportunities(text, result, word_hyphen_opportunities(text), break_spaces?)}
+           css_space_opportunities(
+             text,
+             result,
+             word_hyphen_opportunities(text),
+             policy
+           )}
         else
           failure("line breaking requires valid UTF-8 text")
         end
-
-      {_, flag} when not is_boolean(flag) ->
-        failure("preserved-space line breaking requires a boolean option")
-
-      _ ->
+      else
         failure("line breaking requires UTF-8 text")
+      end
     end
   catch
     {:render_resource_limit, error} -> error
+  end
+
+  @doc "Admits one shared CSS line-breaking policy for style validation and every inline consumer."
+  @spec prepare_policy(term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_policy(options) do
+    case options do
+      flag when is_boolean(flag) ->
+        {:ok,
+         %{
+           line_break: :normal,
+           word_break: :normal,
+           language: "und",
+           break_spaces?: flag,
+           hyphens: :manual
+         }}
+
+      style when is_map(style) ->
+        line =
+          case :maps.get(:line_break, style, :normal) do
+            :auto -> :normal
+            value -> value
+          end
+
+        word = :maps.get(:word_break, style, :normal)
+        overflow = :maps.get(:overflow_wrap, style, :normal)
+
+        if line in [:normal, :strict, :loose, :anywhere, :break_word] and
+             word in [:normal, :break_all, :keep_all, :break_word] and
+             overflow in [:normal, :anywhere, :break_word] do
+          with :ok <-
+                 NativeElixirPdfUtilities.Validators.CssHyphenationValidator.validate_style(
+                   style,
+                   "HTML inline text"
+                 ),
+               {:ok, parts} <-
+                 NativeElixirPdfUtilities.Validators.LanguageValidator.prepare_identifier(
+                   :maps.get(:_text_language, style, "und")
+                 ) do
+            {:ok,
+             %{
+               line_break: line,
+               word_break: word,
+               language: List.first(parts) || "und",
+               break_spaces?: :maps.get(:white_space, style, nil) == :break_spaces,
+               hyphens: :maps.get(:hyphens, style, :manual)
+             }}
+          end
+        else
+          failure(
+            "styled text requires a supported line_break, word_break and overflow_wrap policy; received #{inspect({line, word, overflow})}"
+          )
+        end
+
+      _ ->
+        failure("preserved-space line breaking requires a boolean option or a styled text policy")
+    end
   end
 
   @doc "Validates a native Unicode break protocol result against its UTF-8 source and shared work budget."
@@ -77,7 +145,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
     case {text, result} do
       {text, result} when is_binary(text) and is_list(result) and length(result) >= 0 ->
         HtmlValidator.reserve_render_resource(
-          :max_layout_text_work,
+          :max_work,
           byte_size(text) + length(result),
           :layout
         )
@@ -85,7 +153,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
         if String.valid?(text, :fast_ascii) do
           {grapheme_offsets, _offset} =
             text
-            |> String.graphemes()
+            |> UnicodeGrapheme.graphemes()
             |> Enum.reduce({MapSet.new(), 0}, fn cluster, {offsets, offset} ->
               offset = offset + byte_size(cluster)
               {MapSet.put(offsets, offset), offset}
@@ -172,8 +240,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
   @spec display_plan(term(), Font.font_face()) ::
           {:ok, %{text: binary(), actual_text: binary(), discretionary?: boolean()}}
           | {:error, {atom(), Diagnostics.diagnostic()}}
-  def display_plan(text, font, break_after? \\ false) do
-    with {:ok, visible} <- display_text(text, font, break_after?) do
+  @spec display_plan(term(), Font.font_face(), term(), map()) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def display_plan(text, font, break_after? \\ false, style \\ %{}) do
+    with {:ok, visible} <- display_text(text, font, break_after?, style) do
       {:ok, %{text: visible, actual_text: text, discretionary?: visible != text}}
     end
   end
@@ -183,67 +253,97 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   @spec display_text(term(), Font.font_face()) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def display_text(text, font, break_after? \\ false) do
-    case {text, break_after?} do
-      {text, selected?} when is_binary(text) and is_boolean(selected?) ->
-        HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
+  @spec display_text(term(), Font.font_face(), term(), map()) ::
+          {:ok, binary()} | {:error, {atom(), map()}}
+  def display_text(text, font, break_after? \\ false, style \\ %{}) do
+    with :ok <-
+           NativeElixirPdfUtilities.Validators.CssHyphenationValidator.validate_style(
+             style,
+             "HTML inline text"
+           ) do
+      case {text, break_after?} do
+        {text, selected?} when is_binary(text) and is_boolean(selected?) ->
+          HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :layout)
 
-        if String.valid?(text, :fast_ascii) do
-          # U+00AD and U+200B remain in UAX14 input and ActualText, not in unbroken glyph paint.
-          visible = strip_discretionary_characters(text)
+          if String.valid?(text, :fast_ascii) do
+            # U+00AD and U+200B remain in UAX14 input and ActualText, not in unbroken glyph paint.
+            visible = strip_discretionary_characters(text)
 
-          # Chromium paints LS/PS as spaces, not LF breaks. Keep their source in ActualText.
-          visible =
-            if :binary.match(visible, <<0xE2>>) == :nomatch,
-              do: visible,
-              else: String.replace(visible, ["\u2028", "\u2029"], " ")
+            # Chromium paints LS/PS as spaces, not LF breaks. Keep their source in ActualText.
+            visible =
+              if :binary.match(visible, <<0xE2>>) == :nomatch,
+                do: visible,
+                else: String.replace(visible, ["\u2028", "\u2029"], " ")
 
-          hyphen =
-            if selected? and String.ends_with?(text, "\u00AD") do
-              # CSS Text 3 uses a real selected-font Unicode hyphen at a taken manual break.
-              Enum.find(["\u2010", "-", "\u00AD"], &Font.supports_text?(font, &1))
-            else
-              ""
+            hyphen =
+              if selected? and String.ends_with?(text, "\u00AD") and
+                   :maps.get(:hyphens, style, nil) != :none do
+                # CSS Text 3 uses a real selected-font Unicode hyphen at a taken manual break.
+                case :maps.get(:hyphenate_character, style, :auto) do
+                  :auto ->
+                    Enum.find(["\u2010", "-", "\u00AD"], &Font.supports_text?(font, &1))
+
+                  text ->
+                    if NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
+                         font,
+                         text
+                       ),
+                       do: text
+                end
+              else
+                ""
+              end
+
+            case hyphen do
+              nil ->
+                failure("the selected font cannot paint a conditional hyphen")
+
+              hyphen ->
+                {:ok, visible <> hyphen}
             end
-
-          case hyphen do
-            nil ->
-              failure("the selected font cannot paint a conditional hyphen")
-
-            hyphen ->
-              {:ok, visible <> hyphen}
+          else
+            failure("discretionary text requires valid UTF-8")
           end
-        else
-          failure("discretionary text requires valid UTF-8")
-        end
 
-      {_, flag} when not is_boolean(flag) ->
-        failure("discretionary line selection requires a boolean option")
+        {_, flag} when not is_boolean(flag) ->
+          failure("discretionary line selection requires a boolean option")
 
-      _ ->
-        failure("discretionary text requires UTF-8 text")
+        _ ->
+          failure("discretionary text requires UTF-8 text")
+      end
     end
   catch
     {:render_resource_limit, error} -> error
   end
 
-  @doc "Identifies an otherwise identical inline boundary made transparent by discretionary formatting."
+  @doc "Identifies otherwise identical inline boundaries within one unbroken shaping context."
   @spec transparent_format_boundary?(term(), term()) ::
           {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def transparent_format_boundary?(before, after_text) do
+  @spec transparent_format_boundary?(term(), term(), map() | nil) ::
+          {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def transparent_format_boundary?(before, after_text, style \\ nil) do
     case {before, after_text} do
       {before, after_text} when is_binary(before) and is_binary(after_text) ->
         HtmlValidator.reserve_render_resource(
-          :max_layout_text_work,
+          :max_work,
           byte_size(before) + byte_size(after_text),
           :layout
         )
 
         if String.valid?(before, :fast_ascii) and String.valid?(after_text, :fast_ascii) do
-          {:ok,
-           String.ends_with?(before, @discretionary_characters) or
-             (after_text != "" and
-                strip_discretionary_characters(after_text) == "")}
+          discretionary? =
+            String.ends_with?(before, @discretionary_characters) or
+              (after_text != "" and strip_discretionary_characters(after_text) == "")
+
+          if discretionary? or before == "" or after_text == "" or style == nil do
+            {:ok, discretionary?}
+          else
+            NativeElixirPdfUtilities.Validators.TextShapingValidator.shared_context?(
+              before,
+              after_text,
+              style
+            )
+          end
         else
           failure("discretionary inline boundaries require valid UTF-8")
         end
@@ -278,7 +378,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
 
   # CSS Text 3 keeps the Unicode breaks and adds a break after every preserved
   # space, tab and other Zs separator. NBSP and extended graphemes stay intact.
-  defp css_space_opportunities(text, opportunities, word_hyphens, break_spaces?) do
+  defp css_space_opportunities(text, opportunities, word_hyphens, policy) do
     # Chromium's printed CSS keeps the break after an alphabetic word's
     # hyphen before digits (for example STYLE-5376). The native Unicode
     # numeric rule otherwise joins that boundary to the following number.
@@ -289,19 +389,42 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator do
       # including literal markup in a text document. Unicode rules still apply
       # to the boundary between a slash and a non-ASCII character.
       |> Enum.reject(fn {offset, mandatory?} ->
-        not mandatory? and offset > 0 and offset < byte_size(text) and
+        not mandatory? and policy.word_break != :break_all and policy.line_break != :anywhere and
+          offset > 0 and offset < byte_size(text) and
           :binary.at(text, offset - 1) == ?/ and :binary.at(text, offset) in 0x21..0x7F
       end)
       |> Map.new()
       |> Enum.sort_by(&elem(&1, 0))
 
-    if break_spaces? do
-      HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
+    opportunities =
+      Enum.reject(opportunities, fn {offset, mandatory?} ->
+        not mandatory? and :maps.get(:hyphens, policy, :manual) == :none and offset >= 2 and
+          binary_part(text, offset - 2, 2) == "\u00AD"
+      end)
+
+    opportunities =
+      if Regex.match?(~r/[^\x00-\x7F]/u, text) do
+        {boundaries, _} =
+          Enum.reduce(UnicodeGrapheme.graphemes(text), {MapSet.new(), 0}, fn cluster,
+                                                                             {boundaries, offset} ->
+            offset = offset + byte_size(cluster)
+            {MapSet.put(boundaries, offset), offset}
+          end)
+
+        Enum.filter(opportunities, fn {offset, mandatory?} ->
+          mandatory? or MapSet.member?(boundaries, offset)
+        end)
+      else
+        opportunities
+      end
+
+    if policy.break_spaces? do
+      HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :layout)
       breaks = Map.new(opportunities)
 
       {result, _} =
         text
-        |> String.graphemes()
+        |> UnicodeGrapheme.graphemes()
         |> Enum.reduce({[], 0}, fn cluster, {result, previous} ->
           offset = previous + byte_size(cluster)
           space? = cluster != "\u00A0" and Regex.match?(~r/^[\t\p{Zs}]$/u, cluster)

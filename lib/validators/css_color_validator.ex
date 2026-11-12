@@ -218,8 +218,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
   def parse_function_color(source, current_color), do: parse_color(source, current_color, false)
 
   defp parse_color(source, current_color, initial_input) do
-    HtmlValidator.check_render_resource(:max_css_source_bytes, byte_size(source), :style)
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(source), :style)
+    HtmlValidator.check_render_resource(:max_input_bytes, byte_size(source), :style)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(source), :style)
 
     source =
       source
@@ -408,7 +408,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
   end
 
   defp component(source, kind) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :style)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :style)
 
     parsed =
       if source == "none",

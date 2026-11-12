@@ -61,21 +61,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGlyphAdvanceTest do
     Font.with_measurement_cache(fn ->
       plan = Font.css_glyph_advances("東京", font, 12)
       limits = Limits.effective()
-      Limits.install(%{limits | max_layout_text_work: 1})
+      Limits.install(%{limits | max_work: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlValidator.with_render_budget(fn -> Font.css_glyph_advances("東京", font, 12) end)
 
       assert diagnostic.stage == :layout
-      assert diagnostic.message =~ "max_layout_text_work"
+      assert diagnostic.message =~ "max_work"
       Limits.install(limits)
       assert Font.css_glyph_advances("東京", font, 12) == plan
     end)
 
     Limits.install(%{
       Limits.effective()
-      | max_layout_measurement_cache_bytes: 1,
-        max_layout_measurement_cache_entries: 1
+      | max_cache_bytes: 1,
+        max_entries: 1
     })
 
     Font.with_measurement_cache(fn ->

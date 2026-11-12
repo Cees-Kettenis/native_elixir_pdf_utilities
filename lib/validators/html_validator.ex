@@ -53,7 +53,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @flow_container_tags ~w(form article aside div footer header main nav section address blockquote figure figcaption hgroup search center li dt dd details fieldset dialog)
   @block_tags @flow_container_tags ++
                 ~w(p h1 h2 h3 h4 h5 h6 ul ol menu dir dl dt pre listing xmp plaintext table img picture hr summary legend)
-  @text_inline_tags ~w(map area basefont bgsound iframe object embed label output datalist noscript noembed canvas slot selectedcontent u s strong b em i span a br wbr nobr abbr acronym q font blink keygen cite dfn data time code samp kbd tt var big small sub sup mark ins del strike ruby rb rt rp rtc)
+  @text_inline_tags ~w(map area basefont bgsound iframe object embed label output datalist noscript noembed canvas slot selectedcontent u s strong b em i span bdi bdo a br wbr nobr abbr acronym q font blink keygen cite dfn data time code samp kbd tt var big small sub sup mark ins del strike ruby rb rt rp rtc)
   @form_control_tags ~w(input select textarea button)
   @text_input_types ~w(text search tel url email password)
   @button_input_types ~w(button reset submit)
@@ -110,6 +110,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     :default_font,
     :fonts,
     :system_font_discovery,
+    :hyphenation_dictionaries,
     :metadata,
     :outlines,
     :page_furniture,
@@ -223,7 +224,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
     line_height = Map.fetch!(style, :line_height)
 
-    case {Map.get(style, :_math_flow, false), Map.get(font, :layout_metrics, font)} do
+    case {:maps.get(:_math_flow, style, false), Map.get(font, :layout_metrics, font)} do
       {true, _} ->
         0.0
 
@@ -484,15 +485,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def document_metadata_options(dom, opts) do
     html =
       Enum.find(dom.children, fn node ->
-        Map.get(node, :type) == :element and Map.get(node, :tag) == "html" and
-          Map.get(node, :namespace, :html) == :html
+        :maps.get(:type, node, nil) == :element and :maps.get(:tag, node, nil) == "html" and
+          :maps.get(:namespace, node, :html) == :html
       end)
 
     head =
       if html do
         Enum.find(html.children, fn node ->
-          Map.get(node, :type) == :element and Map.get(node, :tag) == "head" and
-            Map.get(node, :namespace, :html) == :html
+          :maps.get(:type, node, nil) == :element and :maps.get(:tag, node, nil) == "head" and
+            :maps.get(:namespace, node, :html) == :html
         end)
       end
 
@@ -548,7 +549,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp document_title(node) do
     case node do
       %{type: :element, tag: "title", children: children} ->
-        if Map.get(node, :namespace, :html) == :html do
+        if :maps.get(:namespace, node, :html) == :html do
           title =
             children
             |> Enum.map_join("", & &1.text)
@@ -570,15 +571,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     Enum.reduce(nodes, metadata, fn node, metadata ->
       case node do
         %{tag: "noscript", children: children} ->
-          if Map.get(node, :namespace, :html) == :html,
+          if :maps.get(:namespace, node, :html) == :html,
             do: document_metadata_defaults(children, metadata),
             else: metadata
 
         %{tag: "meta", attributes: %{"name" => name, "content" => content}} ->
           field =
-            if Map.get(node, :namespace, :html) == :html and
-                 is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "name")) and
-                 is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "content")) do
+            if :maps.get(:namespace, node, :html) == :html and
+                 is_nil(Map.get(:maps.get(:attribute_namespaces, node, %{}), "name")) and
+                 is_nil(Map.get(:maps.get(:attribute_namespaces, node, %{}), "content")) do
               case String.downcase(name, :ascii) do
                 "author" -> :author
                 "description" -> :subject
@@ -699,7 +700,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec construct_html_template(map()) :: map()
   def construct_html_template(element) do
-    reserve_render_resource(:max_html_nodes, 1, :html)
+    reserve_render_resource(:max_entries, 1, :html)
     fragment = %{type: :document_fragment, children: element.children}
     element |> Map.put(:children, []) |> Map.put(:content, fragment)
   end
@@ -1005,59 +1006,66 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec compute_custom_properties(map(), :atomics.atomics_ref(), nil | function()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def compute_custom_properties(properties, budget \\ new_css_budget(), transform \\ nil) do
-    with {:ok, memo} <- custom_property_cycle_memo(properties, not is_nil(transform)),
-         {:ok, memo} <-
-           Enum.reduce_while(memo, {:ok, %{}}, fn {name, {value, height}}, {:ok, memo} ->
-             case if(transform, do: transform.(name, value), else: {:ok, value}) do
-               {:ok, value} -> {:cont, {:ok, Map.put(memo, name, {value, height})}}
-               error -> {:halt, error}
-             end
-           end) do
-      Enum.reduce_while(properties, {:ok, memo}, fn {name, _value}, {:ok, memo} ->
-        case resolve_custom_property(name, properties, %{}, memo, budget, transform) do
-          {:ok, _value, _height, memo} ->
-            {:cont, {:ok, memo}}
+    with_render_budget(fn ->
+      with {:ok, memo} <- custom_property_cycle_memo(properties, not is_nil(transform)),
+           {:ok, memo} <-
+             Enum.reduce_while(memo, {:ok, %{}}, fn {name, {value, height}}, {:ok, memo} ->
+               case if(transform, do: transform.(name, value), else: {:ok, value}) do
+                 {:ok, value} -> {:cont, {:ok, Map.put(memo, name, {value, height})}}
+                 error -> {:halt, error}
+               end
+             end) do
+        Enum.reduce_while(properties, {:ok, memo}, fn {name, _value}, {:ok, memo} ->
+          case resolve_custom_property(name, properties, %{}, memo, budget, transform) do
+            {:ok, _value, _height, memo} ->
+              {:cont, {:ok, memo}}
 
-          {:error, _detail} = error ->
-            {:halt, error}
+            {:error, _detail} = error ->
+              {:halt, error}
 
-          :error ->
-            {:halt,
-             Diagnostics.error(:css, :invalid_css, "custom property has invalid variable syntax",
-               source: name
-             )}
+            :error ->
+              {:halt,
+               Diagnostics.error(
+                 :css,
+                 :invalid_css,
+                 "custom property has invalid variable syntax",
+                 source: name
+               )}
+          end
+        end)
+        |> case do
+          {:ok, memo} ->
+            {:ok,
+             Map.new(properties, fn {name, _value} -> {name, elem(Map.fetch!(memo, name), 0)} end)}
+
+          error ->
+            error
         end
-      end)
-      |> case do
-        {:ok, memo} ->
-          {:ok,
-           Map.new(properties, fn {name, _value} -> {name, elem(Map.fetch!(memo, name), 0)} end)}
+      else
+        :error ->
+          Diagnostics.error(:css, :invalid_css, "custom property has invalid variable syntax",
+            module: __MODULE__,
+            operation: :compute_custom_properties
+          )
 
         error ->
           error
       end
-    else
-      :error ->
-        Diagnostics.error(:css, :invalid_css, "custom property has invalid variable syntax",
-          module: __MODULE__,
-          operation: :compute_custom_properties
-        )
-
-      error ->
-        error
-    end
+    end)
   end
 
   @doc "Invalidates custom-property cycles before conditional substitutions select their fallbacks."
   @spec invalidate_custom_property_cycles(map()) ::
           {:ok, map()} | :error | {:error, {atom(), map()}}
   def invalidate_custom_property_cycles(properties) do
-    with {:ok, memo} <- custom_property_cycle_memo(properties, true) do
-      {:ok,
-       Map.new(properties, fn {name, value} ->
-         {name, if(Map.has_key?(memo, name), do: nil, else: value)}
-       end)}
-    end
+    with_render_budget(fn ->
+      with {:ok, memo} <- custom_property_cycle_memo(properties, true) do
+        {:ok,
+         Map.new(properties, fn {name, value} ->
+           {name, if(Map.has_key?(memo, name), do: nil, else: value)}
+         end)}
+      end
+    end)
   end
 
   # Fallback references participate in the CSS dependency graph even when the
@@ -1081,7 +1089,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                    {:ok, references} ->
                      Enum.each(references, fn reference ->
                        Enum.each(reference.dependencies, fn dependency ->
-                         reserve_render_resource(:max_css_work, 1, :css)
+                         reserve_render_resource(:max_work, 1, :css)
 
                          if Map.has_key?(properties, dependency),
                            do: :digraph.add_edge(graph, name, dependency)
@@ -1112,24 +1120,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec resolve_css_variables(String.t(), map(), map(), :atomics.atomics_ref()) ::
           {:ok, String.t()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def resolve_css_variables(value, properties, resolving, budget \\ new_css_budget()) do
-    case expand_css_value(value, properties, resolving, %{}, budget, nil) do
-      {:ok, nil, _height, _memo} -> :error
-      {:ok, resolved, _height, _memo} -> {:ok, resolved}
-      error -> error
-    end
+    with_render_budget(fn ->
+      case expand_css_value(value, properties, resolving, %{}, budget, nil) do
+        {:ok, nil, _height, _memo} -> :error
+        {:ok, resolved, _height, _memo} -> {:ok, resolved}
+        error -> error
+      end
+    end)
   end
 
   defp resolve_custom_property(name, properties, resolving, memo, budget, transform) do
     depth = map_size(resolving)
 
-    with :ok <- css_limit(:max_css_variable_work, :atomics.add_get(budget, 2, 1)),
-         :ok <- css_limit(:max_css_variable_depth, depth + 1) do
+    with :ok <- css_limit(:max_work, :atomics.add_get(budget, 2, 1)),
+         :ok <- css_limit(:max_depth, depth + 1) do
       case {Map.has_key?(resolving, name), Map.fetch(memo, name), Map.get(properties, name)} do
         {true, _cached, _value} ->
           {:ok, nil, 0, memo}
 
         {false, {:ok, {value, height}}, _value} ->
-          with :ok <- css_limit(:max_css_variable_depth, depth + height) do
+          with :ok <- css_limit(:max_depth, depth + height) do
             {:ok, value, height, memo}
           end
 
@@ -1176,16 +1186,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     with_render_budget(fn ->
       with :ok <- validate_css_budget(budget),
            true <- is_binary(value) and String.valid?(value, :fast_ascii),
-           :ok <- css_limit(:max_css_variable_bytes, byte_size(value)),
+           :ok <- css_limit(:max_decoded_bytes, byte_size(value)),
            {:ok, references} <- css_variable_references(value, 0),
            :ok <-
              css_limit(
-               :max_css_variable_work,
+               :max_work,
                :atomics.add_get(budget, 2, Enum.reduce(references, 0, &(&1.syntax_work + &2)))
              ),
            :ok <-
              css_limit(
-               :max_css_variable_total_bytes,
+               :max_decoded_bytes,
                :atomics.add_get(budget, 1, byte_size(value))
              ) do
         {:ok, references}
@@ -1200,10 +1210,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   # Strings and escapes are opaque lexical units. Fallbacks remain authored token
   # streams until a missing or cyclic property actually selects them.
   defp css_variable_references(value, depth) do
-    with :ok <- css_limit(:max_css_variable_depth, depth),
+    with :ok <- css_limit(:max_depth, depth),
          {:ok, _} <-
            NativeElixirPdfUtilities.Validators.CssMathValidator.component_tokens(value, false) do
-      reserve_render_resource(:max_css_work, byte_size(value), :css)
+      reserve_render_resource(:max_work, byte_size(value), :css)
 
       # Balanced components without a function opening cannot contain var().
       if :binary.match(value, "(") == :nomatch do
@@ -1302,7 +1312,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp expand_css_value(value, properties, resolving, memo, budget, transform) do
-    with :ok <- css_limit(:max_css_variable_bytes, byte_size(value)),
+    with :ok <- css_limit(:max_input_bytes, byte_size(value)),
          {:ok, matches} <- css_variable_references(value, map_size(resolving)) do
       Enum.reduce_while(matches, {:ok, [], 0, 0, 0, memo}, fn
         %{offset: offset, length: length, name: name, fallback: fallback},
@@ -1323,7 +1333,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             {:ok, replacement, dependency_height, memo} ->
               size = size + offset - cursor + byte_size(replacement)
 
-              case css_limit(:max_css_variable_bytes, size) do
+              case css_limit(:max_decoded_bytes, size) do
                 :ok ->
                   prefix = binary_part(value, cursor, offset - cursor)
 
@@ -1343,18 +1353,25 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {:ok, chunks, cursor, size, height, memo} ->
           size = size + byte_size(value) - cursor
 
-          with :ok <- css_limit(:max_css_variable_bytes, size),
-               :ok <- css_limit(:max_css_variable_total_bytes, :atomics.add_get(budget, 1, size)) do
+          with :ok <- css_limit(:max_decoded_bytes, size),
+               :ok <- css_limit(:max_decoded_bytes, :atomics.add_get(budget, 1, size)) do
+            reserve_render_resource(:max_decoded_bytes, size, :css)
             suffix = binary_part(value, cursor, byte_size(value) - cursor)
             computed = IO.iodata_to_binary(Enum.reverse([suffix | chunks]))
             computed = if matches == [], do: computed, else: normalize_css_comments(computed)
 
-            with :ok <- css_limit(:max_css_variable_bytes, byte_size(computed)),
+            with :ok <- css_limit(:max_decoded_bytes, byte_size(computed)),
                  :ok <-
                    css_limit(
-                     :max_css_variable_total_bytes,
+                     :max_decoded_bytes,
                      :atomics.add_get(budget, 1, max(0, byte_size(computed) - size))
                    ) do
+              reserve_render_resource(
+                :max_decoded_bytes,
+                max(0, byte_size(computed) - size),
+                :css
+              )
+
               {:ok, computed, height, memo}
             end
           end
@@ -1405,21 +1422,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       if is_nil(budget), do: {0, 0}, else: {:atomics.get(budget, 1), :atomics.get(budget, 2)}
 
     cond do
-      count >= Limits.get(:max_image_count) ->
+      count >= Limits.get(:max_entries) ->
         Diagnostics.error(:limits, :resource_limit_exceeded, "image count exceeds the limit")
 
-      bytes >= Limits.get(:max_aggregate_image_source_bytes) ->
+      bytes >= Limits.get(:max_input_bytes) ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
           "aggregate image source bytes exceed the limit"
         )
 
+      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_input_bytes) == 0 ->
+        Diagnostics.error(
+          :limits,
+          :resource_limit_exceeded,
+          "image source exceeds remaining max_input_bytes"
+        )
+
       true ->
         {:ok,
          min(
-           Limits.get(:max_image_source_bytes),
-           Limits.get(:max_aggregate_image_source_bytes) - bytes
+           NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(
+             :max_input_bytes
+           ),
+           Limits.get(:max_input_bytes) - bytes
          )}
     end
   rescue
@@ -1430,17 +1456,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec reserve_image_source(image_budget(), non_neg_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def reserve_image_source(budget, source_bytes) do
-    max_image_source_bytes = Limits.get(:max_image_source_bytes)
+    max_input_bytes = Limits.get(:max_input_bytes)
 
     cond do
       not is_integer(source_bytes) or source_bytes < 0 ->
         Diagnostics.error(:style, :invalid_document, "image source size is invalid")
 
-      source_bytes > max_image_source_bytes ->
+      source_bytes > max_input_bytes ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "image source exceeds the #{max_image_source_bytes}-byte limit"
+          "image source exceeds the #{max_input_bytes}-byte limit"
         )
 
       true ->
@@ -1449,7 +1475,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  budget,
                  1,
                  1,
-                 Limits.get(:max_image_count),
+                 :max_entries,
                  "image count exceeds the limit"
                ),
              :ok <-
@@ -1457,7 +1483,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  budget,
                  2,
                  source_bytes,
-                 Limits.get(:max_aggregate_image_source_bytes),
+                 :max_input_bytes,
                  "aggregate image source bytes exceed the limit"
                ) do
           :ok
@@ -1469,7 +1495,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec reserve_decoded_image(image_budget(), pos_integer(), pos_integer(), pos_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def reserve_decoded_image(budget, width, height, channels) do
-    max_decoded_image_bytes = Limits.get(:max_decoded_image_bytes)
+    max_decoded_bytes = Limits.get(:max_decoded_bytes)
 
     case is_integer(width) and width > 0 and is_integer(height) and height > 0 and
            is_integer(channels) and channels > 0 do
@@ -1477,11 +1503,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         decoded_bytes = width * height * channels
 
         cond do
-          decoded_bytes > max_decoded_image_bytes ->
+          decoded_bytes > max_decoded_bytes ->
             Diagnostics.error(
               :limits,
               :resource_limit_exceeded,
-              "decoded image exceeds the #{max_decoded_image_bytes}-byte limit"
+              "decoded image exceeds the #{max_decoded_bytes}-byte limit"
             )
 
           true ->
@@ -1489,7 +1515,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               budget,
               3,
               decoded_bytes,
-              Limits.get(:max_aggregate_decoded_image_bytes),
+              :max_decoded_bytes,
               "aggregate decoded image bytes exceed the limit"
             )
         end
@@ -1638,17 +1664,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
     case :erlang.get(key) do
       value when value in [:undefined, nil] ->
-        Process.put(key, %{})
-        Process.delete({__MODULE__, :validated_dom})
-
-        try do
-          fun.()
-        catch
-          {:render_resource_limit, error} -> error
-        after
-          Process.delete(key)
+        NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+          Process.put(key, %{})
           Process.delete({__MODULE__, :validated_dom})
-        end
+
+          try do
+            fun.()
+          catch
+            {:render_resource_limit, error} -> error
+          after
+            Process.delete(key)
+            Process.delete({__MODULE__, :validated_dom})
+          end
+        end)
 
       _budget ->
         fun.()
@@ -1658,22 +1686,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec reserve_render_resource(Limits.key(), non_neg_integer(), atom()) :: :ok
   def reserve_render_resource(limit, amount, stage) do
-    key = {__MODULE__, :render_budget}
-
-    # This per-node path avoids wrapper calls while retaining Process.get/1 defaults.
-    case :erlang.get(key) do
-      value when value in [:undefined, nil] ->
-        check_render_resource(limit, amount, stage)
-
-      budget ->
-        used =
-          case budget do
-            %{^limit => used} -> used + amount
-            _ -> amount
-          end
-
-        check_render_resource(limit, used, stage)
-        if amount != 0, do: :erlang.put(key, Map.put(budget, limit, used))
+    case NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(limit, amount, stage,
+           module: __MODULE__
+         ) do
+      :ok -> :ok
+      error -> throw({:render_resource_limit, error})
     end
 
     :ok
@@ -1705,21 +1722,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def within_html_element(fun) do
     key = {__MODULE__, :render_budget}
     budget = Process.get(key)
-    depth = Map.get(budget, :max_html_depth, 0)
-    check_render_resource(:max_html_depth, depth + 1, :html)
-    Process.put(key, Map.put(budget, :max_html_depth, depth + 1))
+    depth = :maps.get(:max_depth, budget, 0)
+    check_render_resource(:max_depth, depth + 1, :html)
+    Process.put(key, Map.put(budget, :max_depth, depth + 1))
 
     try do
       fun.()
     after
-      Process.put(key, Map.put(Process.get(key), :max_html_depth, depth))
+      Process.put(key, Map.put(Process.get(key), :max_depth, depth))
     end
   end
 
   @doc false
   @spec reserve_layout_box(atom()) :: atom()
   def reserve_layout_box(type) do
-    reserve_render_resource(:max_layout_boxes, 1, :layout)
+    reserve_render_resource(:max_entries, 1, :layout)
     type
   end
 
@@ -1729,13 +1746,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def validate_html_source(html) do
     case html do
       html when is_binary(html) ->
-        case {byte_size(html) <= Limits.get(:max_html_source_bytes),
-              String.valid?(html, :fast_ascii)} do
+        case {byte_size(html) <= Limits.get(:max_input_bytes), String.valid?(html, :fast_ascii)} do
           {false, _} ->
             Diagnostics.error(
               :html,
               :resource_limit_exceeded,
-              "HTML input exceeds max_html_source_bytes"
+              "HTML input exceeds max_input_bytes"
             )
 
           {true, true} ->
@@ -1930,7 +1946,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         true -> ancestors
       end
 
-    html? = Map.get(element, :namespace, :html) == :html
+    html? = :maps.get(:namespace, element, :html) == :html
     parent = if is_tuple(context), do: "div", else: context
     tag = element.tag
 
@@ -1938,7 +1954,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       if Enum.any?([context | ancestors], &(&1 in ["a", "button", "option", "canvas"])) do
         attributes =
           Map.reject(element.attributes, fn {name, _} ->
-            not is_nil(Map.get(Map.get(element, :attribute_namespaces, %{}), name))
+            not is_nil(Map.get(:maps.get(:attribute_namespaces, element, %{}), name))
           end)
 
         # Interactive content is conditional for anchors, images and inputs.
@@ -2032,7 +2048,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         case Regex.run(regex, value, capture: :all_but_first) do
           [digits] ->
             try do
-              check_render_resource(:max_html_numeric_token_bytes, byte_size(digits), :html)
+              check_render_resource(:max_numeric_token_bytes, byte_size(digits), :html)
             catch
               {:render_resource_limit, {:error, {reason, diagnostic}}} ->
                 throw(
@@ -2074,9 +2090,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       _ ->
         offset =
-          if Map.get(node, :namespace, :html) == :html do
+          if :maps.get(:namespace, node, :html) == :html do
             attributes = node.attributes
-            namespaces = Map.get(node, :attribute_namespaces, %{})
+            namespaces = :maps.get(:attribute_namespaces, node, %{})
 
             own_offset =
               if is_nil(Map.get(namespaces, "headingoffset")) do
@@ -2100,7 +2116,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           case node do
             %{tag: <<"h", base>>} when base in ?1..?6 and offset > 0 ->
               # HTML fixes the maximum computed heading level at nine.
-              if Map.get(node, :namespace, :html) == :html,
+              if :maps.get(:namespace, node, :html) == :html,
                 do: min(base - ?0 + offset, 9),
                 else: nil
 
@@ -2117,11 +2133,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
          {:error,
           {reason,
            Diagnostics.diagnostic(diagnostic.stage, diagnostic.reason, diagnostic.message,
-             operation: Map.get(diagnostic, :operation),
-             module: Map.get(diagnostic, :module),
+             operation: :maps.get(:operation, diagnostic, nil),
+             module: :maps.get(:module, diagnostic, nil),
              source: "headingoffset=" <> node.attributes["headingoffset"],
-             line: Map.get(diagnostic, :line, Map.get(node, :line)),
-             column: Map.get(diagnostic, :column, Map.get(node, :column))
+             line: Map.get(diagnostic, :line, :maps.get(:line, node, nil)),
+             column: Map.get(diagnostic, :column, :maps.get(:column, node, nil))
            )}}}
       )
   end
@@ -2159,8 +2175,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec counter_box?(map(), :element | :pseudo) :: boolean()
   def counter_box?(style, kind) do
-    Map.get(style, :display, :inline) not in [:none, :contents] and
-      (kind == :element or Map.get(style, :content, :none) != :none)
+    :maps.get(:display, style, :inline) not in [:none, :contents] and
+      (kind == :element or :maps.get(:content, style, :none) != :none)
   end
 
   @doc false
@@ -2172,8 +2188,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec prepare_list_owner(map(), map(), map()) :: map()
   def prepare_list_owner(node, style, inherited) do
-    box_owner = Map.get(inherited, :_list_box_owner, :document)
-    html_owner = Map.get(inherited, :_html_list_owner)
+    box_owner = :maps.get(:_list_box_owner, inherited, :document)
+    html_owner = :maps.get(:_html_list_owner, inherited, nil)
     owner = if html_owner == nil, do: {:auto, box_owner}, else: html_owner
 
     descendant_owner =
@@ -2181,7 +2197,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {:auto, box_owner}
       else
         if node.tag in ~w(ol ul menu) do
-          case List.keyfind(Map.get(style, :counter_reset, []), "list-item", 0) do
+          case List.keyfind(:maps.get(:counter_reset, style, []), "list-item", 0) do
             {"list-item", {kind, _value}} when kind in [:list, :reversed] ->
               {:auto, node._selector_id}
 
@@ -2206,8 +2222,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec prepare_list_marker(map(), integer()) :: map()
   def prepare_list_marker(style, ordinal) do
     if style.display == :list_item do
-      marker = CounterStyle.marker(Map.get(style, :list_marker_type, :disc), ordinal)
-      reserve_render_resource(:max_rendered_text_bytes, byte_size(marker), :style)
+      marker = CounterStyle.marker(:maps.get(:list_marker_type, style, :disc), ordinal)
+      reserve_render_resource(:max_output_bytes, byte_size(marker), :style)
       marker_style = list_paint_style(style)
       markers = if marker == "", do: [], else: [%{type: :text, text: marker, style: marker_style}]
       Map.put(style, :_list_marker, markers)
@@ -2376,7 +2392,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       "text-decoration-style" ->
         case normalized do
-          style when style in ~w(solid dotted dashed) ->
+          style when style in ~w(solid dotted dashed double wavy) ->
             {:ok, %{text_decoration_style: String.to_existing_atom(style)}}
 
           _ ->
@@ -2433,7 +2449,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 token in ~w(none underline overline line-through) ->
                   parse_css_text_decoration("text-decoration-line", token, font_size, color)
 
-                token in ~w(solid dotted dashed) ->
+                token in ~w(solid dotted dashed double wavy) ->
                   parse_css_text_decoration("text-decoration-style", token, font_size, color)
 
                 match?(
@@ -2488,13 +2504,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     # Ruby containers decorate their bases. Real annotations start a separate
     # scope; authored display overrides already remove the annotation role.
     style =
-      if Map.get(style, :display) in [:inline_block, :inline_flex, :inline_grid] or
-           Map.get(style, :position) in [:absolute, :fixed] or
-           Map.get(style, :_ruby_annotation, false),
+      if :maps.get(:display, style, nil) in [:inline_block, :inline_flex, :inline_grid] or
+           :maps.get(:position, style, nil) in [:absolute, :fixed] or
+           :maps.get(:_ruby_annotation, style, false),
          do: Map.delete(style, :_text_decorations),
          else: style
 
-    case Map.get(style, :text_decoration_line, []) do
+    case :maps.get(:text_decoration_line, style, []) do
       [] ->
         {:ok, style}
 
@@ -2508,7 +2524,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             # CSS fixes one px at 0.75 PDF points. These UA paint rules match
             # pinned Chromium: auto thickness is 1/10 em, whole-pixel strokes,
             # a thickness-dependent underline gap, and ascent-based strikes.
-            configured = Map.get(style, :text_decoration_thickness, :auto)
+            configured = :maps.get(:text_decoration_thickness, style, :auto)
 
             thickness =
               case configured do
@@ -2534,40 +2550,49 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 else: max(0.75, round(thickness / 0.75) * 0.75)
 
             color =
-              case Map.get(style, :text_decoration_color, :current_color) do
+              case :maps.get(:text_decoration_color, style, :current_color) do
                 :current_color -> style.color
                 color -> color
               end
 
             ascent = font.ascent * scale
 
-            decoration = %{
-              lines: lines,
-              color: color,
-              thickness: thickness,
-              style: Map.get(style, :text_decoration_style, :solid),
-              underline: -max(1, Float.ceil(thickness / 0.75 / 2)) * 0.75,
-              overline: round(ascent / 0.75) * 0.75,
-              strike: ascent / 3
-            }
+            with {:ok, underline} <-
+                   NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.underline(
+                     style,
+                     metrics,
+                     scale,
+                     thickness
+                   ) do
+              decoration = %{
+                lines: lines,
+                color: color,
+                thickness: thickness,
+                style: :maps.get(:text_decoration_style, style, :solid),
+                skip_ink: :maps.get(:text_decoration_skip_ink, style, :auto),
+                underline: underline,
+                overline: round(ascent / 0.75) * 0.75,
+                strike: ascent / 3
+              }
 
-            decorations = Map.get(style, :_text_decorations, []) ++ [decoration]
+              decorations = :maps.get(:_text_decorations, style, []) ++ [decoration]
 
-            if valid_text_decorations?(decorations),
-              do: {:ok, Map.put(style, :_text_decorations, decorations)},
-              else:
-                Diagnostics.error(
-                  :style,
-                  :invalid_document,
-                  "text decoration geometry or color is invalid"
-                )
+              if valid_text_decorations?(decorations),
+                do: {:ok, Map.put(style, :_text_decorations, decorations)},
+                else:
+                  Diagnostics.error(
+                    :style,
+                    :invalid_document,
+                    "text decoration geometry or color is invalid"
+                  )
+            end
 
           :error ->
             Diagnostics.error(
               :font,
               :invalid_document,
               "text decorations require valid selected-font metrics",
-              source: Map.get(font, :family),
+              source: :maps.get(:family, font, nil),
               module: FontValidator
             )
         end
@@ -2625,7 +2650,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     attributes = Map.fetch!(node, :attributes)
 
     selector =
-      if Map.get(node, :namespace, :html) == :html,
+      if :maps.get(:namespace, node, :html) == :html,
         do: put_elem(selector, 1, String.downcase(elem(selector, 1), :ascii)),
         else: selector
 
@@ -2649,8 +2674,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             false
 
           {:ok, actual} ->
-            namespace = Map.get(node, :namespace, :html)
-            attribute_namespace = Map.get(Map.get(node, :attribute_namespaces, %{}), name)
+            namespace = :maps.get(:namespace, node, :html)
+            attribute_namespace = Map.get(:maps.get(:attribute_namespaces, node, %{}), name)
 
             insensitive? =
               mode == :insensitive or
@@ -2658,7 +2683,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                    name in @case_insensitive_html_attributes)
 
             if insensitive? or operator != :equals do
-              reserve_render_resource(:max_css_work, byte_size(actual) + byte_size(value), :css)
+              reserve_render_resource(:max_work, byte_size(actual) + byte_size(value), :css)
             end
 
             {actual, value} =
@@ -2697,26 +2722,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec parse_css_text_wrapping(String.t(), String.t()) :: {:ok, atom(), atom()} | :error
   def parse_css_text_wrapping(property, value) do
     case {property, value |> String.trim() |> String.downcase()} do
-      {"white-space", "normal"} ->
-        {:ok, :white_space, :normal}
-
-      {"white-space", "pre-line"} ->
-        {:ok, :white_space, :pre_line}
-
-      {"white-space", "nowrap"} ->
-        {:ok, :white_space, :nowrap}
-
-      {"white-space", "pre"} ->
-        {:ok, :white_space, :pre}
-
-      {"white-space", "pre-wrap"} ->
-        {:ok, :white_space, :pre_wrap}
-
-      {"white-space", "break-spaces"} ->
-        {:ok, :white_space, :break_spaces}
+      {"white-space", value} ->
+        with {:ok, style} <-
+               NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.prepare(
+                 %{},
+                 "white-space",
+                 value
+               ),
+             do: {:ok, :white_space, style.white_space}
 
       {"line-break", value} when value in ["auto", "normal"] ->
         {:ok, :line_break, :normal}
+
+      {"line-break", "loose"} ->
+        {:ok, :line_break, :loose}
+
+      {"line-break", "strict"} ->
+        {:ok, :line_break, :strict}
 
       {"line-break", "anywhere"} ->
         {:ok, :line_break, :anywhere}
@@ -2729,6 +2751,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       {property, "normal"} when property in ~w(word-wrap overflow-wrap) ->
         {:ok, :overflow_wrap, :normal}
+
+      {"word-break", "break-all"} ->
+        {:ok, :word_break, :break_all}
+
+      {"word-break", "keep-all"} ->
+        {:ok, :word_break, :keep_all}
 
       {"word-break", "break-word"} ->
         {:ok, :word_break, :break_word}
@@ -2879,7 +2907,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     Enum.all?(nodes, fn node ->
       case node do
         %{type: :element, tag: tag, children: children} ->
-          not (tag == excluded_tag and Map.get(node, :namespace, :html) == :html) and
+          not (tag == excluded_tag and :maps.get(:namespace, node, :html) == :html) and
             descendants_exclude_html_tag?(children, excluded_tag)
 
         _ ->
@@ -2901,7 +2929,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   defp script_supporting_element?(node) do
     match?(%{type: :element, tag: tag} when tag in ~w(script template), node) and
-      Map.get(node, :namespace, :html) == :html
+      :maps.get(:namespace, node, :html) == :html
   end
 
   defp table_children_valid?(children) do
@@ -2945,7 +2973,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         token ->
           # Classification and ASCII tag folding can each scan the token.
-          reserve_render_resource(:max_html_tree_work, 2 * byte_size(token), :html)
+          reserve_render_resource(:max_work, 2 * byte_size(token), :html)
 
           cond do
             String.starts_with?(token, "<?") or String.starts_with?(token, "<!") ->
@@ -3059,7 +3087,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               Enum.split_while(dom.children, &match?(%{type: :processing_instruction}, &1))
 
             with {:ok, children} <- document_sections(content) do
-              reserve_render_resource(:max_html_nodes, 1, :html)
+              reserve_render_resource(:max_entries, 1, :html)
 
               html = %{
                 type: :element,
@@ -3094,7 +3122,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {head, head_content}
 
         _ ->
-          reserve_render_resource(:max_html_nodes, 1, :html)
+          reserve_render_resource(:max_entries, 1, :html)
           head = %{type: :element, tag: "head", attributes: %{}, children: head_content}
           {head, [head]}
       end
@@ -3105,7 +3133,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {body, body_content}
 
         _ ->
-          reserve_render_resource(:max_html_nodes, 1, :html)
+          reserve_render_resource(:max_entries, 1, :html)
           body = %{type: :element, tag: "body", attributes: %{}, children: body_content}
           {body, [body]}
       end
@@ -3198,10 +3226,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         {group_children, previous} =
           Enum.split_while(children, fn child ->
-            Map.get(child, :tag) == child_tag or
+            :maps.get(:tag, child, nil) == child_tag or
               match?(%{type: :processing_instruction}, child) or
               (script_supporting_element?(child) and
-                 (tag == "tbody" or Map.get(child, :tag) == "template"))
+                 (tag == "tbody" or :maps.get(:tag, child, nil) == "template"))
           end)
 
         if Enum.any?(group_children, &(Map.get(&1, :tag) == child_tag)),
@@ -3238,7 +3266,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec construct_html_group(String.t(), list()) :: map()
   def construct_html_group(tag, children) do
-    reserve_render_resource(:max_html_nodes, 1, :html)
+    reserve_render_resource(:max_entries, 1, :html)
     %{type: :element, tag: tag, attributes: %{}, children: children}
   end
 
@@ -3269,12 +3297,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     {groups, _pending} =
       Enum.reduce(children, {[], nil}, fn child, {groups, pending} ->
         kind =
-          case Map.get(child, :type) do
+          case :maps.get(:type, child, nil) do
             :processing_instruction when pending in ~w(tbody colgroup) ->
               pending
 
             _ ->
-              case Map.get(child, :tag) do
+              case :maps.get(:tag, child, nil) do
                 "tr" -> "tbody"
                 "col" -> "colgroup"
                 "template" when pending in ~w(tbody colgroup) -> pending
@@ -3291,7 +3319,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             {[{%{group | children: [child | group.children]}, true} | rest], kind}
 
           {kind, _, _} ->
-            reserve_render_resource(:max_html_nodes, 1, :html)
+            reserve_render_resource(:max_entries, 1, :html)
             group = %{type: :element, tag: kind, attributes: %{}, children: [child]}
             {[{group, true} | groups], kind}
         end
@@ -3420,7 +3448,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         end)
         |> Enum.take_while(&(not is_nil(&1)))
         |> Enum.any?(fn node ->
-          reserve_render_resource(:max_html_tree_work, 1, :html)
+          reserve_render_resource(:max_work, 1, :html)
 
           match?(
             %{type: :element, tag: "plaintext", namespace: :html},
@@ -3563,8 +3591,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       {node, stage, source} =
         case value do
           token when is_binary(token) ->
-            check_render_resource(:max_html_source_bytes, byte_size(token), :html)
-            reserve_render_resource(:max_html_tree_work, byte_size(token), :html)
+            check_render_resource(:max_input_bytes, byte_size(token), :html)
+            reserve_render_resource(:max_work, byte_size(token), :html)
 
             node =
               case Regex.named_captures(@processing_instruction_token, token) do
@@ -3594,7 +3622,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       case valid_processing_instruction_node?(node) do
         true ->
           check_render_resource(
-            :max_html_source_bytes,
+            :max_input_bytes,
             byte_size(node.target) + byte_size(node.data),
             :html
           )
@@ -3646,7 +3674,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             {:ok, %{text: text, line: line, column: column} = source}
             when is_binary(text) and is_integer(line) and line > 0 and is_integer(column) and
                    column > 0 ->
-              reserve_render_resource(:max_html_tree_work, 2 * byte_size(text), :html)
+              reserve_render_resource(:max_work, 2 * byte_size(text), :html)
 
               map_size(source) == 3 and String.valid?(text, :fast_ascii) and
                 case validate_html_processing_instruction(String.replace(text, ~r/\r\n?/, "\n")) do
@@ -3751,7 +3779,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              {:ok, parsed} <- attributes_to_map(captures, tag, namespace) do
           order =
             Enum.map(captures, fn [_, name | _] ->
-              reserve_render_resource(:max_html_tree_work, byte_size(name) + 1, :html)
+              reserve_render_resource(:max_work, byte_size(name) + 1, :html)
               String.downcase(name, :ascii)
             end)
 
@@ -3778,7 +3806,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               %{type: :element, attributes: attributes}
               when is_map(attributes) and is_list(order) ->
                 reserve_render_resource(
-                  :max_html_tree_work,
+                  :max_work,
                   length(order) + map_size(attributes),
                   :html
                 )
@@ -3786,7 +3814,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 result =
                   Enum.reduce_while(order, {:ok, MapSet.new()}, fn name, {:ok, seen} ->
                     if is_binary(name) do
-                      reserve_render_resource(:max_html_tree_work, byte_size(name) + 1, :html)
+                      reserve_render_resource(:max_work, byte_size(name) + 1, :html)
 
                       if String.valid?(name) and Map.has_key?(attributes, name) and
                            not MapSet.member?(seen, name),
@@ -3816,7 +3844,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 module: __MODULE__,
                 operation: :compute,
                 source:
-                  case Map.get(node, :source) do
+                  case :maps.get(:source, node, nil) do
                     %{text: text} when is_binary(text) -> text
                     _ -> "attribute_order"
                   end
@@ -4056,14 +4084,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   @doc false
   @spec validate_css_source(term(), :stylesheet | :declarations) ::
-          {:ok, binary()} | {:error, {:invalid_css, Diagnostics.diagnostic()}}
+          {:ok, binary()}
+          | {:error, {:invalid_css | :resource_limit_exceeded, Diagnostics.diagnostic()}}
   def validate_css_source(css, kind \\ :stylesheet) do
     case {css, kind} do
       {css, kind} when is_binary(css) and kind in [:stylesheet, :declarations] ->
-        case {byte_size(css) <= Limits.get(:max_css_source_bytes),
-              String.valid?(css, :fast_ascii)} do
+        case {byte_size(css) <= Limits.get(:max_input_bytes), String.valid?(css, :fast_ascii)} do
           {false, _} ->
-            Diagnostics.error(:css, :invalid_css, "CSS input exceeds max_css_source_bytes")
+            Diagnostics.error(:css, :resource_limit_exceeded, "CSS input exceeds max_input_bytes")
 
           {true, true} ->
             {:ok, css}
@@ -4211,7 +4239,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               Diagnostics.error(
                 :style,
                 :resource_limit_exceeded,
-                "hr size exceeds max_css_numeric_magnitude; reduce the rule size",
+                "hr size exceeds max_numeric_magnitude; reduce the rule size",
                 source: "size=" <> Map.fetch!(attributes, "size"),
                 module: __MODULE__
               )
@@ -4300,10 +4328,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def prepare_document_canvas(root_style, body_style) do
     root_style = root_style || %{}
     body_style = body_style || %{}
-    root_color = Map.get(root_style, :background_color)
+    root_color = :maps.get(:background_color, root_style, nil)
 
     root_paints =
-      Map.get(root_style, :background_image) != nil or
+      :maps.get(:background_image, root_style, nil) != nil or
         case root_color do
           nil -> false
           {_, _, _, alpha} when alpha == 0 -> false
@@ -4314,8 +4342,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       style:
         Map.take(
           if(
-            root_paints or Map.get(root_style, :content_visibility) == :hidden or
-              Map.get(body_style, :content_visibility) == :hidden,
+            root_paints or :maps.get(:content_visibility, root_style, nil) == :hidden or
+              :maps.get(:content_visibility, body_style, nil) == :hidden,
             do: root_style,
             else: body_style
           ),
@@ -4328,8 +4356,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           ]
         ),
       body_background_propagated:
-        not root_paints and Map.get(root_style, :content_visibility) != :hidden and
-          Map.get(body_style, :content_visibility) != :hidden
+        not root_paints and :maps.get(:content_visibility, root_style, nil) != :hidden and
+          :maps.get(:content_visibility, body_style, nil) != :hidden
     }
   end
 
@@ -4403,7 +4431,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 token = if fraction == "", do: integer, else: integer <> "." <> fraction
 
                 try do
-                  check_render_resource(:max_html_numeric_token_bytes, byte_size(token), :style)
+                  check_render_resource(:max_numeric_token_bytes, byte_size(token), :style)
                 catch
                   {:render_resource_limit, {:error, {reason, diagnostic}}} ->
                     throw(
@@ -4430,7 +4458,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        :resource_limit_exceeded,
                        source_tag <>
                          " " <>
-                         name <> " exceeds max_css_numeric_magnitude; reduce the dimension",
+                         name <> " exceeds max_numeric_magnitude; reduce the dimension",
                        source: name <> "=" <> value,
                        module: __MODULE__
                      )}
@@ -4466,12 +4494,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp reserve_image_budget(budget, index, amount, limit, message) do
-    case :atomics.add_get(budget, index, amount) <= limit do
-      true ->
-        :ok
+    total = :atomics.add_get(budget, index, amount)
 
-      false ->
-        Diagnostics.error(:limits, :resource_limit_exceeded, message)
+    if NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.active?() do
+      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(limit, amount, :limits,
+        module: __MODULE__
+      )
+    else
+      case total <= Limits.get(limit) do
+        true ->
+          :ok
+
+        false ->
+          Diagnostics.error(:limits, :resource_limit_exceeded, message)
+      end
     end
   rescue
     ArgumentError ->
@@ -4852,7 +4888,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {kind, values} ->
             numbers =
               Enum.map(values, fn token ->
-                check_render_resource(:max_html_numeric_token_bytes, byte_size(token), :css)
+                check_render_resource(:max_numeric_token_bytes, byte_size(token), :css)
 
                 case parse_css_number(token) do
                   {number, ""} ->
@@ -4864,7 +4900,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        Diagnostics.error(
                          :css,
                          :resource_limit_exceeded,
-                         "positional selector exceeds max_css_numeric_magnitude; reduce its integer coefficients",
+                         "positional selector exceeds max_numeric_magnitude; reduce its integer coefficients",
                          module: __MODULE__,
                          source: expression
                        )}
@@ -4909,18 +4945,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc "Resolves applicable editing keywords; non-root foreign elements stop editing inheritance."
   @spec html_editing_state(map()) :: :editable | :not_editable | :inherit
   def html_editing_state(node) do
-    html? = Map.get(node, :namespace, :html) == :html
+    html? = :maps.get(:namespace, node, :html) == :html
 
     eligible? =
       html? or
-        {Map.get(node, :namespace), Map.get(node, :tag)} in [{:svg, "svg"}, {:mathml, "math"}]
+        {:maps.get(:namespace, node, nil), :maps.get(:tag, node, nil)} in [
+          {:svg, "svg"},
+          {:mathml, "math"}
+        ]
 
     cond do
       not eligible? ->
         :not_editable
 
-      html? and is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "contenteditable")) ->
-        html_contenteditable_state(Map.get(node, :attributes, %{}))
+      html? and is_nil(Map.get(:maps.get(:attribute_namespaces, node, %{}), "contenteditable")) ->
+        html_contenteditable_state(:maps.get(:attributes, node, %{}))
 
       true ->
         :inherit
@@ -4931,26 +4970,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec editing_state_matches?(:read_only | :read_write, map(), [map()], reference() | nil) ::
           boolean()
   def editing_state_matches?(state, node, ancestors, cache \\ nil) do
-    html? = Map.get(node, :namespace, :html) == :html
-    attributes = Map.get(node, :attributes, %{})
-    namespaces = Map.get(node, :attribute_namespaces, %{})
+    html? = :maps.get(:namespace, node, :html) == :html
+    attributes = :maps.get(:attributes, node, %{})
+    namespaces = :maps.get(:attribute_namespaces, node, %{})
 
     readonly? =
       Map.get(
-        Map.get(node, :_initial_form_state, %{}),
+        :maps.get(:_initial_form_state, node, %{}),
         :readonly,
         Map.has_key?(attributes, "readonly") and is_nil(Map.get(namespaces, "readonly"))
       )
 
     disabled? =
       Map.get(
-        Map.get(node, :_initial_form_state, %{}),
+        :maps.get(:_initial_form_state, node, %{}),
         :disabled,
         Map.has_key?(attributes, "disabled") and is_nil(Map.get(namespaces, "disabled"))
       )
 
     writable? =
-      case {html?, Map.get(node, :tag)} do
+      case {html?, :maps.get(:tag, node, nil)} do
         {true, "input"} ->
           type =
             if is_nil(Map.get(namespaces, "type")),
@@ -4975,7 +5014,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   # Cache the region independently of a form control's own mutability.
   defp editable_region?(node, ancestors, cache) do
     resolve = fn ->
-      reserve_render_resource(:max_css_work, 1, :css)
+      reserve_render_resource(:max_work, 1, :css)
 
       case html_editing_state(node) do
         :editable ->
@@ -5018,8 +5057,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         ) ::
           boolean()
   def control_state_matches?(state, node) do
-    html? = Map.get(node, :namespace, :html) == :html
-    attributes = Map.get(node, :attributes, %{})
+    html? = :maps.get(:namespace, node, :html) == :html
+    attributes = :maps.get(:attributes, node, %{})
 
     case state do
       state when state in [:valid, :invalid] ->
@@ -5030,9 +5069,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       :indeterminate ->
         html? and
-          case Map.get(node, :tag) do
+          case :maps.get(:tag, node, nil) do
             "progress" -> not Map.fetch!(node, :_initial_gauge_state).determinate
-            "input" -> Map.get(Map.get(node, :_initial_form_state, %{}), :indeterminate, false)
+            "input" -> Map.get(:maps.get(:_initial_form_state, node, %{}), :indeterminate, false)
             _ -> false
           end
 
@@ -5040,14 +5079,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         false
 
       state when state in [:enabled, :disabled] ->
-        applicable? = html? and valid_boolean_form_attribute?(Map.get(node, :tag), "disabled")
+        applicable? =
+          html? and valid_boolean_form_attribute?(:maps.get(:tag, node, nil), "disabled")
 
         disabled? =
-          if Map.get(node, :tag) == "option",
+          if :maps.get(:tag, node, nil) == "option",
             do: Map.get(node, :_initial_option_disabled, Map.has_key?(attributes, "disabled")),
             else:
               Map.get(
-                Map.get(node, :_initial_form_state, Map.get(node, :initial_state, %{})),
+                Map.get(node, :_initial_form_state, :maps.get(:initial_state, node, %{})),
                 :disabled,
                 Map.has_key?(attributes, "disabled")
               )
@@ -5057,13 +5097,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       state when state in [:required, :optional] ->
         required? =
           Map.get(
-            Map.get(node, :_initial_form_state, Map.get(node, :initial_state, %{})),
+            Map.get(node, :_initial_form_state, :maps.get(:initial_state, node, %{})),
             :required,
             Map.has_key?(attributes, "required")
           )
 
         if(state == :required, do: required?, else: not required?) and html? and
-          case Map.get(node, :tag) do
+          case :maps.get(:tag, node, nil) do
             "input" ->
               type = input_type(Map.get(attributes, "type", "text"))
 
@@ -5081,13 +5121,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       :checked ->
         if html? do
-          case Map.get(node, :tag) do
+          case :maps.get(:tag, node, nil) do
             "input" ->
               input_type(Map.get(attributes, "type", "text")) in ["checkbox", "radio"] and
-                Map.get(Map.get(node, :_initial_form_state, %{}), :checked, false)
+                Map.get(:maps.get(:_initial_form_state, node, %{}), :checked, false)
 
             "option" ->
-              Map.get(node, :_initial_selected, false)
+              :maps.get(:_initial_selected, node, false)
 
             _ ->
               false
@@ -5414,7 +5454,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec select_options([map()]) :: [map()]
   def select_options(children) do
     Enum.flat_map(children, fn child ->
-      if Map.get(child, :namespace, :html) == :html do
+      if :maps.get(:namespace, child, :html) == :html do
         case child do
           %{type: :element, tag: "option"} ->
             attributes =
@@ -5462,11 +5502,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   # Charge both the visits and copied bytes before building semantic values.
   defp descendant_text_chunks(children, skip_scripts? \\ false) do
     Enum.map(children, fn node ->
-      reserve_render_resource(:max_html_tree_work, 1, :style)
+      reserve_render_resource(:max_work, 1, :style)
 
       case node do
         %{type: :text, text: text} ->
-          reserve_render_resource(:max_html_tree_work, 2 * byte_size(text), :style)
+          reserve_render_resource(:max_work, 2 * byte_size(text), :style)
           text
 
         %{type: :element, tag: "script"} when skip_scripts? ->
@@ -5503,7 +5543,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
         %{type: :element, tag: tag, attributes: attributes, children: nested}
         when is_map(attributes) and is_list(nested) ->
-          html? = Map.get(child, :namespace, :html) == :html
+          html? = :maps.get(:namespace, child, :html) == :html
 
           # Copied option children are actual executed DOM, rather than authored
           # children of selectedcontent. Keep all interactive ancestry checks.
@@ -5536,12 +5576,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_layout_cardinality(:grid_placement | :grid_tracks | :table_span, term()) ::
           :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_layout_cardinality(kind, value) do
-    max_layout_cardinality = Limits.get(:max_layout_cardinality)
+    max_entries = Limits.get(:max_entries)
 
     case {kind, value} do
       {kind, value}
       when kind in [:grid_placement, :grid_tracks, :table_span] and is_integer(value) and
-             value >= 1 and value <= max_layout_cardinality ->
+             value >= 1 and value <= max_entries ->
         :ok
 
       {kind, value}
@@ -5557,7 +5597,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "#{label} exceeds the #{max_layout_cardinality}-item limit"
+          "#{label} exceeds the #{max_entries}-item limit"
         )
 
       _ ->
@@ -5569,19 +5609,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_background_image_tile_count(term()) ::
           :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_background_image_tile_count(tile_count) do
-    max_background_image_tiles = Limits.get(:max_background_image_tiles)
+    max_entries = Limits.get(:max_entries)
 
     case tile_count do
       tile_count
       when is_integer(tile_count) and tile_count >= 1 and
-             tile_count <= max_background_image_tiles ->
+             tile_count <= max_entries ->
         :ok
 
       tile_count when is_integer(tile_count) and tile_count >= 1 ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "background image tile count exceeds the #{max_background_image_tiles}-tile limit"
+          "background image tile count exceeds the #{max_entries}-tile limit"
         )
 
       _ ->
@@ -5604,7 +5644,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         area_height,
         repeat
       ) do
-    max_background_image_tiles = Limits.get(:max_background_image_tiles)
+    max_entries = Limits.get(:max_entries)
 
     case {tile_width, tile_height, area_width, area_height, repeat} do
       {tile_width, tile_height, area_width, area_height, repeat}
@@ -5613,14 +5653,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              repeat in [:repeat, :repeat_x, :repeat_y, :no_repeat] ->
         horizontal_over_limit? =
           repeat in [:repeat, :repeat_x] and tile_width > 0 and
-            tile_width < area_width / max_background_image_tiles
+            tile_width < area_width / max_entries
 
         vertical_over_limit? =
           repeat in [:repeat, :repeat_y] and tile_height > 0 and
-            tile_height < area_height / max_background_image_tiles
+            tile_height < area_height / max_entries
 
         case horizontal_over_limit? or vertical_over_limit? do
-          true -> validate_background_image_tile_count(max_background_image_tiles + 1)
+          true -> validate_background_image_tile_count(max_entries + 1)
           false -> :ok
         end
 
@@ -5664,7 +5704,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               }
             ])
 
-          reserve_render_resource(:max_rendered_text_bytes, byte_size("Details"), :style)
+          reserve_render_resource(:max_output_bytes, byte_size("Details"), :style)
           {Map.put(summary, :_default_disclosure_summary, true), preceding}
       end
 
@@ -5690,7 +5730,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   defp disclosure_parts(node) do
     Enum.split_while(node.children, fn child ->
-      not (Map.get(child, :tag) == "summary" and Map.get(child, :namespace, :html) == :html)
+      not (:maps.get(:tag, child, nil) == "summary" and
+             :maps.get(:namespace, child, :html) == :html)
     end)
   end
 
@@ -5717,8 +5758,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
           inert? =
             parent_inert? or
-              (Map.get(node, :namespace, :html) == :html and
-                 is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "inert")) and
+              (:maps.get(:namespace, node, :html) == :html and
+                 is_nil(Map.get(:maps.get(:attribute_namespaces, node, %{}), "inert")) and
                  html_inert?(node.attributes, false))
 
           translation? = HtmlMetadataValidator.translation_mode(node, parent_translation?)
@@ -5869,8 +5910,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       module: __MODULE__,
       operation: :source_style_contexts,
       source: source.text,
-      line: Map.get(source, :line),
-      column: Map.get(source, :column)
+      line: :maps.get(:line, source, nil),
+      column: :maps.get(:column, source, nil)
     )
   end
 
@@ -5917,8 +5958,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       case {width, height} do
         {width, height}
         when is_number(width) and width >= 0 and is_number(height) and height >= 0 ->
-          check_render_resource(:max_css_numeric_magnitude, width, :layout)
-          check_render_resource(:max_css_numeric_magnitude, height, :layout)
+          check_render_resource(:max_numeric_magnitude, width, :layout)
+          check_render_resource(:max_numeric_magnitude, height, :layout)
           {:ok, {width, height}}
 
         _ ->
@@ -5968,21 +6009,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {%{type: :document, children: children}, opts}
         when is_list(children) and is_list(opts) ->
           case Keyword.keyword?(opts) and
-                 is_boolean(Map.get(styled_tree, :_css_pixel_viewport, false)) do
+                 is_boolean(:maps.get(:_css_pixel_viewport, styled_tree, false)) do
             true ->
               {page_size_result, margins_result} = geometry.()
               validate_render_tree(children)
 
               with :ok <-
                      NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_expected_targets(
-                       Map.get(styled_tree, :link_document_targets, []),
-                       Map.get(styled_tree, :link_scope)
+                       :maps.get(:link_document_targets, styled_tree, []),
+                       :maps.get(:link_scope, styled_tree, nil)
                      ),
                    :ok <- validate_layout_nodes(children),
                    :ok <- validate_initial_control_root_context(children),
                    :ok <-
                      NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_root(
-                       Map.get(styled_tree, :document_root_sizing)
+                       :maps.get(:document_root_sizing, styled_tree, nil)
                      ),
                    {:ok, page_size} <- page_size_result,
                    :ok <- validate_page_size(page_size),
@@ -6064,8 +6105,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
           node = Map.put(node, :style, style)
           dimensions = Enum.map([:available_width, :available_height], &Map.get(constraints, &1))
-          display = Map.get(style, :display, :inline)
-          formatting_context = Map.get(constraints, :formatting_context, :flow)
+          display = :maps.get(:display, style, :inline)
+          formatting_context = :maps.get(:formatting_context, constraints, :flow)
 
           # CSS Display 3: inline flow produces an inline box only in flow
           # contexts. Math, flex and grid items instead form block containers.
@@ -6077,11 +6118,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           valid? =
             Enum.all?(Map.keys(constraints), &(&1 in allowed)) and
               formatting_context in [:flow, :math, :flex, :grid] and
-              Enum.all?([size, line_height], &(&1 <= Limits.get(:max_css_numeric_magnitude))) and
+              Enum.all?([size, line_height], &(&1 <= Limits.get(:max_numeric_magnitude))) and
               Enum.all?(
                 dimensions,
                 &(is_nil(&1) or
-                    (is_number(&1) and &1 >= 0 and &1 <= Limits.get(:max_css_numeric_magnitude)))
+                    (is_number(&1) and &1 >= 0 and &1 <= Limits.get(:max_numeric_magnitude)))
               )
 
           cond do
@@ -6110,13 +6151,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 "intrinsic measurement of #{display} HTML children requires its shared layout adapter",
                 operation: :measure_child,
                 module: __MODULE__,
-                source: Map.get(node, :tag, "text")
+                source: :maps.get(:tag, node, "text")
               )
 
             true ->
               with :ok <-
                      validate_unsupported_glyphs(
-                       Map.get(constraints, :unsupported_glyphs, :replace)
+                       :maps.get(:unsupported_glyphs, constraints, :replace)
                      ),
                    :ok <-
                      (case Map.fetch(style, :_math_box) do
@@ -6129,7 +6170,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                                {reason,
                                 Diagnostics.with_context(diagnostic,
                                   operation: :measure_child,
-                                  source: Map.get(node, :tag, "math")
+                                  source: :maps.get(:tag, node, "math")
                                 )}}
 
                             result ->
@@ -6148,10 +6189,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                     {:ok,
                      %{
                        node: node,
-                       unsupported_glyphs: Map.get(constraints, :unsupported_glyphs, :replace),
+                       unsupported_glyphs: :maps.get(:unsupported_glyphs, constraints, :replace),
                        context: context,
-                       available_width: Map.get(constraints, :available_width),
-                       available_height: Map.get(constraints, :available_height),
+                       available_width: :maps.get(:available_width, constraints, nil),
+                       available_height: :maps.get(:available_height, constraints, nil),
                        used_display: used_display,
                        atomic:
                          used_display in [
@@ -6215,7 +6256,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             Diagnostics.error(:layout, reason, diagnostic.message,
               operation: :measure_child,
               module: diagnostic.module,
-              source: if(is_map(node), do: Map.get(node, :tag, "HTML child"), else: "HTML child")
+              source:
+                if(is_map(node), do: :maps.get(:tag, node, "HTML child"), else: "HTML child")
             )
         end
     end
@@ -6225,7 +6267,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     Diagnostics.error(:layout, :invalid_layout, message,
       operation: :measure_child,
       module: __MODULE__,
-      source: if(is_map(node), do: Map.get(node, :tag, "text"), else: "HTML child")
+      source: if(is_map(node), do: :maps.get(:tag, node, "text"), else: "HTML child")
     )
   end
 
@@ -6241,7 +6283,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         {%{type: :layout, page_size: {width, height} = page_size, boxes: boxes}, opts}
         when is_number(width) and width > 0 and is_number(height) and height > 0 and
                is_list(boxes) and is_list(opts) ->
-          check_render_resource(:max_layout_boxes, length(boxes), :pagination)
+          check_render_resource(:max_entries, length(boxes), :pagination)
 
           with true <- Keyword.keyword?(opts),
                {:ok, margins} <- margins_result,
@@ -6251,7 +6293,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                :ok <-
                  NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_boxes(
                    boxes,
-                   Map.get(layout_tree, :link_scope)
+                   :maps.get(:link_scope, layout_tree, nil)
                  ),
                :ok <- validate_pagination_clips(boxes),
                :ok <-
@@ -6260,13 +6302,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  ),
                :ok <-
                  NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_expected_targets(
-                   Map.get(layout_tree, :link_expected_targets, []),
-                   Map.get(layout_tree, :link_scope)
+                   :maps.get(:link_expected_targets, layout_tree, []),
+                   :maps.get(:link_scope, layout_tree, nil)
                  ),
                :ok <-
                  NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_document_targets(
-                   Map.get(layout_tree, :link_document_targets, []),
-                   Map.get(layout_tree, :link_scope),
+                   :maps.get(:link_document_targets, layout_tree, []),
+                   :maps.get(:link_scope, layout_tree, nil),
                    page_size
                  ),
                :ok <-
@@ -6341,12 +6383,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def validate_paragraph_line_counts(box, stage) do
     counts =
       case box do
-        box when is_map(box) -> [Map.get(box, :orphans, 2), Map.get(box, :widows, 2)]
+        box when is_map(box) -> [:maps.get(:orphans, box, 2), :maps.get(:widows, box, 2)]
         _ -> nil
       end
 
     if counts != nil and Enum.all?(counts, &(is_integer(&1) and &1 > 0)) do
-      Enum.each(counts, &check_render_resource(:max_css_numeric_magnitude, &1, stage))
+      Enum.each(counts, &check_render_resource(:max_numeric_magnitude, &1, stage))
       :ok
     else
       Diagnostics.error(
@@ -6369,7 +6411,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       case layout_tree do
         layout_tree when is_map(layout_tree) ->
           layout_tree
-          |> Map.get(:margins, Map.get(layout_tree, :margin, :missing))
+          |> Map.get(:margins, :maps.get(:margin, layout_tree, :missing))
           |> PageGeometryValidator.normalize_margins()
 
         _ ->
@@ -6488,7 +6530,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   def aspect_ratio_dimension(size, ratio, axis, stage) do
     try do
       dimension = if axis == :height, do: size / ratio, else: size * ratio
-      check_render_resource(:max_css_numeric_magnitude, abs(dimension), stage)
+      check_render_resource(:max_numeric_magnitude, abs(dimension), stage)
       dimension
     rescue
       ArithmeticError ->
@@ -6611,7 +6653,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              value
            ) do
       [token, sign, significand | exponent] ->
-        check_render_resource(:max_html_numeric_token_bytes, byte_size(token), :html)
+        check_render_resource(:max_numeric_token_bytes, byte_size(token), :html)
 
         original_significand = significand
 
@@ -6703,45 +6745,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @doc false
   @spec parse_vertical_align(term(), number() | :source) :: {:ok, term()} | :error
   def parse_vertical_align(value, font_size) do
-    case value |> trim_ascii_whitespace() |> String.downcase(:ascii) do
-      "baseline" ->
-        {:ok, :baseline}
-
-      "sub" ->
-        {:ok, :sub}
-
-      "super" ->
-        {:ok, :super}
-
-      "top" ->
-        {:ok, :top}
-
-      "middle" ->
-        {:ok, :middle}
-
-      "bottom" ->
-        {:ok, :bottom}
-
-      value ->
-        if font_size == :source,
-          do: prepare_css_length_source(value, :signed_length),
-          else: parse_css_length(value, :margin, font_size)
-    end
+    NativeElixirPdfUtilities.Validators.CssBaselineValidator.legacy(value, font_size)
   end
 
   @doc false
   @spec normalize_geometry_number(term()) :: {:ok, float()} | :error
   def normalize_geometry_number(value) do
-    case is_number(value) && parse_css_number(to_string(value)) do
-      {number, ""} -> {:ok, number}
-      _ -> :error
-    end
+    # Prepared numeric values have no source token to parse. Keep the common
+    # magnitude check here without allocating and reparsing decimal strings.
+    if is_number(value) and abs(value) <= Limits.get(:max_numeric_magnitude),
+      do: {:ok, value * 1.0},
+      else: :error
   end
 
   @doc false
   @spec parse_css_number(term(), number()) :: {float(), binary()} | :error
   def parse_css_number(value, scale \\ 1.0) do
-    limit = Limits.get(:max_css_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     case is_number(scale) && parse_number(value) do
       {number, rest} ->
@@ -6805,8 +6825,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   defp prepared_css_size?(value, depth, context) do
-    check_render_resource(:max_html_depth, depth, :layout)
-    reserve_render_resource(:max_css_work, 1, :layout)
+    check_render_resource(:max_depth, depth, :layout)
+    reserve_render_resource(:max_work, 1, :layout)
 
     case value do
       nil ->
@@ -6816,10 +6836,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         depth == 0 and context in [:width, :height]
 
       number when is_number(number) ->
-        number >= 0 and number <= Limits.get(:max_css_numeric_magnitude)
+        number >= 0 and number <= Limits.get(:max_numeric_magnitude)
 
       {:percent, ratio} when is_number(ratio) ->
-        ratio >= 0 and ratio <= Limits.get(:max_css_numeric_magnitude) / 100
+        ratio >= 0 and ratio <= Limits.get(:max_numeric_magnitude) / 100
 
       {:css_size_math, _} = calculation ->
         NativeElixirPdfUtilities.Validators.CssSizingValidator.valid_calculation?(calculation)
@@ -7031,7 +7051,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           _ -> nil
         end
 
-      limit = Limits.get(:max_css_numeric_magnitude)
+      limit = Limits.get(:max_numeric_magnitude)
 
       with true <- is_number(scale) and abs(scale) <= limit,
            true <- context == :margin or number >= 0,
@@ -7146,6 +7166,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              :ok <- validate_default_font(Keyword.get(opts, :default_font, "DejaVu Sans")),
              :ok <-
                validate_system_font_discovery(Keyword.get(opts, :system_font_discovery, true)),
+             {:ok, _dictionaries} <-
+               NativeElixirPdfUtilities.Validators.HyphenationValidator.prepare_dictionaries(
+                 Keyword.get(opts, :hyphenation_dictionaries, %{})
+               ),
              :ok <- validate_unsupported_glyphs(Keyword.get(opts, :unsupported_glyphs, :replace)),
              {:ok, output_opts} <- HtmlUrlValidator.prepare_style_output_options(opts),
              :ok <- validate_pdf_output_options(output_opts),
@@ -7290,21 +7314,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   # Walk before recursive semantic validation, without creating a flattened tree.
   defp validate_render_tree(nodes, depth \\ 0, count \\ 0, groups \\ %{}, ancestor_groups \\ []) do
-    check_render_resource(:max_html_depth, depth, :html)
+    check_render_resource(:max_depth, depth, :html)
 
     Enum.reduce(nodes, {count, groups}, fn node, {count, groups} ->
-      check_render_resource(:max_html_nodes, count + 1, :html)
+      check_render_resource(:max_entries, count + 1, :html)
 
       case node do
         %{tag: "template", children: [], content: %{type: :document_fragment, children: children}}
         when is_list(children) ->
-          check_render_resource(:max_html_nodes, count + 2, :html)
+          check_render_resource(:max_entries, count + 2, :html)
           {count, _fragment_groups} = validate_render_tree(children, depth + 1, count + 2)
           {count, groups}
 
         %{tag: "details", attributes: attributes, children: children}
         when is_map(attributes) and is_list(children) ->
-          if Map.get(node, :namespace, :html) == :html do
+          if :maps.get(:namespace, node, :html) == :html do
             {groups, child_groups} =
               validate_disclosure_group(attributes, groups, ancestor_groups)
 
@@ -7317,11 +7341,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           validate_render_tree(children, depth + 1, count + 1, groups, ancestor_groups)
 
         %{type: :processing_instruction, data: data} when is_binary(data) ->
-          check_render_resource(:max_html_source_bytes, byte_size(data), :html)
+          check_render_resource(:max_input_bytes, byte_size(data), :html)
           {count + 1, groups}
 
         %{text: text} when is_binary(text) ->
-          check_render_resource(:max_html_source_bytes, byte_size(text), :html)
+          check_render_resource(:max_input_bytes, byte_size(text), :html)
           {count + 1, groups}
 
         _ ->
@@ -7458,7 +7482,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           when is_binary(tag) and is_map(attributes) and is_list(children) ->
             attribute_error_message =
               cond do
-                not is_map(Map.get(node, :attribute_namespaces, %{})) ->
+                not is_map(:maps.get(:attribute_namespaces, node, %{})) ->
                   "attribute_namespaces must be a map"
 
                 Enum.all?(attributes, fn {name, value} ->
@@ -7473,7 +7497,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
             case attribute_error_message do
               nil ->
-                html_tag = if Map.get(node, :namespace, :html) == :html, do: tag, else: nil
+                html_tag = if :maps.get(:namespace, node, :html) == :html, do: tag, else: nil
 
                 with :ok <-
                        validate_static_url_attributes(
@@ -7517,7 +7541,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                           :ok
                         end),
                      {:ok, child_controls?} <-
-                       if(tag == "template" and Map.get(node, :namespace, :html) == :html,
+                       if(tag == "template" and :maps.get(:namespace, node, :html) == :html,
                          do:
                            case validate_template_content(node) do
                              :ok -> {:ok, false}
@@ -7527,7 +7551,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                            validate_dom_nodes(
                              children,
                              inert?,
-                             if(Map.get(node, :namespace, :html) == :html,
+                             if(:maps.get(:namespace, node, :html) == :html,
                                do: tag,
                                else:
                                  NativeElixirPdfUtilities.Validators.ForeignContentValidator.child_context(
@@ -7536,7 +7560,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                              ),
                              if(is_nil(parent), do: ancestors, else: [parent | ancestors]),
                              tree,
-                             Map.get(node, :namespace, :html),
+                             :maps.get(:namespace, node, :html),
                              mode
                            )
                        ) do
@@ -7547,12 +7571,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
                       Map.has_key?(attributes, "multiple") and
                         valid_boolean_form_attribute?(tag, "multiple") and
-                          is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "multiple")) ->
+                          is_nil(Map.get(:maps.get(:attribute_namespaces, node, %{}), "multiple")) ->
                         "multiple"
 
                       Map.has_key?(attributes, "readonly") and
                         valid_boolean_form_attribute?(tag, "readonly") and
-                          is_nil(Map.get(Map.get(node, :attribute_namespaces, %{}), "readonly")) ->
+                          is_nil(Map.get(:maps.get(:attribute_namespaces, node, %{}), "readonly")) ->
                         "readonly"
 
                       tag == "input" ->
@@ -7624,7 +7648,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                   else
                     if child_controls? or
                          (tag in ~w(input select textarea button form label fieldset progress meter output datalist) and
-                            Map.get(node, :namespace, :html) == :html),
+                            :maps.get(:namespace, node, :html) == :html),
                        do: {:ok, true},
                        else: {:ok, false}
                   end
@@ -7660,7 +7684,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
   # Name support and transparent custom content are validated before Style uses defaults.
   defp validate_dom_html_element(node, parent, ancestors) do
-    if Map.get(node, :namespace, :html) == :html do
+    if :maps.get(:namespace, node, :html) == :html do
       native? = Map.has_key?(@supported_tags, node.tag)
       custom? = not native? and custom_html_tag?(node.tag)
 
@@ -7826,7 +7850,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           {:ok, false}
       end
     else
-      if Map.get(node, :namespace) in [:svg, :mathml] do
+      if :maps.get(:namespace, node, nil) in [:svg, :mathml] do
         {:ok, false}
       else
         Diagnostics.error(
@@ -7959,10 +7983,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               end
 
             %{type: :element, style: %{display: :image} = style} ->
-              maximum = Limits.get(:max_css_numeric_magnitude)
+              maximum = Limits.get(:max_numeric_magnitude)
 
               image =
-                case Map.get(style, :image) do
+                case :maps.get(:image, style, nil) do
                   image when is_map(image) -> image
                   _ -> %{}
                 end
@@ -7998,19 +8022,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 match?({:error, _}, document_validation) ->
                   document_validation
 
-                Map.get(style, :image_display, :block) not in [:inline, :block] ->
+                :maps.get(:image_display, style, :block) not in [:inline, :block] ->
                   Diagnostics.error(
                     :layout,
                     :invalid_layout,
                     "image_display must be inline or block",
                     operation: :layout,
                     module: __MODULE__,
-                    source: Map.get(node, :tag, "img")
+                    source: :maps.get(:tag, node, "img")
                   )
 
                 not (match?({:ok, _}, document_validation) or
                        NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.valid_request?(
-                         Map.get(style, :_responsive_image)
+                         :maps.get(:_responsive_image, style, nil)
                        ) or
                          ((pixels? or points?) and (not pixel_metadata? or pixels?) and
                             Enum.all?([:width, :height], fn dimension ->
@@ -8025,11 +8049,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                     "image layout requires bounded positive pixel or natural point dimensions; optional natural dimensions may be zero",
                     operation: :layout,
                     module: __MODULE__,
-                    source: Map.get(node, :tag, "img")
+                    source: :maps.get(:tag, node, "img")
                   )
 
-                parent_display == :inline and Map.get(style, :image_display, :block) == :block and
-                    Map.get(style, :position, :static) not in [:absolute, :fixed] ->
+                parent_display == :inline and :maps.get(:image_display, style, :block) == :block and
+                    :maps.get(:position, style, :static) not in [:absolute, :fixed] ->
                   :block_flow
 
                 true ->
@@ -8047,9 +8071,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 # retaining the original computed display on the source node.
                 display =
                   if parent_display in [:math, :flex, :inline_flex, :grid, :inline_grid] and
-                       Map.get(style, :display) == :inline,
+                       :maps.get(:display, style, nil) == :inline,
                      do: :block,
-                     else: Map.get(style, :display)
+                     else: :maps.get(:display, style, nil)
 
                 case validate_layout_nodes(
                        children,
@@ -8057,12 +8081,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                        atomic_context or display == :inline_block
                      ) do
                   :block_flow when display == :inline ->
-                    alignment = Map.get(style, :vertical_align, :baseline)
+                    alignment = :maps.get(:vertical_align, style, :baseline)
 
-                    if Map.get(node, :positioned_children, []) == [] and
-                         (alignment in [:baseline, :sub, :super, :top, :middle, :bottom] or
-                            (is_number(alignment) and
-                               abs(alignment) <= Limits.get(:max_css_numeric_magnitude))) do
+                    if :maps.get(:positioned_children, node, []) == [] and
+                         NativeElixirPdfUtilities.Validators.CssBaselineValidator.valid_alignment?(
+                           alignment
+                         ) do
                       if parent_display == :inline, do: :block_flow, else: :ok
                     else
                       Diagnostics.error(
@@ -8071,7 +8095,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                         "interrupted inline box edges require bounded numeric top, right, bottom and left values and uncollected positioned descendants; recompute styles",
                         module: __MODULE__,
                         operation: :layout,
-                        source: Map.get(node, :tag, "element")
+                        source: :maps.get(:tag, node, "element")
                       )
                     end
 
@@ -8085,7 +8109,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                            :line_break,
                            :soft_break
                          ] and
-                         Map.get(style, :position, :static) not in [:absolute, :fixed],
+                         :maps.get(:position, style, :static) not in [:absolute, :fixed],
                        do: :block_flow,
                        else: :ok
 
@@ -8107,7 +8131,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             with :ok <-
                    NativeElixirPdfUtilities.Validators.HtmlTableValidator.validate_presentation_style(
                      node,
-                     Map.get(node, :style, %{}),
+                     :maps.get(:style, node, %{}),
                      :layout,
                      atomic_context
                    ),
@@ -8134,7 +8158,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     gauge_result =
       case node do
         %{style: %{_gauge: gauge} = style} ->
-          if is_boolean(Map.get(style, :_gauge_native)) and
+          if is_boolean(:maps.get(:_gauge_native, style, nil)) and
                NativeElixirPdfUtilities.Validators.HtmlGaugeValidator.valid_prepared?(gauge) do
             :ok
           else
@@ -8144,7 +8168,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
               "gauge artwork requires canonical initial gauge state and a prepared native appearance flag; compute styles before layout",
               operation: :layout,
               module: __MODULE__,
-              source: Map.get(node, :tag, "gauge")
+              source: :maps.get(:tag, node, "gauge")
             )
           end
 
@@ -8167,7 +8191,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 "heading_level requires an h1-h6 element and an integer between its base level and HTML's fixed maximum of nine",
                 operation: :layout,
                 module: __MODULE__,
-                source: Map.get(node, :tag, "text")
+                source: :maps.get(:tag, node, "text")
               )
           end
 
@@ -8208,7 +8232,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                contexts
              ) and
                NativeElixirPdfUtilities.Validators.CssStackingValidator.valid_source_order?(
-                 Map.get(style, :_stacking_order, [])
+                 :maps.get(:_stacking_order, style, [])
                ) do
             validate_paragraph_line_limits([style], :layout)
           else
@@ -8254,7 +8278,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             "collapsed table edge winners and segments are internal formation metadata; compute styles before layout and do not supply border calculations",
             operation: :layout,
             module: __MODULE__,
-            source: Map.get(node, :tag, "element")
+            source: :maps.get(:tag, node, "element")
           )
 
         _ ->
@@ -8280,7 +8304,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :ok
 
         %{style: style} when is_map(style) ->
-          source = Map.get(node, :tag, "text")
+          source = :maps.get(:tag, node, "text")
 
           with :ok <-
                  NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_ratio(
@@ -8336,22 +8360,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           :ok
 
         %{style: style} when is_map(style) ->
-          case {Map.get(style, :line_break, :normal), Map.get(style, :overflow_wrap, :normal),
-                Map.get(style, :word_break, :normal)} do
-            {line, overflow, word}
-            when line in [:normal, :anywhere, :break_word] and
-                   overflow in [:normal, :anywhere, :break_word] and
-                   word in [:normal, :break_word] ->
+          case NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator.prepare_policy(style) do
+            {:ok, _policy} ->
               :ok
 
-            values ->
+            {:error, {reason, diagnostic}} ->
               Diagnostics.error(
-                :layout,
-                :invalid_layout,
-                "styled text requires line_break and overflow_wrap in [:normal, :anywhere, :break_word] and word_break in [:normal, :break_word]; received #{inspect(values)}",
-                operation: :layout,
-                module: __MODULE__,
-                source: Map.get(node, :tag, "text")
+                diagnostic.stage,
+                reason,
+                diagnostic.message,
+                [operation: :layout, source: :maps.get(:tag, node, "text")] ++
+                  Map.to_list(Map.take(diagnostic, [:module, :line, :column]))
               )
           end
 
@@ -8364,9 +8383,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp validate_auto_margin_context(node, _parent_display) do
     case node do
       %{style: style} when is_map(style) ->
-        source = Map.get(node, :tag, "element")
+        source = :maps.get(:tag, node, "element")
 
         with :ok <-
+               if(Map.has_key?(style, :_initial_exclusion_region),
+                 do:
+                   Diagnostics.error(
+                     :layout,
+                     :invalid_layout,
+                     "initial-letter exclusions belong to the current layout pass; recompute styles before layout",
+                     operation: :layout,
+                     module: __MODULE__,
+                     source: source
+                   ),
+                 else: :ok
+               ),
+             :ok <-
                NativeElixirPdfUtilities.Validators.CssLengthValidator.validate_style(
                  style,
                  source
@@ -8376,10 +8408,61 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  style,
                  source
                ),
-             do:
+             :ok <-
                NativeElixirPdfUtilities.Validators.CssSizingValidator.validate_calculations(
                  style,
                  source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssHyphenationValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssTextEmphasisValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssTextShadowValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.RubyValidator.validate_style(style, source),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssBaselineValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssInitialLetterValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssWritingModeValidator.validate_style(
+                 style,
+                 source
+               ),
+             do:
+               NativeElixirPdfUtilities.Validators.HyphenationValidator.validate_prepared(
+                 :maps.get(:_hyphenation_dictionaries, style, %{})
                )
 
       _ ->
@@ -8393,14 +8476,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     is_map(style) and
       NativeElixirPdfUtilities.Validators.CssTransformValidator.valid_style?(style) and
       not Map.has_key?(style, :_collapsed_borders) and
-      (Map.get(style, :_image_map) == nil or
+      (:maps.get(:_image_map, style, nil) == nil or
          NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_model?(style._image_map)) and
-      (Map.get(style, :html_target) == nil or
+      (:maps.get(:html_target, style, nil) == nil or
          NativeElixirPdfUtilities.Validators.HtmlLinkValidator.valid_identity?(style.html_target)) and
       NativeElixirPdfUtilities.Validators.HtmlLinkValidator.valid_prepared_destination?(
-        Map.get(style, :link_destination)
+        :maps.get(:link_destination, style, nil)
       ) and
-      valid_text_decorations?(Map.get(style, :_text_decorations, [])) and
+      valid_text_decorations?(:maps.get(:_text_decorations, style, [])) and
       case Map.fetch(style, :_list_marker) do
         :error ->
           true
@@ -8443,7 +8526,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         true
 
       decorations when is_list(decorations) ->
-        check_render_resource(:max_text_decoration_layers, length(decorations), :style)
+        check_render_resource(:max_entries, length(decorations), :style)
 
         Enum.all?(decorations, fn decoration ->
           case decoration do
@@ -8457,14 +8540,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             } ->
               numbers = [thickness, underline, overline, strike]
 
-              Map.get(decoration, :style, :solid) in [:solid, :dotted, :dashed] and
+              :maps.get(:style, decoration, :solid) in [:solid, :dotted, :dashed, :double, :wavy] and
+                :maps.get(:skip_ink, decoration, :auto) in [:auto, :none, :all] and
                 is_list(lines) and lines != [] and
                 Enum.all?(lines, &(&1 in [:underline, :overline, :line_through])) and
                 length(lines) == length(Enum.uniq(lines)) and
                 is_number(thickness) and thickness >= 0 and
                 Enum.all?(numbers, fn number ->
                   if is_number(number) do
-                    check_render_resource(:max_css_numeric_magnitude, abs(number), :style)
+                    check_render_resource(:max_numeric_magnitude, abs(number), :style)
                     true
                   else
                     false
@@ -8499,17 +8583,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       Enum.all?(boxes, fn box ->
         case Map.fetch(box, :table_caption_side) do
           :error -> true
-          {:ok, side} -> side in [:top, :bottom] and not is_nil(Map.get(box, :table_id))
+          {:ok, side} -> side in [:top, :bottom] and not is_nil(:maps.get(:table_id, box, nil))
         end and
           valid_fieldset_pagination_metadata?(box) and
-          Enum.all?(Map.get(box, :fieldset_ancestors, []), &MapSet.member?(paint_ids, &1)) and
+          Enum.all?(:maps.get(:fieldset_ancestors, box, []), &MapSet.member?(paint_ids, &1)) and
           case Map.fetch(box, :positioned_fragment_owner) do
             :error ->
               true
 
             {:ok, owner} ->
-              Map.get(box, :out_of_flow, false) == true and is_reference(owner) and
-                owner in Map.get(box, :fieldset_ancestors, []) and
+              :maps.get(:out_of_flow, box, false) == true and is_reference(owner) and
+                owner in :maps.get(:fieldset_ancestors, box, []) and
                 MapSet.member?(paint_ids, owner)
           end
       end)
@@ -8525,8 +8609,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             Enum.all?(inline_sources, fn box ->
               case box.inline_positioned_anchor do
                 %{id: id, source_y: y} when is_reference(id) and is_number(y) ->
-                  Map.get(box, :out_of_flow, false) == true and MapSet.member?(ids, id) and
-                    abs(y) <= Limits.get(:max_pdf_numeric_magnitude)
+                  :maps.get(:out_of_flow, box, false) == true and MapSet.member?(ids, id) and
+                    abs(y) <= Limits.get(:max_numeric_magnitude)
 
                 _ ->
                   false
@@ -8571,7 +8655,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     # HtmlLinkValidator already validated native group structure. This pass
     # owns only the optional inline fragment references consumed by pagination.
     Enum.reduce_while(boxes, {:ok, ids}, fn box, {:ok, ids} ->
-      anchors = Map.get(box, :inline_fragment_anchors, [])
+      anchors = :maps.get(:inline_fragment_anchors, box, [])
 
       if is_list(anchors) and Enum.all?(anchors, &is_reference/1) do
         children =
@@ -8593,18 +8677,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         Enum.all?(ancestors, &is_reference/1) and
           case Map.fetch(box, :fieldset_paint_id) do
             :error ->
-              is_number(Map.get(box, :y))
+              is_number(:maps.get(:y, box, nil))
 
             {:ok, id} ->
-              is_reference(id) and id in ancestors and is_number(Map.get(box, :y)) and
-                Map.get(box, :type) in [:rect, :image] and
-                (Map.get(box, :type) != :image or
+              is_reference(id) and id in ancestors and is_number(:maps.get(:y, box, nil)) and
+                :maps.get(:type, box, nil) in [:rect, :image] and
+                (:maps.get(:type, box, nil) != :image or
                    match?(
                      %{clip: %{x: x, width: width}}
                      when is_number(x) and is_number(width) and width > 0,
                      box
                    )) and
-                case Map.get(box, :fieldset_bounds) do
+                case :maps.get(:fieldset_bounds, box, nil) do
                   %{top: top, bottom: bottom} ->
                     is_number(top) and is_number(bottom) and top > bottom
 
@@ -8844,12 +8928,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             if layout_whitespace?,
               do: hd(candidates),
               else:
-                Enum.find(
+                NativeElixirPdfUtilities.Validators.FontRenderingValidator.select_face(
                   candidates,
-                  &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
-                    &1,
-                    text
-                  )
+                  text
                 )
 
           supported? = selected != nil

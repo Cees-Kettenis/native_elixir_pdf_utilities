@@ -137,7 +137,7 @@ defmodule ManualWeb.Validator do
           upload,
           "SVG",
           :svg_to_png,
-          NativeElixirPdfUtilities.Limits.get(:max_svg_bytes)
+          NativeElixirPdfUtilities.Limits.get(:max_input_bytes)
         )
 
       _ ->

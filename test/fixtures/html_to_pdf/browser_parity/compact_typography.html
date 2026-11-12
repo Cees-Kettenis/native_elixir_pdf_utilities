@@ -1,6 +1,6 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><style>
-@page {size:600pt 540pt;margin:0}
+@page {size:600pt 2880pt;margin:0}
 html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
 #zero_font_size,#zero_font_size{margin:0;padding:0}
 #zero_font_size{font-family:'DejaVu Sans';font-size:12pt}
@@ -22,6 +22,116 @@ html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
 #quoted_variables{font-family:'DejaVu Sans';font-size:12pt}
 #quoted_variables p{margin:0}
 #quoted_variables p::before{content:"var(--missing)"}
+#bidi_inline_geometry{font-family:'DejaVu Sans';font-size:18pt;line-height:24pt}
+#bidi_inline_geometry p{margin:0}
+#bidi_inline_geometry .sample{position:absolute;width:270pt;border:0.75pt solid #445566;padding:3pt;box-sizing:border-box}
+#bidi_inline_geometry #rtl{left:12pt;top:12pt}
+#bidi_inline_geometry #override{left:312pt;top:12pt}
+#bidi_inline_geometry #isolate{left:12pt;top:84pt}
+#bidi_inline_geometry #arabic{left:312pt;top:84pt}
+#indic_inline_geometry{font-family:'Authored Indic';font-size:22pt;line-height:28pt}
+#indic_inline_geometry p{margin:0}
+#indic_inline_geometry .sample{position:absolute;left:12pt;top:8pt;width:570pt;border:0.75pt solid #445566;padding:3pt;box-sizing:border-box}
+#unicode_wrap_geometry{font-family:'DejaVu Sans';font-size:8pt;line-height:12pt}
+#unicode_wrap_geometry .sample{position:absolute;top:8pt;width:88pt;border:0.75pt solid #445566;padding:3pt;box-sizing:border-box}
+#unicode_wrap_geometry .label{margin:0 0 3pt}
+#unicode_wrap_geometry .text{margin:0;font-family:'CJK Ruby Fixture';font-size:12pt;line-height:18pt;width:16pt}
+#unicode_wrap_geometry #strict{left:6pt}#unicode_wrap_geometry #normal{left:106pt}#unicode_wrap_geometry #loose{left:206pt}#unicode_wrap_geometry #keep{left:306pt}#unicode_wrap_geometry #cjk{left:406pt}#unicode_wrap_geometry #all{left:506pt}
+#unicode_wrap_geometry #strict .text{line-break:strict}#unicode_wrap_geometry #normal .text{line-break:normal}#unicode_wrap_geometry #loose .text{line-break:loose}
+#unicode_wrap_geometry #keep .text{width:25pt;word-break:keep-all}#unicode_wrap_geometry #cjk .text{width:25pt}
+#unicode_wrap_geometry #all .text{font-family:'DejaVu Sans';width:12pt;word-break:break-all}
+#automatic_hyphenation{font-family:'DejaVu Sans';font-size:8pt;line-height:12pt}
+#automatic_hyphenation .sample{position:absolute;top:8pt;width:140pt;border:0.75pt solid #445566;padding:3pt;box-sizing:border-box}
+#automatic_hyphenation .label{margin:0 0 3pt}
+#automatic_hyphenation .text{margin:0;font-size:12pt;line-height:16pt;width:40pt;hyphens:auto}
+#automatic_hyphenation #unlimited{left:8pt}#automatic_hyphenation #limited{left:156pt}#automatic_hyphenation #last{left:304pt}#automatic_hyphenation #zone{left:452pt}
+#whitespace_tab_geometry{font-family:'DejaVu Sans Mono';font-size:10pt;line-height:14pt}
+#whitespace_tab_geometry .sample{position:absolute;top:8pt;width:138pt;border:0.75pt solid #445566;padding:3pt;box-sizing:border-box}
+#whitespace_tab_geometry .label{font-family:'DejaVu Sans';font-size:8pt;line-height:12pt;margin:0 0 3pt}
+#whitespace_tab_geometry p{margin:0}
+#whitespace_tab_geometry .tabs{white-space:pre;tab-size:4}
+#whitespace_tab_geometry #block{left:8pt}#whitespace_tab_geometry #table{left:156pt}#whitespace_tab_geometry #flex{left:304pt}#whitespace_tab_geometry #grid{left:452pt}
+#whitespace_tab_geometry td{padding:0}
+#whitespace_tab_geometry #table .tabs{tab-size:2.5}
+#whitespace_tab_geometry #flex .tabs{tab-size:20pt}
+#whitespace_tab_geometry #grid .tabs{white-space:break-spaces;width:31pt}
+#whitespace_tab_geometry .hanging{white-space:pre-wrap;text-align:right;width:40pt;margin-top:8pt}
+#whitespace_tab_geometry .cjk{font-family:'CJK Ruby Fixture';font-size:12pt;line-height:18pt;margin-top:8pt}
+
+#spacing_geometry{font-family:'DejaVu Sans Mono';font-size:10pt;line-height:14pt}
+#spacing_geometry .sample{position:absolute;top:8pt;width:138pt;box-sizing:border-box;padding:3pt;border:0.75pt solid #445566}
+#spacing_geometry p{margin:0}
+#spacing_geometry .label{font-family:'DejaVu Sans';font-size:8pt;line-height:12pt;margin-bottom:3pt}
+#spacing_geometry #spacing{left:8pt}#spacing_geometry #justification{left:156pt}#spacing_geometry #indentation{left:304pt}#spacing_geometry #ideographic{left:452pt}
+#spacing_geometry #spacing .wide{word-spacing:5pt}#spacing_geometry #spacing .tight{word-spacing:-2pt}
+#spacing_geometry #justification .text{width:120pt;text-align:justify;text-align-last:center}
+#spacing_geometry #indentation .text{width:100pt;text-indent:12pt}
+#spacing_geometry #ideographic .text{font-family:'CJK Ruby Fixture';font-size:12pt;line-height:18pt;width:70pt;text-align:justify;text-align-last:justify}
+#spacing_geometry .hanging{margin-top:8pt;width:90pt;hanging-punctuation:first}
+
+#writing_mode_geometry .sample{position:absolute;top:8pt;width:92pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#writing_mode_geometry p{margin:0}#writing_mode_geometry .label{font:8pt/12pt 'DejaVu Sans';margin-bottom:6pt}
+#writing_mode_geometry .text{font:12pt/12pt 'Authored Vertical';width:36pt;height:72pt;border:0.75pt solid #8899aa;text-orientation:upright}
+#writing_mode_geometry #vrl{left:6pt}#writing_mode_geometry #vlr{left:106pt}#writing_mode_geometry #srl{left:206pt}#writing_mode_geometry #slr{left:306pt}#writing_mode_geometry #combine{left:406pt}#writing_mode_geometry #mixed{left:506pt}
+
+#ruby_controls_geometry .sample{position:absolute;top:8pt;width:138pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#ruby_controls_geometry .sample:nth-child(1){left:9pt}#ruby_controls_geometry .sample:nth-child(2){left:156pt}#ruby_controls_geometry .sample:nth-child(3){left:303pt}#ruby_controls_geometry .sample:nth-child(4){left:450pt}
+#ruby_controls_geometry p{margin:0}#ruby_controls_geometry .label{font:8pt/12pt 'DejaVu Sans';margin-bottom:3pt}
+#ruby_controls_geometry .primary,#ruby_controls_geometry .secondary{font:12pt/28pt 'CJK Ruby Fixture';width:120pt}
+#ruby_controls_geometry .primary rt{font-size:12pt}#ruby_controls_geometry .secondary rt{font-size:6pt}
+#ruby_controls_geometry ruby{ruby-overhang:none}
+
+#initial_letter_geometry .sample{position:absolute;top:6pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#initial_letter_geometry .sample:nth-child(1){left:9pt}#initial_letter_geometry .sample:nth-child(2){left:207pt}#initial_letter_geometry .sample:nth-child(3){left:405pt}
+#initial_letter_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 3pt}
+#initial_letter_geometry .text{font:12pt/16pt 'DejaVu Sans';margin:0;width:170pt}
+#initial_letter_geometry .drop::first-letter{initial-letter:3}
+#initial_letter_geometry .raise::first-letter{initial-letter:3 1}
+#initial_letter_geometry .sunken::first-letter{initial-letter:3 2}
+
+#initial_letter_geometry .sample:nth-child(4){left:9pt;top:126pt}#initial_letter_geometry .sample:nth-child(5){left:207pt;top:126pt}
+
+#text_decoration_geometry .sample{position:absolute;top:8pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#text_decoration_geometry .sample:nth-child(1){left:9pt}#text_decoration_geometry .sample:nth-child(2){left:207pt}#text_decoration_geometry .sample:nth-child(3){left:405pt}
+#text_decoration_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 3pt}
+#text_decoration_geometry .text{font:18pt/32pt 'DejaVu Sans';margin:0;text-decoration-style:double;text-decoration-thickness:0.75pt;text-decoration-color:#336699}
+
+#text_emphasis_geometry .sample{position:absolute;top:8pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#text_emphasis_geometry .sample:nth-child(1){left:9pt}#text_emphasis_geometry .sample:nth-child(2){left:207pt}#text_emphasis_geometry .sample:nth-child(3){left:405pt}
+#text_emphasis_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 9pt}
+#text_emphasis_geometry .text{font:18pt/36pt 'DejaVu Sans';margin:0;text-emphasis-color:#336699}
+
+#baseline_controls_geometry .sample{position:absolute;top:8pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#baseline_controls_geometry .sample:nth-child(1){left:9pt}#baseline_controls_geometry .sample:nth-child(2){left:207pt}#baseline_controls_geometry .sample:nth-child(3){left:405pt}
+#baseline_controls_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 9pt}
+#baseline_controls_geometry .text{font:12pt/20pt 'DejaVu Sans';margin:0;color:#336699}
+
+
+#ruby_fragmentation_geometry .sample{position:absolute;top:8pt;width:180pt;height:130pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#ruby_fragmentation_geometry .sample:nth-child(1){left:9pt}#ruby_fragmentation_geometry .sample:nth-child(2){left:207pt}#ruby_fragmentation_geometry .sample:nth-child(3){left:405pt}
+#ruby_fragmentation_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 9pt}
+#ruby_fragmentation_geometry .text{font:12pt/30pt 'CJK Ruby Fixture';width:60pt;margin:0;color:#336699}
+
+
+#vertical_fallback_geometry .sample{position:absolute;top:8pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#vertical_fallback_geometry .sample:nth-child(1){left:9pt}#vertical_fallback_geometry .sample:nth-child(2){left:207pt}#vertical_fallback_geometry .sample:nth-child(3){left:405pt}
+#vertical_fallback_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 6pt}
+#vertical_fallback_geometry .text{font:18pt/24pt 'DejaVu Sans';width:48pt;height:96pt;margin:0;color:#336699;text-orientation:mixed}
+#vertical_fallback_geometry a{color:inherit;text-decoration:none}
+
+
+#orthogonal_intrinsic_geometry .sizing{position:absolute;top:0pt;width:140pt;height:54pt;font:8pt/10pt 'DejaVu Sans'}
+#orthogonal_intrinsic_geometry .sizing .caption{height:12pt}
+#orthogonal_intrinsic_geometry .sizing .probe{vertical-align:top;grid-template-columns:1fr;writing-mode:vertical-rl;text-orientation:sideways;font:12pt/12pt 'Authored Vertical';border:0.75pt solid #8899aa}
+
+#vertical_emphasis_geometry .sample{position:absolute;top:0;width:150pt;height:120pt}
+#vertical_emphasis_geometry .caption{position:absolute;left:9pt;top:9pt;font:8pt/12pt 'DejaVu Sans'}
+#vertical_emphasis_geometry .probe{position:absolute;left:42pt;top:27pt;margin:0;width:48pt;height:72pt;font:18pt/48pt 'Authored Vertical';text-orientation:upright;text-emphasis:'B' #336699}
+
+#vertical_synthesized_metrics .sample{position:absolute;top:0;width:300pt;height:120pt}
+#vertical_synthesized_metrics .caption{position:absolute;left:9pt;top:9pt;font:8pt/12pt 'DejaVu Sans'}
+#vertical_synthesized_metrics .probe{position:absolute;left:42pt;top:27pt;margin:0;width:72pt;height:84pt;font:12pt/36pt 'DejaVu Sans';writing-mode:vertical-rl;text-orientation:upright;color:#336699}
+#vertical_synthesized_metrics .context{font-family:'Authored Contextual Vertical';font-size:18pt;text-orientation:mixed}
 </style></head><body>
 <!-- zero_font_size.html, original canvas 240 x 160 pt -->
 <section id="zero_font_size" style="position:absolute;left:0pt;top:0pt;width:240pt;height:160pt;box-sizing:border-box"><p style="font-size:0">Hidden</p><p>Visible paragraph</p><p>Before <span style="font-size:0">hidden inline</span> after</p></section>
@@ -45,4 +155,130 @@ html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
 </div></section>
 <!-- quoted_variables.html, original canvas 300 x 160 pt -->
 <section id="quoted_variables" style="position:absolute;left:300pt;top:360pt;width:300pt;height:160pt;box-sizing:border-box"><p></p></section>
+<!-- bidi_inline_geometry.html, original canvas 600 x 180 pt -->
+<section id="bidi_inline_geometry" style="position:absolute;left:0pt;top:540pt;width:600pt;height:180pt;box-sizing:border-box">
+<div class="sample" id="rtl"><p dir="rtl">אב abc גד</p><p dir="rtl">12 אב 34</p></div>
+<div class="sample" id="override"><p>start <bdo dir="rtl">ABC12</bdo> end</p><p><bdo dir="ltr">אב</bdo> left</p></div>
+<div class="sample" id="isolate"><p>left <bdi dir="auto">אב 12</bdi> right</p><p dir="auto">אב : abc 12</p></div>
+<div class="sample" id="arabic"><p>بِسْمِ سلام</p><p dir="rtl">سلام abc</p></div>
+</section>
+<!-- indic_inline_geometry.html, original canvas 600 x 120 pt -->
+<section id="indic_inline_geometry" style="position:absolute;left:0pt;top:720pt;width:600pt;height:120pt;box-sizing:border-box">
+<div class="sample"><p>कि क्षि र्कि</p><p>क्नि क्रि र्का</p><p>क्‍ क्‌</p></div>
+<div class="sample" style="left:156pt;width:140pt;font-family:'Authored Syriac'"><p>ܒܐ ܗܐ ܕܐ</p><p>ܒܐܒ ܗܐܒ</p><p>ܒܐܰܒ</p></div>
+<!-- The preceding samples keep their original text and positions. This unused
+     panel checks reph before syllable signs and font-defined mark advances. -->
+<div style="position:absolute;left:324pt;top:20pt;width:240pt"><p>र्कं र्कः</p></div>
+</section>
+<!-- unicode_wrap_geometry.html, original canvas 600 x 120 pt -->
+<section id="unicode_wrap_geometry" style="position:absolute;left:0pt;top:840pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample" id="strict" lang="ja"><p class="label">Strict</p><p class="text">きょう</p></section>
+<section class="sample" id="normal" lang="ja"><p class="label">Normal</p><p class="text">きょう</p></section>
+<section class="sample" id="loose" lang="ja"><p class="label">Loose</p><p class="text">きょう</p></section>
+<section class="sample" id="keep" lang="ja"><p class="label">Keep all</p><p class="text">東京京都</p></section>
+<section class="sample" id="cjk" lang="ja"><p class="label">CJK wrap</p><p class="text">東京京都</p></section>
+<section class="sample" id="all"><p class="label">Break all</p><p class="text">ABCD</p></section>
+</section>
+<!-- automatic_hyphenation.html, original canvas 600 x 120 pt -->
+<section id="automatic_hyphenation" style="position:absolute;left:0pt;top:960pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample" id="unlimited"><p class="label">Automatic</p><p class="text" lang="en" data-hyphen-reference="hy&amp;shy;phen&amp;shy;ation">hyphenation</p></section>
+<section class="sample" id="limited"><p class="label">One successive line</p><p class="text" lang="en" style="hyphenate-limit-lines:1" data-hyphen-reference="hy&amp;shy;phenation">hyphenation</p></section>
+<section class="sample" id="last"><p class="label">Last full line</p><p class="text" lang="en" style="hyphenate-limit-last:always" data-hyphen-reference="hyphenation">hyphenation</p></section>
+<section class="sample" id="zone"><p class="label">Zone</p><p class="text" lang="en" style="hyphenate-limit-zone:40pt" data-hyphen-reference="hyphenation">hyphenation</p></section>
+</section>
+<!-- whitespace_tab_geometry.html, original canvas 600 x 120 pt -->
+<section id="whitespace_tab_geometry" style="position:absolute;left:0pt;top:1080pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample" id="block"><p class="label">Block stops</p><p class="tabs">A	B	C</p><p class="hanging">A    BBBB</p></section>
+<section class="sample" id="table"><p class="label">Table stops</p><table><tr><td><p class="tabs">A	B	C</p></td></tr></table><p class="cjk" lang="ja">京都
+東京</p></section>
+<section class="sample" id="flex"><p class="label">Flex stops</p><div style="display:flex"><p class="tabs">A	B	C</p></div></section>
+<section class="sample" id="grid"><p class="label">Grid wrap</p><div style="display:grid;grid-template-columns:100pt"><p class="tabs">AAAA 	B</p></div></section>
+</section>
+<!-- spacing_geometry.html reuses the existing typography capture. -->
+<section id="spacing_geometry" style="position:absolute;left:0pt;top:1200pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample" id="spacing"><p class="label">Word spacing</p><p class="wide">A B C</p><p class="tight">A B C</p><p class="hanging" data-hanging-reference="first">(AAAA BBBB)</p></section>
+<section class="sample" id="justification"><p class="label">Justification</p><p class="text">A B C D E F G H I J K L M N O P Q R S T</p><p style="margin-top:8pt;width:100pt;text-wrap:balance">AAAA BBBB CCCC DDDD</p></section>
+<section class="sample" id="indentation"><p class="label">Indentation</p><p class="text">AAAA BBBB CCCC DDDD EEEE</p><p dir="rtl" style="text-indent:20pt;width:100pt;font-family:'DejaVu Sans'">אב 12</p></section>
+<section class="sample" id="ideographic" lang="ja"><p class="label">CJK spacing</p><p class="text">東京京都</p></section>
+</section>
+
+<!-- writing_mode_geometry.html extends the shared capture with no extra browser launch. -->
+<section id="writing_mode_geometry" style="position:absolute;left:0pt;top:1320pt;width:600pt;height:180pt;box-sizing:border-box">
+<section class="sample" id="vrl"><p class="label">Vertical RL</p><p class="text" data-vkrn-reference="required" style="writing-mode:vertical-rl">ABABAB</p></section>
+<section class="sample" id="vlr"><p class="label">Vertical LR</p><p class="text" data-vkrn-reference="required" style="writing-mode:vertical-lr">ABABAB</p></section>
+<section class="sample" id="srl"><p class="label">Sideways RL</p><p class="text" style="writing-mode:sideways-rl">ABABAB</p></section>
+<section class="sample" id="slr"><p class="label">Sideways LR</p><p class="text" style="writing-mode:sideways-lr">ABABAB</p></section>
+<section class="sample" id="combine"><p class="label">Combined</p><p class="text" style="writing-mode:vertical-rl"><span data-combine-reference="one-em" style="text-combine-upright:all">AB</span>C</p></section>
+<section class="sample" id="mixed"><p class="label">Mixed</p><p class="text" style="writing-mode:vertical-rl;text-orientation:mixed;font-family:'CJK Ruby Fixture'">京AB京</p></section>
+
+</section>
+
+<!-- ruby_controls_geometry.html reuses the typography capture and its existing CJK face. -->
+<section id="ruby_controls_geometry" style="position:absolute;left:0pt;top:1500pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample"><p class="label">Start / under</p><p class="primary"><ruby style="ruby-align:start">東京<rt>東京京都</rt></ruby></p><p class="secondary"><ruby style="ruby-position:under">京<rt>東京</rt></ruby></p></section>
+<section class="sample"><p class="label">Center / merge</p><p class="primary"><ruby style="ruby-align:center">東京<rt>東京京都</rt></ruby></p><p class="secondary"><ruby data-merge-reference="group" style="ruby-merge:merge">京<rt>東京京都</rt>都<rt>京</rt></ruby></p></section>
+<section class="sample"><p class="label">Between / vertical reading</p><p class="primary"><ruby style="ruby-align:space-between">東京<rt>東京京都</rt></ruby></p><p class="secondary"><ruby data-intercharacter-reference="em" style="ruby-position:inter-character">京<rt>とう</rt></ruby></p></section>
+<section class="sample"><p class="label">Around / no overhang</p><p class="primary"><ruby style="ruby-align:space-around">東京<rt>東京京都</rt></ruby></p><p class="secondary">京<ruby style="ruby-overhang:none">都<rt>東京京都</rt></ruby>京</p></section>
+</section>
+
+<!-- Initial letters reuse this existing capture and bundled DejaVu outlines. -->
+<section id="initial_letter_geometry" style="position:absolute;left:0pt;top:1620pt;width:600pt;height:240pt;box-sizing:border-box">
+<section class="sample"><p class="label">Drop initial</p><p class="text drop">Alphabet beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Raised initial</p><p class="text raise">Alphabet beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Sunken initial</p><p class="text sunken">Alphabet beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Short paragraph flow</p><p class="text drop">A</p><p class="text">beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Independent context</p><p class="text drop">A</p><div class="text" style="display:flow-root">Below the initial.</div></section>
+</section>
+
+<!-- Text decoration styles reuse the typography capture and its registered face. -->
+<section id="text_decoration_geometry" style="position:absolute;left:0pt;top:1860pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample"><p class="label">Double underline</p><p class="text" style="text-decoration-line:underline">ABC<span style="color:red">DEF</span></p><p class="text" style="text-decoration:underline solid 0.75pt #336699;text-underline-offset:4pt">Offset</p></section>
+<section class="sample"><p class="label">Double overline</p><p class="text" style="text-decoration-line:overline">ABCDEF</p><p class="text" style="text-decoration:underline solid 0.75pt #336699;text-underline-position:from-font">From font</p></section>
+<section class="sample"><p class="label">Double strike</p><p class="text" style="text-decoration-line:line-through">ABCDEF</p><p class="text" style="text-decoration:underline solid 0.75pt #336699;text-underline-position:under">Under</p></section>
+</section>
+
+<!-- Wavy strokes use the same capture and fonts, including split and bidi phases. -->
+<section id="text_emphasis_geometry" style="position:absolute;left:0pt;top:1980pt;width:600pt;height:150pt;box-sizing:border-box">
+<section class="sample"><p class="label">Filled dot / ligature and mark</p><p class="text" style="text-emphasis-style:filled dot">ABC</p><p class="text" style="text-emphasis-style:filled dot">ffi<span>Á B.</span></p></section>
+<section class="sample"><p class="label">Open circle / under</p><p class="text" style="text-emphasis-style:open circle;text-emphasis-position:under">ABC</p><p class="text" style="text-emphasis-style:open circle;text-emphasis-position:under">A B.</p></section>
+<section class="sample"><p class="label">Custom mark / bidi</p><p class="text" style="text-emphasis-style:'*'">ABC</p><p class="text" dir="rtl" style="text-emphasis-style:'*'">אב<span>גד</span></p></section>
+</section>
+<!-- Baseline controls reuse the same font bytes and browser capture. -->
+<section id="baseline_controls_geometry" style="position:absolute;left:0pt;top:2130pt;width:600pt;height:150pt;box-sizing:border-box">
+<section class="sample"><p class="label">Line-height percent / nested shift</p><p class="text">X<span data-baseline-reference="percent" style="baseline-shift:25%">A</span><span style="vertical-align:-10%">B</span>Y</p><p class="text">X<span data-baseline-reference="super" style="baseline-shift:super">A<span data-baseline-reference="sub" style="baseline-shift:sub">B</span></span>Y</p></section>
+<section class="sample"><p class="label">First / last inline-block source</p><p class="text">X<span data-baseline-reference="first" style="display:inline-block;baseline-source:first">A<br>B</span>Y</p><p class="text">X<span style="display:inline-block;baseline-source:last">A<br>B</span>Y</p></section>
+<section class="sample"><p class="label">Text edges / hanging baseline</p><p class="text" style="font-size:20pt;line-height:30pt">X<span style="font-size:10pt;vertical-align:text-top">A</span><span style="font-size:10pt;vertical-align:text-bottom">B</span>Y</p><p class="text" data-baseline-reference="hanging" style="font-size:20pt;line-height:30pt;dominant-baseline:hanging">X<span data-baseline-reference="hang-child" style="font-size:10pt">A</span>Y</p></section>
+</section>
+
+<!-- Ruby fragment ownership and no-wrap reuse the same capture. -->
+<section id="ruby_fragmentation_geometry" style="position:absolute;left:0pt;top:2280pt;width:600pt;height:150pt;box-sizing:border-box">
+<section class="sample"><p class="label">Ruby base white-space nowrap</p><p class="text"><ruby style="white-space:nowrap;line-break:anywhere">東京京都東京<rt>東京京都東京</rt>京都<rt>京都</rt></ruby></p></section>
+<section class="sample"><p class="label">Ruby base text-wrap-mode nowrap</p><p class="text"><ruby style="text-wrap-mode:nowrap;line-break:anywhere">東京京都東京<rt>東京京都東京</rt>京都<rt>京都</rt></ruby></p></section>
+<section class="sample"><p class="label">Joined columns retain their readings</p><p class="text" style="font-family:'DejaVu Sans'"><ruby>(<rt style="color:red">first</rt>A B C D E F<rt>longreadingtext</rt></ruby></p></section>
+</section>
+
+<!-- Tr fallback uses existing font bytes and the existing capture. -->
+<section id="vertical_fallback_geometry" style="position:absolute;left:0pt;top:2430pt;width:600pt;height:150pt;box-sizing:border-box">
+<section class="sample"><p class="label">Missing vertical form / RL</p><p class="text" style="writing-mode:vertical-rl">—AB—</p></section>
+<section class="sample"><p class="label">Missing vertical form / LR</p><p class="text" style="writing-mode:vertical-lr">—AB—</p></section>
+<section class="sample"><p class="label">Upright CJK / fallback and link</p><p class="text" style="writing-mode:vertical-rl;font-family:'CJK Ruby Fixture'"><a href="https://example.test/vertical">京—AB京</a></p></section>
+</section>
+<section id="orthogonal_intrinsic_geometry" style="position:absolute;left:0pt;top:2580pt;width:600pt;height:60pt;box-sizing:border-box">
+<!-- Intrinsic orthogonal sizing reuses the existing authored face and shared capture.
+     ZWSP supplies the same explicit word boundary without another font for a space glyph. -->
+<section class="sizing" style="left:9pt"><div class="caption">Min grid</div><span class="probe" style="display:inline-grid;inline-size:min-content">AB&#8203;CD</span></section>
+<section class="sizing" style="left:159pt"><div class="caption">Max flex</div><span class="probe" style="display:inline-flex;inline-size:max-content">AB&#8203;CD</span></section>
+<section class="sizing" style="left:309pt"><div class="caption">Fit grid</div><span class="probe" data-intrinsic-reference="18pt" style="display:inline-grid;inline-size:fit-content(18pt)">AB&#8203;CD</span></section>
+<section class="sizing" style="left:459pt"><div class="caption">Calculated</div><span class="probe" style="display:inline-flex;inline-size:calc(9pt + 9pt)">AB&#8203;CD</span></section>
+</section>
+<section id="vertical_emphasis_geometry" style="position:absolute;left:0pt;top:2640pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample" style="left:0pt"><span class="caption">RL right</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-rl;text-emphasis-position:over right">AB</p></section>
+<section class="sample" style="left:150pt"><span class="caption">RL left</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-rl;text-emphasis-position:over left">AB</p></section>
+<section class="sample" style="left:300pt"><span class="caption">LR right</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-lr;text-emphasis-position:over right">AB</p></section>
+<section class="sample" style="left:450pt"><span class="caption">LR left</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-lr;text-emphasis-position:over left">AB</p></section>
+</section>
+<section id="vertical_synthesized_metrics" style="position:absolute;left:0pt;top:2760pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample" style="left:0pt"><span class="caption">Synthesized advances and origins</span><p class="probe">AB</p></section>
+<section class="sample" style="left:300pt"><span class="caption">Contextual vertical alternate</span><p class="probe context">（（</p></section>
+</section>
 </body></html>

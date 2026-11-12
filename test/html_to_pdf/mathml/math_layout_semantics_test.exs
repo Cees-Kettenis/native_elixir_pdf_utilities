@@ -188,14 +188,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
     assert diagnostic.stage == :html and diagnostic.source == "src"
     assert diagnostic.message =~ "Active URL schemes"
 
-    Limits.install(Map.put(Limits.effective(), :max_html_nodes, 4))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 4))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
                "<math><semantics><mn>1</mn><annotation>Hidden</annotation></semantics></math>"
              )
 
-    assert diagnostic.message =~ "max_html_nodes"
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "computed hidden backgrounds skip assets while revealed alternatives use ordinary asset diagnostics" do
@@ -228,14 +228,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
     assert diagnostic.stage == :layout and diagnostic.source == "אב"
     assert diagnostic.module == MathLayoutValidator and diagnostic.operation == :measure_math
 
-    Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              styled_math(
                "<math><semantics><mn>12</mn><annotation>Hidden</annotation></semantics></math>"
              )
 
-    assert diagnostic.message =~ "max_font_math_work"
-    assert diagnostic.stage == :font and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_work"
+    assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
   end
 end

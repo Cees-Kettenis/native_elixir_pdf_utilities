@@ -291,7 +291,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSchemaCssFlowTest do
     assert {:ok, measured} = styled_math(html)
     assert measured.actual_text == "123"
     assert Enum.any?(measured.drawing_items, &match?(%{kind: :native, box: %{type: :rect}}, &1))
-    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html, system_font_discovery: false, compress_streams: false)
+
     assert {:ok, "123"} = Text.extract(pdf, layout: false)
     assert pdf =~ "/ActualText"
     refute measured.actual_text =~ "√"

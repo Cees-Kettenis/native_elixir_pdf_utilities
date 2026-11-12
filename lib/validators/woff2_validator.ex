@@ -37,8 +37,8 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
                    "header"
                  )
 
-        FontValidator.check(:max_font_decoded_bytes, total)
-        FontValidator.reserve(:max_font_container_work, count)
+        FontValidator.check(:max_decoded_bytes, total)
+        FontValidator.reserve(:max_work, count)
         {records, bytes, decoded_size} = directory(bytes, count, [], 0)
         records = List.to_tuple(records)
         {faces, bytes} = faces(bytes, flavor, count)
@@ -115,7 +115,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
         do: invalid("WOFF2 transformed loca length must be zero", tag)
 
       size = decoded_size + length
-      FontValidator.check(:max_font_decoded_bytes, size)
+      FontValidator.check(:max_decoded_bytes, size)
       record = %{tag: tag, original: original, length: length, transformed: transformed}
       directory(bytes, left - 1, [record | records], size)
     end
@@ -164,7 +164,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
 
       {number, bytes} = ushort255(bytes, "collection count")
       if number == 0, do: invalid("WOFF2 collection has no fonts", "collection")
-      FontValidator.check(:max_font_candidates, number)
+      FontValidator.check(:max_entries, number)
 
       Enum.map_reduce(1..number, bytes, fn _, bytes ->
         {tables, bytes} = ushort255(bytes, "collection table count")
@@ -173,7 +173,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
           do: invalid("WOFF2 face table count cannot fit an sfnt directory", "collection")
 
         {scaler, bytes} = uint(bytes, 4, "collection flavor")
-        FontValidator.reserve(:max_font_container_work, tables)
+        FontValidator.reserve(:max_work, tables)
 
         {indices, bytes} =
           Enum.map_reduce(1..tables, bytes, fn _, bytes ->
@@ -315,7 +315,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
   end
 
   defp put_data(tables, tag, data) do
-    FontValidator.check(:max_font_decoded_bytes, byte_size(data))
+    FontValidator.check(:max_decoded_bytes, byte_size(data))
     Map.update!(tables, tag, &%{&1 | data: data})
   end
 
@@ -330,7 +330,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
           "glyf"
         )
 
-    FontValidator.reserve(:max_font_container_work, count)
+    FontValidator.reserve(:max_work, count)
     names = [:contours, :points, :flags, :glyphs, :components, :boxes, :instructions]
 
     {streams, bytes} =
@@ -403,7 +403,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
 
         glyph = glyph <> :binary.copy(<<0>>, rem(2 - rem(byte_size(glyph), 2), 2))
         next = total + byte_size(glyph)
-        FontValidator.check(:max_font_decoded_bytes, next)
+        FontValidator.check(:max_decoded_bytes, next)
 
         if format == 0 and next > 131_070,
           do: invalid("WOFF2 glyph offsets cannot fit short loca", "loca")
@@ -437,7 +437,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
         {[total + n - 1 | ends], total + n, %{state | points: rest}}
       end)
 
-    FontValidator.reserve(:max_font_container_work, total)
+    FontValidator.reserve(:max_work, total)
     {flags, state} = stream(state, :flags, total)
 
     {points, {x, y, state}} =
@@ -653,7 +653,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
   end
 
   defp read(bytes, length, source) do
-    FontValidator.reserve(:max_font_container_work, max(length, 1))
+    FontValidator.reserve(:max_work, max(length, 1))
     if byte_size(bytes) < length, do: invalid("WOFF2 #{source} is truncated", source)
     <<value::binary-size(^length), rest::binary>> = bytes
     {value, rest}

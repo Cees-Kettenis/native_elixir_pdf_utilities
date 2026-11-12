@@ -1,4 +1,5 @@
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixture.ex"))
+Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("open_type_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
   use ExUnit.Case, async: false
@@ -168,10 +169,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
     {:ok, controls} = CssFontControlsValidator.prepare("font-feature-settings", ~s("dlig" on))
     assert {:ok, pending} = FontRenderingValidator.prepare(font, %{font_controls: controls})
 
-    assert {:error, {:unsupported_font, diagnostic}} =
-             FontRenderingValidator.validate_execution(pending, "st")
-
-    assert diagnostic.message =~ "script shaping"
+    assert :ok = FontRenderingValidator.validate_execution(pending, "st")
+    assert {:ok, shaped} = Font.shape("st", pending)
+    assert length(shaped.glyphs) == 1
     assert :ok = FontRenderingValidator.validate_execution(pending, " ")
 
     assert {:ok, again} =
@@ -207,7 +207,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
              PdfWriter.render([%{size: {100, 100}, boxes: [box]}], compress_streams: false)
 
     assert pdf =~ "2 Tr 0.75 w"
-    assert pdf =~ "0.2493 1 10"
+
+    assert [[_, coefficient]] =
+             Regex.scan(~r/1(?:\.0)? 0(?:\.0)? ([0-9.]+) 1(?:\.0)? 10 20 Tm/, pdf)
+
+    assert_in_delta String.to_float(coefficient), synthetic.synthesis.shear, 0.000000001
     assert pdf =~ "1 0 0 RG"
     assert {:ok, "Hx0"} = Text.extract(pdf, layout: false)
     assert {:ok, document} = Reader.read(pdf)
@@ -230,7 +234,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
 
     assert {:ok, styled} = HtmlToPdf.render(html, opts)
     assert styled =~ "2 Tr"
-    assert styled =~ "0.4663 -1"
+
+    assert [[_, coefficient]] =
+             Regex.scan(
+               ~r/1(?:\.0)? -?0(?:\.0)? ([0-9.]+) -1(?:\.0)? [-.0-9]+ [-.0-9]+ Tm/,
+               styled
+             )
+
+    assert_in_delta String.to_float(coefficient), :math.tan(25 * :math.pi() / 180), 0.000000001
     assert {:ok, "Hx0"} = Text.extract(styled, layout: false)
 
     assert {:ok, ordinary} =
@@ -240,7 +251,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
              )
 
     refute ordinary =~ "2 Tr"
-    refute ordinary =~ "0.4663 -1"
+    refute ordinary =~ "0.466"
 
     for synthesis <- [
           %{weight: :bold, shear: 0},
@@ -540,7 +551,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
     data = File.read!(FontCorpus.path("selected-control-axes.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Controls", data: data}])
     font = Map.drop(font, [:variation_source, :variation_axes, :variation_coordinates])
-    gsub = <<1::16, 0::16, 0::16, 10::16, 0::16, 1::16, "smcp", 0::16>>
+    fixture = NativeElixirPdfUtilities.TestSupport.OpenTypeFixture
+
+    single =
+      fixture.join(fn [covered] -> fixture.words([2, covered, 0]) end, [fixture.coverage([])])
+
+    gsub = fixture.layout([%{type: 1, subtables: [single]}], features: [{"smcp", [0]}])
 
     smcp = %{
       font
@@ -554,8 +570,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
 
       assert selected.feature_plan.features["smcp"] == 1
 
-      assert {:error, {:unsupported_font, _}} =
-               FontRenderingValidator.validate_execution(selected, "x")
+      assert :ok = FontRenderingValidator.validate_execution(selected, "x")
 
       assert {:ok, plain} =
                FontRenderingValidator.prepare(smcp, %{
@@ -620,7 +635,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
                font_controls: %{:"variant-emoji" => ["emoji"]}
              })
 
-    assert {:error, {:unsupported_font, _}} =
+    assert :ok =
              FontRenderingValidator.validate_execution(Map.delete(selected, :color_tables), "0")
 
     assert {:ok, selected} =
@@ -628,8 +643,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
                font_controls: %{:"variant-emoji" => ["unicode"]}
              })
 
-    assert {:error, {:unsupported_font, _}} =
-             FontRenderingValidator.validate_execution(selected, "0")
+    assert :ok = FontRenderingValidator.validate_execution(selected, "0")
 
     stripped =
       NativeElixirPdfUtilities.TestSupport.FontFixture.rebuild(font.data, %{"OS/2" => nil})
@@ -643,7 +657,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
     assert script.glyph_scale == 0.65
   end
 
-  test "feature table ownership failures and active GPOS kerning return recoverable diagnostics" do
+  test "malformed active feature tables return recoverable ownership diagnostics" do
     data = File.read!(FontCorpus.path("selected-variable.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Broken features", data: data}])
 
@@ -693,11 +707,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
                  }
                })
 
-      assert {:error, {:unsupported_font, %{message: message}}} =
+      assert {:error, {:invalid_font, %{message: message}}} =
                FontRenderingValidator.validate_execution(selected, "H")
 
-      assert message =~ "GPOS kerning"
-      assert message =~ "language-specific OpenType selection"
+      assert message =~ "offset"
     end
 
     gsub = <<1::16, 0::16, 0::16, 10::16, 0::16, 1::16, "clig", 0::16>>
@@ -713,10 +726,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
                font_controls: %{:"feature-settings" => %{"clig" => 1}}
              })
 
-    assert {:error, {:unsupported_font, %{message: message}}} =
+    assert {:error, {:invalid_font, %{message: message}}} =
              FontRenderingValidator.validate_execution(selected, "H")
 
-    assert message =~ "clig"
+    assert message =~ "offset"
   end
 
   test "resetting prepared static controls restores the physical face for selected and fallback candidates" do

@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidator do
     projected = candidate.projected
 
     HtmlValidator.reserve_render_resource(
-      :max_html_tree_work,
+      :max_work,
       map_size(original.nodes) + map_size(projected.nodes),
       :html
     )
@@ -83,7 +83,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidator do
           original_node = Map.get(authored, {source.line, source.column, node.type})
 
           HtmlValidator.reserve_render_resource(
-            :max_html_tree_work,
+            :max_work,
             byte_size(source.text),
             :html
           )
@@ -105,7 +105,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidator do
     with {:ok, ids, authored_bindings} <- remapping do
       nodes =
         Map.new(projected.nodes, fn {id, node} ->
-          HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+          HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
           node =
             node
@@ -117,7 +117,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidator do
           node =
             if Map.has_key?(node, :children) do
               HtmlValidator.reserve_render_resource(
-                :max_html_tree_work,
+                :max_work,
                 length(node.children),
                 :html
               )
@@ -133,7 +133,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidator do
           {node.node_id, node}
         end)
 
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, map_size(projected.hosts), :html)
+      HtmlValidator.reserve_render_resource(:max_work, map_size(projected.hosts), :html)
 
       hosts =
         Map.new(projected.hosts, fn {fragment, host} ->
@@ -148,7 +148,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidator do
              HtmlValidator.prepare_style_input(dom, [], Font.normalize_options([])) do
         bindings =
           Map.new(authored_bindings, fn {id, original_binding} ->
-            HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
             {id,
              %{original: original_binding, prospective: Map.take(projected.nodes[id], @identity)}}

@@ -1,6 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 Code.require_file(Paths.support("png_fixture.ex"))
+Code.require_file(Paths.support("font_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.SvgValidatorTest do
   use ExUnit.Case, async: false
@@ -15,6 +16,90 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     old = Limits.effective()
     on_exit(fn -> Limits.install(old) end)
     %{limits: old}
+  end
+
+  test "converter font admission retains a malformed CFF source's precise failure" do
+    alias NativeElixirPdfUtilities.TestSupport.{FontCorpus, FontFixture}
+
+    data =
+      File.read!(FontCorpus.path("cff-static-sans.otf"))
+      |> FontFixture.rebuild(%{"CFF " => <<0>>})
+
+    assert {:error, {reason, diagnostic}} =
+             SvgConverterValidator.prepare(
+               "<svg width='2' height='2'/>",
+               [],
+               nil,
+               [%{data: data}],
+               %{mode: :image}
+             )
+
+    assert reason == diagnostic.reason and diagnostic.stage == :font
+    assert is_binary(diagnostic.source) and diagnostic.message != ""
+  end
+
+  test "converter raster allocation joins the allowance consumed before conversion" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(Map.put(previous, :max_raster_pixels, 100))
+
+    assert :checked =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.reserve_render_resource(:max_raster_pixels, 96, :layout)
+
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        SvgConverterValidator.prepare(
+                          "<svg width='2' height='2'/>",
+                          [],
+                          nil,
+                          [],
+                          %{mode: :image}
+                        )
+
+               assert diagnostic.source == "SVG" and diagnostic.message =~ "max_raster_pixels"
+               :checked
+             end)
+  end
+
+  test "nested SVG preparation catches the enclosing operation's exhausted work allowance" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    source = "<svg width='2' height='2'><rect width='2' height='2'/></svg>"
+    Limits.install(Map.put(previous, :max_work, byte_size(source)))
+
+    for operation <- [
+          fn -> SvgValidator.validate_processing(source, %{mode: :image}) end,
+          fn -> SvgValidator.validate_extraction(source) end,
+          fn -> SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image}) end
+        ] do
+      assert :checked =
+               HtmlValidator.with_render_budget(fn ->
+                 HtmlValidator.reserve_render_resource(:max_work, 1, :style)
+                 assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+                 assert diagnostic.source == "SVG" and diagnostic.message =~ "max_work"
+                 :checked
+               end)
+    end
+  end
+
+  test "expanded SVG reuse checks cumulative node and text-position work" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+
+    definitions =
+      "<g id='base'><rect width='1' height='1'/></g>" <>
+        Enum.map_join(1..12, fn depth ->
+          parent = if depth == 1, do: "base", else: "level#{depth - 1}"
+          "<g id='level#{depth}'><use href='##{parent}'/><use href='##{parent}'/></g>"
+        end)
+
+    source = "<svg width='2' height='2'><defs>#{definitions}</defs><use href='#level12'/></svg>"
+    Limits.install(Map.put(previous, :max_work, 10_000))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgValidator.validate_processing(source, %{mode: :image})
+
+    assert diagnostic.source == "SVG" and diagnostic.message =~ "max_work"
   end
 
   test "SVG asset static input policy diagnoses executable and event content before conversion" do
@@ -126,18 +211,20 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
   test "structural limits stop parsing and a subsequent valid request recovers", %{limits: old} do
     for {key, content} <- [
-          {:max_svg_nodes, "<rect/>"},
-          {:max_svg_depth, "<g/>"},
-          {:max_svg_path_bytes, "<path d=\"M0 0\"/>"},
-          {:max_svg_filter_primitives, "<filter><feFlood/><feBlend/></filter>"},
-          {:max_svg_references, "<use href=\"#a\"/><use href=\"#a\"/>"}
+          {:max_entries, "<rect/>"},
+          {:max_depth, "<g/>"},
+          {:max_input_bytes, "<path d=\"M0 0\"/>"},
+          {:max_entries, "<filter><feFlood/><feBlend/></filter>"},
+          {:max_entries, "<use href=\"#a\"/><use href=\"#a\"/>"}
         ] do
       Limits.install(Map.put(old, key, 1))
 
-      assert {:error, {:resource_limit_exceeded, %{message: message, line: 1}}} =
+      assert {:error, {:resource_limit_exceeded, %{message: message} = diagnostic}} =
                SvgValidator.validate(svg(content), [], nil)
 
       assert message =~ Atom.to_string(key)
+      if key != :max_input_bytes, do: assert(diagnostic.line == 1)
+      Limits.install(old)
       assert {:ok, _} = SvgValidator.validate(svg(""), [], nil)
     end
   end
@@ -152,7 +239,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
              SvgValidator.conversion_result(:unexpected)
 
     assert message =~ "unexpected"
-    Limits.install(%{old | max_svg_output_bytes: 1})
+    Limits.install(%{old | max_output_bytes: 1})
     assert {:ok, "x"} = SvgValidator.conversion_result({:ok, "x"})
     assert {:error, {:resource_limit_exceeded, _}} = SvgValidator.conversion_result({:ok, "xx"})
 
@@ -187,14 +274,14 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
   end
 
   test "foreign attributes cannot replace the SVG path budget", %{limits: old} do
-    Limits.install(%{old | max_svg_path_bytes: 1})
+    Limits.install(%{old | max_input_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgValidator.validate(svg("<path xmlns:x=\"urn:x\" d=\"M0 0\" x:d=\"\"/>"), [], nil)
   end
 
   test "reference budgets include namespaced href attributes", %{limits: old} do
-    Limits.install(%{old | max_svg_references: 1})
+    Limits.install(%{old | max_entries: 1})
 
     for attributes <- [
           ["xlink:href", "xlink:href"],
@@ -208,8 +295,10 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                %{stage: :limits, source: "SVG", line: 1, message: message}}} =
                SvgValidator.validate(source, [], nil)
 
-      assert message =~ "max_svg_references"
+      assert message =~ "max_entries"
     end
+
+    Limits.install(old)
 
     assert {:ok, _} =
              SvgValidator.validate(
@@ -280,7 +369,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       assert {:ok, [width: 48, height: 1]} = SvgValidator.validate(source, [width: 48], nil)
     end
 
-    Limits.install(%{old | max_svg_raster_dimension: 47})
+    Limits.install(%{old | max_raster_dimension: 47})
 
     for width <- [".5in", "0.5in"] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -317,8 +406,8 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
   test "native PNG dimension bounds cannot be disabled by configuration", %{limits: old} do
     Limits.install(%{
       old
-      | max_svg_raster_dimension: 4_294_967_296,
-        max_svg_raster_pixels: 4_294_967_296
+      | max_raster_dimension: 4_294_967_296,
+        max_raster_pixels: 4_294_967_296
     })
 
     assert {:error, {:invalid_document, %{message: message}}} =
@@ -504,14 +593,15 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
     content = svg("<defs><g id='a'><rect/><circle/></g></defs><use href='#a'/><use href='#a'/>")
     assert {:ok, _} = SvgValidator.validate_processing(content, %{mode: :image})
-    Limits.install(%{old | max_svg_expansion_work: 8})
+    Limits.install(%{old | max_work: 8})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              SvgValidator.validate_processing(content, %{mode: :image})
 
-    assert message =~ "max_svg_expansion_work"
+    assert message =~ "max_work"
+    Limits.install(old)
     assert {:ok, _} = SvgValidator.validate_processing(svg(""), %{mode: :image})
-    Limits.install(%{old | max_svg_depth: 4})
+    Limits.install(%{old | max_depth: 4})
 
     assert {:error, {:invalid_document, %{message: message}}} =
              SvgValidator.validate_processing(
@@ -519,20 +609,20 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                %{mode: :image}
              )
 
-    assert message =~ "max_svg_depth"
+    assert message =~ "max_depth"
   end
 
   test "reused path geometry charges expanded bytes rather than only authored source", %{
     limits: old
   } do
     source = svg("<defs><path id='p' d='M0 0 L1 1'/></defs><use href='#p'/><use href='#p'/>")
-    Limits.install(%{old | max_svg_expanded_path_bytes: 20})
+    Limits.install(%{old | max_decoded_bytes: 20})
 
     assert {:error, {:resource_limit_exceeded, %{message: message, source: "SVG"}}} =
              SvgValidator.validate_processing(source, %{mode: :image})
 
-    assert message =~ "max_svg_expanded_path_bytes"
-    Limits.install(%{old | max_svg_expanded_path_bytes: 30})
+    assert message =~ "max_decoded_bytes"
+    Limits.install(%{old | max_decoded_bytes: 30})
     assert {:ok, _} = SvgValidator.validate_processing(source, %{mode: :image})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
@@ -541,20 +631,30 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                SvgValidator.validate_processing(source, %{mode: :image})
              end)
 
-    assert message =~ "max_svg_expanded_path_bytes"
+    assert message =~ "max_decoded_bytes"
   end
 
   test "SVG work is cumulative across nested scopes and cleans up after exhaustion", %{
     limits: old
   } do
-    for {key, content, limit} <- [
-          {:max_aggregate_svg_source_bytes, "", byte_size(svg(""))},
-          {:max_aggregate_svg_nodes, "<rect/>", 2},
-          {:max_aggregate_svg_path_bytes, "<path d='M0 0'/>", 4},
-          {:max_aggregate_svg_filter_primitives, "<filter><feFlood/></filter>", 1},
-          {:max_aggregate_svg_references, "<rect id='a'/><use href='#a'/>", 1},
-          {:max_svg_expansion_work, "", 1}
+    for {key, content} <- [
+          {:max_input_bytes, ""},
+          {:max_entries, "<rect/>"},
+          {:max_input_bytes, "<path d='M0 0'/>"},
+          {:max_entries, "<filter><feFlood/></filter>"},
+          {:max_entries, "<rect id='a'/><use href='#a'/>"},
+          {:max_work, ""}
         ] do
+      Limits.install(old)
+
+      limit =
+        HtmlValidator.with_render_budget(fn ->
+          assert {:ok, _} = SvgValidator.validate_processing(svg(content), %{mode: :image})
+
+          Limits.get(key) -
+            NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(key)
+        end)
+
       Limits.install(Map.put(old, key, limit))
 
       result =
@@ -579,7 +679,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
   test "raster work and font sources retain cumulative budgets before native allocation", %{
     limits: old
   } do
-    Limits.install(%{old | max_aggregate_svg_raster_pixels: 1})
+    Limits.install(%{old | max_raster_pixels: 2})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              HtmlValidator.with_render_budget(fn ->
@@ -587,9 +687,9 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                convert_svg(svg("<rect/>"), [], %{mode: :image})
              end)
 
-    assert message =~ "max_aggregate_svg_raster_pixels"
+    assert message =~ "max_raster_pixels"
     data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
-    Limits.install(%{old | max_font_count: 1})
+    Limits.install(%{old | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              convert_svg(svg(""), [], %{
@@ -597,7 +697,15 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                fonts: [%{data: data}, %{data: data}]
              })
 
-    Limits.install(%{old | max_svg_font_work_bytes: byte_size(data)})
+    work =
+      HtmlValidator.with_render_budget(fn ->
+        assert {:ok, _} = convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
+
+        old.max_work -
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_work)
+      end)
+
+    Limits.install(%{old | max_work: work})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              HtmlValidator.with_render_budget(fn ->
@@ -607,11 +715,11 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
              end)
 
-    assert message =~ "max_svg_font_work_bytes"
-    Limits.install(%{old | max_svg_font_work_bytes: 1})
+    assert message =~ "max_work"
+    Limits.install(%{old | max_work: 1})
 
     assert {:error,
-            {:resource_limit_exceeded, %{stage: :font, module: HtmlValidator, message: message}}} =
+            {:resource_limit_exceeded, %{stage: :style, module: HtmlValidator, message: message}}} =
              SvgConverterValidator.prepare(
                svg(""),
                [],
@@ -620,10 +728,10 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
                %{mode: :image}
              )
 
-    assert message =~ "max_svg_font_work_bytes"
-    Limits.install(%{old | max_font_source_bytes: 1})
+    assert message =~ "max_work"
+    Limits.install(%{old | max_input_bytes: 1})
 
-    assert {:error, {:resource_limit_exceeded, %{stage: :font}}} =
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
   end
 
@@ -694,11 +802,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
     assert message =~ "opaque"
 
-    for key <- [
-          :max_svg_resource_bytes,
-          :max_aggregate_svg_resource_bytes,
-          :max_decoded_image_bytes
-        ] do
+    for key <- [:max_input_bytes, :max_decoded_bytes] do
       Limits.install(Map.put(old, key, 1))
 
       assert {:error, {:resource_limit_exceeded, _}} =
@@ -790,12 +894,12 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
   test "font parser diagnostics retain their limit explanation", %{limits: old} do
     data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
-    Limits.install(%{old | max_font_cmap_work: 1})
+    Limits.install(%{old | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              convert_svg(svg(""), [], %{mode: :image, fonts: [%{data: data}]})
 
-    assert message =~ "character-map"
+    assert message =~ "max_work"
   end
 
   test "unused empty marker has no ink while active missing paint and font resources still fail" do
@@ -921,12 +1025,12 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     assert {:ok, %{expanded_work: 19, expansion_counts: %{3 => 3}}} =
              SvgValidator.validate_processing(text_source, %{mode: :image})
 
-    Limits.install(%{old | max_svg_expansion_work: 18})
+    Limits.install(%{old | max_work: 18})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              SvgValidator.validate_processing(text_source, %{mode: :image})
 
-    assert message =~ "max_svg_expansion_work"
+    assert message =~ "max_work"
 
     data = PngFixture.build(2, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
 
@@ -940,19 +1044,19 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
         "<defs><image id='asset' href='svg-resource:logo' width='1' height='1'/></defs><use href='#asset'/><use href='#asset'/>"
       )
 
-    Limits.install(%{old | max_aggregate_svg_raster_pixels: 5})
+    Limits.install(%{old | max_raster_pixels: 5})
 
     assert {:error, {:resource_limit_exceeded, %{source: "SVG", message: message}}} =
              convert_svg(source, [], context)
 
-    assert message =~ "max_aggregate_svg_raster_pixels"
+    assert message =~ "max_raster_pixels"
 
-    Limits.install(%{old | max_aggregate_decoded_image_bytes: 20})
+    Limits.install(%{old | max_decoded_bytes: 20})
 
     assert {:error, {:resource_limit_exceeded, %{source: "SVG", message: message}}} =
              convert_svg(source, [], context)
 
-    assert message =~ "aggregate decoded image bytes"
+    assert message =~ "max_decoded_bytes"
     Limits.install(old)
     assert {:ok, _} = convert_svg(source, [], context)
   end
@@ -961,19 +1065,19 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
     limits: old
   } do
     source = svg("<g opacity='0.5'><rect width='1' height='1'/></g>")
-    Limits.install(%{old | max_aggregate_svg_surface_pixels: 1})
+    Limits.install(%{old | max_raster_pixels: 2})
 
     assert {:error, {:resource_limit_exceeded, %{source: "SVG", stage: :style, message: message}}} =
              convert_svg(source, [], %{mode: :image})
 
-    assert message =~ "max_aggregate_svg_surface_pixels"
+    assert message =~ "max_raster_pixels"
     Limits.install(old)
     assert {:ok, png} = convert_svg(source, [], %{mode: :image})
     assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
     assert image.width_px == 1 and image.height_px == 1
     assert image.alpha_data == <<128>>
 
-    Limits.install(%{old | max_aggregate_svg_surface_pixels: 1})
+    Limits.install(%{old | max_raster_pixels: 2})
 
     HtmlValidator.with_render_budget(fn ->
       assert {:ok, _} = convert_svg(svg("<rect/>"), [], %{mode: :image})
@@ -981,7 +1085,7 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       assert {:error, {:resource_limit_exceeded, %{source: "SVG", message: message}}} =
                convert_svg(svg("<rect/>"), [], %{mode: :image})
 
-      assert message =~ "max_aggregate_svg_surface_pixels"
+      assert message =~ "max_raster_pixels"
     end)
   end
 

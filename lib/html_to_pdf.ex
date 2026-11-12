@@ -93,6 +93,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           (asset_request() -> {:ok, binary()} | :not_found | {:error, term()})
   @type unsupported_glyphs :: :replace | :error
   @type outlines :: :headings | [NativeElixirPdfUtilities.Outlines.item_input()] | false | nil
+  @type hyphenation_dictionary :: %{
+          required(:provenance) => %{
+            required(:source) => String.t(),
+            optional(:version) => String.t(),
+            optional(:license) => String.t()
+          },
+          optional(:patterns) => [String.t()],
+          optional(:exceptions) => [String.t()]
+        }
   @type render_option ::
           {:html_recovery, boolean()}
           | {:forms, :interactive | :static}
@@ -109,6 +118,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | {:default_font, String.t() | [String.t()]}
           | {:fonts, [map() | keyword() | {String.t(), String.t()}]}
           | {:system_font_discovery, boolean()}
+          | {:hyphenation_dictionaries, %{optional(String.t()) => hyphenation_dictionary()}}
           | {:metadata, pdf_metadata()}
           | {:outlines, outlines()}
           | {:page_furniture, page_furniture() | false | nil}
@@ -271,7 +281,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
         {:ok, %{input_path: input_path, output_path: output_path}} ->
           case NativeElixirPdfUtilities.FileReader.read(
                  input_path,
-                 NativeElixirPdfUtilities.Limits.get(:max_html_source_bytes)
+                 NativeElixirPdfUtilities.Limits.get(:max_input_bytes)
                ) do
             {:ok, html} ->
               case render(html, opts) do

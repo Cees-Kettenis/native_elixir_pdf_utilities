@@ -90,7 +90,7 @@ defmodule NativeElixirPdfUtilities.Validators.BitmapFontValidator do
         if Enum.all?(
              Tuple.to_list(widths),
              &(is_number(&1) and &1 >= 0 and
-                 &1 <= NativeElixirPdfUtilities.Limits.get(:max_font_numeric_magnitude))
+                 &1 <= NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude))
            ),
            do: :ok,
            else:
@@ -144,7 +144,7 @@ defmodule NativeElixirPdfUtilities.Validators.BitmapFontValidator do
             |> Map.delete("DSIG")
 
           bytes = NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt.rebuild(scaler, Enum.sort(tables))
-          FontValidator.check(:max_font_decoded_bytes, byte_size(bytes))
+          FontValidator.check(:max_decoded_bytes, byte_size(bytes))
           {:ok, bytes}
         end
       catch
@@ -230,7 +230,7 @@ defmodule NativeElixirPdfUtilities.Validators.BitmapFontValidator do
 
   @spec sbix_glyph(map(), non_neg_integer(), map()) :: map()
   defp sbix_glyph(records, id, seen) do
-    FontValidator.check(:max_font_glyph_depth, map_size(seen))
+    FontValidator.check(:max_depth, map_size(seen))
     work(1)
     if Map.has_key?(seen, id), do: invalid("sbix duplicate glyph references form a cycle")
     data = Map.get(records, id) || invalid("sbix duplicate glyph ID is outside maxp")
@@ -429,7 +429,7 @@ defmodule NativeElixirPdfUtilities.Validators.BitmapFontValidator do
     binary_part(data, offset, size)
   end
 
-  defp work(count), do: FontValidator.reserve(:max_font_color_work, count)
+  defp work(count), do: FontValidator.reserve(:max_work, count)
 
   @spec invalid(String.t()) :: no_return()
   @spec invalid(String.t(), atom()) :: no_return()

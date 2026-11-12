@@ -105,6 +105,6 @@ Stamping appends a revision and preserves the target's original content,
 metadata, bookmarks, and form configuration. Existing signatures may not cover
 the new content. Stamping is not redaction.
 
-Text and overlays are bounded by [stamping limits](resource-limits.md#stamping).
+Text and overlays are bounded by [stamping limits](resource-limits.md#shared-processing-budgets).
 Invalid selections, unavailable fonts, missing glyphs, unsupported PDFs, and
 limit failures return [diagnostics](diagnostics.md).

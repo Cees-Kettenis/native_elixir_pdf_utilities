@@ -1,0 +1,20 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:600pt 120pt;margin:0}
+html,body{margin:0;padding:0}
+body{font-family:'DejaVu Sans';font-size:8pt;line-height:12pt}
+.sample{position:absolute;top:8pt;width:88pt;border:0.75pt solid #445566;padding:3pt;box-sizing:border-box}
+.label{margin:0 0 3pt}
+.text{margin:0;font-family:'CJK Ruby Fixture';font-size:12pt;line-height:18pt;width:16pt}
+#strict{left:6pt}#normal{left:106pt}#loose{left:206pt}#keep{left:306pt}#cjk{left:406pt}#all{left:506pt}
+#strict .text{line-break:strict}#normal .text{line-break:normal}#loose .text{line-break:loose}
+#keep .text{width:25pt;word-break:keep-all}#cjk .text{width:25pt}
+#all .text{font-family:'DejaVu Sans';width:12pt;word-break:break-all}
+</style></head><body>
+<section class="sample" id="strict" lang="ja"><p class="label">Strict</p><p class="text">きょう</p></section>
+<section class="sample" id="normal" lang="ja"><p class="label">Normal</p><p class="text">きょう</p></section>
+<section class="sample" id="loose" lang="ja"><p class="label">Loose</p><p class="text">きょう</p></section>
+<section class="sample" id="keep" lang="ja"><p class="label">Keep all</p><p class="text">東京京都</p></section>
+<section class="sample" id="cjk" lang="ja"><p class="label">CJK wrap</p><p class="text">東京京都</p></section>
+<section class="sample" id="all"><p class="label">Break all</p><p class="text">ABCD</p></section>
+</body></html>

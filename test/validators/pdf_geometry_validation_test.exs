@@ -15,16 +15,16 @@ defmodule NativeElixirPdfUtilities.Validators.PdfGeometryValidationTest do
       assert {:error, {:invalid_pdf_input, diagnostic}} =
                PdfValidator.validate_geometry_numbers([value])
 
-      assert diagnostic.stage == :geometry and diagnostic.message =~ "max_pdf_numeric_magnitude"
+      assert diagnostic.stage == :geometry and diagnostic.message =~ "max_numeric_magnitude"
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_pdf_numeric_token_bytes, 4))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 4))
     assert :ok = PdfValidator.validate_geometry_numbers([1.25])
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfValidator.validate_geometry_numbers([0.001])
 
-    assert diagnostic.message =~ "max_pdf_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "affine composition retains exact integer cancellation without early float conversion" do

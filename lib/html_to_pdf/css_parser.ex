@@ -132,7 +132,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       case HtmlValidator.validate_css_source(css) do
         {:ok, css} ->
           HtmlValidator.reserve_render_resource(
-            :max_aggregate_css_source_bytes,
+            :max_input_bytes,
             byte_size(css),
             :css
           )
@@ -176,7 +176,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
               case result do
                 {:ok, prepared} ->
                   HtmlValidator.reserve_render_resource(
-                    :max_css_rules,
+                    :max_entries,
                     length(prepared.rules),
                     :css
                   )
@@ -187,8 +187,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
             end
           )
 
-        {:error, {:invalid_css, diagnostic}} ->
-          {:error, {:invalid_css, diagnostic}}
+        {:error, {_reason, _diagnostic}} = error ->
+          error
       end
     end)
   end
@@ -209,12 +209,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                else: HtmlCssSourceValidator.validate_descriptor(css, descriptor)
              ) do
         HtmlValidator.reserve_render_resource(
-          :max_aggregate_css_source_bytes,
+          :max_input_bytes,
           byte_size(css),
           :css
         )
 
-        HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
+        HtmlValidator.reserve_render_resource(:max_work, byte_size(css), :css)
         projection = source_projection(css) |> Map.put(:descriptor, descriptor)
 
         with {:ok, projected, media} <- source_media_projection(projection, media_context),
@@ -282,7 +282,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp source_record(projection, offset, length) do
     HtmlValidator.reserve_render_resource(
-      :max_css_work,
+      :max_work,
       length(projection.gaps) + offset + length,
       :css
     )
@@ -618,7 +618,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
       result =
         Enum.reduce_while(records, {:ok, [], []}, fn record, {:ok, options, checked} ->
-          HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+          HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
           case CssPageValidator.validate_declaration(record.declaration) do
             {:ok, validated} ->
@@ -687,7 +687,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       case HtmlValidator.validate_css_source(css) do
         {:ok, css} ->
           HtmlValidator.reserve_render_resource(
-            :max_aggregate_css_source_bytes,
+            :max_input_bytes,
             byte_size(css),
             :css
           )
@@ -726,7 +726,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       case HtmlValidator.validate_css_source(css) do
         {:ok, css} ->
           HtmlValidator.reserve_render_resource(
-            :max_aggregate_css_source_bytes,
+            :max_input_bytes,
             byte_size(css),
             :css
           )
@@ -773,15 +773,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
       case HtmlValidator.validate_css_source(css, :declarations) do
         {:ok, css} ->
           HtmlValidator.reserve_render_resource(
-            :max_aggregate_css_source_bytes,
+            :max_input_bytes,
             byte_size(css),
             :css
           )
 
           {:ok, Enum.map(CssSyntaxValidator.declarations(css), & &1.declaration)}
 
-        {:error, {:invalid_css, diagnostic}} ->
-          {:error, {:invalid_css, diagnostic}}
+        {:error, {_reason, _diagnostic}} = error ->
+          error
       end
     end)
   end
@@ -990,7 +990,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
          _namespaces
        ) do
     HtmlValidator.reserve_render_resource(
-      :max_aggregate_css_source_bytes,
+      :max_input_bytes,
       byte_size(declaration_source),
       :css
     )

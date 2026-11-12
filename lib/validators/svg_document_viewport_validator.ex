@@ -97,7 +97,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgDocumentViewportValidator do
             Enum.all?([containing, height], fn value ->
               is_nil(value) or
                 (is_number(value) and value >= 0 and
-                   value <= Limits.get(:max_css_numeric_magnitude) and
+                   value <= Limits.get(:max_numeric_magnitude) and
                    match?({:ok, _}, HtmlValidator.normalize_geometry_number(value)))
             end)
 
@@ -218,13 +218,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgDocumentViewportValidator do
       invalid("selected SVG viewport arithmetic exceeds the supported numeric range")
   catch
     {:render_resource_limit, {:error, {reason, diagnostic}}} ->
-      {:error,
-       {reason,
-        Diagnostics.with_context(diagnostic,
-          source: "SVG",
-          module: __MODULE__,
-          operation: :rasterize_document
-        )}}
+      raster_failure(reason, diagnostic)
   end
 
   @doc "Charges actual raster allocation after shared document viewport resolution."
@@ -233,46 +227,56 @@ defmodule NativeElixirPdfUtilities.Validators.SvgDocumentViewportValidator do
   @spec prepare_raster(plan(), term(), term(), HtmlValidator.image_budget(), map() | nil) ::
           {:ok, raster() | :skipped} | {:error, {atom(), map()}}
   def prepare_raster(plan, width, height, budget, context \\ nil) do
-    with {:ok, viewport} <- prepare_viewport(plan, width, height, budget, context) do
-      case viewport do
-        :skipped ->
-          {:ok, :skipped}
+    result =
+      with {:ok, viewport} <- prepare_viewport(plan, width, height, budget, context) do
+        case viewport do
+          :skipped ->
+            {:ok, :skipped}
 
-        viewport ->
-          [width: raster_width, height: raster_height] =
-            SvgValidator.default_viewport_dimensions(
-              viewport.width / 0.75,
-              viewport.height / 0.75
-            )
+          viewport ->
+            [width: raster_width, height: raster_height] =
+              SvgValidator.default_viewport_dimensions(
+                viewport.width / 0.75,
+                viewport.height / 0.75
+              )
 
-          with :ok <- SvgValidator.validate_raster_dimensions(raster_width, raster_height, nil),
-               :ok <-
-                 HtmlValidator.reserve_render_resource(
-                   :max_aggregate_svg_surface_pixels,
-                   raster_width * raster_height * 2,
-                   :layout
-                 ) do
-            {:ok,
-             %{
-               width: raster_width,
-               height: raster_height,
-               root_size: viewport.root_size
-             }}
-          end
+            with :ok <- SvgValidator.validate_raster_dimensions(raster_width, raster_height, nil),
+                 :ok <-
+                   HtmlValidator.reserve_render_resource(
+                     :max_raster_pixels,
+                     raster_width * raster_height * 2,
+                     :layout
+                   ) do
+              {:ok,
+               %{
+                 width: raster_width,
+                 height: raster_height,
+                 root_size: viewport.root_size
+               }}
+            end
+        end
       end
+
+    case result do
+      {:error, {reason, diagnostic}} -> raster_failure(reason, diagnostic)
+      success -> success
     end
   rescue
     ArithmeticError ->
       invalid("selected SVG viewport arithmetic exceeds the supported numeric range")
   catch
     {:render_resource_limit, {:error, {reason, diagnostic}}} ->
-      {:error,
-       {reason,
-        Diagnostics.with_context(diagnostic,
-          source: "SVG",
-          module: __MODULE__,
-          operation: :rasterize_document
-        )}}
+      raster_failure(reason, diagnostic)
+  end
+
+  defp raster_failure(reason, diagnostic) do
+    {:error,
+     {reason,
+      Diagnostics.with_context(diagnostic,
+        source: "SVG",
+        module: __MODULE__,
+        operation: :rasterize_document
+      )}}
   end
 
   defp unsupported(message) do

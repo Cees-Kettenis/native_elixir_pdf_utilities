@@ -116,14 +116,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextPaintTest do
   test "source coordinate conversion honors the canonical writer numeric budget", %{box: box} do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_pdf_numeric_magnitude: 10000})
+    Limits.install(%{original | max_numeric_magnitude: 10000})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfWriter.render([%{size: {210, 180}, boxes: [%{box | x: 9000}]}])
 
     assert diagnostic.stage == :writer and diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.operation == :write_pdf
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
     assert diagnostic.source =~ "CSS source text"
   end
 end

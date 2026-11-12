@@ -195,7 +195,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
     assert diagnostic.stage == :css and diagnostic.source == "css_budget"
 
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_css_variable_depth, 1))
+    Limits.install(Map.put(limits, :max_depth, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.prepare_css_variable_source(
@@ -203,9 +203,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
                HtmlValidator.new_css_budget()
              )
 
-    assert diagnostic.message =~ "max_css_variable_depth"
+    assert diagnostic.message =~ "max_depth"
 
-    Limits.install(Map.put(limits, :max_css_variable_work, 1))
+    Limits.install(Map.put(limits, :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.prepare_css_variable_source(
@@ -213,7 +213,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
                HtmlValidator.new_css_budget()
              )
 
-    assert diagnostic.message =~ "max_css_variable_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "unapplied source parsing consumes the same shared invocation budget without resetting it" do
@@ -227,11 +227,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
     assert {:ok, _} = Style.with_source_style_contexts(dom, [], budget, consume, @opts)
     used = :atomics.get(budget, 1)
     assert used == byte_size("var(--missing,2em)")
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, used))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, used))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Style.with_source_style_contexts(dom, [], budget, consume, @opts)
 
-    assert diagnostic.message =~ "max_css_variable_total_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 end

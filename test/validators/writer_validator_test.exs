@@ -4,6 +4,16 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
   alias NativeElixirPdfUtilities.Validators.WriterValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
 
+  test "generated containers diagnose capacity before allocating their entries" do
+    maximum = NativeElixirPdfUtilities.Limits.get(:max_entries)
+
+    assert {:render_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}} =
+             catch_throw(WriterValidator.reserve_container_entries(maximum + 1))
+
+    assert diagnostic.operation == :render and diagnostic.module == WriterValidator
+    assert diagnostic.message =~ "max_entries"
+  end
+
   test "gauge fractions and fixed four-stop RGB shading reject malformed writer input" do
     rect = %{
       type: :rect,
@@ -249,10 +259,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
           %{group | boxes: [%{type: :glyph_group, actual_text: "x", boxes: :bad}]},
           %{group | boxes: [%{text | line_height: -1}]},
           %{group | boxes: [%{text | line_height: :bad}]},
-          %{group | boxes: [%{text | x: 1_000_000_001}]},
+          %{group | boxes: [%{text | x: 4_294_967_296}]},
           %{group | boxes: [Map.put(text, :baseline_snap_depth, Integer.pow(10, 1000))]},
           %{group | boxes: [Map.put(text, :letter_spacing, :bad)]},
-          %{group | boxes: [Map.put(text, :stroke_width, 1_000_000_001)]},
+          %{group | boxes: [Map.put(text, :stroke_width, 4_294_967_296)]},
           %{group | boxes: [Map.put(text, :drawing_annotation_rect, {0, 0, 1, 1})]},
           %{group | boxes: [Map.put(text, :drawing_page_height, 10)]},
           %{
@@ -264,22 +274,22 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
           %{group | transform: {1, 0, 0, 1, :bad, 0}},
           %{group | transform: {0, 0, 0, 1, 0, 0}},
           %{group | transform: {1, 0, 0, 1, 0, 0, 0}},
-          %{group | width: 1_000_000_001},
+          %{group | width: 4_294_967_296},
           %{group | baseline: -1},
           %{group | baseline: 31},
           %{group | clip: %{x: 0, y: 0, width: -1, height: 1}},
           %{group | clip: %{x: 0, y: 0, width: 1, height: :bad}},
-          %{group | clip: %{x: 1_000_000_000, y: 0, width: 1, height: 1}},
+          %{group | clip: %{x: 4_294_967_295, y: 0, width: 1, height: 1}},
           %{group | clip: %{x: 0, y: 0, width: 1, height: 1, extra: true}},
           %{group | clip: :bad},
           Map.put(group, :link_url, "https://example.com"),
           %{group | boxes: [Map.put(group, :snap_to_css_pixel_grid, :bad)]},
           %{group | boxes: [Map.put(group, :drawing_annotation_rect, {0, 0, 1, 1})]},
           %{group | boxes: [Map.put(group, :drawing_page_height, 10)]},
-          %{group | transform: {1_000_000_000, 0, 0, 1, 0, 0}},
-          %{group | boxes: [%{group | transform: {1_000_000_000, 0, 0, 1, 0, 0}}]},
-          %{group | clip: %{x: 500_000_000, y: 0, width: 1, height: 1}},
-          %{group | boxes: [%{text | x: 500_000_000}]}
+          %{group | transform: {4_294_967_295, 0, 0, 1, 0, 0}},
+          %{group | boxes: [%{group | transform: {4_294_967_295, 0, 0, 1, 0, 0}}]},
+          %{group | clip: %{x: 2_147_483_648, y: 0, width: 1, height: 1}},
+          %{group | boxes: [%{text | x: 2_147_483_648}]}
         ] do
       assert {:error, {:invalid_pdf_input, diagnostic}} =
                PdfWriter.render([%{page | boxes: [invalid]}])

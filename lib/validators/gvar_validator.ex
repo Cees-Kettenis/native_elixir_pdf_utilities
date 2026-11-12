@@ -46,7 +46,7 @@ defmodule NativeElixirPdfUtilities.Validators.GvarValidator do
                    data_offset + List.last(offsets) <= byte_size(data),
                  do: invalid("gvar glyph data offsets are invalid")
 
-          FontValidator.reserve(:max_font_variation_work, shared_count * axes)
+          FontValidator.reserve(:max_work, shared_count * axes)
           shared_raw = read(data, shared_offset, shared_count * axes * 2)
           shared = for <<n::signed-16 <- shared_raw>>, do: n / 16384
 
@@ -125,7 +125,7 @@ defmodule NativeElixirPdfUtilities.Validators.GvarValidator do
 
   defp tuples(data, points, ends, coordinates, shared, composite?) do
     total = length(points)
-    FontValidator.reserve(:max_font_variation_work, total)
+    FontValidator.reserve(:max_work, total)
     zero = List.duplicate({0, 0}, total)
 
     if data == <<>> do
@@ -202,7 +202,7 @@ defmodule NativeElixirPdfUtilities.Validators.GvarValidator do
               interpolate(points, ends, sparse)
             end
 
-          FontValidator.reserve(:max_font_variation_work, total)
+          FontValidator.reserve(:max_work, total)
 
           result =
             Enum.zip(result, deltas)
@@ -392,7 +392,7 @@ defmodule NativeElixirPdfUtilities.Validators.GvarValidator do
   def ot_round(value), do: floor(value + 0.5)
 
   defp read(data, offset, size) do
-    FontValidator.reserve(:max_font_variation_work, max(size, 1))
+    FontValidator.reserve(:max_work, max(size, 1))
 
     unless offset >= 0 and size >= 0 and offset + size <= byte_size(data),
       do: invalid("gvar byte range is outside its owning table")

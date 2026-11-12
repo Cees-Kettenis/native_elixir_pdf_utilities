@@ -117,7 +117,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffLargeProgramTest do
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
 
     NativeElixirPdfUtilities.Limits.install(
-      Map.put(limits, :max_font_outline_coordinate, Integer.pow(10, 310))
+      Map.put(limits, :max_numeric_magnitude, Integer.pow(10, 310))
     )
 
     assert {:error, {:invalid_font, %{message: message}}} =

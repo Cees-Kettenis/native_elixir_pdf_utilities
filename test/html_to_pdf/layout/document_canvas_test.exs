@@ -109,12 +109,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentCanvasTest do
                )
 
       assert {:ok, tree} = Style.compute_detailed(dom, [], parent.image_budget)
-      Limits.install(Map.put(Limits.effective(), :max_layout_boxes, 0))
+      Limits.install(Map.put(Limits.effective(), :max_entries, 0))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                Layout.layout_viewport(tree, 90, 60)
 
-      assert diagnostic.message =~ "max_layout_boxes" and ResourceContext.current() == parent
+      assert diagnostic.message =~ "max_entries" and ResourceContext.current() == parent
       :callback_continued
     end)
     |> then(&assert(&1 == :callback_continued))

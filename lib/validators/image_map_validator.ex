@@ -24,7 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.ImageMapValidator do
         )
       end
 
-    HtmlValidator.check_render_resource(:max_image_map_geometry_work, count * count, :layout)
+    HtmlValidator.check_render_resource(:max_work, count * count, :layout)
     count
   end
 
@@ -77,11 +77,11 @@ defmodule NativeElixirPdfUtilities.Validators.ImageMapValidator do
 
         %{tag: "area", attributes: attrs} ->
           coords = HtmlValidator.parse_html_float_list(Map.get(attrs, "coords", ""))
-          HtmlValidator.reserve_render_resource(:max_image_map_coordinates, length(coords), :html)
+          HtmlValidator.reserve_render_resource(:max_entries, length(coords), :html)
 
           Enum.each(
             coords,
-            &HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(&1), :html)
+            &HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(&1), :html)
           )
 
           shape =
@@ -285,7 +285,7 @@ defmodule NativeElixirPdfUtilities.Validators.ImageMapValidator do
                   if Map.get(box, :type) == :link_region and
                        (Map.get(box, :link_url) != nil or Map.get(box, :link_destination) != nil) do
                     HtmlValidator.check_render_resource(
-                      :max_image_map_geometry_work,
+                      :max_work,
                       length(box.link_quads) * 4,
                       :layout
                     )

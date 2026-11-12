@@ -122,13 +122,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
         if operations == [], do: :error, else: {:ok, Enum.reverse(operations)}
 
       _ ->
-        HtmlValidator.check_render_resource(:max_css_transform_operations, count + 1, :css)
+        HtmlValidator.check_render_resource(:max_entries, count + 1, :css)
 
         with {:ok, name, "(" <> rest} <- HtmlValidator.parse_css_identifier(source),
              {:ok, args, remaining} <- function_arguments(rest),
              name = String.downcase(name, :ascii),
              {:ok, prepared} <- prepare_operation(name, args) do
-          HtmlValidator.reserve_render_resource(:max_css_work, byte_size(args) + 1, :css)
+          HtmlValidator.reserve_render_resource(:max_work, byte_size(args) + 1, :css)
           functions(remaining, [prepared | operations], count + 1)
         else
           _ -> :error
@@ -150,7 +150,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
               units |> Enum.drop(index + 1) |> Enum.join()}}
 
           unit == "(" ->
-            HtmlValidator.check_render_resource(:max_css_calculation_depth, depth, :css)
+            HtmlValidator.check_render_resource(:max_depth, depth, :css)
             {:cont, {[unit | args], depth + 1}}
 
           unit == ")" ->
@@ -267,7 +267,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
           operations when is_list(operations) and operations != [] ->
             HtmlValidator.check_render_resource(
-              :max_css_transform_operations,
+              :max_entries,
               length(operations),
               :layout
             )
@@ -357,7 +357,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                      Enum.each(
                        Tuple.to_list(combined),
                        &HtmlValidator.check_render_resource(
-                         :max_pdf_numeric_magnitude,
+                         :max_numeric_magnitude,
                          abs(&1),
                          :layout
                        )
@@ -395,7 +395,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
             Enum.each(
               Tuple.to_list(matrix),
-              &HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(&1), :layout)
+              &HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(&1), :layout)
             )
 
             if a * d - b * c == 0, do: {:ok, :empty}, else: {:ok, matrix}
@@ -517,7 +517,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
              scopes = [scope | Map.get(box, :css_transform_scopes, [])]
 
              HtmlValidator.check_render_resource(
-               :max_drawing_group_depth,
+               :max_depth,
                length(scopes),
                :layout
              )
@@ -563,7 +563,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   @spec validate_scopes(term()) :: :ok | {:error, {atom(), map()}}
   def validate_scopes(scopes) do
     if is_list(scopes) do
-      HtmlValidator.check_render_resource(:max_drawing_group_depth, length(scopes), :layout)
+      HtmlValidator.check_render_resource(:max_depth, length(scopes), :layout)
 
       valid =
         Enum.all?(scopes, fn scope ->
@@ -741,12 +741,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
           end
         end)
 
-      HtmlValidator.check_render_resource(:max_rendered_pages, page_count, :pagination)
-      HtmlValidator.check_render_resource(:max_pdf_pages, page_count, :pagination)
+      HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
+      HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
       canvas = Enum.filter(hd(pages).boxes, &(Map.get(&1, :position_anchor) == :canvas))
 
       HtmlValidator.reserve_render_resource(
-        :max_layout_boxes,
+        :max_entries,
         (page_count - length(pages)) * length(canvas),
         :pagination
       )
@@ -756,7 +756,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
       work =
         length(pages) * Enum.reduce(pages, 0, fn page, count -> count + length(page.boxes) end)
 
-      HtmlValidator.reserve_render_resource(:max_css_work, work, :pagination)
+      HtmlValidator.reserve_render_resource(:max_work, work, :pagination)
 
       Enum.with_index(pages)
       |> Enum.map(fn {page, target} ->
@@ -786,7 +786,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
             end
           end)
 
-        HtmlValidator.reserve_render_resource(:max_layout_boxes, length(carried), :pagination)
+        HtmlValidator.reserve_render_resource(:max_entries, length(carried), :pagination)
         boxes = carried ++ page.boxes
 
         boxes =
@@ -821,7 +821,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
     alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
     alias NativeElixirPdfUtilities.Validators.{EmbeddedFormValidator, ClipGeometryValidator}
 
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :pagination)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :pagination)
     {transform, clip, height} = DrawingGeometry.composition_parts(composition)
 
     case box do
@@ -951,7 +951,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   # genuine local control plane before the CSS affine wrappers are emitted.
   defp prepare_group_forms(boxes, size, opts, context, depth) do
     alias NativeElixirPdfUtilities.Validators.{EmbeddedFormValidator, HtmlFormValidator}
-    HtmlValidator.check_render_resource(:max_drawing_group_depth, depth, :layout)
+    HtmlValidator.check_render_resource(:max_depth, depth, :layout)
 
     Enum.reduce_while(boxes, {:ok, []}, fn box, {:ok, acc} ->
       prepared =
@@ -1122,7 +1122,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
     valid =
       if is_list(clips) do
-        HtmlValidator.check_render_resource(:max_drawing_group_depth, length(clips), :layout)
+        HtmlValidator.check_render_resource(:max_depth, length(clips), :layout)
 
         Enum.all?(clips, fn entry ->
           case entry do

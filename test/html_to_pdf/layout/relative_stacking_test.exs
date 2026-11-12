@@ -123,7 +123,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RelativeStackingTest do
           %{_stacking_path: [{:bad, 0}]},
           %{_stacking_path: [{[-1], 0}]},
           %{_stacking_path: [{[0], :auto}]},
-          %{_stacking_path: List.duplicate({[0], 0}, 129)},
+          %{
+            _stacking_path:
+              List.duplicate({[0], 0}, NativeElixirPdfUtilities.Limits.get(:max_depth) + 1)
+          },
           %{_stacking_background_order: :bad},
           %{_stacking_root_background: :bad}
         ] do
@@ -143,7 +146,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RelativeStackingTest do
     assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
     [child | rest] = styled.children
 
-    for order <- [:bad, [-1], List.duplicate(0, 129)] do
+    for order <- [
+          :bad,
+          [-1],
+          List.duplicate(0, NativeElixirPdfUtilities.Limits.get(:max_depth) + 1)
+        ] do
       node = %{child | style: Map.put(child.style, :_stacking_order, order)}
 
       assert {:error, {:invalid_layout, diagnostic}} =

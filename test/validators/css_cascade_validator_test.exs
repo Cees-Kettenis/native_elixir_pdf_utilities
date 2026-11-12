@@ -145,7 +145,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidatorTest do
   test "computed source validation and supports preserve shared resource failures" do
     limits = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_css_work: 25})
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 25})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssValueValidator.validate_declaration(
@@ -154,7 +154,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidatorTest do
                HtmlValidator.new_css_budget()
              )
 
-    assert diagnostic.message =~ "max_css_work"
+    assert diagnostic.message =~ "max_work"
 
     assert {:render_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}} =
              catch_throw(
@@ -163,6 +163,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidatorTest do
                )
              )
 
-    assert diagnostic.message =~ "max_css_work"
+    assert diagnostic.message =~ "max_work"
   end
 end

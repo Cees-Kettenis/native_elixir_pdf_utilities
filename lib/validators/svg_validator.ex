@@ -100,10 +100,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
     requested_width = max(ceil(width * requested), 1)
     requested_height = max(ceil(height * requested), 1)
 
-    if requested_width <= Limits.get(:max_svg_raster_dimension) and
-         requested_height <= Limits.get(:max_svg_raster_dimension) and
-         requested_width * requested_height <= Limits.get(:max_svg_raster_pixels) and
-         requested_width * requested_height * 4 <= Limits.get(:max_decoded_image_bytes) and
+    if requested_width <= Limits.get(:max_raster_dimension) and
+         requested_height <= Limits.get(:max_raster_dimension) and
+         requested_width * requested_height <= Limits.get(:max_raster_pixels) and
+         requested_width * requested_height * 4 <= Limits.get(:max_decoded_bytes) and
          png_raster_budget(requested_width, requested_height) == :ok do
       [width: requested_width, height: requested_height]
     else
@@ -113,10 +113,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   defp bounded_sampling_scale(width, height, scale) do
-    maximum_axis_scale = div(Limits.get(:max_svg_raster_dimension), max(width, height))
+    maximum_axis_scale = div(Limits.get(:max_raster_dimension), max(width, height))
 
     maximum_pixels =
-      min(Limits.get(:max_svg_raster_pixels), div(Limits.get(:max_decoded_image_bytes), 4))
+      min(Limits.get(:max_raster_pixels), div(Limits.get(:max_decoded_bytes), 4))
 
     maximum_pixel_scale = trunc(:math.sqrt(div(maximum_pixels, width * height)))
     scale = max(1, min(scale, min(maximum_axis_scale, maximum_pixel_scale)))
@@ -146,7 +146,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
            :ok <- validate_svg_raster_budget(width, height),
            :ok <-
              HtmlValidator.reserve_render_resource(
-               :max_aggregate_svg_raster_pixels,
+               :max_raster_pixels,
                width * height,
                :style
              ) do
@@ -178,13 +178,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   def conversion_result(result) do
     case result do
       {:ok, png} when is_binary(png) ->
-        if byte_size(png) <= Limits.get(:max_svg_output_bytes) do
+        if byte_size(png) <= Limits.get(:max_output_bytes) do
           {:ok, png}
         else
           Diagnostics.error(
             :limits,
             :resource_limit_exceeded,
-            "SVG conversion output exceeds max_svg_output_bytes",
+            "SVG conversion output exceeds max_output_bytes",
             source: "SVG"
           )
         end
@@ -289,7 +289,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   defp validate_source(svg) do
-    max_svg_bytes = Limits.get(:max_svg_bytes)
+    max_input_bytes = Limits.get(:max_input_bytes)
 
     cond do
       not is_binary(svg) ->
@@ -297,11 +297,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           source: "SVG"
         )
 
-      byte_size(svg) > max_svg_bytes ->
+      byte_size(svg) > max_input_bytes ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "SVG source exceeds the #{max_svg_bytes}-byte limit",
+          "SVG source exceeds max_input_bytes (#{max_input_bytes}-byte limit)",
           source: "SVG"
         )
 
@@ -316,7 +316,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   defp validate_structure(svg, context) do
-    HtmlValidator.reserve_render_resource(:max_aggregate_svg_source_bytes, byte_size(svg), :style)
+    HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(svg), :style)
 
     # Reject both DTD events because a bare DOCTYPE emits only endDTD in xmerl.
     state = %{
@@ -689,17 +689,17 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         if id != nil and Map.has_key?(state.ids, id), do: reject("SVG IDs must be unique", line)
         graph = Map.put(state.graph, index, [])
         graph = if parent == nil, do: graph, else: Map.update!(graph, parent.index, &[index | &1])
-        HtmlValidator.reserve_render_resource(:max_aggregate_svg_nodes, 1, :style)
-        HtmlValidator.reserve_render_resource(:max_aggregate_svg_path_bytes, paths, :style)
+        HtmlValidator.reserve_render_resource(:max_entries, 1, :style)
+        HtmlValidator.reserve_render_resource(:max_input_bytes, paths, :style)
 
         HtmlValidator.reserve_render_resource(
-          :max_aggregate_svg_filter_primitives,
+          :max_entries,
           if(String.starts_with?(name, "fe"), do: 1, else: 0),
           :style
         )
 
         HtmlValidator.reserve_render_resource(
-          :max_aggregate_svg_references,
+          :max_entries,
           length(hrefs) + length(paint_hrefs),
           :style
         )
@@ -830,11 +830,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         }
 
         for {key, count} <- [
-              {:max_svg_nodes, state.nodes},
-              {:max_svg_depth, state.depth},
-              {:max_svg_path_bytes, state.paths},
-              {:max_svg_filter_primitives, state.filters},
-              {:max_svg_references, state.references}
+              {:max_entries, state.nodes},
+              {:max_depth, state.depth},
+              {:max_input_bytes, state.paths},
+              {:max_entries, state.filters},
+              {:max_entries, state.references}
             ] do
           if count > Limits.get(key) do
             throw(
@@ -1010,40 +1010,40 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           MapSet.member?(ancestors, index) ->
             reject("SVG reference cycle is not supported", 1)
 
-          depth > Limits.get(:max_svg_depth) ->
-            reject("SVG reference expansion exceeds max_svg_depth", 1)
+          depth > Limits.get(:max_depth) ->
+            reject("SVG reference expansion exceeds max_depth", 1)
 
           work.nodes + node_work + work.positions + positions >
-              Limits.get(:max_svg_expansion_work) ->
+              Limits.get(:max_work) ->
             throw(
               {:svg_validation,
                Diagnostics.error(
                  :limits,
                  :resource_limit_exceeded,
-                 "SVG exceeds max_svg_expansion_work",
+                 "SVG exceeds max_work",
                  source: "SVG"
                )}
             )
 
-          work.paths + paths > Limits.get(:max_svg_expanded_path_bytes) ->
+          work.paths + paths > Limits.get(:max_decoded_bytes) ->
             throw(
               {:svg_validation,
                Diagnostics.error(
                  :limits,
                  :resource_limit_exceeded,
-                 "SVG exceeds max_svg_expanded_path_bytes",
+                 "SVG exceeds max_decoded_bytes",
                  source: "SVG"
                )}
             )
 
           true ->
             HtmlValidator.reserve_render_resource(
-              :max_svg_expansion_work,
+              :max_work,
               node_work + if(Map.has_key?(work.counts, index), do: positions, else: 0),
               :style
             )
 
-            HtmlValidator.reserve_render_resource(:max_svg_expanded_path_bytes, paths, :style)
+            HtmlValidator.reserve_render_resource(:max_decoded_bytes, paths, :style)
             ancestors = MapSet.put(ancestors, index)
             children = Enum.map(Map.fetch!(graph, index), &{&1, ancestors, depth + 1})
 
@@ -1240,22 +1240,28 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
   end
 
   defp validate_svg_raster_budget(width, height) do
-    max_dimension = Limits.get(:max_svg_raster_dimension)
-    max_pixels = Limits.get(:max_svg_raster_pixels)
+    max_dimension = Limits.get(:max_raster_dimension)
+    max_pixels = Limits.get(:max_raster_pixels)
 
     cond do
       width > max_dimension or height > max_dimension ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "SVG raster dimensions #{width}x#{height} exceed the #{max_dimension}-pixel per-axis limit"
+          "SVG raster dimensions #{width}x#{height} exceed max_raster_dimension (#{max_dimension}-pixel per-axis limit)",
+          source: "SVG",
+          module: __MODULE__,
+          operation: :rasterize
         )
 
       width * height > max_pixels ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "SVG raster dimensions #{width}x#{height} exceed the #{max_pixels}-pixel limit"
+          "SVG raster dimensions #{width}x#{height} exceed max_raster_pixels (#{max_pixels}-pixel limit)",
+          source: "SVG",
+          module: __MODULE__,
+          operation: :rasterize
         )
 
       width > 0x7FFFFFFF or height > 0x7FFFFFFF ->

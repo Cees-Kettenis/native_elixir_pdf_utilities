@@ -481,7 +481,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialNumberTest do
   end
 
   test "shared numeric token and geometry limits report actionable public failures" do
-    Limits.install(Map.put(Limits.defaults(), :max_html_numeric_token_bytes, 3))
+    Limits.install(Map.put(Limits.defaults(), :max_numeric_token_bytes, 3))
 
     for attributes <- ["value=1234", "min=1234", "max=1234", "step=1234"] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -489,14 +489,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialNumberTest do
 
       assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.operation == :render and diagnostic.module == HtmlValidator
-      assert diagnostic.message =~ "max_html_numeric_token_bytes"
+      assert diagnostic.message =~ "max_numeric_token_bytes"
     end
 
-    Limits.install(Map.put(Limits.defaults(), :max_css_numeric_magnitude, 10))
+    Limits.install(Map.put(Limits.defaults(), :max_numeric_magnitude, 10))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=number>")
 
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 end

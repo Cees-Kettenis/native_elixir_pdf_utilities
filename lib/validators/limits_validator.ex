@@ -32,61 +32,24 @@ defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
                  "resource limit #{inspect(key)} must be a positive integer no greater than #{@max_configured_integer}; got: #{inspect(value)}"}
 
               nil ->
-                validate_relationships(limits)
+                # BEAM receive timeouts have a fixed unsigned 32-bit millisecond range.
+                # This is a runtime invariant, independent of configurable resource budgets.
+                timeout =
+                  Enum.find(
+                    [:max_operation_timeout_ms, :operation_memory_check_interval_ms],
+                    &(Map.fetch!(limits, &1) > 4_294_967_295)
+                  )
+
+                if timeout,
+                  do:
+                    {:error,
+                     "resource limit #{inspect(timeout)} exceeds the BEAM receive timeout range"},
+                  else: {:ok, limits}
             end
         end
 
       false ->
         {:error, "resource limits must be configured as a keyword list"}
-    end
-  end
-
-  defp validate_relationships(limits) do
-    # BEAM receive timeouts have a fixed unsigned 32-bit millisecond range.
-    # This is a runtime invariant rather than a configurable resource limit.
-    invalid_timeout =
-      Enum.find(
-        [
-          :max_operation_timeout_ms,
-          :operation_memory_check_interval_ms,
-          :max_html_form_value_timeout_ms
-        ],
-        &(Map.fetch!(limits, &1) > 4_294_967_295)
-      )
-
-    cond do
-      invalid_timeout ->
-        {:error,
-         "resource limit #{inspect(invalid_timeout)} exceeds the BEAM receive timeout range"}
-
-      limits.max_aggregate_font_source_bytes < limits.max_font_source_bytes ->
-        {:error,
-         "resource limit :max_aggregate_font_source_bytes must be greater than or equal to :max_font_source_bytes"}
-
-      limits.max_aggregate_image_source_bytes < limits.max_image_source_bytes ->
-        {:error,
-         "resource limit :max_aggregate_image_source_bytes must be greater than or equal to :max_image_source_bytes"}
-
-      limits.max_aggregate_decoded_image_bytes < limits.max_decoded_image_bytes ->
-        {:error,
-         "resource limit :max_aggregate_decoded_image_bytes must be greater than or equal to :max_decoded_image_bytes"}
-
-      limits.max_pdf_object_stream_entries > limits.max_pdf_objects ->
-        {:error, "resource limit :max_pdf_object_stream_entries must not exceed :max_pdf_objects"}
-
-      limits.max_pdf_info_total_bytes < limits.max_pdf_info_value_bytes ->
-        {:error,
-         "resource limit :max_pdf_info_total_bytes must be greater than or equal to :max_pdf_info_value_bytes"}
-
-      limits.max_pdf_outline_total_title_bytes < limits.max_pdf_outline_title_bytes ->
-        {:error,
-         "resource limit :max_pdf_outline_total_title_bytes must be greater than or equal to :max_pdf_outline_title_bytes"}
-
-      limits.max_cid_width_entries > 65_536 ->
-        {:error, "resource limit :max_cid_width_entries must not exceed the PDF CID range"}
-
-      true ->
-        {:ok, limits}
     end
   end
 end

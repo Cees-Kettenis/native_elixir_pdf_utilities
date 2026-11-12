@@ -75,7 +75,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderPredictorTest do
   end
 
   test "predictor work is admitted for unpacked samples before reconstruction", %{limits: limits} do
-    Limits.install(%{limits | max_pdf_reader_work: 20})
+    Limits.install(%{limits | max_work: 20})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              decode(<<0, 0, 0, 0, 0, 0>>, %{
@@ -89,25 +89,37 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderPredictorTest do
     assert diagnostic.operation == :read
     assert diagnostic.module == Reader
     assert diagnostic.source == "object 1 0"
-    assert diagnostic.message =~ "max_pdf_reader_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "predictor buffer admission accepts the boundary and rejects one byte less", %{
     limits: limits
   } do
-    params = %{"Predictor" => 2, "Columns" => 3}
-    Limits.install(%{limits | max_pdf_predictor_working_bytes: 17})
+    alias NativeElixirPdfUtilities.Validators.PdfValidator
+    params = %{"Predictor" => 2, "Columns" => 3, "Colors" => 1, "BitsPerComponent" => 8}
     assert {:ok, <<1, 3, 6>>} = decode(<<1, 2, 3>>, params)
-    Limits.install(%{limits | max_pdf_predictor_working_bytes: 16})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = decode(<<1, 2, 3>>, params)
+    # Tiny buffer ceilings are tested at allocation admission. A public worker
+    # also needs space for its BEAM heap and referenced input binaries.
+    Limits.install(%{limits | max_operation_memory_bytes: 17})
+    assert {:ok, _plan} = PdfValidator.prepare_predictor(<<1, 2, 3>>, params, {1, 0})
+    Limits.install(%{limits | max_operation_memory_bytes: 16})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfValidator.prepare_predictor(<<1, 2, 3>>, params, {1, 0})
+
     assert diagnostic.stage == :limits and diagnostic.operation == :read
     assert diagnostic.source == "object 1 0"
-    assert diagnostic.message =~ "max_pdf_predictor_working_bytes"
+    assert diagnostic.message =~ "max_operation_memory_bytes"
 
-    Limits.install(%{limits | max_pdf_predictor_working_bytes: 1})
+    Limits.install(%{limits | max_operation_memory_bytes: 1})
 
     for predictor <- [2, 15] do
-      assert {:ok, <<>>} = decode(<<>>, %{"Predictor" => predictor, "Columns" => 1_000})
+      assert {:ok, _} =
+               PdfValidator.prepare_predictor(
+                 <<>>,
+                 %{params | "Predictor" => predictor, "Columns" => 1_000},
+                 {1, 0}
+               )
     end
   end
 

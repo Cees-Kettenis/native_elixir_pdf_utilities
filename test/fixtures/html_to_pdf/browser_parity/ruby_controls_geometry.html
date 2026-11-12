@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><style>@page{size:600pt 120pt;margin:0}html,body{margin:0;padding:0}
+#ruby_controls_geometry .sample{position:absolute;top:8pt;width:138pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#ruby_controls_geometry .sample:nth-child(1){left:9pt}#ruby_controls_geometry .sample:nth-child(2){left:156pt}#ruby_controls_geometry .sample:nth-child(3){left:303pt}#ruby_controls_geometry .sample:nth-child(4){left:450pt}
+#ruby_controls_geometry p{margin:0}#ruby_controls_geometry .label{font:8pt/12pt 'DejaVu Sans';margin-bottom:3pt}
+#ruby_controls_geometry .primary,#ruby_controls_geometry .secondary{font:12pt/28pt 'CJK Ruby Fixture';width:120pt}
+#ruby_controls_geometry .primary rt{font-size:12pt}#ruby_controls_geometry .secondary rt{font-size:6pt}
+#ruby_controls_geometry ruby{ruby-overhang:none}
+</style></head><body>
+<!-- ruby_controls_geometry.html reuses the typography capture and its existing CJK face. -->
+<section id="ruby_controls_geometry" style="position:absolute;left:0pt;top:0pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample"><p class="label">Start / under</p><p class="primary"><ruby style="ruby-align:start">東京<rt>東京京都</rt></ruby></p><p class="secondary"><ruby style="ruby-position:under">京<rt>東京</rt></ruby></p></section>
+<section class="sample"><p class="label">Center / merge</p><p class="primary"><ruby style="ruby-align:center">東京<rt>東京京都</rt></ruby></p><p class="secondary"><ruby data-merge-reference="group" style="ruby-merge:merge">京<rt>東京京都</rt>都<rt>京</rt></ruby></p></section>
+<section class="sample"><p class="label">Between / vertical reading</p><p class="primary"><ruby style="ruby-align:space-between">東京<rt>東京京都</rt></ruby></p><p class="secondary"><ruby data-intercharacter-reference="em" style="ruby-position:inter-character">京<rt>とう</rt></ruby></p></section>
+<section class="sample"><p class="label">Around / no overhang</p><p class="primary"><ruby style="ruby-align:space-around">東京<rt>東京京都</rt></ruby></p><p class="secondary">京<ruby style="ruby-overhang:none">都<rt>東京京都</rt></ruby>京</p></section>
+</section>
+</body></html>

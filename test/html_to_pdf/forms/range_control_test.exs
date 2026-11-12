@@ -391,13 +391,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
   test "existing numeric and layout budgets return public Range diagnostics" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_html_numeric_token_bytes, 4))
-    assert Limits.get(:max_html_numeric_token_bytes) == 4
+    Limits.install(Map.put(previous, :max_numeric_token_bytes, 4))
+    assert Limits.get(:max_numeric_token_bytes) == 4
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=range value=12345>", forms: :static)
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "datalist range ticks use exact bounds and authored step base without selecting suggestions" do
@@ -627,7 +627,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
       fn ->
         previous = Limits.effective()
         on_exit(fn -> Limits.install(previous) end)
-        Limits.install(Map.put(previous, :max_html_numeric_token_bytes, 4))
+        Limits.install(Map.put(previous, :max_numeric_token_bytes, 4))
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  HtmlToPdf.render(
@@ -636,7 +636,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
                    html_recovery: true
                  )
 
-        assert diagnostic.message =~ "max_html_numeric_token_bytes"
+        assert diagnostic.message =~ "max_numeric_token_bytes"
       end
     )
   end

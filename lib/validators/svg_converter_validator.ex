@@ -69,7 +69,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
            :ok <- SvgFilterWorkValidator.reserve(work_root, dimensions, summary.filter_work),
            :ok <-
              HtmlValidator.reserve_render_resource(
-               :max_aggregate_svg_surface_pixels,
+               :max_raster_pixels,
                dimensions[:width] * dimensions[:height] *
                  (1 + 25 * summary.opacity_layers +
                     75 * (summary.nested_viewports + summary.clip_references)),
@@ -279,7 +279,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
           # approved bytes. Its rewritten data URIs are execution output, not
           # new caller references to validate against the old opaque keys.
           HtmlValidator.reserve_render_resource(
-            :max_aggregate_svg_source_bytes,
+            :max_input_bytes,
             byte_size(source),
             :style
           )
@@ -303,7 +303,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   end
 
   defp prepare_source(source, context, budget, depth, image_font_options) do
-    with :ok <- HtmlValidator.check_render_resource(:max_embedded_document_depth, depth, :style),
+    with :ok <- HtmlValidator.check_render_resource(:max_depth, depth, :style),
          {:ok, summary} <-
            SvgValidator.validate_processing(
              source,
@@ -327,7 +327,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
            embed_resources(root, context, budget, depth, occurrences, image_font_options, fonts),
          normalized = normalize_converter_source(root),
          approved = SvgScene.authored_source(normalized),
-         :ok <- HtmlValidator.check_render_resource(:max_svg_bytes, byte_size(approved), :style) do
+         :ok <- HtmlValidator.check_render_resource(:max_input_bytes, byte_size(approved), :style) do
       summary =
         Map.put(summary, :filter_work, %{
           root: normalized,
@@ -468,7 +468,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
         {:ok, %{data: data, media_type: mime}} ->
           with :ok <-
                  HtmlValidator.reserve_render_resource(
-                   :max_aggregate_svg_resource_bytes,
+                   :max_input_bytes,
                    byte_size(data),
                    :style
                  ),
@@ -538,7 +538,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
         with {:ok, image} <- PngDecoder.decode(data, budget, true),
              :ok <-
                HtmlValidator.reserve_render_resource(
-                 :max_aggregate_svg_raster_pixels,
+                 :max_raster_pixels,
                  image.width_px * image.height_px * count,
                  :style
                ),
@@ -565,7 +565,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
           {:ok, image} ->
             with :ok <-
                    HtmlValidator.reserve_render_resource(
-                     :max_aggregate_svg_raster_pixels,
+                     :max_raster_pixels,
                      image.width_px * image.height_px * count,
                      :style
                    ),
@@ -592,7 +592,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
 
   defp prepare_fonts(fonts, summary) do
     FontValidator.with_budget(fn ->
-      with :ok <- HtmlValidator.check_render_resource(:max_font_count, length(fonts), :font) do
+      with :ok <- HtmlValidator.check_render_resource(:max_entries, length(fonts), :font) do
         Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, bytes} ->
           result =
             case font do
@@ -600,7 +600,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                 FontValidator.reserve_source(data)
 
                 HtmlValidator.reserve_render_resource(
-                  :max_svg_font_work_bytes,
+                  :max_work,
                   byte_size(data),
                   :font
                 )

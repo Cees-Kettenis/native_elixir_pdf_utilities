@@ -150,9 +150,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterContractTest do
     limits: limits
   } do
     for {key, value} <- [
-          {:max_svg_bytes, 1},
-          {:max_svg_raster_pixels, 1},
-          {:max_svg_output_bytes, 1}
+          {:max_input_bytes, 1},
+          {:max_raster_pixels, 1},
+          {:max_input_bytes, 1}
         ] do
       Limits.install(Map.put(limits, key, value))
 

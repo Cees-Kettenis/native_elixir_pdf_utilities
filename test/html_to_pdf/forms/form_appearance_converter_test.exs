@@ -192,10 +192,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterTest do
                system_font_discovery: false
              )
 
-    assert :ok = Limits.install(%{Limits.effective() | max_aggregate_font_source_bytes: 1})
+    assert :ok = Limits.install(%{Limits.effective() | max_input_bytes: 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fields(pdf)
     assert diagnostic.operation == :fields
-    assert diagnostic.message =~ "max_aggregate_font_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "legacy custom effect PDFs remain inspectable but are never executed" do
@@ -218,13 +218,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterTest do
     assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
     assert {:ok, context} = Reader.read_validated(pdf)
     required = context.document.trailer["Size"]
-    assert :ok = Limits.install(%{Limits.effective() | max_pdf_objects: required})
+    assert :ok = Limits.install(%{Limits.effective() | max_entries: required})
+    assert :ok = NativeElixirPdfUtilities.Validators.FormValidator.capacity(context, 0)
+    assert :ok = Limits.install(Limits.defaults())
     assert {:ok, exact} = HtmlToPdf.render(html, system_font_discovery: false)
     assert {:ok, [%{name: "pick", widgets: [_, _]}, %{name: "editor"}]} = Forms.fields(exact)
-    assert :ok = Limits.install(%{Limits.effective() | max_pdf_objects: required - 1})
+    assert :ok = Limits.install(%{Limits.effective() | max_entries: required - 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(html, system_font_discovery: false)
+             NativeElixirPdfUtilities.Validators.FormValidator.capacity(context, 0)
 
     assert diagnostic.stage == :forms
     assert diagnostic.message =~ "object count cannot accommodate form appearances"

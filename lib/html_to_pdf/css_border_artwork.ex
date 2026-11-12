@@ -76,6 +76,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBorderArtwork do
     %{length: length, segments: List.flatten(segments) |> Enum.filter(&(&1.to > &1.from))}
   end
 
+  @doc "Returns the fixed UA dash and cap geometry for an admitted open stroke."
+  @spec open_pattern(atom(), number(), number() | nil) :: map() | nil
+  def open_pattern(style, width, length) do
+    case {style, width > 0} do
+      {:dotted, true} ->
+        gap =
+          if is_number(length) and length > width do
+            intervals = max(round((length - width) / (width * 2)), 1)
+            (length - width) / intervals
+          else
+            width * 2
+          end
+
+        %{dash: 0.0, gap: gap, cap: :round}
+
+      {:dashed, true} ->
+        dash = width * 2
+
+        gap =
+          if is_number(length) and length > dash do
+            count = max(round((length + width) / (dash + width)), 1)
+            if count > 1, do: max((length - count * dash) / (count - 1), 0.0), else: width
+          else
+            width
+          end
+
+        %{dash: dash, gap: gap, cap: :butt}
+
+      _ ->
+        nil
+    end
+  end
+
   @doc "Returns the source closed-path dash length, gap and cap for validated border thickness and contour length."
   @spec pattern(:dashed | :dotted, number(), number()) :: map()
   def pattern(style, width, length) do
@@ -134,7 +167,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBorderArtwork do
       |> Stream.take_while(&(&1 < measure.length))
       |> Enum.map(fn start ->
         HtmlValidator.reserve_render_resource(
-          :max_clip_projection_work,
+          :max_work,
           1 + length(measure.segments),
           :writer
         )
@@ -177,7 +210,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBorderArtwork do
   # contour sampling, not configurable renderer resource ceilings. Each
   # subdivision separately consumes the shared projection work budget.
   defp conic_spans(primitive, t0, p0, t1, p1, depth) do
-    HtmlValidator.reserve_render_resource(:max_clip_projection_work, 1, :writer)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :writer)
     middle = (t0 + t1) / 2
     {mx, my} = conic_point(primitive, middle)
     {ax, ay} = p0

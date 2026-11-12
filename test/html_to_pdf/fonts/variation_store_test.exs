@@ -148,7 +148,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariationStoreTest do
     assert {:error, {:invalid_font, _}} =
              FontVariationValidator.prepare_request([{"wght", 1} | :improper], nil)
 
-    Limits.install(Map.put(Limits.effective(), :max_font_variation_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              FontVariationValidator.prepare_normalized_coordinates([0, 0])

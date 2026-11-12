@@ -55,7 +55,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     result =
       case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
              inputs,
-             Limits.get(:max_merge_inputs)
+             Limits.get(:max_entries)
            ) do
         {:ok, 0} ->
           Diagnostics.error(:merge, :empty_pdf_list, "merge/1 expects at least one PDF binary",
@@ -69,7 +69,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
               not is_binary(input) ->
                 {:halt, :invalid}
 
-              aggregate_bytes + byte_size(input) > Limits.get(:max_aggregate_merge_input_bytes) ->
+              aggregate_bytes + byte_size(input) > Limits.get(:max_input_bytes) ->
                 {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
 
               true ->
@@ -314,7 +314,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     case is_list(inputs) and is_integer(start_id) and start_id > 0 do
       true ->
         with :ok <- validate_generated_entry_count(start_id) do
-          page_limit = min(Limits.get(:max_pdf_pages), Limits.get(:max_merged_pages))
+          page_limit = Limits.get(:max_pages)
 
           inputs
           |> Enum.reduce_while({:ok, [], start_id, 0}, fn input,
@@ -327,7 +327,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
                   page_count > page_limit ->
                     {:halt,
                      resource_limit_error(
-                       "merged output requires #{page_count} pages, exceeding min(max_pdf_pages, max_merged_pages) (#{page_limit})"
+                       "merged output requires #{page_count} pages, exceeding max_pages (#{page_limit})"
                      )}
 
                   true ->
@@ -397,7 +397,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   end
 
   defp merged_output_entry_limit do
-    min(Limits.get(:max_merged_objects), Limits.get(:max_pdf_objects))
+    Limits.get(:max_entries)
   end
 
   defp validate_combined_outlines(inputs, page_count) do

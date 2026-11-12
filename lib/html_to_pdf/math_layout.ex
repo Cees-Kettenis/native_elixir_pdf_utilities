@@ -284,10 +284,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             Enum.map(prepared.rows, fn row -> Enum.map(row, &measure_prepared(&1.content)) end)
 
           placement =
-            case MathTableValidator.prepare_geometry(prepared, rows) do
-              {:ok, geometry} -> geometry
-              {:error, _} = error -> throw({:math_layout_error, error})
-            end
+            MathTableValidator.prepare_geometry(prepared, rows) |> math_value()
 
           placement =
             if Enum.any?(prepared.rows, fn row ->
@@ -301,22 +298,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                   Enum.map_reduce(row, index, fn cell, index ->
                     measured =
                       if Map.has_key?(cell, :content_layout_source) do
-                        with {:ok, request} <-
-                               MathTableValidator.prepare_cell_reflow(cell, elem(widths, index)) do
-                          measured =
-                            measure_prepared(
-                              request.prepared,
-                              request.prepared.stretch_constraint
-                            )
+                        request =
+                          MathTableValidator.prepare_cell_reflow(cell, elem(widths, index))
+                          |> math_value()
 
-                          # Allocation gives the anonymous cell row its used
-                          # width before percentage children reflow. A narrower
-                          # painted child does not recenter that containing row.
-                          used_width = min(elem(intrinsic, index).width, elem(widths, index))
-                          %{measured | width: max(measured.width, used_width)}
-                        else
-                          error -> throw({:math_layout_error, error})
-                        end
+                        measured =
+                          measure_prepared(
+                            request.prepared,
+                            request.prepared.stretch_constraint
+                          )
+
+                        # Allocation gives the anonymous cell row its used
+                        # width before percentage children reflow. A narrower
+                        # painted child does not recenter that containing row.
+                        used_width = min(elem(intrinsic, index).width, elem(widths, index))
+                        %{measured | width: max(measured.width, used_width)}
                       else
                         elem(intrinsic, index)
                       end
@@ -325,10 +321,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                   end)
                 end)
 
-              case MathTableValidator.prepare_geometry(prepared, rows) do
-                {:ok, geometry} -> geometry
-                error -> throw({:math_layout_error, error})
-              end
+              MathTableValidator.prepare_geometry(prepared, rows) |> math_value()
             else
               placement
             end
@@ -441,10 +434,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
           inner = measure_prepared(prepared.inner, constraint)
 
           placed =
-            case MathLayoutValidator.prepare_padded_placement(prepared, inner) do
-              {:ok, placed} -> placed
-              {:error, _} = error -> throw({:math_layout_error, error})
-            end
+            MathLayoutValidator.prepare_padded_placement(prepared, inner) |> math_value()
 
           inner
           |> Map.merge(
@@ -466,10 +456,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
           index = if prepared.index, do: measure_prepared(prepared.index)
 
           resolved =
-            case MathLayoutValidator.prepare_radical_stretch(prepared, base) do
-              {:ok, resolved} -> resolved
-              {:error, _} = error -> throw({:math_layout_error, error})
-            end
+            MathLayoutValidator.prepare_radical_stretch(prepared, base) |> math_value()
 
           surd = stretch_geometry(resolved.shape)
           thickness = prepared.rule_thickness
@@ -629,10 +616,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
                 end
 
               target =
-                case MathLayoutValidator.prepare_limit_stretch(prepared, measured) do
-                  {:ok, target} -> target
-                  {:error, _} = error -> throw({:math_layout_error, error})
-                end
+                MathLayoutValidator.prepare_limit_stretch(prepared, measured) |> math_value()
 
               measured =
                 Enum.reduce(pending, measured, fn index, measured ->
@@ -822,10 +806,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
 
             _ ->
               measured =
-                case row(children) do
-                  {:ok, measured} -> measured
-                  {:error, _} = error -> throw({:math_layout_error, error})
-                end
+                row(children) |> math_value()
 
               {items, _, _} =
                 Enum.reduce(children, {[], 0.0, 0.0}, fn child, {items, offset, previous} ->
@@ -1393,6 +1374,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
          }}
       end
     end)
+  end
+
+  # Preserve the owning validator's diagnostic at each fallible geometry step.
+  defp math_value(result) do
+    case result do
+      {:ok, value} -> value
+      {:error, _} = error -> throw({:math_layout_error, error})
+    end
   end
 
   @doc false

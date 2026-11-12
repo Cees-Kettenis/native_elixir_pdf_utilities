@@ -37,6 +37,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AffineDrawingGeometryTest do
     {:ok, image: image, group: group}
   end
 
+  test "scaled writing planes preserve their original canvas when physical grid rebasing is inapplicable" do
+    group = %{
+      type: :drawing_group,
+      role: :writing_mode,
+      x: 0,
+      y: 0,
+      width: 30,
+      height: 30,
+      transform: {0, -2, 2, 0, 12.1, 30.2},
+      boxes: []
+    }
+
+    assert DrawingGeometry.rebase_writing_canvas(group, nil, 100) == group
+  end
+
   test "rotation and reflection preserve native image paint and exact link corners", %{
     group: group
   } do
@@ -185,14 +200,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AffineDrawingGeometryTest do
   } do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_clip_projection_work: 1})
+    Limits.install(%{original | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfWriter.render([
                %{size: {100, 100}, boxes: [%{group | transform: {1, 0.5, 0, 1, 20, 20}}]}
              ])
 
-    assert diagnostic.message =~ "max_clip_projection_work"
+    assert diagnostic.message =~ "max_work"
     Limits.install(original)
     forged = Map.put(image, :drawing_affine_link_quads, [[{0, 0}, {20, 0}, {20, 20}, {0, 20}]])
 

@@ -160,7 +160,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
   test "variation interpolation and reconstruction obey cumulative font work and byte allowances" do
     data = FontCorpus.path("selected-variable.ttf") |> File.read!()
 
-    for limit <- [:max_font_variation_work, :max_font_decoded_bytes] do
+    for limit <- [:max_work, :max_decoded_bytes] do
       limits = Limits.effective()
       Limits.install(Map.put(limits, limit, 1))
 

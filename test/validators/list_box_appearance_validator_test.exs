@@ -81,13 +81,13 @@ defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidatorTest do
       assert {:error, {:unsupported_form, _}} = ListBoxAppearanceValidator.validate(model)
     end
 
-    Limits.install(%{limits | max_pdf_form_preparation_entries: 1})
+    Limits.install(%{limits | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FormAppearanceValidator.prepare(document, wire)
 
-    assert diagnostic.message =~ "max_pdf_form_preparation_entries"
-    Limits.install(%{limits | max_pdf_form_metadata_bytes: 1})
+    assert diagnostic.message =~ "max_entries"
+    Limits.install(%{limits | max_decoded_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              ListBoxAppearanceValidator.validate(editor.listbox)
@@ -156,11 +156,11 @@ defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidatorTest do
         {0, 0, 900, 900}
       )
 
-    Limits.install(%{limits | max_pdf_xref_revisions: 1})
+    Limits.install(%{limits | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FormAppearanceValidator.appearance(field, projected.source_editor, "b")
 
-    assert diagnostic.message =~ "revision"
+    assert diagnostic.message =~ "max_entries"
   end
 end

@@ -140,7 +140,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MixedTextAndGraphicsTest do
     html =
       "<p>Before SVG</p><svg width='120' height='50'>\n  <path d='M10 20 H110' fill='none' stroke='blue' stroke-width='3' stroke-opacity='.4'/>\n</svg><math><mi>x</mi></math>\n"
 
-    Limits.install(%{limits | max_svg_raster_pixels: 0})
+    Limits.install(%{limits | max_raster_pixels: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(html, system_font_discovery: false)

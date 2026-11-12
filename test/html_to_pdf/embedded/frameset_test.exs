@@ -29,6 +29,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
     %{root: root}
   end
 
+  test "frameset layout returns nested render-budget failures without leaking throws" do
+    assert {:ok, plan} = FramesetValidator.prepare(%{"border" => "0", "cols" => "*"})
+
+    assert {:ok, plan} = FramesetValidator.prepare_children(plan, [])
+
+    node = %{
+      type: :element,
+      tag: "frameset",
+      style: %{_frameset: plan, display: :block},
+      children: []
+    }
+
+    Limits.install(Map.put(Limits.effective(), :max_entries, 2))
+
+    assert :checked =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.reserve_render_resource(:max_entries, 2, :layout)
+
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        NativeElixirPdfUtilities.HtmlToPdf.Frameset.layout(node, 100, 100)
+
+               assert diagnostic.message =~ "max_entries"
+               :checked
+             end)
+  end
+
   test "fixed, percentage, relative and oversized tracks match legacy priority and integer remainders" do
     assert {:ok, plan} =
              FramesetValidator.prepare(%{"border" => "0", "rows" => "80,*", "cols" => "25%,*"})
@@ -70,10 +96,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
     assert {:ok, [absolute: +0.0, absolute: +0.0]} =
              FramesetValidator.tracks("\u00A025%,\u200380")
 
-    Limits.install(Map.put(Limits.effective(), :max_html_numeric_token_bytes, 3))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 3))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = FramesetValidator.tracks(" 80 ")
     assert diagnostic.stage == :limits
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "undersubscribed unequal tracks refill proportionally with integer residues" do
@@ -92,7 +118,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
 
   test "track allocation work joins the shared cell budget before allocation" do
     assert {:ok, plan} = FramesetValidator.prepare(%{"border" => "0", "cols" => "*"})
-    Limits.install(Map.put(Limits.effective(), :max_html_tree_work, 48))
+    Limits.install(Map.put(Limits.effective(), :max_work, 48))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -100,9 +126,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
              end)
 
     assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
 
-    Limits.install(Map.put(Limits.effective(), :max_html_tree_work, 49))
+    Limits.install(Map.put(Limits.effective(), :max_work, 49))
 
     assert {:ok, %{columns: [300.0], rows: [90.0]}} =
              HtmlValidator.with_render_budget(fn ->
@@ -144,12 +170,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
       assert failure.message != ""
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_embedded_documents, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, budget}} =
              HtmlToPdf.render(html, base_url: root, forms: :static)
 
-    assert budget.message =~ "max_embedded_documents"
+    assert budget.message =~ "max_entries"
   end
 
   test "full-document frameset is the body alternative and noframes remains literal inactive source" do
@@ -432,7 +458,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare(%{"border" => String.duplicate("9", 1_025)})
 
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "positive bordered zero-area cells retain selected content and form failures", %{
@@ -544,16 +570,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
   test "track and cell allocations use central limits and frame documents share existing ceilings",
        %{root: root} do
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_frameset_tracks, 1))
+    Limits.install(Map.put(limits, :max_entries, 1))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = FramesetValidator.tracks("*,*")
-    assert diagnostic.message =~ "max_frameset_tracks"
-    Limits.install(Map.put(limits, :max_frameset_cells, 1))
+    assert diagnostic.message =~ "max_entries"
+    Limits.install(Map.put(limits, :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare(%{"border" => "0", "rows" => "*,*", "cols" => "*,*"})
 
-    assert diagnostic.message =~ "max_frameset_cells"
-    Limits.install(Map.put(limits, :max_embedded_documents, 1))
+    assert diagnostic.message =~ "max_entries"
+    Limits.install(Map.put(limits, :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -561,7 +587,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
                base_url: root
              )
 
-    assert diagnostic.message =~ "max_embedded_documents"
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "malformed and exhausted native grid requests return shared diagnostics before painting" do
@@ -595,12 +621,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
 
     assert {:error, {:invalid_document, _}} = Frameset.layout(node, 150, 90)
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_html_tree_work, 0))
+    Limits.install(Map.put(limits, :max_work, 0))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare_layout(plan, 150, 90)
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "zero-area cells still select and validate content before omitting paint destinations", %{
@@ -731,18 +757,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetTest do
                )
 
       assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(pdf)
-      Limits.install(Map.put(limits, :max_embedded_documents, 1))
+      Limits.install(Map.put(limits, :max_entries, 1))
 
       assert {:error, {:resource_limit_exceeded, _}} =
                HtmlToPdf.render(html, base_url: root, forms: :static)
 
-      Limits.install(Map.put(limits, :max_aggregate_decoded_image_bytes, 0))
+      Limits.install(Map.put(limits, :max_decoded_bytes, 0))
       html = String.replace(html, "zero-fields.html", "zero-image.html")
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render(html, base_url: root, page_size: {300, 200}, margin: 0)
 
-      assert diagnostic.message =~ "image"
+      assert diagnostic.message =~ "max_decoded_bytes"
       Limits.install(limits)
     end
   end

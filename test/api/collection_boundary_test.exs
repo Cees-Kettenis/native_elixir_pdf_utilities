@@ -48,33 +48,33 @@ defmodule NativeElixirPdfUtilities.CollectionBoundaryTest do
     limits = Limits.effective()
 
     for {key, run} <- [
-          {:max_merge_inputs, fn -> Merge.merge([pdf, pdf]) end},
-          {:max_split_outputs, fn -> Split.by_ranges(pdf, [1..1, 2..2]) end},
-          {:max_pdf_attachments,
+          {:max_entries, fn -> Merge.merge([pdf, pdf]) end},
+          {:max_entries, fn -> Split.by_ranges(pdf, [1..1, 2..2]) end},
+          {:max_entries,
            fn ->
              Attachments.embed(pdf, [
                %{filename: "a", bytes: "a"},
                %{filename: "b", bytes: "b"}
              ])
            end},
-          {:max_pdf_outline_items, fn -> Outlines.put(pdf, [{"Parent", 1, [{"Child", 2}]}]) end}
+          {:max_entries, fn -> Outlines.put(pdf, [{"Parent", 1, [{"Child", 2}]}]) end}
         ] do
       Limits.install(Map.put(limits, key, 1))
       assert {:error, {:resource_limit_exceeded, diagnostic}} = run.()
       assert is_binary(diagnostic.message) and is_atom(diagnostic.operation)
     end
 
-    Limits.install(%{limits | max_pdf_outline_items: 2})
+    Limits.install(%{limits | max_entries: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Outlines.put(pdf, [{"Parent", 1, [{"Child", 2}]}, {"Sibling", 1}])
 
-    assert diagnostic.operation == :put_outlines and diagnostic.message =~ "item count"
+    assert diagnostic.operation == :put_outlines and diagnostic.message =~ "max_entries"
     Limits.install(limits)
     assert {:ok, single} = PdfWriter.render([%{size: {100, 100}, boxes: []}])
-    Limits.install(%{limits | max_pdf_pages: 1})
+    Limits.install(%{limits | max_pages: 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Transform.pick_pages(single, [1, 1])
-    assert diagnostic.operation == :pick_pages and diagnostic.message =~ "max_pdf_pages"
+    assert diagnostic.operation == :pick_pages and diagnostic.message =~ "max_pages"
   end
 
   test "nested field names, keywords and choice values return public diagnostics" do
@@ -106,16 +106,16 @@ defmodule NativeElixirPdfUtilities.CollectionBoundaryTest do
 
   test "nested lists respect field counts and the minimum keyword separator bytes", %{pdf: pdf} do
     original = Limits.effective()
-    Limits.install(%{original | max_pdf_form_fields: 1})
+    Limits.install(%{original | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Forms.flatten(pdf, fields: ["a", "b"])
 
     assert diagnostic.operation == :flatten and diagnostic.module == Forms
     assert diagnostic.stage == :forms and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_pdf_form_fields"
+    assert diagnostic.message =~ "max_entries"
 
-    Limits.install(%{original | max_pdf_info_value_bytes: 4})
+    Limits.install(%{original | max_decoded_bytes: 4})
     assert {:ok, updated} = Info.put(pdf, keywords: ["", "", ""])
     assert {:ok, %{keywords: ", , "}} = Info.get(updated)
 

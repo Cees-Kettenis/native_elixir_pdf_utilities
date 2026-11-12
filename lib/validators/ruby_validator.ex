@@ -1,9 +1,126 @@
 defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
+  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeGrapheme
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator, HtmlLineBreakValidator}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, ResourceContext}
+
+  @doc "Lists the ruby formatting declarations."
+  @spec properties() :: [String.t()]
+  def properties, do: ~w(ruby-align ruby-position ruby-merge ruby-overhang)
+
+  @doc "Returns the selected CSS Ruby 1 initial values."
+  @spec defaults() :: map()
+  def defaults,
+    do: %{
+      ruby_align: :space_around,
+      ruby_position: [:over],
+      ruby_merge: :separate,
+      ruby_overhang: :auto
+    }
+
+  @doc "Admits ruby placement, distribution, merging and overhang identifiers."
+  @spec prepare_property(map(), String.t(), String.t()) :: {:ok, map()} | :error
+  def prepare_property(style, property, value) do
+    tokens = HtmlValidator.split_css_tokens(String.downcase(String.trim(value), :ascii))
+
+    parsed =
+      case {property, tokens} do
+        {"ruby-align", [value]} when value in ~w(start center space-between space-around) ->
+          {:ruby_align, value |> String.replace("-", "_") |> String.to_existing_atom()}
+
+        {"ruby-position", [value]} when value in ~w(over under inter-character) ->
+          {:ruby_position, [value |> String.replace("-", "_") |> String.to_existing_atom()]}
+
+        {"ruby-position", ["alternate"]} ->
+          {:ruby_position, [:alternate, :over]}
+
+        {"ruby-position", ["alternate", value]} when value in ~w(over under) ->
+          {:ruby_position, [:alternate, String.to_existing_atom(value)]}
+
+        {"ruby-position", [value, "alternate"]} when value in ~w(over under) ->
+          {:ruby_position, [:alternate, String.to_existing_atom(value)]}
+
+        {"ruby-merge", ["collapse"]} ->
+          # CSS Ruby 2014 spelling; the 2022 grammar calls this merge.
+          {:ruby_merge, :merge}
+
+        {"ruby-merge", [value]} when value in ~w(separate merge auto) ->
+          {:ruby_merge, String.to_existing_atom(value)}
+
+        {"ruby-overhang", [value]} when value in ~w(auto none) ->
+          {:ruby_overhang, String.to_existing_atom(value)}
+
+        _ ->
+          nil
+      end
+
+    if parsed == nil, do: :error, else: {:ok, Map.put(style, elem(parsed, 0), elem(parsed, 1))}
+  end
+
+  @doc "Checks computed ruby controls through the same finite grammar as authored declarations."
+  @spec validate_style(map(), String.t()) :: :ok | {:error, {atom(), map()}}
+  def validate_style(style, source) do
+    if :maps.get(:ruby_align, style, :space_around) in [
+         :start,
+         :center,
+         :space_between,
+         :space_around
+       ] and
+         Map.get(style, :ruby_position, [:over]) in [
+           [:over],
+           [:under],
+           [:inter_character],
+           [:alternate, :over],
+           [:alternate, :under]
+         ] and
+         :maps.get(:ruby_merge, style, :separate) in [:separate, :merge, :auto] and
+         :maps.get(:ruby_overhang, style, :auto) in [:auto, :none],
+       do: :ok,
+       else:
+         Diagnostics.error(:layout, :invalid_layout, "recompute ruby formatting controls",
+           module: __MODULE__,
+           operation: :layout,
+           source: source
+         )
+  end
+
+  @doc "Forces inter-character annotation writing axes before descendant styles and font selection."
+  @spec compute_style(map()) :: map()
+  def compute_style(style) do
+    ruby? =
+      :maps.get(:_ruby_container, style, false) or :maps.get(:_ruby_base, style, false) or
+        :maps.get(:_ruby_annotation, style, false) or
+        :maps.get(:_display_role, style, nil) in [
+          :ruby,
+          :ruby_base,
+          :ruby_text,
+          :ruby_base_container,
+          :ruby_text_container
+        ]
+
+    style =
+      if ruby? do
+        case :maps.get(:unicode_bidi, style, :normal) do
+          value when value in [:normal, :embed] -> Map.put(style, :unicode_bidi, :isolate)
+          :bidi_override -> Map.put(style, :unicode_bidi, :isolate_override)
+          _ -> style
+        end
+      else
+        style
+      end
+
+    parent = :maps.get(:_cascade_inherited, style, %{})
+
+    if :maps.get(:_ruby_annotation, style, false) and
+         Map.get(style, :ruby_position, [:over]) == [:inter_character] and
+         :maps.get(:writing_mode, parent, :horizontal_tb) == :horizontal_tb do
+      style |> Map.put(:writing_mode, :vertical_rl) |> Map.put(:_ruby_inter_character, true)
+    else
+      Map.delete(style, :_ruby_inter_character)
+    end
+  end
 
   @doc "Rejects caller-supplied ruby measurements, which are created only inside inline layout."
   @spec validate_layout_metadata(term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -43,7 +160,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
                 Enum.reduce(expand_container_columns(children), {[], []}, fn child,
                                                                              {groups, pending} ->
                   HtmlValidator.reserve_render_resource(
-                    :max_html_tree_work,
+                    :max_work,
                     length(groups) + length(pending) + 1,
                     :layout
                   )
@@ -54,7 +171,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
 
                     %{tag: "rt", style: %{_ruby_annotation: true}} ->
                       cond do
-                        Map.get(child, :_ruby_same_base, false) and groups != [] ->
+                        :maps.get(:_ruby_same_base, child, false) and groups != [] ->
                           {List.update_at(
                              groups,
                              -1,
@@ -82,6 +199,51 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
                   do: groups,
                   else: groups ++ [%{base: pending, annotations: []}]
 
+              groups =
+                Enum.reduce(groups, [], fn group, merged ->
+                  case merged do
+                    [previous | rest] ->
+                      collapse? =
+                        length(previous.annotations) == length(group.annotations) and
+                          group.annotations != [] and
+                          Enum.all?(
+                            previous.annotations ++ group.annotations,
+                            &(Map.get(&1.style, :ruby_merge, :separate) == :merge and
+                                Map.get(&1.style, :ruby_position, [:over]) != [:inter_character])
+                          )
+
+                      if collapse? do
+                        annotations =
+                          Enum.zip(previous.annotations, group.annotations)
+                          |> Enum.map(fn {before, following} ->
+                            %{
+                              before
+                              | children:
+                                  isolate_nodes(before.children, before.style) ++
+                                    isolate_nodes(following.children, following.style)
+                            }
+                          end)
+
+                        [
+                          %{
+                            previous
+                            | base:
+                                isolate_nodes(previous.base, style) ++
+                                  isolate_nodes(group.base, style),
+                              annotations: annotations
+                          }
+                          | rest
+                        ]
+                      else
+                        [group | merged]
+                      end
+
+                    [] ->
+                      [group]
+                  end
+                end)
+                |> Enum.reverse()
+
               text = Enum.map_join(groups, &base_text(&1.base))
 
               with {:ok, breaks} <- HtmlLineBreakValidator.opportunities(text) do
@@ -90,11 +252,21 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
                 {groups, _} =
                   Enum.map_reduce(groups, 0, fn group, start ->
                     base = base_text(group.base)
-                    anywhere? = Map.get(style, :line_break) == :anywhere
+                    anywhere? = :maps.get(:line_break, style, nil) == :anywhere
+
+                    nowrap? =
+                      :maps.get(:text_wrap_mode, style, :wrap) == :nowrap or
+                        :maps.get(:white_space, style, :normal) in [:nowrap, :pre]
+
+                    clusters =
+                      NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator.cluster_boundaries(
+                        %{text: base, style: style}
+                      )
+                      |> MapSet.new()
 
                     {counts, _} =
                       base
-                      |> String.graphemes()
+                      |> UnicodeGrapheme.graphemes()
                       |> Enum.with_index(1)
                       |> Enum.map_reduce(0, fn {grapheme, count}, offset ->
                         offset = offset + byte_size(grapheme)
@@ -103,7 +275,9 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
 
                     counts =
                       for {count, offset} <- counts,
+                          not nowrap?,
                           offset < byte_size(base),
+                          MapSet.member?(clusters, offset),
                           anywhere? or MapSet.member?(offsets, start + offset),
                           do: count
 
@@ -111,7 +285,8 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
                       group
                       |> Map.put(
                         :break_before,
-                        start == 0 or anywhere? or MapSet.member?(offsets, start)
+                        start == 0 or
+                          (not nowrap? and (anywhere? or MapSet.member?(offsets, start)))
                       )
                       |> Map.put(:break_counts, counts)
 
@@ -128,6 +303,31 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
     end
   catch
     {:render_resource_limit, error} -> error
+  end
+
+  defp isolate_nodes(nodes, style, context \\ nil) do
+    context =
+      context || %{id: make_ref(), mode: :isolate, direction: :maps.get(:direction, style, :ltr)}
+
+    inherited = length(:maps.get(:_bidi_contexts, style, []))
+
+    Enum.map(nodes, fn node ->
+      HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
+
+      if :maps.get(:_ruby_isolated_unit, node, false) do
+        node
+      else
+        current = Map.get(node, :style, style)
+        {outer, inner} = Enum.split(:maps.get(:_bidi_contexts, current, []), inherited)
+        current = Map.put(current, :_bidi_contexts, outer ++ [context] ++ inner)
+        HtmlValidator.check_render_resource(:max_depth, length(current._bidi_contexts), :layout)
+        node = node |> Map.put(:style, current) |> Map.put(:_ruby_isolated_unit, true)
+
+        if Map.has_key?(node, :children),
+          do: Map.update!(node, :children, &isolate_nodes(&1, style, context)),
+          else: node
+      end
+    end)
   end
 
   # CSS Ruby 1, 31 December 2022, sections 2.1 and 2.3. Container
@@ -147,7 +347,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
         count = Enum.max([length(bases) | Enum.map(annotations, &length/1)])
 
         HtmlValidator.reserve_render_resource(
-          :max_html_tree_work,
+          :max_work,
           count * max(length(annotations), 1),
           :layout
         )
@@ -234,7 +434,11 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
   @spec splittable_group?(map(), number()) :: boolean()
   def splittable_group?(group, base_width) do
     # Blink's four/eight glyph boundary is a fixed composition rule, not a resource ceiling.
-    base_width > 0 and Map.get(group, :break_counts, []) != [] and
+    base_width > 0 and :maps.get(:break_counts, group, []) != [] and
+      Enum.all?(group.annotations, fn annotation ->
+        not :maps.get(:_ruby_inter_character, annotation.style, false) and
+          :maps.get(:white_space, annotation.style, :normal) not in [:nowrap, :pre]
+      end) and
       (node_length(group.base, true) > 4 or
          Enum.any?(group.annotations, &(node_length(&1.children, true) > 8)))
   end
@@ -258,7 +462,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
 
   defp node_length(nodes, shaped \\ false) do
     Enum.reduce(nodes, 0, fn node, count ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :layout)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
       count +
         case node do
@@ -273,7 +477,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
             if shaped, do: 0, else: 1
 
           %{type: :text, text: text} ->
-            HtmlValidator.reserve_render_resource(:max_layout_text_work, byte_size(text), :layout)
+            HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :layout)
 
             text =
               if shaped,
@@ -281,7 +485,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
                   Font.shape_ligatures(
                     text,
                     node.style.font_face,
-                    Map.get(node.style, :letter_spacing, 0)
+                    :maps.get(:letter_spacing, node.style, 0)
                   ),
                 else: text
 
@@ -298,7 +502,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
 
   defp partition_nodes(nodes, remaining) do
     Enum.reduce(nodes, {[], [], remaining}, fn node, {before, after_nodes, remaining} ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :layout)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
       cond do
         remaining == 0 ->
@@ -308,11 +512,27 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
           {before ++ [node], after_nodes, remaining - node_length([node])}
 
         node.type == :text ->
-          graphemes = String.graphemes(node.text)
+          graphemes = UnicodeGrapheme.graphemes(node.text)
           {left, right} = Enum.split(graphemes, remaining)
 
-          {before ++ [%{node | text: Enum.join(left)}],
-           after_nodes ++ [%{node | text: Enum.join(right)}], 0}
+          left_text = Enum.join(left)
+          right_text = Enum.join(right)
+
+          {left_style, right_style} =
+            case :maps.get(:_source_glyph_characters, node.style, nil) do
+              characters when is_list(characters) ->
+                {left_chars, right_chars} =
+                  Enum.split(characters, length(String.codepoints(left_text)))
+
+                {Map.put(node.style, :_source_glyph_characters, left_chars),
+                 Map.put(node.style, :_source_glyph_characters, right_chars)}
+
+              _ ->
+                {node.style, node.style}
+            end
+
+          {before ++ [%{node | text: left_text, style: left_style}],
+           after_nodes ++ [%{node | text: right_text, style: right_style}], 0}
 
         true ->
           {left, right, remaining} = partition_nodes(node.children, remaining)
@@ -325,7 +545,7 @@ defmodule NativeElixirPdfUtilities.Validators.RubyValidator do
 
   defp base_text(children) do
     Enum.map_join(children, fn child ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :layout)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
       case child do
         %{style: %{display: :none}} ->

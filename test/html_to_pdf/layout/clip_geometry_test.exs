@@ -126,7 +126,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryTest do
   end
 
   test "inverse rejects arithmetic overflow under a deliberately expanded numeric policy" do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, Integer.pow(10, 309)))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, Integer.pow(10, 309)))
     assert :error = AffineGeometry.inverse({1.0e308, 0, 0, 1.0e308, 0, 0})
   end
 
@@ -154,14 +154,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryTest do
     end
   end
 
-  test "clip expressions have their own depth limit, independent of drawing groups" do
-    assert Limits.defaults().max_clip_expression_depth == 256
-
-    Limits.install(
-      Limits.effective()
-      |> Map.put(:max_clip_expression_depth, 2)
-      |> Map.put(:max_drawing_group_depth, 1)
-    )
+  test "clip expressions use the same depth limit as drawing groups" do
+    Limits.install(%{Limits.effective() | max_depth: 2})
 
     contour = DrawingGeometry.clip_expression({0, 0, 20, 20})
     at_limit = {:intersection, [contour]}
@@ -175,12 +169,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryTest do
 
     assert diagnostic.stage == :layout
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_clip_expression_depth"
-    refute diagnostic.message =~ "max_drawing_group_depth"
+    assert diagnostic.message =~ "max_depth"
   end
 
   test "projection work consumes the shared generic resource limit" do
-    Limits.install(Map.put(Limits.effective(), :max_clip_projection_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              ClipGeometryValidator.project(
@@ -191,6 +184,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryTest do
 
     assert diagnostic.stage == :layout
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_clip_projection_work"
+    assert diagnostic.message =~ "max_work"
   end
 end

@@ -43,7 +43,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageCssPrintCanvasTest do
   test "a CSS source transform exceeding the configured PDF magnitude returns diagnostics" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_pdf_numeric_magnitude, 20))
+    Limits.install(Map.put(limits, :max_numeric_magnitude, 20))
     assert {:ok, image} = PngDecoder.decode(@png, HtmlValidator.new_image_budget(), false)
 
     box = %{
@@ -61,6 +61,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageCssPrintCanvasTest do
 
     assert diagnostic.stage == :writer and diagnostic.operation == :write_pdf
     assert diagnostic.source == "CSS image source print coordinates"
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 end

@@ -22,10 +22,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
         FontValidator.with_budget(fn ->
           case kind do
             :font ->
-              FontValidator.reserve(:max_font_candidates, 1)
+              FontValidator.reserve(:max_entries, 1)
 
               case Map.get(Keyword.get(opts, :assets, %{}), reference) do
-                {:bytes, bytes} -> FontValidator.check(:max_font_source_bytes, byte_size(bytes))
+                {:bytes, bytes} -> FontValidator.check(:max_input_bytes, byte_size(bytes))
                 _ -> :ok
               end
 
@@ -72,7 +72,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
 
         result =
           FontValidator.with_budget(fn ->
-            if kind == :font, do: FontValidator.reserve(:max_font_candidates, 1)
+            if kind == :font, do: FontValidator.reserve(:max_entries, 1)
             resolve_explicit_source(source, reference, budget)
           end)
 
@@ -184,8 +184,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
     maximum =
       case image_budget do
         :font -> {:ok, FontValidator.read_limit()}
-        :local_font -> {:ok, Limits.get(:max_font_source_bytes)}
-        :stylesheet -> {:ok, Limits.get(:max_css_source_bytes)}
+        :local_font -> {:ok, Limits.get(:max_input_bytes)}
+        :stylesheet -> {:ok, Limits.get(:max_input_bytes)}
         _ -> HtmlValidator.image_source_read_limit(image_budget)
       end
 

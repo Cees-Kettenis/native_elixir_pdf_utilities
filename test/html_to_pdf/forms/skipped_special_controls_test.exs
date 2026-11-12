@@ -159,11 +159,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsTest do
     alias NativeElixirPdfUtilities.Limits
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_css_numeric_magnitude: 100})
+    Limits.install(%{previous | max_numeric_magnitude: 100})
     assert {:ok, dom} = HtmlParser.parse_detailed("<input hidden=until-found type=file>")
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Style.compute_detailed(dom)
     assert diagnostic.stage == :style
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "forged skipped paint state returns an actionable public layout diagnostic" do

@@ -116,14 +116,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
   @doc "Checks the retained source order of an element participating in CSS stacking."
   @spec valid_source_order?(term()) :: boolean()
   def valid_source_order?(order) do
-    is_list(order) and length(order) <= Limits.get(:max_html_depth) and
+    is_list(order) and length(order) <= Limits.get(:max_depth) and
       Enum.all?(order, &(is_integer(&1) and &1 >= 0))
   end
 
   @doc "Checks bounded stacking-context ancestry retained when positioned descendants are hoisted."
   @spec valid_context_path?(term()) :: boolean()
   def valid_context_path?(path) do
-    is_list(path) and length(path) <= Limits.get(:max_html_depth) and
+    is_list(path) and length(path) <= Limits.get(:max_depth) and
       Enum.all?(path, fn entry ->
         case entry do
           {order, z} -> valid_source_order?(order) and is_integer(z)

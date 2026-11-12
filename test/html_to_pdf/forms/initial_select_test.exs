@@ -248,10 +248,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialSelectTest do
 
   test "select resource and ambiguous interactive export failures are actionable" do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<select size=1000000001><option>A</option></select>")
+             HtmlToPdf.render("<select size=4294967296><option>A</option></select>")
 
     assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
 
     html =
       "<select multiple><option selected value=a>A</option><option selected value=a>B</option></select>"
@@ -278,7 +278,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialSelectTest do
           %{selection | id: make_ref()},
           %{selection | multiple: false},
           %{selection | display_size: -1},
-          %{selection | display_size: 1_000_000_001},
+          %{selection | display_size: 4_294_967_296},
           %{selection | rows: 1},
           %{selection | listbox: false},
           %{selection | choices: [%{}]},

@@ -7,6 +7,8 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
 
   @fixture_directory Paths.fixture("pdf_reader")
 
@@ -139,16 +141,18 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
   end
 
   test "object-stream metadata is bounded before header parsing" do
-    assert {:ok, %{count: 10_000, first: 20}} =
+    limit = Limits.get(:max_entries)
+
+    assert {:ok, %{count: ^limit, first: 20}} =
              PdfValidator.validate_object_stream_header(
-               %{"N" => 10_000, "First" => 20},
+               %{"N" => limit, "First" => 20},
                20,
                {6, 0}
              )
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfValidator.validate_object_stream_header(
-               %{"N" => 10_001, "First" => 20},
+               %{"N" => limit + 1, "First" => 20},
                20,
                {6, 0}
              )
@@ -181,15 +185,18 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
   end
 
   test "generic PDF value depth is bounded by the shared validator" do
-    assert :ok = PdfValidator.validate_value_depth(100)
+    limit = Limits.get(:max_depth)
+    assert :ok = PdfValidator.validate_value_depth(limit)
 
     assert {:error,
             {:resource_limit_exceeded,
              %{
                stage: :limits,
                reason: :resource_limit_exceeded,
-               message: "PDF value nesting depth exceeds the 100-level limit"
-             }}} = PdfValidator.validate_value_depth(101)
+               message: depth_message
+             }}} = PdfValidator.validate_value_depth(limit + 1)
+
+    assert depth_message == "PDF value nesting depth exceeds max_depth (#{limit}-level limit)"
 
     assert {:error,
             {:invalid_pdf_input, %{stage: :object, reason: :invalid_pdf_input, message: message}}} =
@@ -279,23 +286,28 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
     assert depth_diagnostic.message ==
              "indirect reference chain depth exceeds the limit; object 1001 0"
 
+    validate_remaining = fn document ->
+      ResourceBudgetValidator.with_budget(fn ->
+        :ok = ResourceBudgetValidator.reserve(:max_work, Limits.get(:max_work) - 25_000, :limits)
+        PdfValidator.validate(document)
+      end)
+    end
+
     assert {:error, {:resource_limit_exceeded, work_diagnostic}} =
-             50
-             |> unique_parent_chains_document(500)
-             |> PdfValidator.validate()
+             50 |> unique_parent_chains_document(500) |> validate_remaining.()
 
     assert work_diagnostic.stage == :limits
-    assert work_diagnostic.message =~ "indirect reference resolution work exceeds the limit"
+    assert work_diagnostic.message =~ "max_work"
 
     assert {:error, {:resource_limit_exceeded, split_work_diagnostic}} =
              50
              |> unique_page_chains_document(500)
-             |> PdfValidator.validate()
+             |> validate_remaining.()
 
     assert split_work_diagnostic.stage == :limits
 
     assert split_work_diagnostic.message =~
-             "indirect reference resolution work exceeds the limit"
+             "max_work"
   end
 
   test "page-tree Parent validation includes indirect-object generations" do
@@ -539,13 +551,13 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
     assert page_diagnostic.stage == :limits
 
     assert page_diagnostic.message ==
-             "merged output requires 10001 pages, exceeding min(max_pdf_pages, max_merged_pages) (10000)"
+             "merged output requires 10001 pages, exceeding max_pages (10000)"
 
     object = %{obj: 1, gen: 0, tokens: [], value: 42}
 
     assert {:error, {:resource_limit_exceeded, object_diagnostic}} =
              MergeValidator.prepare_remapping(
-               [%{objects: List.duplicate(object, 99_999), pages: []}],
+               [%{objects: List.duplicate(object, Limits.get(:max_entries) - 1), pages: []}],
                3
              )
 

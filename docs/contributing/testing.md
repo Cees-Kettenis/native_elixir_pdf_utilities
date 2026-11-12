@@ -301,3 +301,10 @@ variants, collection wrappers and long programs under ignored `tmp/font-corpus/`
 at suite startup. It needs no external encoder or installed test fonts. Separate
 fixture manifests retain the independently measured outlines, metrics and paint
 matrices. The browser page-equivalence command prepares the same corpus.
+
+Unicode typography data and conformance vectors are pinned to Unicode 17.0.0.
+The grapheme suite checks the complete 766-case extended grapheme corpus,
+including Indic conjuncts, emoji joins and regional-indicator pairs. Data source
+hashes are in `scripts/data/unicode-text-source.json`; corpus files retain their
+source URL and hash. The builders under `scripts/data/` consume local UCD files
+and do not download data during tests or rendering.

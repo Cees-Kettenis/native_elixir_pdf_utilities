@@ -140,7 +140,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                     Map.new(glyph_runs, fn {id, runs} ->
                       runs =
                         Enum.map(runs, fn run ->
-                          HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                          HtmlValidator.reserve_render_resource(:max_work, 1, :font)
                           placement = Map.get(projection.placements, run.owner.node_id)
 
                           Map.put(
@@ -159,7 +159,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                  Map.new(glyph_runs, fn {id, runs} ->
                    {id,
                     Enum.map(runs, fn run ->
-                      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                      HtmlValidator.reserve_render_resource(:max_work, 1, :font)
                       ticket = Map.get(run.font_face, :__template_font_outcome__)
                       outcome = Map.get(Process.get(key).font_outcomes, ticket)
                       binding = Map.get(Process.get(key).clone_bindings, run.owner.node_id)
@@ -488,7 +488,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
         same_source? =
           map_size(logical) == map_size(preparation.logical_nodes) and
             Enum.all?(logical, fn {id, node} ->
-              HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :html)
               original = Map.get(preparation.logical_nodes, id)
               original && Map.take(node, fields) == Map.take(original, fields)
             end)
@@ -499,7 +499,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
           with {:ok, bindings} <- bind_clone_origins(registry, preparation.tree) do
             bindings =
               Map.new(bindings, fn {id, binding} ->
-                HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+                HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
                 authored =
                   if preparation.source_projection do
@@ -563,7 +563,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   # children are added to this discarded source view under their own host.
   defp complete_unassigned_children(nodes, logical, seen) do
     Enum.map(nodes, fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{children: children} ->
@@ -571,7 +571,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
 
           missing =
             Enum.filter(Map.get(original, :children, []), fn child ->
-              HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :html)
               Map.get(child, :tag) != "template" and not Map.has_key?(seen, child.node_id)
             end)
 
@@ -594,7 +594,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   defp bind_clone_origins(registry, tree) do
     bindings =
       Enum.reduce(registry, %{}, fn {id, node}, bindings ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
         if Map.has_key?(node, :cloned_from_node_id) do
           {_original, bindings} = resolve_clone_origin(id, registry, tree, bindings, 0)
@@ -610,8 +610,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   @spec resolve_clone_origin(reference(), map(), HtmlTree.t(), map(), non_neg_integer()) ::
           {map(), map()}
   defp resolve_clone_origin(id, registry, tree, bindings, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
     # Only normal composition creates this registry. Its canonical clone
     # validator runs at creation, and every fresh clone references an existing
@@ -653,7 +653,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
         :ok
 
       %{tree: tree, nodes: nodes, resource_context: expected} = preparation ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :style)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :style)
 
         original =
           Map.get(Map.get(preparation, :clone_nodes, %{}), Map.get(node, :node_id)) ||
@@ -772,14 +772,14 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
           descriptor =
             if owner do
               Enum.find_value(preparation.provenance.embedded, fn authored ->
-                HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+                HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
                 if Map.take(authored.node, @source_identity) == Map.take(owner, @source_identity),
                   do: authored.descriptor
               end)
             end
 
-          HtmlValidator.reserve_render_resource(:max_css_work, length(prepared.rules), :css)
+          HtmlValidator.reserve_render_resource(:max_work, length(prepared.rules), :css)
 
           with :ok <-
                  if(owner == nil or descriptor != nil,
@@ -812,7 +812,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                  ) do
             rules =
               Enum.zip_with(prepared.rules, authored.rules, fn rule, source_rule ->
-                HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+                HtmlValidator.reserve_render_resource(:max_work, 1, :css)
                 Map.put(rule, :source_declarations, source_rule.source_declarations)
               end)
 
@@ -820,7 +820,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
               authored.authored_fonts
               |> Enum.filter(& &1.active)
               |> Enum.map(fn font ->
-                HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+                HtmlValidator.reserve_render_resource(:max_work, 1, :css)
                 ticket = make_ref()
 
                 provider = %{
@@ -874,7 +874,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
         )
 
       candidate = Enum.at(candidates, ordinal)
-      HtmlValidator.reserve_render_resource(:max_css_work, length(candidates) + 1, :font)
+      HtmlValidator.reserve_render_resource(:max_work, length(candidates) + 1, :font)
 
       if candidate do
         frame = %{provider: ticket, candidate: candidate, context: preparation.resource_context}
@@ -893,7 +893,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                     candidate: candidate,
                     references:
                       Enum.filter(current.references, fn reference ->
-                        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                        HtmlValidator.reserve_render_resource(:max_work, 1, :font)
                         Map.get(reference, :font_candidate) == frame
                       end)
                   }}}
@@ -928,7 +928,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
     if is_map(preparation) && live_preparation?(preparation) &&
          Map.has_key?(preparation.font_providers, provider) &&
          Enum.all?(candidates, &is_map/1) do
-      HtmlValidator.reserve_render_resource(:max_css_work, length(candidates) + 1, :font)
+      HtmlValidator.reserve_render_resource(:max_work, length(candidates) + 1, :font)
       recipe = %{provider: provider, candidates: candidates, config: config}
       Process.put(key, %{preparation | font_recipes: preparation.font_recipes ++ [recipe]})
     end
@@ -1004,7 +1004,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
       if recipe && candidate == nil do
         loaded
       else
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :font)
         outcome_ticket = make_ref()
 
         outcome = %{
@@ -1077,7 +1077,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
 
           result =
             Enum.reduce_while(matched, {:ok, []}, fn matched, {:ok, records} ->
-              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
               record =
                 if matched.inline,
@@ -1176,7 +1176,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
 
           if live_preparation?(preparation) && owner &&
                Map.take(owner, @source_identity) == Map.take(node, @source_identity) do
-            HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :style)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :style)
             marker = make_ref()
 
             Process.put({__MODULE__, :preparation}, %{
@@ -1255,7 +1255,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
              frame.reference == reference and frame.kind == kind and frame.context == current and
              frame.marker == Keyword.get(opts, :__template_source_owner__) and
              ResourceValidator.validate_context(current) == :ok do
-          HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :asset)
+          HtmlValidator.reserve_render_resource(:max_work, 1, :asset)
           owner = frame.owner
 
           record = %{
@@ -1302,7 +1302,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
                   |> Map.get({owner.node_id, nil}, [])
                   |> Enum.filter(fn declaration ->
                     HtmlValidator.reserve_render_resource(
-                      :max_css_work,
+                      :max_work,
                       1 + length(declaration.references),
                       :css
                     )
@@ -1349,10 +1349,10 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   end
 
   defp collect_math_paint_runs(boxes, tree, cascades, records, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :font)
+    HtmlValidator.check_render_resource(:max_depth, depth, :font)
 
     Enum.reduce_while(boxes, {:ok, records}, fn box, {:ok, records} ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :font)
 
       # Native text-box records come from ordinary Elixir font shaping. They
       # retain real scalar owners, including Math HTML text and annotations.
@@ -1450,7 +1450,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
 
   defp declaration_chain(tree, id, cascades) do
     Stream.unfold(id, fn id ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :css)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
       case Map.get(tree.nodes, id) do
         %{type: :element, parent_id: parent} = node ->
@@ -1467,16 +1467,16 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
       end
     end)
     |> Enum.map(fn {id, records} ->
-      HtmlValidator.reserve_render_resource(:max_css_work, length(records), :css)
+      HtmlValidator.reserve_render_resource(:max_work, length(records), :css)
       %{owner: Map.take(tree.nodes[id], @source_identity), declarations: records}
     end)
   end
 
   defp collect_glyph_runs(nodes, tree, cascades, records, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :font)
+    HtmlValidator.check_render_resource(:max_depth, depth, :font)
 
     Enum.reduce_while(nodes, {:ok, records}, fn node, {:ok, records} ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :font)
 
       result =
         case node do

@@ -200,7 +200,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedInitializationTest do
 
   test "blank children share document/depth ceilings and nested selected files retain cycle denial",
        %{root: root} do
-    Limits.install(Map.put(Limits.effective(), :max_embedded_documents, 2))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 2))
 
     ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, child} = EmbeddedResource.load_html({:blank, "about:blank?one"}, parent)
@@ -209,11 +209,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedInitializationTest do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                EmbeddedResource.load_html({:blank, "about:blank"}, parent)
 
-      assert diagnostic.message =~ "max_embedded_documents"
+      assert diagnostic.message =~ "max_entries"
       assert child.context.image_budget == parent.image_budget
     end)
 
-    Limits.install(Map.put(Limits.effective(), :max_embedded_document_depth, 1))
+    Limits.install(Map.put(Limits.effective(), :max_depth, 1))
 
     ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, child} = EmbeddedResource.load_html({:blank, "about:blank"}, parent)
@@ -221,7 +221,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedInitializationTest do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                EmbeddedResource.load_html({:srcdoc, "<p>Nested</p>"}, child.context)
 
-      assert diagnostic.message =~ "max_embedded_document_depth"
+      assert diagnostic.message =~ "max_depth"
     end)
 
     ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->

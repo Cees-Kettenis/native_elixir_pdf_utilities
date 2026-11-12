@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.VariationStoreValidator do
         header = read(data, offset, 8)
         <<format::16, region_offset::32, count::16>> = header
         unless format == 1, do: invalid("ItemVariationStore format must be one")
-        FontValidator.reserve(:max_font_variation_work, count)
+        FontValidator.reserve(:max_work, count)
         offsets = for <<value::32 <- read(data, offset + 8, count * 4)>>, do: value
         region_header = read(data, offset + region_offset, 4)
         <<axis_count::16, region_count::16>> = region_header
@@ -39,7 +39,7 @@ defmodule NativeElixirPdfUtilities.Validators.VariationStoreValidator do
         unless axis_count == length(coordinates),
           do: invalid("variation region axis count differs from fvar")
 
-        FontValidator.reserve(:max_font_variation_work, axis_count * region_count)
+        FontValidator.reserve(:max_work, axis_count * region_count)
         raw = read(data, offset + region_offset + 4, axis_count * region_count * 6)
 
         triples =
@@ -78,7 +78,7 @@ defmodule NativeElixirPdfUtilities.Validators.VariationStoreValidator do
                 do: words * 4 + (indices_count - words) * 2,
                 else: words * 2 + indices_count - words
 
-            FontValidator.reserve(:max_font_variation_work, items * indices_count)
+            FontValidator.reserve(:max_work, items * indices_count)
             raw = read(data, base + 6 + indices_count * 2, items * size)
 
             {values, <<>>} =
@@ -135,7 +135,7 @@ defmodule NativeElixirPdfUtilities.Validators.VariationStoreValidator do
                    "delta-set maps require bytes, a nonnegative offset/count and an admitted variation store"
                  )
 
-        FontValidator.reserve(:max_font_variation_work, count)
+        FontValidator.reserve(:max_work, count)
 
         if offset == 0 and not implicit? do
           {:ok, nil}
@@ -158,7 +158,7 @@ defmodule NativeElixirPdfUtilities.Validators.VariationStoreValidator do
               count_width = if format == 0, do: 2, else: 4
               entries = :binary.decode_unsigned(read(data, offset + 2, count_width))
               if entries == 0, do: invalid("delta-set map has no entries")
-              FontValidator.reserve(:max_font_variation_work, entries)
+              FontValidator.reserve(:max_work, entries)
               raw = read(data, offset + 2 + count_width, entries * width)
 
               values =
@@ -235,7 +235,7 @@ defmodule NativeElixirPdfUtilities.Validators.VariationStoreValidator do
         unless length(operands) >= required,
           do: invalid("CFF2 blend has insufficient base values and region deltas")
 
-        FontValidator.reserve(:max_font_variation_work, required)
+        FontValidator.reserve(:max_work, required)
         {prefix, selected} = Enum.split(operands, length(operands) - required)
         {bases, deltas} = Enum.split(selected, count)
 
@@ -279,7 +279,7 @@ defmodule NativeElixirPdfUtilities.Validators.VariationStoreValidator do
   end
 
   defp read(data, offset, size) do
-    FontValidator.reserve(:max_font_variation_work, max(size, 1))
+    FontValidator.reserve(:max_work, max(size, 1))
 
     unless offset >= 0 and size >= 0 and offset + size <= byte_size(data),
       do: invalid("variation store range is outside its owning table")

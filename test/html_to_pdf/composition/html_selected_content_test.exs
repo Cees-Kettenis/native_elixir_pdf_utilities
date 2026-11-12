@@ -446,10 +446,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContentBudgetTest do
 
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    assert :ok = Limits.install(Map.put(limits, :max_html_nodes, 6))
+    assert :ok = Limits.install(Map.put(limits, :max_entries, 6))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlSelectedContent.compose(dom)
     assert diagnostic.stage == :html
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_html_nodes"
+    assert diagnostic.message =~ "max_entries"
   end
 end

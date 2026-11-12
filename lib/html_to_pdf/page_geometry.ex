@@ -326,6 +326,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   def box_vertical_bounds(box) do
     bounds =
       case box do
+        %{type: :drawing_group, role: :writing_mode, y: y, writing_extent: %{height: height}} ->
+          {y + height, y}
+
         %{type: type, y: y, height: height}
         when type in [
                :rect,

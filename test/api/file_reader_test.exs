@@ -153,9 +153,7 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
 
     Limits.install(%{
       Limits.effective()
-      | max_html_source_bytes: 4,
-        max_css_source_bytes: 4,
-        max_pdf_input_bytes: 4
+      | max_input_bytes: 4
     })
 
     assert {:error, {:resource_limit_exceeded, %{operation: :render_file, source: ^path}}} =
@@ -180,9 +178,8 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
 
     Limits.install(%{
       Limits.effective()
-      | max_image_source_bytes: 4,
-        max_aggregate_image_source_bytes: 5,
-        max_image_count: 2
+      | max_input_bytes: 5,
+        max_entries: 2
     })
 
     budget = HtmlValidator.new_image_budget()
@@ -193,7 +190,7 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
 
     assert :ok = HtmlValidator.reserve_image_source(budget, 1)
     assert {:error, {:resource_limit_exceeded, _}} = HtmlValidator.image_source_read_limit(budget)
-    Limits.install(%{Limits.effective() | max_image_count: 3})
+    Limits.install(%{Limits.effective() | max_entries: 3})
     assert {:error, {:resource_limit_exceeded, _}} = HtmlValidator.image_source_read_limit(budget)
   end
 end

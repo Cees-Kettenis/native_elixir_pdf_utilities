@@ -95,7 +95,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
   # clone children; the original authored validation tree stays immutable.
   defp logical_target_children(nodes, composition, prepared) do
     Enum.flat_map(nodes, fn original ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       node =
         Map.get(
@@ -372,7 +372,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
         true
 
       [%{identity: identity, dx: dx, dy: dy} | tail] ->
-        HtmlValidator.reserve_render_resource(:max_css_work, 1, :pagination)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :pagination)
 
         valid_identity?(identity) and
           match?({:ok, _}, HtmlValidator.normalize_geometry_number(dx)) and
@@ -529,7 +529,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
                false
            end
          end) do
-      HtmlValidator.reserve_render_resource(:max_css_work, length(targets), :pagination)
+      HtmlValidator.reserve_render_resource(:max_work, length(targets), :pagination)
       :ok
     else
       Diagnostics.error(
@@ -798,8 +798,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
 
   defp target_position(x, y, page, transform, clip) do
     {x, y} = DrawingGeometry.transform_point(x, y, transform)
-    HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(x), :pagination)
-    HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(y), :pagination)
+    HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(x), :pagination)
+    HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(y), :pagination)
 
     if DrawingGeometry.clip_contains?(clip, x, y),
       do: {:xyz, page, x, y},

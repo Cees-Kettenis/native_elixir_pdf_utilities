@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
           :ok | {:error, {atom(), map()}}
   def validate_working_buffers(inflated_bytes, output_bytes, largest_row, rows) do
     bytes = 3 * inflated_bytes + 3 * output_bytes + 64 * largest_row + 64 * rows
-    maximum = Limits.get(:max_png_working_bytes)
+    maximum = Limits.get(:max_operation_memory_bytes)
 
     if bytes > maximum do
       Diagnostics.error(

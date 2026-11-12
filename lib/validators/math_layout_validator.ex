@@ -621,7 +621,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               end
           end
 
-        if is_integer(parsed) and abs(parsed) <= Limits.get(:max_css_numeric_magnitude),
+        if is_integer(parsed) and abs(parsed) <= Limits.get(:max_numeric_magnitude),
           do: {:ok, %{math_depth: parsed}},
           else: :error
 
@@ -732,7 +732,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         depth = Map.get(style, :math_depth, parent.depth)
 
         if style.font_size == :math do
-          FontValidator.reserve(:max_font_math_work, abs(depth - parent.depth))
+          FontValidator.reserve(:max_work, abs(depth - parent.depth))
 
           with {:ok, metrics} <- Font.math_metrics(parent.font) do
             if metrics.constants.script_percent_scale_down <= 0 or
@@ -767,10 +767,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               # IEEE-754 binary64's normal exponent range is a numeric invariant,
               # not a configurable work limit. Validate before exp can overflow.
               if logarithm < :math.log(2.2250738585072014e-308) or
-                   logarithm > :math.log(Limits.get(:max_css_numeric_magnitude)) or
+                   logarithm > :math.log(Limits.get(:max_numeric_magnitude)) or
                    (parent.size > 0 and
                       :math.log(parent.size) + logarithm >
-                        :math.log(Limits.get(:max_css_numeric_magnitude))) do
+                        :math.log(Limits.get(:max_numeric_magnitude))) do
                 failure(
                   "math-depth scales the inherited font size outside supported numeric bounds"
                 )
@@ -897,7 +897,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     value = value |> HtmlValidator.trim_css_whitespace() |> String.downcase(:ascii)
     size = Map.get(style, :font_size)
     root_size = Map.get(style, :_root_font_size, size)
-    limit = Limits.get(:max_css_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     case HtmlValidator.parse_css_number(value) do
       :error ->
@@ -947,7 +947,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               voffset: shift
             }
           } ->
-            limit = Limits.get(:max_css_numeric_magnitude)
+            limit = Limits.get(:max_numeric_magnitude)
 
             valid? =
               Enum.all?(
@@ -1012,13 +1012,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   end
 
   defp inline_size_dependency(node, depth) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :layout)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
-    if depth > Limits.get(:max_html_depth) do
+    if depth > Limits.get(:max_depth) do
       Diagnostics.error(
         :layout,
         :resource_limit_exceeded,
-        "Math block width dependency exceeds max_html_depth",
+        "Math block width dependency exceeds max_depth",
         operation: :measure_math,
         module: __MODULE__,
         source: "math"
@@ -1466,7 +1466,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     names = script_constant_names(side?)
 
     if mode in [:normal, :compact] and shift in [:normal, :compact] and
-         style.font_size <= Limits.get(:max_css_numeric_magnitude) do
+         style.font_size <= Limits.get(:max_numeric_magnitude) do
       with {:ok, metrics} <- Font.math_metrics(style.font_face),
            {:ok, values} <- resolve_constants(metrics, names, style.font_size) do
         stretching =
@@ -1539,7 +1539,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   @spec resolve_constants(map(), [atom()], number()) ::
           {:ok, [number()]} | {:error, Diagnostics.detailed_error()}
   def resolve_constants(metrics, names, size) do
-    FontValidator.reserve(:max_font_math_work, length(names))
+    FontValidator.reserve(:max_work, length(names))
 
     Enum.reduce_while(names, {:ok, []}, fn name, {:ok, values} ->
       case prepare_value(Map.fetch!(metrics.constants, name), size) do
@@ -1860,7 +1860,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     Map.get(style, :math_shift, :normal) in [:normal, :compact] and
       Enum.all?(script_constant_names(side?), fn name ->
         value = Map.get(constants, name)
-        is_number(value) and abs(value) <= Limits.get(:max_css_numeric_magnitude)
+        is_number(value) and abs(value) <= Limits.get(:max_numeric_magnitude)
       end)
   end
 
@@ -1915,7 +1915,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         :ok
 
       [child | rest] when is_map(child) ->
-        FontValidator.reserve(:max_font_math_work, 1)
+        FontValidator.reserve(:max_work, 1)
         validate_script_collection(rest)
 
       _ ->
@@ -2129,14 +2129,14 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   defp validate_script_placement(result) do
     if Enum.all?(
          Map.values(Map.delete(result, :offsets)),
-         &(is_number(&1) and abs(&1) <= Limits.get(:max_css_numeric_magnitude))
+         &(is_number(&1) and abs(&1) <= Limits.get(:max_numeric_magnitude))
        ) and
          result.width >= 0 and result.min_content_width >= 0 and
          result.max_content_width >= result.min_content_width and
          result.ascent + result.descent >= 0 and
          Enum.all?(result.offsets, fn {x, y} ->
-           abs(x) <= Limits.get(:max_css_numeric_magnitude) and
-             abs(y) <= Limits.get(:max_css_numeric_magnitude)
+           abs(x) <= Limits.get(:max_numeric_magnitude) and
+             abs(y) <= Limits.get(:max_numeric_magnitude)
          end),
        do: {:ok, result},
        else: failure("script placement exceeds supported point geometry bounds")
@@ -2254,9 +2254,9 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   defp prepare_corner_kern(glyph, corner, height) do
     table = if glyph, do: Map.get(glyph.corner_kerns, corner)
 
-    if is_number(height) and abs(height) <= Limits.get(:max_css_numeric_magnitude) do
+    if is_number(height) and abs(height) <= Limits.get(:max_numeric_magnitude) do
       if table do
-        FontValidator.reserve(:max_font_math_work, length(table.heights) + 1)
+        FontValidator.reserve(:max_work, length(table.heights) + 1)
 
         heights =
           Enum.reduce_while(table.heights, {:ok, []}, fn record, {:ok, values} ->
@@ -2320,10 +2320,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
              ],
              fn field ->
                value = Map.get(child, field)
-               is_number(value) and abs(value) <= Limits.get(:max_css_numeric_magnitude)
+               is_number(value) and abs(value) <= Limits.get(:max_numeric_magnitude)
              end
            ) and
-             Enum.all?(child.glyphs, &(&1.font_size <= Limits.get(:max_css_numeric_magnitude))) and
+             Enum.all?(child.glyphs, &(&1.font_size <= Limits.get(:max_numeric_magnitude))) and
              child.min_content_width >= 0 and child.max_content_width >= child.min_content_width and
              (is_nil(Map.get(child, :top_accent_attachment)) or
                 is_number(child.top_accent_attachment))
@@ -2829,8 +2829,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         %{type: :element, tag: "span", style: owner_style, children: [inner]}
 
       %{type: :text, text: text, style: style} ->
-        FontValidator.check(:max_rendered_text_bytes, byte_size(text))
-        FontValidator.reserve(:max_font_math_work, byte_size(text))
+        FontValidator.check(:max_output_bytes, byte_size(text))
+        FontValidator.reserve(:max_work, byte_size(text))
 
         displayed =
           if Map.get(style, :text_transform) == :math_auto, do: math_auto_text(text), else: text
@@ -3080,11 +3080,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         {ascent, descent} ->
           Enum.all?(
             [ascent, descent],
-            &(is_number(&1) and abs(&1) <= Limits.get(:max_css_numeric_magnitude))
+            &(is_number(&1) and abs(&1) <= Limits.get(:max_numeric_magnitude))
           )
 
         width when is_number(width) ->
-          width >= 0 and width <= Limits.get(:max_css_numeric_magnitude)
+          width >= 0 and width <= Limits.get(:max_numeric_magnitude)
 
         _ ->
           false
@@ -3197,7 +3197,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             do: base.source.metrics.constants.display_operator_min_height * scale,
             else: 0.0
 
-        FontValidator.reserve(:max_font_math_work, length(variants))
+        FontValidator.reserve(:max_work, length(variants))
 
         selected =
           Enum.find(variants, fn variant ->
@@ -3246,7 +3246,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           _ -> []
         end
 
-    FontValidator.reserve(:max_font_math_work, length(ids))
+    FontValidator.reserve(:max_work, length(ids))
     Enum.max(Enum.map(ids, &(elem(base.source.advances, &1) * scale)))
   end
 
@@ -3370,7 +3370,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             Enum.all?([:top, :right, :bottom, :left], fn edge ->
               value = Map.get(edges, edge)
 
-              is_number(value) and abs(value) <= Limits.get(:max_css_numeric_magnitude) and
+              is_number(value) and abs(value) <= Limits.get(:max_numeric_magnitude) and
                 (property == :margin or value >= 0)
             end)
 
@@ -3874,7 +3874,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
     valid? =
       is_integer(codepoint) and
-        is_number(size) and size >= 0 and size <= Limits.get(:max_css_numeric_magnitude) and
+        is_number(size) and size >= 0 and size <= Limits.get(:max_numeric_magnitude) and
         Keyword.keyword?(opts) and
         Enum.all?(
           Keyword.keys(opts),
@@ -3887,8 +3887,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     case {valid?, font} do
       {true, %{type: :embedded, units_per_em: units, cmap: cmap, widths: widths}}
       when is_integer(units) and units > 0 and is_map(cmap) and is_list(widths) ->
-        FontValidator.reserve(:max_font_math_work, 1)
-        HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+        FontValidator.reserve(:max_work, 1)
+        HtmlValidator.reserve_render_resource(:max_entries, 1, :layout)
 
         displayed =
           if Keyword.get(opts, :text_transform, :none) == :math_auto,
@@ -3968,7 +3968,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     size = base.font_size
 
     if axis in [:horizontal, :vertical] and is_number(target) and target >= 0 and
-         target <= Limits.get(:max_css_numeric_magnitude) do
+         target <= Limits.get(:max_numeric_magnitude) do
       source = base.source
       construction = Map.get(source.metrics.variants[axis], base.glyph_id)
 
@@ -3984,7 +3984,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
           )
 
         construction ->
-          FontValidator.reserve(:max_font_math_work, length(construction.variants))
+          FontValidator.reserve(:max_work, length(construction.variants))
           scale = size / base.units_per_em
           {_xmin, ymin, _xmax, ymax} = base.bounds
 
@@ -4142,7 +4142,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
   defp prepare_assembly(assembly, minimum, scale, target) do
     case assembly do
       %{parts: parts, italics_correction: italic} when scale > 0 ->
-        FontValidator.reserve(:max_font_math_work, length(parts))
+        FontValidator.reserve(:max_work, length(parts))
         {extenders, fixed} = Enum.split_with(parts, & &1.extender?)
         extender_sum = Enum.sum(Enum.map(extenders, & &1.full_advance)) * scale
         fixed_sum = Enum.sum(Enum.map(fixed, & &1.full_advance)) * scale
@@ -4168,12 +4168,12 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
         if extenders != [] and growth > 0 and maximum >= minimum do
           needed = max(target - fixed_sum + minimum * (length(fixed) - 1), 0)
-          work_limit = Limits.get(:max_font_math_work)
+          work_limit = Limits.get(:max_work)
 
           # Bound the ratio before dividing; tiny positive sizes can overflow a
           # float even though their target is bounded. Each repeat costs work.
           if needed > growth * work_limit do
-            FontValidator.reserve(:max_font_math_work, work_limit + 1)
+            FontValidator.reserve(:max_work, work_limit + 1)
           end
 
           repetitions =
@@ -4183,8 +4183,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
             )
 
           count = length(fixed) + repetitions * length(extenders)
-          FontValidator.reserve(:max_font_math_work, count)
-          HtmlValidator.reserve_render_resource(:max_layout_boxes, count, :layout)
+          FontValidator.reserve(:max_work, count)
+          HtmlValidator.reserve_render_resource(:max_entries, count, :layout)
           total = fixed_sum + repetitions * extender_sum
 
           overlap =
@@ -4257,7 +4257,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     valid? =
       is_list(children) and
         Enum.all?(children, fn child ->
-          FontValidator.reserve(:max_font_math_work, 1)
+          FontValidator.reserve(:max_work, 1)
 
           case child do
             %{
@@ -4270,7 +4270,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
               Enum.all?([width, ascent, descent, italic], &is_number/1) and
                 is_list(glyphs) and
                 Enum.all?(glyphs, fn glyph ->
-                  FontValidator.reserve(:max_font_math_work, 1)
+                  FontValidator.reserve(:max_work, 1)
 
                   case glyph do
                     %{

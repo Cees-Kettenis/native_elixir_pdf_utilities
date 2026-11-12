@@ -235,7 +235,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
       )
 
     context = %{mode: :inline, fonts: [%{data: data}]}
-    Limits.install(Map.put(limits, :max_aggregate_svg_surface_pixels, 1))
+    Limits.install(Map.put(limits, :max_raster_pixels, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(
@@ -244,7 +244,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
                context
              )
 
-    assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
+    assert diagnostic.message =~ "max_raster_pixels"
     Limits.install(limits)
 
     assert {:ok, pdf} =

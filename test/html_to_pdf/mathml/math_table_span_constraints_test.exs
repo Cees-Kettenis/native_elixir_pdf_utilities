@@ -159,7 +159,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableSpanConstraintsTest do
     assert_in_delta definite.width, 200, 1.0e-9
     assert definite.actual_text == "12"
 
-    for invalid <- [-1, :auto, {:percent, 1.0}, "200", Limits.get(:max_css_numeric_magnitude) + 1] do
+    for invalid <- [-1, :auto, {:percent, 1.0}, "200", Limits.get(:max_numeric_magnitude) + 1] do
       assert {:error, {reason, diagnostic}} =
                MathLayout.measure(source, %{available_inline_size: invalid})
 
@@ -344,10 +344,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableSpanConstraintsTest do
 
   test "wide spans reserve redistribution work before allocation", %{style: style} do
     source = table([[cell("1", style, %{"columnspan" => "100"})]], style)
-    Limits.install(Map.put(Limits.effective(), :max_table_grid_work, 400))
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = MathLayout.measure(source)
+    {prepared, measured, _} = geometry(source)
+    Limits.install(Map.put(Limits.effective(), :max_work, 400))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             MathTableValidator.prepare_geometry(prepared, measured)
+
     assert diagnostic.reason == :resource_limit_exceeded and diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "authored cell identity survives span preparation and decorated paint" do

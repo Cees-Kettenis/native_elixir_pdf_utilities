@@ -10,7 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlConstraintValidator do
   @doc false
   @spec prepare_initial_states(map(), [map()]) :: map()
   def prepare_initial_states(states, controls) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 4 * length(controls), :html)
+    HtmlValidator.reserve_render_resource(:max_work, 4 * length(controls), :html)
 
     radio_groups =
       Enum.reduce(controls, %{}, fn item, groups ->
@@ -101,7 +101,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlConstraintValidator do
           email_mismatch =
             if item.tag == "input" and type == "email" and state.value != "" do
               HtmlValidator.reserve_render_resource(
-                :max_html_tree_work,
+                :max_work,
                 byte_size(state.value),
                 :html
               )
@@ -198,7 +198,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlConstraintValidator do
         case Map.get(Map.fetch!(states, item.ref), :constraint_validation) do
           %{will_validate: true, valid: false} ->
             ancestors = Map.get(item, :fieldsets, [])
-            HtmlValidator.reserve_render_resource(:max_html_tree_work, length(ancestors), :html)
+            HtmlValidator.reserve_render_resource(:max_work, length(ancestors), :html)
             invalid = if item.owner == nil, do: invalid, else: MapSet.put(invalid, item.owner)
             Enum.reduce(ancestors, invalid, &MapSet.put(&2, &1))
 
@@ -301,7 +301,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlConstraintValidator do
           power = decimal.exponent - exponent
 
           HtmlValidator.reserve_render_resource(
-            :max_html_tree_work,
+            :max_work,
             power + decimal.coefficient_digits,
             :html
           )

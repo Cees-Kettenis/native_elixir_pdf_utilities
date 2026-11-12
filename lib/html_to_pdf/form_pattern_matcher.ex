@@ -134,8 +134,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
   defp match(node, context, position, direction, captures, next, depth) do
     charge(1)
 
-    if depth > context.limits.max_html_pattern_depth,
-      do: throw({:form_limit, :max_html_pattern_depth})
+    if depth > context.limits.max_depth,
+      do: throw({:form_limit, :max_depth})
 
     case node do
       {:sequence, nodes} ->
@@ -328,8 +328,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
   # full budget. Anchoring prevents OTP restarting an allowance per position.
   defp engine_match(value, regex, allowance) do
     {used, limits} = Process.get({__MODULE__, :work})
-    remaining = limits.max_html_pattern_match_work - used
-    if remaining <= 0, do: throw({:form_limit, :max_html_pattern_match_work})
+    remaining = limits.max_work - used
+    if remaining <= 0, do: throw({:form_limit, :max_work})
     allowance = min(allowance, remaining)
     charge(allowance)
 
@@ -337,14 +337,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
       :report_errors,
       {:capture, :none},
       {:match_limit, allowance},
-      {:match_limit_recursion, max(limits.max_html_pattern_depth, 1)}
+      {:match_limit_recursion, max(limits.max_depth, 1)}
     ]
 
     case :re.run(value, regex, options) do
       :match -> true
       :nomatch -> false
       {:error, :match_limit} -> engine_match(value, regex, allowance * 2)
-      {:error, :match_limit_recursion} -> throw({:form_limit, :max_html_pattern_depth})
+      {:error, :match_limit_recursion} -> throw({:form_limit, :max_depth})
     end
   end
 
@@ -352,11 +352,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
     key = {__MODULE__, :work}
     {used, limits} = Process.get(key)
 
-    if used + work > limits.max_html_pattern_match_work,
-      do: throw({:form_limit, :max_html_pattern_match_work})
+    if used + work > limits.max_work,
+      do: throw({:form_limit, :max_work})
 
-    if elem(Process.info(self(), :memory), 1) > limits.max_html_form_value_memory_bytes,
-      do: throw({:form_limit, :max_html_form_value_memory_bytes})
+    if elem(Process.info(self(), :memory), 1) > limits.max_operation_memory_bytes,
+      do: throw({:form_limit, :max_operation_memory_bytes})
 
     Process.put(key, {used + work, limits})
   end

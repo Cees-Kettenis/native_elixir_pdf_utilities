@@ -318,7 +318,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontControlsValidator do
         case features do
           map when is_map(map) ->
             NativeElixirPdfUtilities.Validators.FontValidator.reserve(
-              :max_font_math_work,
+              :max_work,
               map_size(map)
             )
 
@@ -326,7 +326,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontControlsValidator do
               if is_number(value),
                 do:
                   NativeElixirPdfUtilities.Validators.FontValidator.check(
-                    :max_font_numeric_magnitude,
+                    :max_numeric_magnitude,
                     abs(value)
                   )
             end)

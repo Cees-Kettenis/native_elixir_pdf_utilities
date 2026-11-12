@@ -136,7 +136,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
       assert diagnostic.stage == :layout and diagnostic.reason == :invalid_layout
     end
 
-    excessive = NativeElixirPdfUtilities.Limits.get(:max_css_numeric_magnitude) + 1
+    excessive = NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) + 1
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlTableValidator.prepare_baseline_geometry(
@@ -145,7 +145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
                0.0
              )
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_numeric_magnitude"
 
     assert {:ok, %{heights: [], baselines: [], offsets: %{}}} =
              HtmlTableValidator.prepare_baseline_geometry([], %{}, 0.0)
@@ -171,12 +171,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
     metrics = %{{0, 0} => %{metric | minimum_height: 48.0}, {0, 1} => metric, {1, 1} => metric}
     assert {:ok, geometry} = HtmlTableValidator.prepare_baseline_geometry(rows, metrics, 0.0)
     assert Enum.sum(geometry.heights) == 48.0
-    limit = NativeElixirPdfUtilities.Limits.get(:max_table_grid_work)
+    limit = NativeElixirPdfUtilities.Limits.get(:max_work)
 
     result =
       NativeElixirPdfUtilities.Validators.HtmlValidator.with_render_budget(fn ->
         NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
-          :max_table_grid_work,
+          :max_work,
           limit - 28,
           :layout
         )
@@ -185,7 +185,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
       end)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = result
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
     [first, second] = rows
     [span, peer] = first.cells
     invalid = [%{first | cells: [%{span | rowspan: 3}, peer]}, second]
@@ -220,12 +220,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
     assert {:ok, %{heights: [12.0]}} =
              HtmlTableValidator.prepare_baseline_geometry(rows, metrics, 0.0)
 
-    limit = NativeElixirPdfUtilities.Limits.get(:max_table_grid_work)
+    limit = NativeElixirPdfUtilities.Limits.get(:max_work)
 
     result =
       NativeElixirPdfUtilities.Validators.HtmlValidator.with_render_budget(fn ->
         NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
-          :max_table_grid_work,
+          :max_work,
           limit - 4,
           :layout
         )
@@ -236,7 +236,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} = result
     assert diagnostic.stage == :layout and diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "direct baseline dependency scanning charges each descendant before inspecting it" do
@@ -261,12 +261,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
     }
 
     assert {:ok, _geometry} = HtmlTableValidator.prepare_baseline_geometry(rows, metrics, 0.0)
-    limit = NativeElixirPdfUtilities.Limits.get(:max_table_grid_work)
+    limit = NativeElixirPdfUtilities.Limits.get(:max_work)
 
     result =
       NativeElixirPdfUtilities.Validators.HtmlValidator.with_render_budget(fn ->
         NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
-          :max_table_grid_work,
+          :max_work,
           limit - 45,
           :layout
         )
@@ -276,7 +276,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = result
     assert diagnostic.stage == :layout and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "direct malformed active descendants diagnose while hidden descendants remain inactive" do
@@ -655,8 +655,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                HtmlValidator.reserve_render_resource(
-                 :max_table_grid_work,
-                 Limits.get(:max_table_grid_work) - 1,
+                 :max_work,
+                 Limits.get(:max_work) - 1,
                  :pagination
                )
 
@@ -667,6 +667,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicBaselineTest do
                )
              end)
 
-    assert diagnostic.stage == :pagination and diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.stage == :pagination and diagnostic.message =~ "max_work"
   end
 end

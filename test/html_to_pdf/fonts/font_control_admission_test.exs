@@ -112,7 +112,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
     assert Enum.all?(tl(planned), &(&1.cascade_targets == []))
   end
 
-  test "fallback candidates and active feature execution return structured public failures" do
+  test "fallback candidates reject malformed features and admit emoji presentation" do
     assert {:ok, dom} = HtmlParser.parse_detailed("<p>H</p>")
     assert {:ok, tree} = Style.compute_detailed(dom, system_font_discovery: false)
     [paragraph] = tree.children
@@ -129,13 +129,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
     assert message =~ "feature"
     data = File.read!(FontCorpus.path("selected-colr.ttf"))
 
-    assert {:error, {:unsupported_font, diagnostic}} =
+    assert {:ok, pdf} =
              HtmlToPdf.render("<p style='font-family:Color;font-variant-emoji:text'>0</p>",
                fonts: [%{family: "Color", data: data}],
                system_font_discovery: false
              )
 
-    assert diagnostic.message =~ "text emoji presentation"
+    assert {:ok, "0"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
   end
 
   test "fractional strike advances share CSS rounding and malformed color sources fail during measurement" do

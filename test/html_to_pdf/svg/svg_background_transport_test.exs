@@ -46,7 +46,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackgroundTransportTest do
     assert pdf =~ "/Subtype /Image"
   end
 
-  test("background source rasterization respects actual SVG output and tile budgets", %{
+  test("background rendering uses the shared input and entry budgets", %{
     limits: limits
   }) do
     uri = "data:image/svg+xml;base64," <> Base.encode64(@checker)
@@ -54,22 +54,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackgroundTransportTest do
     source =
       "<div style='width:36pt;height:24pt;background-image:url(#{uri});background-size:6pt 6pt'></div>"
 
-    Limits.install(Map.put(limits, :max_svg_output_bytes, 1))
+    Limits.install(Map.put(limits, :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(source)
 
-    assert diagnostic.message =~ "output"
-    assert is_binary(diagnostic.source)
+    assert diagnostic.message =~ "max_input_bytes"
+    assert diagnostic.stage == :html
     assert diagnostic.reason == :resource_limit_exceeded
-    Limits.install(Map.put(limits, :max_background_image_tiles, 1))
+    Limits.install(Map.put(limits, :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(source)
 
-    assert diagnostic.stage == :limits
+    assert diagnostic.stage == :html
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "tile"
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "original nested three-page backgrounds retain native layers and retain all text" do

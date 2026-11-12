@@ -220,7 +220,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
 
   # Centralize API shape and context checks so preparation can rely on them.
   defp validate_arguments(text, attributes, context) do
-    limit = Limits.get(:max_css_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     valid? =
       is_binary(text) and String.valid?(text) and is_map(attributes) and
@@ -244,8 +244,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
       parent = Map.get(context, :parent)
 
       cond do
-        byte_size(text) > Limits.get(:max_rendered_text_bytes) ->
-          failure(:resource_limit_exceeded, "operator text exceeds max_rendered_text_bytes", nil)
+        byte_size(text) > Limits.get(:max_output_bytes) ->
+          failure(:resource_limit_exceeded, "operator text exceeds max_output_bytes", nil)
 
         not (is_integer(index) and index >= 0 and is_integer(count) and count >= 0 and
                (index < count or (index == 0 and count == 0)) and
@@ -259,10 +259,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
                  end)) ->
           failure(:invalid_document, "invalid operator position or core font context", text)
 
-        count > Limits.get(:max_html_nodes) or child_index > Limits.get(:max_html_nodes) ->
+        count > Limits.get(:max_entries) or child_index > Limits.get(:max_entries) ->
           failure(
             :resource_limit_exceeded,
-            "operator sibling context exceeds max_html_nodes",
+            "operator sibling context exceeds max_entries",
             text
           )
 
@@ -310,11 +310,11 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
       spacing? = key in [:lspace, :rspace]
       fallback = if spacing?, do: default * size, else: default
 
-      if is_binary(value) and byte_size(value) > Limits.get(:max_html_numeric_token_bytes) do
+      if is_binary(value) and byte_size(value) > Limits.get(:max_numeric_token_bytes) do
         {:halt,
          failure(
            :resource_limit_exceeded,
-           "operator #{key} exceeds max_html_numeric_token_bytes",
+           "operator #{key} exceeds max_numeric_token_bytes",
            value
          )}
       else
@@ -370,7 +370,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
                 {:ok, {:rem, number}} ->
                   resolved = number * context.root_font_size
 
-                  if abs(resolved) <= Limits.get(:max_css_numeric_magnitude),
+                  if abs(resolved) <= Limits.get(:max_numeric_magnitude),
                     do: {:ok, resolved},
                     else: :numeric_limit
 
@@ -394,7 +394,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
             {:halt,
              failure(
                :resource_limit_exceeded,
-               "operator #{key} exceeds max_css_numeric_magnitude",
+               "operator #{key} exceeds max_numeric_magnitude",
                value
              )}
 
@@ -407,13 +407,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
              )}
 
           {:ok, number} when is_number(number) ->
-            if abs(number) <= Limits.get(:max_css_numeric_magnitude) do
+            if abs(number) <= Limits.get(:max_numeric_magnitude) do
               {:cont, {:ok, Map.put(properties, key, number)}}
             else
               {:halt,
                failure(
                  :resource_limit_exceeded,
-                 "operator #{key} exceeds max_css_numeric_magnitude",
+                 "operator #{key} exceeds max_numeric_magnitude",
                  value
                )}
             end

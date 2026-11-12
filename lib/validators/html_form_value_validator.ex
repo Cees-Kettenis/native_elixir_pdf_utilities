@@ -15,15 +15,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
   def prepare(operation, source, values) do
     if operation in [:pattern, :url] and is_binary(source) and String.valid?(source) and
          is_list(values) and Enum.all?(values, &(is_binary(&1) and String.valid?(&1))) do
-      HtmlValidator.reserve_render_resource(:max_html_pattern_values, length(values), :html)
+      HtmlValidator.reserve_render_resource(:max_entries, length(values), :html)
 
-      limit =
-        if operation == :pattern, do: :max_html_pattern_bytes, else: :max_html_form_value_bytes
-
-      HtmlValidator.reserve_render_resource(limit, byte_size(source), :html)
+      HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(source), :html)
 
       HtmlValidator.reserve_render_resource(
-        :max_html_form_value_bytes,
+        :max_input_bytes,
         Enum.reduce(values, 0, &(byte_size(&1) + &2)),
         :html
       )
@@ -34,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
          source: source,
          values: values,
          limits: Limits.effective(),
-         timeout: Limits.get(:max_html_form_value_timeout_ms)
+         timeout: Limits.get(:max_operation_timeout_ms)
        }}
     else
       failure(
@@ -53,8 +50,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
   def evaluate(request) do
     limits = request.limits
 
-    if elem(Process.info(self(), :memory), 1) > limits.max_html_form_value_memory_bytes,
-      do: throw({:form_limit, :max_html_form_value_memory_bytes})
+    if elem(Process.info(self(), :memory), 1) > limits.max_operation_memory_bytes,
+      do: throw({:form_limit, :max_operation_memory_bytes})
 
     # Install the GC cap only after the initial observation, so sub-minimum
     # budgets return their named limit rather than an invalid BEAM option.
@@ -63,7 +60,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
     Process.flag(:max_heap_size, %{
       size:
         max(
-          div(limits.max_html_form_value_memory_bytes, :erlang.system_info(:wordsize)),
+          div(limits.max_operation_memory_bytes, :erlang.system_info(:wordsize)),
           elem(:erlang.system_info(:min_heap_size), 1)
         ),
       kill: true,
@@ -76,8 +73,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
         :url ->
           work = byte_size(request.source)
 
-          if work > limits.max_html_pattern_compile_work,
-            do: throw({:form_limit, :max_html_pattern_compile_work})
+          if work > limits.max_work,
+            do: throw({:form_limit, :max_work})
 
           {if(HtmlUrlValidator.absolute_input_url?(request.source),
              do: :valid_url,
@@ -98,8 +95,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
                   do: byte_size(expression),
                   else: :erlang.external_size(expression)
 
-              if expression_bytes > limits.max_html_form_value_memory_bytes,
-                do: throw({:form_limit, :max_html_form_value_memory_bytes})
+              if expression_bytes > limits.max_operation_memory_bytes,
+                do: throw({:form_limit, :max_operation_memory_bytes})
 
               {mismatch, work} =
                 FormPatternMatcher.match_values(expression, request.values, limits)
@@ -110,7 +107,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
 
     memory = elem(Process.info(self(), :memory), 1)
 
-    # result/1 reserves this observation against the shared render allowance.
+    # The worker has exited before result/1 admits its observed peak memory.
     {:ok, state, %{compile: compile, matches: match_work, memory: memory}}
   catch
     {:form_limit, limit} -> {:limit, limit}
@@ -123,9 +120,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
     case result do
       {:ok, state, %{compile: compile, matches: matches, memory: memory}}
       when state in [:invalid_pattern, :matched, :mismatched, :valid_url, :invalid_url] ->
-        HtmlValidator.reserve_render_resource(:max_html_pattern_compile_work, compile, :html)
-        HtmlValidator.reserve_render_resource(:max_html_pattern_match_work, matches, :html)
-        HtmlValidator.reserve_render_resource(:max_html_form_value_memory_bytes, memory, :html)
+        HtmlValidator.reserve_render_resource(:max_work, compile, :html)
+        HtmlValidator.reserve_render_resource(:max_work, matches, :html)
+        HtmlValidator.check_render_resource(:max_operation_memory_bytes, memory, :html)
         {:ok, state}
 
       {:limit, limit} ->
@@ -137,7 +134,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
       :timeout ->
         failure(
           :resource_limit_exceeded,
-          "initial form-value parsing exceeds max_html_form_value_timeout_ms; simplify the pattern/value or increase the limit"
+          "initial form-value parsing exceeds max_operation_timeout_ms; simplify the pattern/value or increase the limit"
         )
 
       {:unsupported_pattern, message} ->
@@ -149,7 +146,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
       _ ->
         failure(
           :form_value_backend_unavailable,
-          "Elixir initial form-value worker failed or was terminated by its GC-enforced BEAM heap limit; inspect the worker failure or increase max_html_form_value_memory_bytes. Native regex allocations are outside that heap limit"
+          "Elixir initial form-value worker failed or was terminated by its GC-enforced BEAM heap limit; inspect the worker failure or increase max_operation_memory_bytes. Native regex allocations are outside that heap limit"
         )
     end
   catch

@@ -321,44 +321,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
     html =
       "<iframe src='children/child.html'></iframe><iframe src='children/child.html'></iframe>"
 
-    Limits.install(Map.put(Limits.defaults(), :max_embedded_documents, 1))
-
-    assert {:error, {:resource_limit_exceeded, %{stage: :resource, message: message}}} =
-             HtmlToPdf.render(html, base_url: root)
-
-    assert message =~ "max_embedded_documents"
-
-    Limits.install(
-      Map.put(Limits.defaults(), :max_aggregate_html_source_bytes, byte_size(html) + 1)
-    )
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :html, message: message}}} =
              HtmlToPdf.render(html, base_url: root)
 
-    assert message =~ "max_aggregate_html_source_bytes"
+    assert message =~ "max_entries"
+
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, byte_size(html) + 1))
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
+             HtmlToPdf.render(html, base_url: root)
+
+    assert message =~ "max_input_bytes"
     File.write!(Path.join(root, "children/child.html"), "<img src='image.png'>")
 
-    for {limit, bound} <- [max_image_count: 1, max_aggregate_decoded_image_bytes: 5] do
+    for {limit, bound} <- [max_entries: 1, max_decoded_bytes: 5] do
       Limits.install(Map.put(Limits.defaults(), limit, bound))
 
       assert {:error, {:resource_limit_exceeded, %{message: message}}} =
                HtmlToPdf.render(html, base_url: root)
 
-      assert message =~
-               if(limit == :max_image_count,
-                 do: "image count",
-                 else: "aggregate decoded image bytes"
-               )
+      assert message =~ Atom.to_string(limit)
     end
 
     css = "p{color:red}"
     File.write!(Path.join(root, "children/child.html"), "<style>#{css}</style><p>Styled</p>")
-    Limits.install(Map.put(Limits.defaults(), :max_aggregate_css_source_bytes, byte_size(css)))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, byte_size(css)))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              HtmlToPdf.render(html, base_url: root)
 
-    assert message =~ "max_aggregate_css_source_bytes"
+    assert message =~ "max_input_bytes"
   end
 
   defp iframe(child, attrs \\ "style='border:0;width:90pt;height:45pt'") do

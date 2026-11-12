@@ -151,7 +151,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
       not is_binary(text) or not String.valid?(text) or String.trim(text) == "" ->
         error(:stamp, :invalid_stamp, "stamp text must be a non-empty UTF-8 string")
 
-      byte_size(text) > Limits.get(:max_stamp_text_bytes) ->
+      byte_size(text) > Limits.get(:max_input_bytes) ->
         error(:limits, :resource_limit_exceeded, "stamp text exceeds the byte limit")
 
       true ->
@@ -160,8 +160,8 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   defp validate_appearance_expansion(count, bytes) do
-    if count <= Limits.get(:max_appearance_widgets) and
-         bytes <= Limits.get(:max_appearance_text_bytes),
+    if count <= Limits.get(:max_entries) and
+         bytes <= Limits.get(:max_output_bytes),
        do: :ok,
        else:
          error(
@@ -284,7 +284,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
         error(
           :options,
           :invalid_options,
-          "#{label} must be a representable number within max_pdf_numeric_magnitude"
+          "#{label} must be a representable number within max_numeric_magnitude"
         )
     end
   end
@@ -602,7 +602,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
         pages_tokens * byte_size(Integer.to_string(pages)) * count
 
     with :ok <- validate_appearance_expansion(count, total_bytes) do
-      if total_bytes > Limits.get(:max_stamp_text_bytes) do
+      if total_bytes > Limits.get(:max_input_bytes) do
         error(:limits, :resource_limit_exceeded, "stamp text exceeds the byte limit")
       else
         texts =
@@ -734,7 +734,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   defp decode_page_contents(document, references, decoded_bytes) do
-    limit = Limits.get(:max_stamp_decoded_content_bytes)
+    limit = Limits.get(:max_decoded_bytes)
 
     references
     |> Enum.reduce_while({:ok, [], decoded_bytes}, fn reference, {:ok, parts, decoded_bytes} ->
@@ -831,7 +831,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
            error(:overlay, :unsupported_pdf_feature, "overlay resources refer back to a PDF page")}
 
         true ->
-          PdfValidator.charge_reader_budget(:max_pdf_reference_resolution_work, 1)
+          PdfValidator.charge_reader_budget(:max_work, 1)
 
           case Map.fetch(objects, reference) do
             {:ok, object} ->
@@ -918,8 +918,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
           {reason, diagnostic.message}
 
         nil ->
-          {:invalid_pdf_input,
-           "values must remain representable within max_pdf_numeric_magnitude"}
+          {:invalid_pdf_input, "values must remain representable within max_numeric_magnitude"}
       end
 
     context = "source page #{source.page_number} to target page #{target.page_number}"

@@ -23,7 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableAtomicAdmissionLimitsTest do
       fragment_id: {:line, :line, 0}
     }
 
-    Limits.install(%{Limits.effective() | max_layout_boxes: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
     assert :ok = HtmlTableValidator.validate_atomic_pagination([marker], [marker], 100.0)
   end
 end

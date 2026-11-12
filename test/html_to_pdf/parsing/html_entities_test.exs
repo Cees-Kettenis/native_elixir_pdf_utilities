@@ -66,12 +66,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntitiesTest do
       source = prefix <> String.duplicate("9", 1_900_000) <> ";"
       assert {:ok, ^replacement} = HtmlToPdf.render("<p>" <> source <> "</p>", opts)
 
+      assert {:ok, ^attribute} = HtmlToPdf.render("<p title='" <> source <> "'>Text</p>", opts)
+      original = NativeElixirPdfUtilities.Limits.effective()
+      NativeElixirPdfUtilities.Limits.install(%{original | max_work: 1})
+
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render("<p title='" <> source <> "'>Text</p>", opts)
 
+      NativeElixirPdfUtilities.Limits.install(original)
+
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.stage == :html
-      assert diagnostic.message =~ "max_html_tree_work"
+      assert diagnostic.message =~ "max_work"
 
       shorter = prefix <> String.duplicate("9", 100_000) <> ";"
       assert {:ok, ^attribute} = HtmlToPdf.render("<p title='" <> shorter <> "'>Text</p>", opts)

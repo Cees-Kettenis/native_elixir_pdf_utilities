@@ -53,7 +53,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
   @doc "Selects valid exported part mappings from the HTML exportparts attribute."
   @spec exported_parts(String.t(), [String.t()]) :: [String.t()]
   def exported_parts(source, parts) do
-    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(source) + length(parts), :css)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(source) + length(parts), :css)
     parts = MapSet.new(parts)
 
     source
@@ -77,12 +77,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
 
   defp parse_selector(selector, context) do
     HtmlValidator.check_render_resource(
-      :max_css_selector_depth,
+      :max_depth,
       Map.get(context, :depth, 0),
       :css
     )
 
-    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(selector), :css)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(selector), :css)
 
     tokens =
       selector
@@ -197,7 +197,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
 
   defp parse_simple_selector(selector, context) do
     HtmlValidator.check_render_resource(
-      :max_css_selector_depth,
+      :max_depth,
       Map.get(context, :depth, 0),
       :css
     )
@@ -374,7 +374,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
   end
 
   defp parse_selector_modifiers(source, part, context) do
-    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(source), :css)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(source), :css)
 
     case source do
       "" ->

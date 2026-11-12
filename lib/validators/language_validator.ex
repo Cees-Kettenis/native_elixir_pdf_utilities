@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
 
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
+  alias NativeElixirPdfUtilities.Diagnostics
 
   # Fixed BCP 47 registry data, not caller options or configurable ceilings.
   # IANA File-Date 2026-09-17, source SHA-256
@@ -442,110 +443,147 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
   @private_regex ~r/\Ax(?:-[a-z0-9]{1,8})+\z/
   @extended_range_regex ~r/\A(?:[a-z]{1,8}|\*)(?:-(?:[a-z0-9]{1,8}|\*))*\z/
 
+  @doc "Prepares a UTF-8 language identifier using HTML's existing unknown-language and alias rules."
+  @spec prepare_identifier(term()) :: {:ok, [binary()]} | {:error, {atom(), map()}}
+  def prepare_identifier(value) do
+    case value do
+      value when is_binary(value) ->
+        if String.valid?(value),
+          do: {:ok, canonicalize(value)},
+          else:
+            Diagnostics.error(
+              :html,
+              :invalid_encoding,
+              "language identifiers require valid UTF-8",
+              operation: :prepare_language_identifier,
+              module: __MODULE__
+            )
+
+      _ ->
+        Diagnostics.error(:html, :invalid_document, "language identifiers must be strings",
+          operation: :prepare_language_identifier,
+          module: __MODULE__
+        )
+    end
+  end
+
   @doc false
   @spec canonicalize(binary()) :: [binary()]
   def canonicalize(value) do
-    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(value), :css)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(value), :css)
     folded = String.downcase(value, :ascii)
     preferred = Map.get(@preferred_tags, folded, folded)
-    parts = Regex.named_captures(@tag_regex, preferred)
 
-    cond do
-      Regex.match?(@private_regex, preferred) ->
-        String.split(preferred, "-")
+    case preferred do
+      "" ->
+        [""]
 
-      is_map(parts) ->
-        variants = String.split(parts["variants"], "-", trim: true)
-        extensions = Regex.scan(~r/-([0-9a-wy-z])((?:-[a-z0-9]{2,8})+)/, parts["extensions"])
-        singletons = Enum.map(extensions, &Enum.at(&1, 1))
+      <<first, second, rest::binary>>
+      when first in ?a..?z and second in ?a..?z and
+             (rest == "" or (byte_size(rest) == 1 and rest >= "a" and rest <= "z")) ->
+        preferred
+        |> then(&Map.get(@preferred_subtags, {"language", &1}, &1))
+        |> language_prefix()
 
-        if length(variants) == length(Enum.uniq(variants)) and
-             length(singletons) == length(Enum.uniq(singletons)) do
-          [language | extlangs] = String.split(parts["language"], "-")
-          language = Map.get(@preferred_subtags, {"language", language}, language)
+      _ ->
+        parts = Regex.named_captures(@tag_regex, preferred)
 
-          {language, extlangs} =
-            case extlangs do
-              [extlang | tail] ->
-                case Map.get(@extlangs, extlang) do
-                  {^language, replacement} -> {replacement, tail}
-                  _ -> {language, extlangs}
+        cond do
+          Regex.match?(@private_regex, preferred) ->
+            String.split(preferred, "-")
+
+          is_map(parts) ->
+            variants = String.split(parts["variants"], "-", trim: true)
+            extensions = Regex.scan(~r/-([0-9a-wy-z])((?:-[a-z0-9]{2,8})+)/, parts["extensions"])
+            singletons = Enum.map(extensions, &Enum.at(&1, 1))
+
+            if length(variants) == length(Enum.uniq(variants)) and
+                 length(singletons) == length(Enum.uniq(singletons)) do
+              [language | extlangs] = String.split(parts["language"], "-")
+              language = Map.get(@preferred_subtags, {"language", language}, language)
+
+              {language, extlangs} =
+                case extlangs do
+                  [extlang | tail] ->
+                    case Map.get(@extlangs, extlang) do
+                      {^language, replacement} -> {replacement, tail}
+                      _ -> {language, extlangs}
+                    end
+
+                  [] ->
+                    {language, []}
                 end
 
-              [] ->
-                {language, []}
+              prefix = language_prefix(language)
+
+              script = String.trim_leading(parts["script"], "-")
+              region = String.trim_leading(parts["region"], "-")
+
+              canonical =
+                prefix ++
+                  extlangs ++
+                  [
+                    Map.get(@preferred_subtags, {"script", script}, script),
+                    Map.get(@preferred_subtags, {"region", region}, region)
+                  ] ++
+                  Enum.map(variants, &Map.get(@preferred_subtags, {"variant", &1}, &1))
+
+              extension_subtags =
+                extensions
+                |> Enum.sort_by(&Enum.at(&1, 1))
+                |> Enum.flat_map(fn [_whole, singleton, subtags] ->
+                  [singleton | String.split(subtags, "-", trim: true)]
+                end)
+
+              Enum.reject(canonical, &(&1 == "")) ++
+                extension_subtags ++
+                String.split(parts["private"], "-", trim: true)
+            else
+              String.split(folded, "-")
             end
 
-          prefix =
-            case Map.get(@extlangs, language) do
-              {prefix, _replacement} -> [prefix, language]
-              nil -> [language]
-            end
+          String.contains?(folded, "*") and Regex.match?(@extended_range_regex, folded) ->
+            [language | rest] = String.split(folded, "-")
+            language = Map.get(@preferred_subtags, {"language", language}, language)
 
-          script = String.trim_leading(parts["script"], "-")
-          region = String.trim_leading(parts["region"], "-")
+            prefix = language_prefix(language)
 
-          canonical =
-            prefix ++
-              extlangs ++
-              [
-                Map.get(@preferred_subtags, {"script", script}, script),
-                Map.get(@preferred_subtags, {"region", region}, region)
-              ] ++
-              Enum.map(variants, &Map.get(@preferred_subtags, {"variant", &1}, &1))
+            {rest, _extension?} =
+              Enum.map_reduce(rest, false, fn subtag, extension? ->
+                extension? = extension? or (byte_size(subtag) == 1 and subtag != "*")
 
-          extension_subtags =
-            extensions
-            |> Enum.sort_by(&Enum.at(&1, 1))
-            |> Enum.flat_map(fn [_whole, singleton, subtags] ->
-              [singleton | String.split(subtags, "-", trim: true)]
-            end)
+                kind =
+                  cond do
+                    extension? -> nil
+                    byte_size(subtag) == 4 -> "script"
+                    byte_size(subtag) in [2, 3] -> "region"
+                    true -> "variant"
+                  end
 
-          Enum.reject(canonical, &(&1 == "")) ++
-            extension_subtags ++
-            String.split(parts["private"], "-", trim: true)
-        else
-          String.split(folded, "-")
+                {Map.get(@preferred_subtags, {kind, subtag}, subtag), extension?}
+              end)
+
+            prefix ++ rest
+
+          true ->
+            # HTML preserves empty, unknown and malformed language identifiers.
+            # Invalid identifiers must not acquire meaning through alias rewriting.
+            String.split(folded, "-")
         end
+    end
+  end
 
-      String.contains?(folded, "*") and Regex.match?(@extended_range_regex, folded) ->
-        [language | rest] = String.split(folded, "-")
-        language = Map.get(@preferred_subtags, {"language", language}, language)
-
-        prefix =
-          case Map.get(@extlangs, language) do
-            {prefix, _replacement} -> [prefix, language]
-            nil -> [language]
-          end
-
-        {rest, _extension?} =
-          Enum.map_reduce(rest, false, fn subtag, extension? ->
-            extension? = extension? or (byte_size(subtag) == 1 and subtag != "*")
-
-            kind =
-              cond do
-                extension? -> nil
-                byte_size(subtag) == 4 -> "script"
-                byte_size(subtag) in [2, 3] -> "region"
-                true -> "variant"
-              end
-
-            {Map.get(@preferred_subtags, {kind, subtag}, subtag), extension?}
-          end)
-
-        prefix ++ rest
-
-      true ->
-        # HTML preserves empty, unknown and malformed language identifiers.
-        # Invalid identifiers must not acquire meaning through alias rewriting.
-        String.split(folded, "-")
+  defp language_prefix(language) do
+    case Map.get(@extlangs, language) do
+      {prefix, _replacement} -> [prefix, language]
+      nil -> [language]
     end
   end
 
   @doc false
   @spec matches?([binary()], [binary()]) :: boolean()
   def matches?(range, language) do
-    HtmlValidator.reserve_render_resource(:max_css_work, length(range) + length(language), :css)
+    HtmlValidator.reserve_render_resource(:max_work, length(range) + length(language), :css)
 
     case {range, language} do
       {[""], [""]} ->
@@ -651,10 +689,10 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
   # change the assigned node's actual language parent. Cached logical records
   # carry node IDs, not renderer selector IDs or resource permissions.
   defp logical_language(id, index, hosts, cache, children, scope, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     RenderCache.fetch(cache, {:logical_language, scope, id}, fn ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :css)
       node = Map.fetch!(index, id)
 
       case language_attribute(node) do
@@ -708,7 +746,7 @@ defmodule NativeElixirPdfUtilities.Validators.LanguageValidator do
   # Template contents are inert and cannot set the containing document language.
   defp document_language(nodes, language) do
     Enum.reduce(nodes, language, fn node, language ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
       case node do
         %{tag: "template"} ->

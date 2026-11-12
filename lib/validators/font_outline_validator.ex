@@ -43,7 +43,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontOutlineValidator do
               {glyph, _} =
                 TrueTypeGlyphValidator.resolve(id, outlines.glyphs, %{}, MapSet.new(), 0, false)
 
-              FontValidator.reserve(:max_font_color_work, length(glyph.points))
+              FontValidator.reserve(:max_work, length(glyph.points))
 
               {paths, _} =
                 Enum.map_reduce(glyph.ends, {glyph.points, 0}, fn last, {points, first} ->
@@ -67,6 +67,56 @@ defmodule NativeElixirPdfUtilities.Validators.FontOutlineValidator do
     end)
   catch
     {:invalid_glyph, error} -> error
+  end
+
+  @doc "Returns selected design outlines as canonical move, line, cubic and close commands."
+  @spec prepare_commands(map(), non_neg_integer()) ::
+          {:ok, [{integer(), [number()]}]} | {:error, {atom(), map()}}
+  def prepare_commands(font, id) do
+    with {:ok, path} <- prepare_path(font, id) do
+      # Only prepare_path's canonical absolute M/L/Q/C/Z output enters here.
+      # Convert quadratics once so clipping and typography share subdivision.
+      {commands, _} =
+        Regex.scan(~r/([MLQCZ])([^MLQCZ]*)/, path)
+        |> Enum.map_reduce({0, 0}, fn [_, operation, source], {px, py} ->
+          coordinates =
+            source
+            |> String.split()
+            |> Enum.map(fn token ->
+              {number, ""} =
+                NativeElixirPdfUtilities.Validators.HtmlValidator.parse_css_number(token)
+
+              number
+            end)
+
+          case {operation, coordinates} do
+            {"M", [x, y]} ->
+              {{0, coordinates}, {x, y}}
+
+            {"L", [x, y]} ->
+              {{1, coordinates}, {x, y}}
+
+            {"C", [_, _, _, _, x, y]} ->
+              {{3, coordinates}, {x, y}}
+
+            {"Q", [a, b, x, y]} ->
+              {{3,
+                [
+                  px + 2 / 3 * (a - px),
+                  py + 2 / 3 * (b - py),
+                  x + 2 / 3 * (a - x),
+                  y + 2 / 3 * (b - y),
+                  x,
+                  y
+                ]}, {x, y}}
+
+            {"Z", []} ->
+              {{4, []}, {px, py}}
+          end
+        end)
+
+      {:ok, commands}
+    end
   end
 
   defp contour_path(points) do

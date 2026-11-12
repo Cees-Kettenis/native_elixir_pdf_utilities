@@ -39,12 +39,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClipGeometryTest do
 
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [group]}])
     assert pdf =~ "/QuadPoints [20 40 40 40 20 20 40 20]"
-    Limits.install(Map.put(limits, :max_clip_projection_work, 10))
+    Limits.install(Map.put(limits, :max_work, 10))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              PdfWriter.render([%{size: {100, 100}, boxes: [group]}])
 
-    assert message =~ "max_clip_projection_work"
+    assert message =~ "max_work"
   end
 
   test("cached foreign Forms retain real clip projection work and issued target identity", %{

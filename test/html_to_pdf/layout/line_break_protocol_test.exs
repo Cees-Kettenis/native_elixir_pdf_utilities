@@ -49,18 +49,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LineBreakProtocolTest do
 
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_layout_text_work, 1))
+    Limits.install(Map.put(previous, :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlLineBreakValidator.transparent_format_boundary?("AB", "CD")
 
-    assert diagnostic.message =~ "max_layout_text_work"
+    assert diagnostic.message =~ "max_work"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlLineBreakValidator.validate_native_opportunities("A B", [{2, false}, {3, true}])
 
     assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_layout_text_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "code points beyond the packed line-break tables fall back to the unassigned class" do

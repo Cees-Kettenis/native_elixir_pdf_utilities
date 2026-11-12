@@ -212,7 +212,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormCompositionTest do
   test "cumulative child and parent field ceilings reject before PDF field allocation", %{
     root: root
   } do
-    Limits.install(Map.put(Limits.effective(), :max_pdf_form_fields, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
 
     for source <- [
           "<iframe src='child.html'></iframe><iframe src='child.html'></iframe>",
@@ -221,7 +221,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormCompositionTest do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render(source, base_url: root)
 
-      assert diagnostic.message =~ "max_pdf_form_fields"
+      assert diagnostic.message =~ "max_entries"
     end
   end
 
@@ -246,17 +246,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormCompositionTest do
     original = Limits.effective()
     source = "<iframe src='child.html'></iframe><iframe src='child.html'></iframe>"
 
-    for {limit, maximum} <- [{:max_appearance_widgets, 3}, {:max_appearance_text_bytes, 8}] do
+    for {limit, maximum} <- [{:max_entries, 3}, {:max_output_bytes, 8}] do
       Limits.install(Map.put(original, limit, maximum))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render(source, base_url: root)
 
       assert diagnostic.message =~ Atom.to_string(limit)
-      assert diagnostic.stage == :forms
+      assert diagnostic.stage == if(limit == :max_entries, do: :html, else: :style)
     end
 
-    Limits.install(Map.put(original, :max_pdf_form_fields, 0))
+    Limits.install(Map.put(original, :max_entries, 0))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -264,7 +264,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormCompositionTest do
                base_url: root
              )
 
-    assert diagnostic.message =~ "max_pdf_form_fields"
+    assert diagnostic.message =~ "max_entries"
   end
 
   defp escape(text) do

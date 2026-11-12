@@ -14,7 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
         height: 1.0,
         type_check: true,
         percentage_basis: 1.0,
-        _depth_limit: :max_css_calculation_depth
+        _depth_limit: :max_depth
       }
 
       case CssMathValidator.length_dependencies(value) do
@@ -49,7 +49,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
            unit_scales: scales,
            percentage_basis: remaining / 0.75,
            _intrinsic_basis: Map.get(style, :_intrinsic_basis),
-           _depth_limit: :max_css_calculation_depth
+           _depth_limit: :max_depth
          }}
 
       :error ->
@@ -88,7 +88,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
          source_metrics: metrics,
          root_metrics: root_metrics,
          percentage_basis: remaining / 0.75,
-         _depth_limit: :max_css_calculation_depth
+         _depth_limit: :max_depth
        }}
     else
       {:error, _} = error ->
@@ -168,7 +168,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
   end
 
   defp valid_prepared_position?(position, depth) do
-    HtmlValidator.check_render_resource(:max_css_calculation_depth, depth, :layout)
+    HtmlValidator.check_render_resource(:max_depth, depth, :layout)
 
     case position do
       {:css_position_math, {:css_calculation, _} = calculation} ->
@@ -268,7 +268,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
 
         case result do
           {:ok, value} ->
-            HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(value), :layout)
+            HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(value), :layout)
             HtmlValidator.normalize_geometry_number(value)
 
           {:error, _} = error ->

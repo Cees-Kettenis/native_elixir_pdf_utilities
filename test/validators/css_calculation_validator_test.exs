@@ -54,9 +54,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
   test "token bytes, cumulative work and resolved magnitude stay bounded" do
     Limits.install(
       Map.merge(Limits.effective(), %{
-        max_html_numeric_token_bytes: 32,
-        max_css_work: 20,
-        max_css_numeric_magnitude: 100
+        max_numeric_token_bytes: 32,
+        max_work: 20,
+        max_numeric_magnitude: 100
       })
     )
 
@@ -65,7 +65,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
                "pt" => 1
              })
 
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -74,14 +74,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
                CssCalculationValidator.prepare("calc(10pt)", %{"pt" => 1})
              end)
 
-    assert diagnostic.message =~ "max_css_work"
-    Limits.install(Map.put(Limits.effective(), :max_css_work, 1_000))
+    assert diagnostic.message =~ "max_work"
+    Limits.install(Map.put(Limits.effective(), :max_work, 1_000))
     assert {:ok, expression} = CssCalculationValidator.prepare("calc(90pt + 90pt)", %{"pt" => 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssCalculationValidator.resolve(expression, 0)
 
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "dependency discovery follows validated syntax and ignores CSS comments" do
@@ -117,12 +117,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
 
     assert diagnostic.stage == :layout
     assert diagnostic.message =~ "zero"
-    Limits.install(Map.put(Limits.effective(), :max_css_calculation_depth, 2))
+    Limits.install(Map.put(Limits.effective(), :max_depth, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssCalculationValidator.prepare("calc(min(max(1pt, 2pt), 3pt))", %{"pt" => 1})
 
-    assert diagnostic.message =~ "max_css_calculation_depth"
+    assert diagnostic.message =~ "max_depth"
   end
 
   test "shared point scales retain typed products and dictionary-relative percentages" do

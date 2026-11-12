@@ -1,4 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
+  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeGrapheme
+
   @moduledoc """
   Resolves styled text graphemes to fonts before layout and PDF writing.
 
@@ -75,7 +77,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         # Keep the registry out of map keys: hashing its font payloads per node
         # would cost more than the candidate lookup being cached.
         cached_candidates = if registry == cached_registry, do: cached_candidates, else: %{}
-        key = {families, weight, font_style}
+
+        key =
+          {families, weight, font_style, Map.get(style, :_text_language),
+           Map.get(style, :font_controls, %{}), Map.get(style, :writing_mode, :horizontal_tb),
+           Map.get(style, :text_orientation, :mixed),
+           Map.get(style, :text_combine_upright, :none)}
 
         {candidates, cached_candidates} =
           case Map.fetch(cached_candidates, key) do
@@ -106,13 +113,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         # A fully covered run needs no font-boundary segmentation. Source
         # provenance still follows individual graphemes through normalization.
         graphemes =
-          if text != "" and not Map.has_key?(style, :_source_glyph_characters) and
+          if text != "" and
                not Map.has_key?(selected, :synthetic_variants) and
-               Font.supports_text?(selected, text) do
+               not NativeElixirPdfUtilities.Validators.EmojiPresentationValidator.matching_required?(
+                 text,
+                 selected
+               ) and
+               Font.supports_text?(selected, text) and
+               (not NativeElixirPdfUtilities.Validators.TextShapingValidator.required?(
+                  selected,
+                  text
+                ) or
+                  NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
+                    selected,
+                    text
+                  )) do
             [%{text: text, layout_whitespace?: false}]
           else
             text
-            |> String.graphemes()
+            |> UnicodeGrapheme.graphemes()
             |> Enum.map(fn grapheme ->
               %{
                 text: grapheme,
@@ -189,12 +208,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                   {List.first(candidates), grapheme.text}
 
                 false ->
-                  case Enum.find(
+                  case NativeElixirPdfUtilities.Validators.FontRenderingValidator.select_face(
                          candidates,
-                         &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
-                           &1,
-                           grapheme.text
-                         )
+                         grapheme.text
                        ) do
                     nil when unsupported_glyphs == :replace ->
                       replacement_face =
@@ -220,20 +236,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                 do: [%{displayed: text, fragments: Enum.flat_map(source, & &1.fragments)}],
                 else: source
 
-            font_face =
-              if Map.has_key?(font_face, :synthetic_variants) do
-                # Coverage admission prepared this same selected face and
-                # grapheme in the active budget. Reuse its successful memo.
-                {:ok, font} =
-                  NativeElixirPdfUtilities.Validators.FontRenderingValidator.prepare_grapheme(
-                    font_face,
-                    text
-                  )
-
-                font
-              else
-                font_face
-              end
+            # Coverage admission prepared this face in the active font budget.
+            {:ok, font_face} =
+              NativeElixirPdfUtilities.Validators.FontRenderingValidator.prepare_grapheme(
+                font_face,
+                text
+              )
 
             append_run(runs, node, style, font_face, text, source)
           end)

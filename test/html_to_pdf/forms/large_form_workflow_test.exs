@@ -20,7 +20,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LargeFormWorkflowTest do
                Enum.map(1..count, &{"field#{&1}", "Initial#{&1}"})
 
       assert {:ok, context} = Reader.read_validated(pdf)
-      assert length(context.pages) < Limits.get(:max_rendered_pages)
+      assert length(context.pages) < Limits.get(:max_pages)
 
       catalogs =
         for {_ref, %{value: %{"Type" => {:name, "Catalog"}}}} <- context.document.objects,

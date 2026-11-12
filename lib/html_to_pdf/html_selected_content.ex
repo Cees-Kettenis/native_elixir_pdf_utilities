@@ -98,10 +98,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContent do
   end
 
   defp populate(nodes, logical, prepared, ancestors, depth, state, targets) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     Enum.map_reduce(nodes, state, fn node, state ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{type: :element, tag: "selectedcontent", children: children} ->
@@ -179,7 +179,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContent do
   # Each created node has a new identity. Its payload and source link are checked
   # against the actual original before either logical registration or styling.
   defp clone_children(children, owner, path, depth, logical, state, inert?) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     children
     |> Enum.with_index()
@@ -328,8 +328,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlSelectedContent do
   end
 
   defp clone_identity(source, owner, fragment?) do
-    HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.reserve_render_resource(:max_entries, 1, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
     id = make_ref()
 
     node =

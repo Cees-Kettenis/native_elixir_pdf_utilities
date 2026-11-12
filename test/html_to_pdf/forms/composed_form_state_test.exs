@@ -145,7 +145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedFormStateTest do
     assert {:ok, composition} = HtmlComposition.compose(dom)
     previous = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(previous) end)
-    NativeElixirPdfUtilities.Limits.install(%{previous | max_html_tree_work: 1})
+    NativeElixirPdfUtilities.Limits.install(%{previous | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -158,7 +158,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedFormStateTest do
              end)
 
     assert diagnostic.stage == :html
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   defp prepared(html) do

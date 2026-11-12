@@ -142,7 +142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlMeasurementTest do
 
     failure =
       try do
-        Limits.install(Map.put(previous, :max_pdf_objects, 6))
+        Limits.install(Map.put(previous, :max_entries, 6))
         HtmlToPdf.render(html, forms: :static)
       after
         Limits.install(previous)
@@ -151,7 +151,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlMeasurementTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} = failure
 
     assert diagnostic.reason == :resource_limit_exceeded and
-             diagnostic.message =~ "max_pdf_objects"
+             diagnostic.message =~ "max_entries"
 
     invalid = %{type: :rect, initial_select_opacity: %{owner: make_ref(), alpha: 2}}
     assert {:error, {_reason, diagnostic}} = WriterValidator.validate_native_boxes([invalid])

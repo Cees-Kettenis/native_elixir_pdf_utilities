@@ -50,7 +50,7 @@ defmodule NativeElixirPdfUtilities.FormListBoxRoundTripTest do
   test "editor font serialization respects the configured decompression ratio during the complete lifecycle",
        %{limits: limits} do
     for ratio <- [1, 2, 100] do
-      Limits.install(%{limits | max_pdf_decompression_ratio: ratio})
+      Limits.install(%{limits | max_decompression_ratio: ratio})
 
       assert {:ok, pdf} =
                HtmlToPdf.render(
@@ -118,7 +118,7 @@ defmodule NativeElixirPdfUtilities.FormListBoxRoundTripTest do
   test "retained row metadata is admitted during production before serialization", %{
     limits: limits
   } do
-    Limits.install(%{limits | max_pdf_form_preparation_entries: 2})
+    Limits.install(%{limits | max_entries: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -126,7 +126,7 @@ defmodule NativeElixirPdfUtilities.FormListBoxRoundTripTest do
                system_font_discovery: false
              )
 
-    assert diagnostic.message =~ "max_pdf_form_preparation_entries"
+    assert diagnostic.message =~ "max_entries"
     assert diagnostic.operation == :render
   end
 end

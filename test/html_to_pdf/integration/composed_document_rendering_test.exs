@@ -189,7 +189,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedDocumentRenderingTest do
           Map.put(glyphs, :drawing_page_height, 100),
           %{glyphs | boxes: [Map.put(text, :drawing_annotation_rect, {0, 0, 1, 1})]},
           %{glyphs | boxes: [%{text | glyph_ids: [65_536]}]},
-          %{glyphs | boxes: [%{text | x: Limits.get(:max_pdf_numeric_magnitude)}]},
+          %{glyphs | boxes: [%{text | x: Limits.get(:max_numeric_magnitude)}]},
           %{glyphs | actual_text: <<255>>},
           %{glyphs | boxes: [%{text | type: :rect}]}
         ] do
@@ -206,13 +206,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedDocumentRenderingTest do
     previous = Limits.effective()
 
     try do
-      Limits.install(Map.put(previous, :max_layout_boxes, 6))
+      Limits.install(Map.put(previous, :max_entries, 6))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                WriterValidator.prepare([page], [])
 
       assert diagnostic.reason == :resource_limit_exceeded and
-               diagnostic.message =~ "max_layout_boxes"
+               diagnostic.message =~ "max_entries"
     after
       Limits.install(previous)
     end

@@ -349,7 +349,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererSourceContextTest 
 
     opts =
       Keyword.put(opts, :asset_resolver, fn _ ->
-        Limits.install(Map.update!(limits, :max_html_depth, &(&1 + 1)))
+        Limits.install(Map.update!(limits, :max_depth, &(&1 + 1)))
         {:ok, data}
       end)
 

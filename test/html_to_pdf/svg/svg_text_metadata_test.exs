@@ -26,15 +26,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextMetadataTest do
     assert {:ok, %{children: [svg]}} = Style.prepare_svg_detailed(dom)
     assert {:ok, original_scene} = SvgScene.prepare(svg, HtmlValidator.new_image_budget())
     assert length(original_scene.selected_fonts) == 2
-    Limits.install(Map.put(limits, :max_font_count, 1))
+    Limits.install(Map.put(limits, :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(html)
 
-    assert diagnostic.stage == :font and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.FontValidator
-    assert diagnostic.operation == :load_registry
-    assert diagnostic.message =~ "max_font_count"
+    assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.module == HtmlValidator
+    assert diagnostic.operation == :render
+    assert diagnostic.message =~ "max_entries"
     Limits.install(limits)
     assert {:ok, scene} = SvgScene.prepare(svg, HtmlValidator.new_image_budget())
     assert length(scene.selected_fonts) == 2

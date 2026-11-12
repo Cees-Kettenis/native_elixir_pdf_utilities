@@ -136,7 +136,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectBlankInitializationTest do
         assert diagnostic.stage == :resource and diagnostic.message =~ "about:blank"
       end
 
-      Limits.install(Map.put(Limits.effective(), :max_embedded_document_depth, 0))
+      Limits.install(Map.put(Limits.effective(), :max_depth, 0))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                EmbeddedViewport.prepare_selected(:blank, parent, [], :object)
@@ -147,21 +147,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectBlankInitializationTest do
   end
 
   test "blank objects charge the shared child count even though they allocate no source bytes" do
-    Limits.install(Map.put(Limits.effective(), :max_embedded_documents, 1))
+    original = Limits.effective()
 
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, {:viewport, first}} =
                EmbeddedViewport.prepare_selected(:blank, parent, [], :object)
 
+      used =
+        original.max_entries -
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_entries)
+
+      Limits.install(%{original | max_entries: used})
+
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                EmbeddedViewport.prepare_selected(:blank, parent, [], :object)
 
-      assert diagnostic.stage == :resource and diagnostic.message =~ "max_embedded_documents"
+      assert diagnostic.stage == :resource and diagnostic.message =~ "max_entries"
 
       assert diagnostic.operation == :load_embedded_resource and
                diagnostic.source == "about:blank"
 
       assert ResourceContext.current() == parent
+      Limits.install(original)
       assert {:ok, _group} = EmbeddedViewport.layout(first, 90, 45)
       :callback_continued
     end)

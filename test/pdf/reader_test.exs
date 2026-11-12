@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
 
@@ -116,6 +117,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   end
 
   test "limits generic array and dictionary nesting before recursive descent" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_depth: 100})
     valid_array = String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
 
     valid_dictionary =
@@ -154,7 +158,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
                  ])
                )
 
-      assert message == "PDF value nesting depth exceeds the 100-level limit; object 3 0"
+      assert message == "PDF value nesting depth exceeds max_depth (100-level limit); object 3 0"
     end
 
     nested_trailer = String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
@@ -170,7 +174,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
                )
              )
 
-    assert trailer_message == "PDF value nesting depth exceeds the 100-level limit"
+    assert trailer_message == "PDF value nesting depth exceeds max_depth (100-level limit)"
 
     nested_stream_dictionary =
       String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
@@ -190,7 +194,8 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
                ])
              )
 
-    assert stream_message == "PDF value nesting depth exceeds the 100-level limit; object 3 0"
+    assert stream_message ==
+             "PDF value nesting depth exceeds max_depth (100-level limit); object 3 0"
   end
 
   test "resolves indirect chains and rejects reference cycles" do
@@ -752,6 +757,10 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   end
 
   test "validates predictor selection, dimensions, and truncated rows" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_decoded_bytes: 25_000_000})
+
     assert decoded_stream("726177>", {:name, "ASCIIHexDecode"}, %{"Predictor" => 1}) ==
              {:ok, "raw"}
 
@@ -811,6 +820,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderTest do
   end
 
   test "enforces final decoded-stream size and ratio limits" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_decoded_bytes: 25_000_000})
     oversized = :binary.copy(<<129, ?A>>, div(25_000_000, 128) + 1) <> <<128>>
 
     assert_error(

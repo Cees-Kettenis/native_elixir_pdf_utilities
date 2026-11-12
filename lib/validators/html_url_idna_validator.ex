@@ -29,16 +29,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator do
          end)
         |> List.to_tuple()
 
-  @doc "Returns a Unicode strong direction using the bundled Unicode property table."
-  @spec strong_direction(non_neg_integer()) :: String.t() | nil
-  def strong_direction(codepoint) do
-    case properties(codepoint) do
-      {_, _, _, :L, _, _} -> "ltr"
-      {_, _, _, bidi, _, _} when bidi in [:R, :AL] -> "rtl"
-      _ -> nil
-    end
-  end
-
   @doc "Validates and maps a domain for initial URL admission without DNS or resource access."
   @spec domain(binary()) :: {:ok, binary()} | :error
   def domain(source) do

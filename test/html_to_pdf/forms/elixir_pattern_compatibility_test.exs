@@ -186,10 +186,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ElixirPatternCompatibilityTest do
     source = "(a)+"
     assert {:ok, _, work} = HtmlPatternSyntaxValidator.prepare(source, limits)
 
-    assert {:limit, :max_html_pattern_compile_work} =
+    assert {:limit, :max_work} =
              HtmlPatternSyntaxValidator.prepare_execution(source, %{
                limits
-               | max_html_pattern_compile_work: work
+               | max_work: work
              })
 
     assert Process.get(key) == :enclosing_context

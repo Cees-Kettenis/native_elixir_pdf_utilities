@@ -157,7 +157,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
             chain
             |> Enum.with_index()
             |> Enum.flat_map(fn {root, index} ->
-              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :css)
               root_parents = Enum.drop(chain, index + 1)
 
               root_match =
@@ -238,7 +238,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
   end
 
   defp exposed_part_hosts(node, parts, names, scope, context) do
-    HtmlValidator.reserve_render_resource(:max_css_work, length(parts) + length(names) + 1, :css)
+    HtmlValidator.reserve_render_resource(:max_work, length(parts) + length(names) + 1, :css)
 
     case Map.get(Map.get(context, :consumed_shadow_roots, %{}), Map.get(node, :tree_scope_id)) do
       nil ->
@@ -338,7 +338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
   end
 
   defp matches_simple_selector?(part, node, ancestors, context) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
     target =
       case Map.get(part, :shadow_selector) do
@@ -691,7 +691,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
   defp elements(node, context) do
     children = source_children(node, context)
-    HtmlValidator.reserve_render_resource(:max_css_work, length(children), :css)
+    HtmlValidator.reserve_render_resource(:max_work, length(children), :css)
 
     Enum.filter(children, &match?(%{type: :element}, &1))
   end
@@ -771,7 +771,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
                    ))
         end)
 
-      HtmlValidator.reserve_render_resource(:max_css_work, length(elements), :css)
+      HtmlValidator.reserve_render_resource(:max_work, length(elements), :css)
       type_counts = Enum.frequencies_by(elements, &{Map.get(&1, :namespace, :html), &1.tag})
       count = length(elements)
 

@@ -106,7 +106,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
       assert surface.context.document_id != parent.document_id
       assert surface.context.depth == parent.depth + 1
       assert {:ok, group} = EmbeddedViewport.layout(surface, 150, 72)
-      text = group.boxes |> Enum.filter(&(&1.type == :text)) |> Enum.map_join(& &1.text)
+
+      text =
+        Enum.map_join(group.boxes, fn box ->
+          Map.get(box, :actual_text, Map.get(box, :text, ""))
+        end)
+
       assert text =~ "<tag> & literal"
       assert text =~ "Second"
       assert ResourceContext.current() == parent
@@ -314,10 +319,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
     root: root,
     png: png
   } do
-    Limits.install(Map.put(Limits.defaults(), :max_aggregate_image_source_bytes, byte_size(png)))
+    limits = Limits.effective()
+    source = "<object data='child/image.png'></object>"
 
-    assert {:ok, _pdf} =
-             HtmlToPdf.render("<object data='child/image.png'></object>", base_url: root)
+    used =
+      NativeElixirPdfUtilities.Operation.run(HtmlToPdf, :render, fn ->
+        assert {:ok, _pdf} = HtmlToPdf.render(source, base_url: root)
+
+        limits.max_input_bytes -
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_input_bytes)
+      end)
+
+    assert used >= byte_size(source) + byte_size(png)
+    Limits.install(%{limits | max_input_bytes: used})
+    assert {:ok, _pdf} = HtmlToPdf.render(source, base_url: root)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -325,22 +340,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
                base_url: root
              )
 
-    assert diagnostic.message =~ "image"
-    Limits.install(Map.put(Limits.defaults(), :max_embedded_document_depth, 1))
+    assert diagnostic.message =~ "max_input_bytes"
+    Limits.install(Map.put(Limits.defaults(), :max_depth, 1))
     File.write!(Path.join(root, "child/document.html"), "<embed src='literal.txt'>")
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<embed src='child/document.html'>", base_url: root)
 
-    assert diagnostic.message =~ "max_embedded_document_depth"
-    Limits.install(Map.put(Limits.defaults(), :max_aggregate_svg_surface_pixels, 1))
+    assert diagnostic.message =~ "max_depth"
+    Limits.install(Map.put(Limits.defaults(), :max_raster_pixels, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<embed src='child/image.svg'>", base_url: root)
 
     assert diagnostic.source == "child/image.svg"
-    assert diagnostic.operation == :rasterize_document
-    assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
+    assert diagnostic.operation == :rasterize
+    assert diagnostic.message =~ "max_raster_pixels"
 
     File.write!(Path.join(root, "child/raster.svg"), """
     <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
@@ -352,8 +367,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedDispatchTest do
 
     assert diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.source == "child/raster.svg"
-    assert diagnostic.operation == :rasterize_document
-    assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
+    assert diagnostic.operation == :rasterize
+    assert diagnostic.message =~ "max_raster_pixels"
   end
 
   test "invalid dispatch plans and MIME inputs fail before reads", %{root: root} do

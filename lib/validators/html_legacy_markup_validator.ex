@@ -67,7 +67,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLegacyMarkupValidator do
           order =
             Map.get(node, :attribute_order, ~w(marginwidth marginheight leftmargin topmargin))
 
-          HtmlValidator.reserve_render_resource(:max_html_tree_work, length(order), :html)
+          HtmlValidator.reserve_render_resource(:max_work, length(order), :html)
 
           margin =
             Enum.reduce(

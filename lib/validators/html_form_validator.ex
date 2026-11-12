@@ -54,11 +54,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   # A node may appear in both a root's child list and the clone registry. Walk
   # each real logical identity once, charging the shared traversal budget.
   defp logical_form_forest(nodes, registry, seen, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     {reversed, seen} =
       Enum.reduce(nodes, {[], seen}, fn source, {output, seen} ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :html)
         id = Map.get(source, :node_id)
 
         if id != nil and MapSet.member?(seen, id) do
@@ -83,7 +83,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
   defp initial_node_facts(nodes, facts) do
     Enum.reduce(nodes, facts, fn node, facts ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       facts =
         case Map.get(node, :node_id) do
@@ -99,7 +99,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   # logical identities and the form validator's own initial facts are copied.
   defp transfer_initial_node_facts(nodes, facts) do
     Enum.map(nodes, fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       node =
         case Map.get(facts, Map.get(node, :node_id)) do
@@ -244,7 +244,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 reference = Map.fetch!(item.attributes, "list")
 
                 HtmlValidator.reserve_render_resource(
-                  :max_html_tree_work,
+                  :max_work,
                   byte_size(reference),
                   :style
                 )
@@ -281,7 +281,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   references = Map.get(item.attributes, "for", "")
 
                   HtmlValidator.reserve_render_resource(
-                    :max_html_tree_work,
+                    :max_work,
                     byte_size(references),
                     :style
                   )
@@ -289,7 +289,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   tokens = references |> HtmlValidator.html_class_tokens() |> Enum.uniq()
 
                   HtmlValidator.reserve_render_resource(
-                    :max_html_tree_work,
+                    :max_work,
                     length(tokens),
                     :style
                   )
@@ -313,7 +313,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
 
                 {"datalist", _} ->
                   HtmlValidator.reserve_render_resource(
-                    :max_html_tree_work,
+                    :max_work,
                     2 * length(item.datalist_options),
                     :style
                   )
@@ -490,7 +490,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @spec prepare_initial_color(map()) :: {:ok, map()}
   def prepare_initial_color(attributes) do
     value = Map.get(attributes, "value", "")
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 2 * byte_size(value), :html)
+    HtmlValidator.reserve_render_resource(:max_work, 2 * byte_size(value), :html)
 
     parsed =
       NativeElixirPdfUtilities.Validators.CssColorValidator.parse_initial_input_color(value)
@@ -595,7 +595,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                       ) / 0.75
                   ) * 0.75
 
-                HtmlValidator.check_render_resource(:max_css_numeric_magnitude, width, :style)
+                HtmlValidator.check_render_resource(:max_numeric_magnitude, width, :style)
                 Map.put(style, :width, width)
               else
                 style
@@ -773,7 +773,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @spec prepare_initial_range(map()) :: map()
   @spec prepare_initial_range(map(), [String.t()]) :: map()
   def prepare_initial_range(attributes, options \\ []) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, length(options), :html)
+    HtmlValidator.reserve_render_resource(:max_work, length(options), :html)
 
     option_numbers =
       Enum.map(options, fn value ->
@@ -959,7 +959,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         is_binary(key) and String.valid?(key) and is_binary(value) and String.valid?(value)
       end) and
       is_map(Map.get(state, :range)) and is_list(Map.get(state.range, :options)) and
-      HtmlValidator.check_render_resource(:max_html_tree_work, length(state.range.options), :html) ==
+      HtmlValidator.check_render_resource(:max_work, length(state.range.options), :html) ==
         :ok and
       Enum.all?(state.range.options, &(is_binary(&1) and String.valid?(&1))) and
       Map.take(state, [:value, :display, :readonly, :required, :range]) ==
@@ -1365,7 +1365,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @doc "Prepares applicable input semantics without changing the authored attributes retained on the node."
   @spec applicable_input_attributes(map(), map()) :: map()
   def applicable_input_attributes(attributes, namespaces \\ %{}) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, map_size(attributes), :html)
+    HtmlValidator.reserve_render_resource(:max_work, map_size(attributes), :html)
     attributes = Map.reject(attributes, fn {name, _} -> not is_nil(Map.get(namespaces, name)) end)
     type = HtmlValidator.input_type(Map.get(attributes, "type", "text"))
     Map.reject(attributes, fn {name, _} -> not input_attribute_applies?(type, name) end)
@@ -1602,7 +1602,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   # Its suggestions do not acquire selection or change an input's authored value.
   defp initial_datalist_options(children, ancestor_disabled? \\ false) do
     Enum.flat_map(children, fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :style)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :style)
 
       case node do
         %{type: :element, tag: "option", children: nested} ->
@@ -1671,7 +1671,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @doc "Determines native select-row metrics from an option's validated HTML ancestor chain."
   @spec native_select_option?([map()]) :: boolean()
   def native_select_option?(ancestors) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, length(ancestors), :html)
+    HtmlValidator.reserve_render_resource(:max_work, length(ancestors), :html)
 
     Enum.any?(ancestors, fn ancestor ->
       Map.get(ancestor, :tag) == "select" and Map.get(ancestor, :namespace, :html) == :html
@@ -1771,7 +1771,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         Diagnostics.error(
           :style,
           :resource_limit_exceeded,
-          "initial control #{property} exceeds max_css_numeric_magnitude; reduce the size, cols, rows or font size, or specify a smaller CSS dimension",
+          "initial control #{property} exceeds max_numeric_magnitude; reduce the size, cols, rows or font size, or specify a smaller CSS dimension",
           operation: :compute,
           module: __MODULE__,
           source: "initial control #{property}"
@@ -1785,7 +1785,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     case HtmlValidator.parse_html_integer(Map.get(attributes, name)) do
       {:ok, value} when value > 0 ->
         try do
-          HtmlValidator.check_render_resource(:max_css_numeric_magnitude, value, :html)
+          HtmlValidator.check_render_resource(:max_numeric_magnitude, value, :html)
           value
         catch
           {:render_resource_limit, {:error, {reason, diagnostic}}} ->
@@ -1812,7 +1812,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
     display_size =
       case HtmlValidator.parse_html_integer(Map.get(attributes, "size"), :nonnegative) do
         {:ok, size} when size >= 0 ->
-          HtmlValidator.check_render_resource(:max_css_numeric_magnitude, size, :html)
+          HtmlValidator.check_render_resource(:max_numeric_magnitude, size, :html)
           size
 
         _ ->
@@ -2025,7 +2025,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           selected = Enum.filter(choices, & &1.selected)
           first = List.first(selected)
 
-          display_size <= NativeElixirPdfUtilities.Limits.get(:max_css_numeric_magnitude) and
+          display_size <= NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) and
             rows == if(display_size == 0, do: 4, else: display_size) and
             listbox == if(multiple, do: display_size != 1, else: display_size > 1) and
             ids == Enum.map(selected, & &1.id) and
@@ -2254,24 +2254,24 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                 module: __MODULE__
               )
 
-            length(controls) * 2 > Limits.get(:max_appearance_widgets) ->
-              error(:resource_limit_exceeded, "HTML controls exceed the appearance count limit")
-
-            length(controls) > Limits.get(:max_pdf_form_fields) ->
-              error(:resource_limit_exceeded, "HTML controls exceed max_pdf_form_fields")
+            length(controls) * 2 > Limits.get(:max_entries) ->
+              error(
+                :resource_limit_exceeded,
+                "HTML controls exceed max_entries (the appearance count limit)"
+              )
 
             length(Enum.uniq_by(controls, & &1.control.id)) != length(controls) ->
               error(:unsupported_form, "a control cannot span pages or repeat in page furniture")
 
             true ->
               HtmlValidator.reserve_render_resource(
-                :max_pdf_form_fields,
+                :max_entries,
                 length(controls),
                 :forms
               )
 
               HtmlValidator.reserve_render_resource(
-                :max_appearance_widgets,
+                :max_entries,
                 length(controls) * 2,
                 :forms
               )
@@ -2479,11 +2479,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                   range_appearance != :ok ->
                     {:halt, range_appearance}
 
-                  byte_size(name) > Limits.get(:max_pdf_form_text_bytes) ->
+                  byte_size(name) > Limits.get(:max_input_bytes) ->
                     {:halt,
                      error(
                        :resource_limit_exceeded,
-                       "HTML field name exceeds max_pdf_form_text_bytes"
+                       "HTML field name exceeds max_input_bytes"
                      )}
 
                   String.contains?(name, [".", <<0>>]) ->
@@ -2547,7 +2547,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
                       end)
                     end)
 
-                  HtmlValidator.reserve_render_resource(:max_appearance_text_bytes, bytes, :forms)
+                  HtmlValidator.reserve_render_resource(:max_output_bytes, bytes, :forms)
 
                   {:ok, cleaned,
                    fields
@@ -2633,7 +2633,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           "interactive child fields require surfaces prepared with forms: :interactive; recompute static child artwork for forms: :static"
         )
 
-      count > Limits.get(:max_pdf_form_fields) or count * 2 > Limits.get(:max_appearance_widgets) ->
+      count > Limits.get(:max_entries) or count * 2 > Limits.get(:max_entries) ->
         error(
           :resource_limit_exceeded,
           "composed HTML controls exceed the shared field or appearance count limit"
@@ -2667,7 +2667,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               prefix = "CHILD_#{index}_"
 
               HtmlValidator.reserve_render_resource(
-                :max_html_tree_work,
+                :max_work,
                 name_work + byte_size(prefix) * length(own),
                 :forms
               )
@@ -2678,12 +2678,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
           cond do
             Enum.any?(
               own,
-              &(byte_size(prefix) + byte_size(&1.name) > Limits.get(:max_pdf_form_text_bytes))
+              &(byte_size(prefix) + byte_size(&1.name) > Limits.get(:max_input_bytes))
             ) ->
               {:halt,
                error(
                  :resource_limit_exceeded,
-                 "child PDF field name exceeds max_pdf_form_text_bytes"
+                 "child PDF field name exceeds max_input_bytes"
                )}
 
             own

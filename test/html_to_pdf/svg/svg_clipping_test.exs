@@ -134,7 +134,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
     source =
       "<svg width='40' height='40'><defs><clipPath id='a'><path d='M0 0H30V30H0Z'/></clipPath><clipPath id='b' clip-path='url(#a)'><path d='M0 0H30V30H0Z'/></clipPath></defs><rect width='40' height='40' clip-path='url(#b)'/></svg>"
 
-    Limits.install(Map.put(Limits.effective(), :max_svg_nodes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, %{message: _message}}} =
              NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(
@@ -286,7 +286,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
 
     assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :inline})
     assert summary.clip_references == 1
-    Limits.install(Map.put(limits, :max_aggregate_svg_surface_pixels, 1))
+    Limits.install(Map.put(limits, :max_raster_pixels, 1))
 
     for result <- [
           NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(
@@ -297,7 +297,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
           NativeElixirPdfUtilities.HtmlToPdf.render(source)
         ] do
       assert {:error, {:resource_limit_exceeded, %{message: message}}} = result
-      assert message =~ "max_aggregate_svg_surface_pixels"
+      assert message =~ "max_raster_pixels"
     end
 
     assert {:error, {:resource_limit_exceeded, %{message: _message}}} =
@@ -307,7 +307,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
                %{mode: :inline}
              )
 
-    Limits.install(Map.put(limits, :max_svg_raster_dimension, 10))
+    Limits.install(Map.put(limits, :max_raster_dimension, 10))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(

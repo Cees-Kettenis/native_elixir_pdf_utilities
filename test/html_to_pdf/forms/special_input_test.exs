@@ -366,7 +366,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
     assert reason == diagnostic.reason and diagnostic.stage == :style and diagnostic.message != ""
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_image_source_bytes: 1})
+    Limits.install(%{previous | max_input_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=image src=tile>",
@@ -374,7 +374,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
                assets: %{"tile" => {:bytes, File.read!(@image)}}
              )
 
-    assert diagnostic.message =~ "source"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "native color stroke adjustment remains local and artwork counts toward layout ceiling" do
@@ -389,24 +389,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
     assert text =~ "Before" and text =~ "After"
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_layout_boxes: 1})
+    Limits.install(%{previous | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=color value=red>", forms: :static)
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
   end
 
   test "color preparation and native artwork consume existing budgets" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_html_tree_work: 10})
+    Limits.install(%{previous | max_work: 10})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                HtmlFormValidator.prepare_initial_color(%{"value" => "long invalid color"})
              end)
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
   end
 end

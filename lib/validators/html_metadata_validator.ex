@@ -23,7 +23,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
     if map_size(namespaces) == 0 do
       attributes
     else
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, map_size(attributes), :html)
+      HtmlValidator.reserve_render_resource(:max_work, map_size(attributes), :html)
       Map.reject(attributes, fn {name, _} -> not is_nil(Map.get(namespaces, name)) end)
     end
   end
@@ -97,7 +97,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
             metadata? = namespace == :html and tag == "meta"
 
             if stylesheet? or metadata?,
-              do: HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              do: HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
             own =
               if stylesheet? or metadata?,
@@ -263,7 +263,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
   # Logical scopes do not authorize resources. Hidden/foreign nodes participate.
   defp index_tree_ids(nodes, {document, tree} = scope, index) do
     Enum.reduce(nodes, index, fn node, index ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{type: :element, attributes: attributes, children: children} ->
@@ -296,7 +296,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
   # Ordinary children include foreign hosts; inert template contents are separate.
   defp tree_id?(nodes, id) do
     Enum.any?(nodes, fn node ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{type: :element, attributes: attributes, children: children}
@@ -356,14 +356,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
   # Translation and editing use parent elements, not slot/flat-tree ancestry.
   # A shadow or template fragment therefore starts with the initial modes.
   defp logical_modes(id, node, index, facts, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     case Map.fetch(facts, id) do
       {:ok, modes} ->
         {modes, facts}
 
       :error ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :html)
         parent = Map.get(index, Map.get(node, :parent_id))
 
         {inherited, facts} =
@@ -392,7 +392,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlMetadataValidator do
 
   defp project_logical_modes(nodes, facts) do
     Enum.map(nodes, fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{type: :element, children: children} ->

@@ -248,12 +248,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
   test "unapplied grid grammar uses canonical cardinality limits and exact original diagnostic coordinates" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_layout_cardinality, 2))
-    declaration = "grid-template-columns:repeat(3,1em)"
+    declaration = "grid-template-columns:repeat(1001,1em)"
 
     html =
       "<style>@media screen{p{#{declaration}}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
+    Limits.install(Map.put(limits, :max_entries, 1000))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, @opts)
     assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.source == declaration

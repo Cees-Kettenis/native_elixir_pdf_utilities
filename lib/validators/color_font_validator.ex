@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
           pages = Enum.reverse(pages)
 
           HtmlValidator.check_render_resource(
-            :max_layout_boxes,
+            :max_entries,
             Enum.reduce(pages, 0, &(length(&1.boxes) + &2)),
             :writer
           )
@@ -48,14 +48,24 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
     Enum.reduce_while(boxes, {:ok, []}, fn box, {:ok, output} ->
       case box do
         %{type: :text, font_face: %{color_tables: [_ | _]} = font} ->
-          with {:ok, strikes} <-
-                 FontValidator.memo({:bitmap_font, font.data}, fn ->
-                   BitmapFontValidator.prepare(font)
-                 end),
-               {:ok, glyphs} <- glyph_boxes(box, height, strikes, budget) do
-            {:cont, {:ok, [glyphs | output]}}
+          if Enum.all?(String.codepoints(box.text), fn scalar ->
+               NativeElixirPdfUtilities.Validators.EmojiPresentationValidator.preference(
+                 scalar,
+                 font
+               ) == :text
+             end) do
+            {:cont, {:ok, [[box] | output]}}
           else
-            error -> {:halt, error}
+            with {:ok, strikes} <-
+                   FontValidator.memo({:bitmap_font, font.data}, fn ->
+                     BitmapFontValidator.prepare(font)
+                   end),
+                 {:ok, glyphs} <-
+                   glyph_boxes(box, Map.get(box, :drawing_page_height, height), strikes, budget) do
+              {:cont, {:ok, [glyphs | output]}}
+            else
+              error -> {:halt, error}
+            end
           end
 
         _ ->
@@ -86,7 +96,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
     baseline = baseline + Font.baseline_offset(font, box.font_size)
 
     advances =
-      if WriterValidator.css_source_text?(box) do
+      if WriterValidator.css_source_text?(box) and not Map.has_key?(box, :glyph_ids) do
         Font.css_glyph_advances(box.text, font, box.font_size, Map.get(box, :letter_spacing, 0))
       else
         text = Font.shape_ligatures(box.text, font, Map.get(box, :letter_spacing, 0))
@@ -109,10 +119,20 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
         end)
       end
 
+    advances =
+      case Map.get(box, :glyph_advances) do
+        nil ->
+          advances
+
+        selected ->
+          Enum.zip(advances, selected)
+          |> Enum.map(fn {{unicode, glyph, _}, advance} -> {unicode, glyph, advance} end)
+      end
+
     result =
       Enum.reduce_while(advances, {:ok, [], left}, fn {unicode, glyph, advance},
                                                       {:ok, output, x} ->
-        FontValidator.reserve(:max_font_color_work, 1)
+        FontValidator.reserve(:max_work, 1)
         text = <<unicode::utf8>>
 
         ordinary =
@@ -127,10 +147,20 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
             do: Map.put(ordinary, :glyph_ids, [glyph]),
             else: ordinary
 
+        ordinary =
+          if Map.has_key?(box, :glyph_advances),
+            do: Map.put(ordinary, :glyph_advances, [advance]),
+            else: ordinary
+
         record_result =
-          case BitmapFontValidator.select(strikes, glyph, size / 0.75) do
-            nil -> vector_record(font, glyph, box.color, size)
-            record -> {:ok, record}
+          if NativeElixirPdfUtilities.Validators.EmojiPresentationValidator.preference(text, font) ==
+               :text do
+            {:ok, nil}
+          else
+            case BitmapFontValidator.select(strikes, glyph, size / 0.75) do
+              nil -> vector_record(font, glyph, box.color, size)
+              record -> {:ok, record}
+            end
           end
 
         record =
@@ -174,6 +204,42 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
                 image: Map.put(image, :interpolate, true)
               })
 
+            paint =
+              case Map.get(box, :glyph_basis) do
+                nil ->
+                  paint
+
+                {a, b, c, d} ->
+                  local =
+                    paint
+                    |> Map.drop([:clip, :link_url, :link_destination])
+                    |> Map.put(:x, paint.x - x)
+                    |> Map.put(:y, paint.y - baseline)
+
+                  group = %{
+                    type: :drawing_group,
+                    width: width,
+                    height: height,
+                    transform: {a, b, c, d, x, baseline},
+                    boxes: [local]
+                  }
+
+                  case Map.get(box, :clip) do
+                    nil ->
+                      group
+
+                    clip ->
+                      %{
+                        type: :drawing_group,
+                        width: width,
+                        height: height,
+                        transform: {1, 0, 0, 1, 0, 0},
+                        clip: clip,
+                        boxes: [group]
+                      }
+                  end
+              end
+
             glyphs = if record.overlay, do: [paint, ordinary], else: [paint]
             {:cont, {:ok, [glyphs | output], x + advance + Map.get(box, :letter_spacing, 0)}}
           else
@@ -187,10 +253,39 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
         # Keep the selected text run in PDF text space for selection geometry
         # as well as Unicode. Its transparent paint sits behind the color art;
         # the surrounding ActualText replaces all glyph/layer content once.
-        text_geometry = Map.put(box, :color, {0, 0, 0, 0})
-        boxes = [text_geometry | output |> Enum.reverse() |> List.flatten()]
+        prepared_fields = [
+          :drawing_page_height,
+          :drawing_annotation_rect,
+          :drawing_link_quad_points,
+          :drawing_affine_link_quads
+        ]
+
+        source_geometry = Map.take(box, prepared_fields)
+
+        text_geometry =
+          box
+          |> Map.drop(prepared_fields)
+          |> Map.put(:color, {0, 0, 0, 0})
+          |> Map.put(:_color_source_geometry, true)
+
+        boxes =
+          [text_geometry | output |> Enum.reverse() |> List.flatten()]
+          |> Enum.map(fn child ->
+            child = Map.drop(child, prepared_fields)
+            # The transparent source supplies the already projected hit region.
+            if Map.get(child, :_color_source_geometry, false),
+              do: child,
+              else: Map.drop(child, [:link_url, :link_destination])
+          end)
 
         with {:ok, boxes} <- WriterValidator.prepare_color_boxes(boxes, page_height) do
+          boxes =
+            Enum.map(boxes, fn child ->
+              if Map.get(child, :_color_source_geometry, false),
+                do: child |> Map.delete(:_color_source_geometry) |> Map.merge(source_geometry),
+                else: child
+            end)
+
           {:ok,
            [%{type: :actual_text_start, text: box.text}] ++ boxes ++ [%{type: :actual_text_end}]}
         end

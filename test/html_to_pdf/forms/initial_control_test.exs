@@ -221,13 +221,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialControlTest do
 
   test "initial control dimensions and malformed transport retain actionable diagnostics" do
     for html <- [
-          "<textarea cols=1000000001></textarea>",
-          "<textarea rows=1000000001></textarea>",
-          "<input size=1000000001>"
+          "<textarea cols=4294967296></textarea>",
+          "<textarea rows=4294967296></textarea>",
+          "<input size=4294967296>"
         ] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
       assert diagnostic.stage == :html and diagnostic.operation == :render
-      assert diagnostic.message =~ "max_css_numeric_magnitude" and is_binary(diagnostic.source)
+      assert diagnostic.message =~ "max_numeric_magnitude" and is_binary(diagnostic.source)
     end
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -370,7 +370,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialControlTest do
           %{clip | width: -1},
           %{clip | height: -1},
           Map.put(clip, :inner_clip, Map.put(clip, :inner_clip, clip)),
-          %{clip | x: NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude) * 2}
+          %{clip | x: NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) * 2}
         ] do
       assert {:error, {:invalid_pdf_input, diagnostic}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [Map.put(box, :clip, malformed)]}])

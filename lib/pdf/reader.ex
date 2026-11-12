@@ -273,7 +273,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp final_xref_offset(pdf) do
-    PdfValidator.charge_reader_budget(:max_pdf_reader_work, byte_size(pdf))
+    PdfValidator.charge_reader_budget(:max_work, byte_size(pdf))
 
     case Regex.scan(~r/startxref\s*(\d+)\s*%%EOF\s*\z/s, pdf) do
       [[_, offset_text]] ->
@@ -571,7 +571,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp xref_length_candidates(pdf, {object, generation}) do
-    PdfValidator.charge_reader_budget(:max_pdf_reader_work, byte_size(pdf))
+    PdfValidator.charge_reader_budget(:max_work, byte_size(pdf))
     whitespace = "[\\x00\\t\\n\\f\\r ]"
 
     {:ok, pattern} =
@@ -609,7 +609,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   defp xref_candidate_offsets(pdf, pattern, position, offsets, count) do
     case Regex.run(pattern, pdf, offset: position, return: :index, capture: :all_but_first) do
       [{offset, length}] ->
-        with :ok <- PdfValidator.validate_reader_size(count + 1, :max_pdf_xref_length_candidates) do
+        with :ok <- PdfValidator.validate_reader_size(count + 1, :max_entries) do
           xref_candidate_offsets(pdf, pattern, offset + length, [offset | offsets], count + 1)
         end
 
@@ -619,7 +619,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp candidate_object_limit(pdf, offset) do
-    PdfValidator.charge_reader_budget(:max_pdf_reader_work, byte_size(pdf) - offset)
+    PdfValidator.charge_reader_budget(:max_work, byte_size(pdf) - offset)
     tail = binary_part(pdf, offset, byte_size(pdf) - offset)
 
     case Regex.run(~r/\bendobj\b/, tail, return: :index) do
@@ -668,7 +668,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
              [type_width, field_width, generation_width],
              &(is_integer(&1) and &1 >= 0)
            ),
-         :ok <- PdfValidator.validate_reader_size(Enum.max(widths), :max_pdf_numeric_token_bytes),
+         :ok <- PdfValidator.validate_reader_size(Enum.max(widths), :max_numeric_token_bytes),
          row_width when row_width > 0 <- type_width + field_width + generation_width,
          {:ok, object_numbers} <- xref_index_objects(index, size),
          true <- byte_size(data) == length(object_numbers) * row_width do
@@ -704,7 +704,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
                        operation: :read,
                        module: __MODULE__
                      ) do
-                PdfValidator.charge_reader_budget(:max_pdf_reader_values, count)
+                PdfValidator.charge_reader_budget(:max_entries, count)
                 range = if count == 0, do: [], else: Enum.to_list(first..(first + count - 1))
 
                 if Enum.any?(range, &MapSet.member?(seen, &1)) do
@@ -771,7 +771,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp parse_value(tokens, depth) do
-    PdfValidator.charge_reader_budget(:max_pdf_reader_values, 1)
+    PdfValidator.charge_reader_budget(:max_entries, 1)
 
     case tokens do
       [{:int, first}, {:int, second}, :R | rest] ->
@@ -1145,7 +1145,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
              operation: :read,
              module: __MODULE__
            ),
-         :ok <- PdfValidator.charge_reader_budget(:max_pdf_reader_work, first),
+         :ok <- PdfValidator.charge_reader_budget(:max_work, first),
          header <- binary_part(data, 0, first),
          tokens when is_list(tokens) <- Tokenizer.new(header) |> Tokenizer.tokenize_all(),
          true <- length(tokens) == count * 2,
@@ -1234,7 +1234,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
   defp decode_stream(stream, filters, ref) do
     if filters == [] do
-      PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, byte_size(stream))
+      PdfValidator.charge_reader_budget(:max_decoded_bytes, byte_size(stream))
     end
 
     with {:ok, decoded} <-
@@ -1248,7 +1248,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp decode_filter(%{name: filter, parameters: parameters}, {:ok, data}, ref) do
-    PdfValidator.charge_reader_budget(:max_pdf_reader_work, byte_size(data))
+    PdfValidator.charge_reader_budget(:max_work, byte_size(data))
 
     result =
       case filter do
@@ -1269,8 +1269,8 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
       end
 
     with {:ok, data} <- result,
-         :ok <- PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, byte_size(data)),
-         :ok <- PdfValidator.charge_reader_budget(:max_pdf_reader_work, byte_size(data)),
+         :ok <- PdfValidator.charge_reader_budget(:max_decoded_bytes, byte_size(data)),
+         :ok <- PdfValidator.charge_reader_budget(:max_work, byte_size(data)),
          {:ok, data} <- apply_predictor(data, parameters, ref) do
       {:cont, {:ok, data}}
     else

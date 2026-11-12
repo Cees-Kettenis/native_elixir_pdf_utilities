@@ -21,35 +21,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   @spec paginate(term(), [render_option()]) ::
           {:ok, [page()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def paginate(layout_tree, opts \\ []) do
-    HtmlValidator.with_render_budget(fn ->
-      margins =
-        case layout_tree do
-          layout_tree when is_map(layout_tree) ->
-            layout_tree
-            |> Map.get(:margins, Map.get(layout_tree, :margin, 0.0))
-            |> PageGeometry.normalize_margins()
+    NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+      HtmlValidator.with_render_budget(fn ->
+        margins =
+          case layout_tree do
+            layout_tree when is_map(layout_tree) ->
+              layout_tree
+              |> Map.get(:margins, Map.get(layout_tree, :margin, 0.0))
+              |> PageGeometry.normalize_margins()
 
-          _ ->
-            {:error, :invalid_margin}
+            _ ->
+              {:error, :invalid_margin}
+          end
+
+        case HtmlValidator.validate_pagination_input(layout_tree, opts, margins) do
+          :ok ->
+            {:ok, margins} = margins
+
+            paginate_boxes(
+              layout_tree.page_size,
+              layout_tree.boxes,
+              margins,
+              layout_tree,
+              opts
+            )
+
+          {:error, {reason, diagnostic}} ->
+            {:error,
+             {reason,
+              Diagnostics.with_context(diagnostic, operation: :paginate, module: __MODULE__)}}
         end
-
-      case HtmlValidator.validate_pagination_input(layout_tree, opts, margins) do
-        :ok ->
-          {:ok, margins} = margins
-
-          paginate_boxes(
-            layout_tree.page_size,
-            layout_tree.boxes,
-            margins,
-            layout_tree,
-            opts
-          )
-
-        {:error, {reason, diagnostic}} ->
-          {:error,
-           {reason,
-            Diagnostics.with_context(diagnostic, operation: :paginate, module: __MODULE__)}}
-      end
+      end)
     end)
   end
 
@@ -198,7 +200,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       |> paint_table_outlines()
       |> Enum.map(fn page ->
         background = Enum.map(canvas_boxes, &Map.delete(&1, pagination_order))
-        HtmlValidator.reserve_render_resource(:max_layout_boxes, length(background), :pagination)
+        HtmlValidator.reserve_render_resource(:max_entries, length(background), :pagination)
         %{page | boxes: background ++ page.boxes}
       end)
 
@@ -262,7 +264,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
 
     Enum.reduce(boxes, locations, fn box, locations ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :pagination)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :pagination)
 
       locations =
         case Map.get(box, :inline_fragment_anchors, []) do
@@ -372,7 +374,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                     do: paint.y + paint.fieldset_bounds.bottom + last_delta,
                     else: margins.bottom
 
-                HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :pagination)
+                HtmlValidator.reserve_render_resource(:max_entries, 1, :pagination)
 
                 case paint.type do
                   :rect ->
@@ -506,7 +508,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                     delta
                   )
 
-                HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :pagination)
+                HtmlValidator.reserve_render_resource(:max_entries, 1, :pagination)
 
                 NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(
                   [source],
@@ -669,7 +671,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         pages
 
       _ ->
-        HtmlValidator.check_render_resource(:max_pdf_pages, length(pages) + 1, :pagination)
+        HtmlValidator.check_render_resource(:max_pages, length(pages) + 1, :pagination)
 
         {:ok, boxes, next} =
           HtmlTableValidator.prepare_cell_page_fragments(
@@ -855,7 +857,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       else
         Enum.map(remaining_pages, fn page ->
           HtmlValidator.reserve_render_resource(
-            :max_layout_boxes,
+            :max_entries,
             length(fixed_boxes),
             :pagination
           )
@@ -995,8 +997,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         do: Map.put(marker, :fieldset_source_y, group.top - taken),
         else: marker
 
-    HtmlValidator.check_render_resource(:max_rendered_pages, state.page_count + 1, :pagination)
-    HtmlValidator.check_render_resource(:max_pdf_pages, state.page_count + 1, :pagination)
+    HtmlValidator.check_render_resource(:max_pages, state.page_count + 1, :pagination)
+    HtmlValidator.check_render_resource(:max_pages, state.page_count + 1, :pagination)
 
     state = %{
       state
@@ -1022,6 +1024,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp place_group(group, state, headers, page_size, margins) do
     content_height = elem(page_size, 1) - margins.top - margins.bottom
+
+    group =
+      case Map.get(group, :_hyphenation_reservation) do
+        {control, height} ->
+          if NativeElixirPdfUtilities.Validators.CssHyphenationValidator.forbids_fragment_end?(
+               control,
+               :page,
+               state.page_count + 1
+             ) and height <= content_height,
+             do:
+               Map.put(
+                 group,
+                 :placement_height,
+                 max(height, Map.get(group, :placement_height, 0.0))
+               ),
+             else: group
+
+        nil ->
+          group
+      end
 
     group =
       if group.table_section == :head and Map.get(group, :placement_height, 0.0) > content_height,
@@ -1251,12 +1273,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
         _ ->
           HtmlValidator.check_render_resource(
-            :max_rendered_pages,
+            :max_pages,
             state.page_count + 1,
             :pagination
           )
 
-          HtmlValidator.check_render_resource(:max_pdf_pages, state.page_count + 1, :pagination)
+          HtmlValidator.check_render_resource(:max_pages, state.page_count + 1, :pagination)
 
           %{
             state
@@ -1406,6 +1428,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       table_caption_side: Map.get(first, :table_caption_side),
       block_placement_height: Map.get(first, :block_placement_height)
     }
+    |> Map.put(:_hyphenation_fragment_end, Map.get(first, :_hyphenation_fragment_end, :none))
+    |> Map.put(:_initial_letter_lines, Map.get(first, :_initial_letter_lines, 0))
+    |> Map.put(:_initial_letter_height, Map.get(first, :_initial_letter_height, 0.0))
   end
 
   defp fragment_flow_group(group, content_height) do
@@ -1419,7 +1444,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         |> Enum.map(&flow_group/1)
         |> then(fn fragments ->
           first = hd(group.boxes)
-          orphans = Map.get(first, :orphans, 2)
+          orphans = max(Map.get(first, :orphans, 2), Map.get(first, :_initial_letter_lines, 0))
           widows = Map.get(first, :widows, 2)
           count = length(fragments)
 
@@ -1441,7 +1466,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
             height =
               if last_index == index,
                 do: fragment.height,
-                else: fragment.top - Enum.at(fragments, last_index).bottom
+                else: max(fragment.height, fragment.top - Enum.at(fragments, last_index).bottom)
+
+            height = max(height, fragment._initial_letter_height)
 
             # If a reservation exceeds a complete page, CSS break restrictions
             # must relax to make progress. Ordinary oversized paragraphs still
@@ -1450,6 +1477,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
               do: Map.put(fragment, :placement_height, height),
               else: fragment
           end)
+          |> Enum.reverse()
+          |> Enum.map_reduce(nil, fn fragment, next_bottom ->
+            control = fragment._hyphenation_fragment_end
+
+            case {control, next_bottom} do
+              {control, bottom} when control != :none and is_number(bottom) ->
+                {Map.put(fragment, :_hyphenation_reservation, {control, fragment.top - bottom}),
+                 bottom}
+
+              _ ->
+                {fragment, fragment.bottom}
+            end
+          end)
+          |> elem(0)
+          |> Enum.reverse()
         end)
 
       false ->
@@ -1464,10 +1506,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     if group.height > content_height and
          Enum.any?(group.boxes, &(Map.get(&1, :role) == :atomic_table_line)) do
       count = ceil(group.height / content_height)
-      HtmlValidator.check_render_resource(:max_rendered_pages, count, :pagination)
+      HtmlValidator.check_render_resource(:max_pages, count, :pagination)
 
       HtmlValidator.reserve_render_resource(
-        :max_table_grid_work,
+        :max_work,
         count * length(group.boxes),
         :pagination
       )
@@ -1490,7 +1532,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           })
           |> Map.put(pagination_order, Map.fetch!(hd(group.boxes), pagination_order))
 
-        HtmlValidator.reserve_render_resource(:max_layout_boxes, length(boxes) + 1, :pagination)
+        HtmlValidator.reserve_render_resource(:max_entries, length(boxes) + 1, :pagination)
 
         %{
           group
@@ -1544,11 +1586,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
             )
 
           total = max(total, first_page + count)
-          HtmlValidator.check_render_resource(:max_rendered_pages, total, :pagination)
-          HtmlValidator.check_render_resource(:max_pdf_pages, total, :pagination)
+          HtmlValidator.check_render_resource(:max_pages, total, :pagination)
+          HtmlValidator.check_render_resource(:max_pages, total, :pagination)
 
           HtmlValidator.reserve_render_resource(
-            :max_table_grid_work,
+            :max_work,
             count * length(source.boxes),
             :pagination
           )
@@ -1564,7 +1606,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                 |> atomic_slice_boxes(top, bottom, page_width, pagination_order)
                 |> shift_boxes(delta)
 
-              HtmlValidator.reserve_render_resource(:max_layout_boxes, length(boxes), :pagination)
+              HtmlValidator.reserve_render_resource(:max_entries, length(boxes), :pagination)
               Map.update(paint, first_page + offset, boxes, &(boxes ++ &1))
             end)
 
@@ -1705,7 +1747,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp shift_boxes(boxes, delta_y) do
-    HtmlValidator.reserve_render_resource(:max_layout_boxes, length(boxes), :pagination)
+    HtmlValidator.reserve_render_resource(:max_entries, length(boxes), :pagination)
 
     Enum.map(boxes, fn box ->
       box =

@@ -101,7 +101,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleDiagnosticsTest do
                  [declaration] = provenance.records[node.node_id]
                  assert declaration.source.text == "grid-template-columns:repeat(2, 1fr)"
                  assert declaration.source.line == 2 and declaration.source.column == 13
-                 Limits.install(Map.put(limits, :max_layout_cardinality, 1))
+                 Limits.install(Map.put(limits, :max_entries, 1))
 
                  CssValueValidator.validate_source_cascade(
                    context.style,

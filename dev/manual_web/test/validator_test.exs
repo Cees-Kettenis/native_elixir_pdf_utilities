@@ -36,7 +36,7 @@ defmodule ManualWeb.ValidatorTest do
 
     oversized =
       upload(
-        :binary.copy("x", NativeElixirPdfUtilities.Limits.get(:max_svg_bytes) + 1),
+        :binary.copy("x", NativeElixirPdfUtilities.Limits.get(:max_input_bytes) + 1),
         "large.svg",
         "image/svg+xml"
       )

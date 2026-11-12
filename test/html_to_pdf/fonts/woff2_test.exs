@@ -89,7 +89,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
   test "decompression and reconstruction obey shared size and work limits" do
     input = FontCorpus.path("selected-transformed.woff2") |> File.read!()
 
-    for limit <- [:max_font_decoded_bytes, :max_font_container_work, :max_font_brotli_work] do
+    for limit <- [:max_decoded_bytes, :max_work] do
       limits = Limits.effective()
       Limits.install(Map.put(limits, limit, 1))
 

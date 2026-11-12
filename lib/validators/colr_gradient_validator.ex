@@ -19,7 +19,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrGradientValidator do
       budget = HtmlValidator.new_image_budget()
 
       with :ok <- SvgValidator.validate_raster_dimensions(width, height, budget) do
-        FontValidator.reserve(:max_font_color_work, width * height * (length(stops) + 1))
+        FontValidator.reserve(:max_work, width * height * (length(stops) + 1))
 
         rows =
           for row <- 0..(height - 1) do
@@ -49,7 +49,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrGradientValidator do
             chunk("IEND", <<>>)
           ])
 
-        FontValidator.check(:max_font_decoded_bytes, byte_size(png))
+        FontValidator.check(:max_decoded_bytes, byte_size(png))
         {:ok, png}
       end
     end)

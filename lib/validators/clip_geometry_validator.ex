@@ -41,7 +41,7 @@ defmodule NativeElixirPdfUtilities.Validators.ClipGeometryValidator do
           # Reserve the real edge preparation. The arrangement sweep reserves
           # only pairs whose vertical ranges can actually intersect.
           HtmlValidator.reserve_render_resource(
-            :max_clip_projection_work,
+            :max_work,
             length(all_edges) + length(edges),
             :layout
           )
@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.Validators.ClipGeometryValidator do
               ClipGeometry.convex?([{x1, y1}, {x2, y2}, {x4, y4}, {x3, y3}])
             end)
 
-          HtmlValidator.reserve_render_resource(:max_layout_boxes, length(quads), :layout)
+          HtmlValidator.reserve_render_resource(:max_entries, length(quads), :layout)
           {:ok, quads}
         else
           {:error, {_reason, _diagnostic}} = error ->
@@ -121,12 +121,12 @@ defmodule NativeElixirPdfUtilities.Validators.ClipGeometryValidator do
   # Public callers may supply a clip expression; only canonical finite HTML
   # box contours and intersections may reach the geometry engine.
   defp validate_expression(expression, depth) do
-    HtmlValidator.check_render_resource(:max_clip_expression_depth, depth, :layout)
+    HtmlValidator.check_render_resource(:max_depth, depth, :layout)
 
     case expression do
       {:contour, edges} when is_list(edges) ->
         HtmlValidator.reserve_render_resource(
-          :max_clip_projection_work,
+          :max_work,
           length(edges) + 1,
           :layout
         )
@@ -145,7 +145,7 @@ defmodule NativeElixirPdfUtilities.Validators.ClipGeometryValidator do
 
       {:intersection, children} when is_list(children) ->
         HtmlValidator.reserve_render_resource(
-          :max_clip_projection_work,
+          :max_work,
           length(children) + 1,
           :layout
         )

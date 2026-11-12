@@ -94,7 +94,7 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
                {:ok, glyph_count, location_format} <- font_header(head, maxp) do
             offset_bytes = (glyph_count + 1) * if(location_format == 0, do: 2, else: 4)
             # Decode one location and ten header bytes per glyph, plus its result entry.
-            FontValidator.reserve(:max_font_math_work, offset_bytes + glyph_count * 11)
+            FontValidator.reserve(:max_work, offset_bytes + glyph_count * 11)
 
             with {:ok, offsets} <- glyph_offsets(loca, glyf, glyph_count, location_format) do
               offsets
@@ -196,8 +196,8 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
     # Fixed sfnt field capacities, not configurable resource ceilings: offsets
     # are 32-bit and the power-of-two searchRange is a 16-bit byte count.
     if output_bytes <= 0xFFFF_FFFF and count < 4096 do
-      FontValidator.reserve(:max_font_subset_bytes, output_bytes)
-      FontValidator.reserve(:max_font_subset_checksum_work, div(output_bytes, 4))
+      FontValidator.reserve(:max_decoded_bytes, output_bytes)
+      FontValidator.reserve(:max_work, div(output_bytes, 4))
       {:ok, output_bytes}
     else
       invalid("TrueType subset exceeds sfnt directory field capacity")
@@ -288,17 +288,25 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
               for <<offset::32 <- binary_part(loca, 0, required_bytes)>>, do: offset
           end
 
-        valid? =
-          Enum.all?(Enum.chunk_every(offsets, 2, 1, :discard), fn [left, right] ->
-            left <= right and right <= byte_size(glyf)
-          end)
-
-        if hd(offsets) == 0 and valid?,
+        if hd(offsets) == 0 and ordered_glyph_offsets?(tl(offsets), 0, byte_size(glyf)),
           do: {:ok, offsets},
           else: invalid("TrueType glyph offsets are invalid")
 
       false ->
         invalid("TrueType loca table is truncated")
+    end
+  end
+
+  # Check adjacent locations without allocating overlapping pairs for every
+  # unused glyph slot. The first location is admitted separately as zero.
+  defp ordered_glyph_offsets?(offsets, previous, maximum) do
+    case offsets do
+      [] ->
+        true
+
+      [offset | rest] ->
+        previous <= offset and offset <= maximum and
+          ordered_glyph_offsets?(rest, offset, maximum)
     end
   end
 
@@ -335,11 +343,11 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
           Map.has_key?(retained, glyph_id) ->
             retain_dependencies(rest, retained, active, work, offsets, glyf)
 
-          work >= Limits.get(:max_font_subset_work) ->
+          work >= Limits.get(:max_work) ->
             Diagnostics.error(
               :limits,
               :resource_limit_exceeded,
-              "font subsetting exceeds max_font_subset_work"
+              "font subsetting exceeds max_work"
             )
 
           true ->
@@ -349,11 +357,11 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
 
             with {:ok, dependencies, component_work} <- component_glyphs(glyph) do
               cond do
-                work + 1 + component_work > Limits.get(:max_font_subset_work) ->
+                work + 1 + component_work > Limits.get(:max_work) ->
                   Diagnostics.error(
                     :limits,
                     :resource_limit_exceeded,
-                    "font subsetting exceeds max_font_subset_work"
+                    "font subsetting exceeds max_work"
                   )
 
                 Enum.any?(dependencies, &(&1 >= tuple_size(offsets) - 1)) ->
@@ -407,11 +415,11 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator do
           scale_flags > 1 ->
             invalid("TrueType composite glyph has conflicting scale flags")
 
-          work >= Limits.get(:max_font_subset_work) ->
+          work >= Limits.get(:max_work) ->
             Diagnostics.error(
               :limits,
               :resource_limit_exceeded,
-              "font subsetting exceeds max_font_subset_work"
+              "font subsetting exceeds max_work"
             )
 
           byte_size(rest) < skipped ->

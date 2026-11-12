@@ -14,7 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
     limits: limits
   } do
     assert {:ok, prepared} = FramesetValidator.prepare(%{"border" => "0"})
-    Limits.install(Map.put(limits, :max_frameset_tracks, 2))
+    Limits.install(Map.put(limits, :max_entries, 2))
 
     plan =
       Map.merge(prepared, %{rows: [:malformed, :malformed, :malformed], columns: [relative: 1.0]})
@@ -23,8 +23,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
              FramesetValidator.prepare_layout(plan, 150, 90)
 
     assert diagnostic.stage == :limits and diagnostic.source == "frameset"
-    assert diagnostic.message =~ "max_frameset_tracks"
-    Limits.install(Map.put(limits, :max_frameset_cells, 3))
+    assert diagnostic.message =~ "max_entries"
+    Limits.install(Map.put(limits, :max_entries, 3))
 
     plan =
       Map.merge(prepared, %{
@@ -35,9 +35,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare_layout(plan, 150, 90)
 
-    assert diagnostic.message =~ "max_frameset_cells"
+    assert diagnostic.message =~ "max_entries"
 
-    Limits.install(limits |> Map.put(:max_frameset_tracks, 2) |> Map.put(:max_frameset_cells, 4))
+    Limits.install(limits |> Map.put(:max_entries, 2) |> Map.put(:max_entries, 4))
 
     valid =
       Map.merge(prepared, %{
@@ -95,7 +95,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
       assert recovered.border_enabled and recovered.border_width == 0.0
     end
 
-    Limits.install(Map.put(limits, :max_css_numeric_magnitude, 1))
+    Limits.install(Map.put(limits, :max_numeric_magnitude, 1))
     assert {:error, {:invalid_document, diagnostic}} = FramesetValidator.tracks("2")
     assert diagnostic.message =~ "dimension exceeds"
 
@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
   test "public frameset and frame numeric failures preserve their resource diagnostic", %{
     limits: limits
   } do
-    Limits.install(Map.put(limits, :max_html_numeric_token_bytes, 1))
+    Limits.install(Map.put(limits, :max_numeric_token_bytes, 1))
 
     for result <- [
           FramesetValidator.prepare(%{"border" => "00"}),
@@ -133,7 +133,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
       assert {:error, {:resource_limit_exceeded, diagnostic}} = result
       assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
 
-      assert diagnostic.message =~ "max_html_numeric_token_bytes" and
+      assert diagnostic.message =~ "max_numeric_token_bytes" and
                diagnostic.source in ["00", "10"]
     end
 
@@ -212,13 +212,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
       children: []
     }
 
-    Limits.install(Map.put(limits, :max_html_depth, 1))
+    Limits.install(Map.put(limits, :max_depth, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare_scene(node, 150, 90, 2)
 
-    assert diagnostic.message =~ "max_html_depth" and diagnostic.stage == :limits
-    Limits.install(Map.put(limits, :max_html_nodes, 1))
+    assert diagnostic.message =~ "max_depth" and diagnostic.stage == :limits
+    Limits.install(Map.put(limits, :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FramesetValidator.prepare_scene(
@@ -228,7 +228,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
                1
              )
 
-    assert diagnostic.message =~ "max_html_nodes"
+    assert diagnostic.message =~ "max_entries"
     Limits.install(limits)
     frame = %{type: :element, tag: "frame", style: %{display: :block, embedded_document: %{}}}
 
@@ -252,9 +252,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
         children: []
       }
 
-      Limits.install(Map.put(limits, :max_layout_boxes, 0))
+      Limits.install(Map.put(limits, :max_entries, 0))
       assert {:error, {:resource_limit_exceeded, diagnostic}} = Frameset.layout(node, 150, 90)
-      assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+      assert diagnostic.stage == :limits and diagnostic.message =~ "max_entries"
       assert ResourceContext.current() == context
       Limits.install(limits)
       assert {:ok, group} = Frameset.layout(node, 150, 90)

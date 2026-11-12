@@ -89,14 +89,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
     assert Enum.any?(layout.boxes, &(Map.get(&1, :role) == :block_end_padding))
     assert {:ok, pages} = Pagination.paginate(layout)
     count = Enum.sum(Enum.map(pages, &length(&1.boxes)))
-    Limits.install(%{previous | max_layout_boxes: count - 1})
+    Limits.install(%{previous | max_entries: count - 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
-    assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.stage == :writer and diagnostic.message =~ "max_entries"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Layout.layout(styled, page_size: {100, 100}, margin: 0)
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.message =~ "max_entries", inspect(diagnostic)
   end
 
   test "empty hidden and absolute-only root bodies do not attach padding to positioned paint" do

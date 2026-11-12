@@ -167,7 +167,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
                         )
 
                assert elem(bounds, 0) >= elem(bounds, 2)
-               Limits.install(%{Limits.effective() | max_pdf_numeric_magnitude: 100})
+               Limits.install(%{Limits.effective() | max_numeric_magnitude: 100})
+
+               for operation <- [
+                     &EmbeddedFormValidator.compose/2,
+                     &EmbeddedFormValidator.validate_composition/2,
+                     &EmbeddedFormValidator.projection_bounds/2
+                   ] do
+                 assert {:error, {:invalid_form, diagnostic}} =
+                          operation.(descriptor, {1, 1, 200, 0, nil, 60})
+
+                 assert diagnostic.message =~ "axis placement"
+               end
 
                for operation <- [
                      &EmbeddedFormValidator.compose/2,
@@ -175,12 +186,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
                      &EmbeddedFormValidator.projection_bounds/2
                    ] do
                  assert {:error, {:invalid_pdf_input, diagnostic}} =
-                          operation.(descriptor, {1, 1, 200, 0, nil, 60})
+                          operation.(descriptor, {99, 99, 0, 0, nil, nil})
 
-                 assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+                 assert diagnostic.stage == :pdf and diagnostic.message =~ "max_numeric_magnitude"
                end
 
-               Limits.install(%{Limits.defaults() | max_pdf_objects: 1})
+               Limits.install(%{Limits.defaults() | max_entries: 1})
 
                assert {:error, {:resource_limit_exceeded, diagnostic}} =
                         EmbeddedFormValidator.compose_affine(
@@ -190,9 +201,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
                           nil
                         )
 
-               assert diagnostic.message =~ "max_pdf_objects"
+               assert diagnostic.message =~ "max_entries"
 
-               Limits.install(%{Limits.defaults() | max_appearance_widgets: 0})
+               Limits.install(%{Limits.defaults() | max_entries: 0})
 
                assert {:error, {:resource_limit_exceeded, diagnostic}} =
                         EmbeddedFormValidator.compose_affine(
@@ -202,7 +213,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
                           nil
                         )
 
-               assert diagnostic.message =~ "max_appearance_widgets"
+               assert diagnostic.message =~ "max_entries"
              end)
   end
 
@@ -215,11 +226,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
     end
 
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-      assert {:ok, surface} =
-               EmbeddedViewport.prepare_html(
-                 {:srcdoc, "<input name=actual value=Source>"},
-                 context
-               )
+      html =
+        Enum.map_join(~w(actual second third fourth fifth), fn name ->
+          "<input name='#{name}' value=Source style='display:block;width:40px;height:10px'>"
+        end)
+
+      assert {:ok, surface} = EmbeddedViewport.prepare_html({:srcdoc, html}, context)
 
       assert {:ok, layout} = Layout.layout_viewport(surface.tree, 90, 60)
 
@@ -256,12 +268,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
       assert {:ok, identity} = EmbeddedFormValidator.source_identity(descriptor)
       assert {:ok, ^identity} = EmbeddedFormValidator.source_identity(slice)
       assert {:ok, ^fields} = EmbeddedFormValidator.resolve(slice)
-      Limits.install(%{Limits.effective() | max_pdf_form_fields: 0})
+      assert length(fields) == 5
+      Limits.install(%{Limits.effective() | max_entries: 4})
+
+      assert {:error, {:resource_limit_exceeded, sliced_diagnostic}} =
+               EmbeddedFormValidator.issue_drawing_slice(group)
+
+      assert sliced_diagnostic.stage == :forms and sliced_diagnostic.message =~ "max_entries"
+
+      Limits.install(%{Limits.effective() | max_entries: 0})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                EmbeddedFormValidator.issue_drawing_slice(group)
 
-      assert diagnostic.message =~ "max_pdf_form_fields"
+      assert diagnostic.message =~ "max_entries"
       assert diagnostic.stage == :forms
     end)
   end
@@ -325,13 +345,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
                )
 
       assert [%{value: "Real source"}] = fields
-      Limits.install(Map.put(Limits.effective(), :max_pdf_form_fields, 0))
+      Limits.install(Map.put(Limits.effective(), :max_entries, 0))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                EmbeddedFormValidator.issue(surface.context, fields)
 
       assert diagnostic.operation == :compose_child_widgets
-      assert diagnostic.message =~ "max_pdf_form_fields"
+      assert diagnostic.message =~ "max_entries"
       assert ResourceContext.current() == parent
       :continued
     end)
@@ -343,7 +363,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
           [],
           [0, 0, 1, 1],
           List.duplicate(:invalid, 8),
-          [0, 0, Limits.get(:max_pdf_numeric_magnitude) + 1, 1, 0, 0, 1, 1]
+          [0, 0, Limits.get(:max_numeric_magnitude) + 1, 1, 0, 0, 1, 1]
         ] do
       assert {:error, {:invalid_pdf_input, diagnostic}} =
                WriterValidator.validate_pdf_geometry(values)

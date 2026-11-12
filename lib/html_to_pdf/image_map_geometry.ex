@@ -36,7 +36,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
       count = length(edges)
 
       HtmlValidator.reserve_render_resource(
-        :max_image_map_geometry_work,
+        :max_work,
         div(count * max(count - 1, 0), 2),
         :layout
       )
@@ -50,7 +50,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
         |> Enum.sort()
 
       HtmlValidator.reserve_render_resource(
-        :max_image_map_geometry_work,
+        :max_work,
         length(levels) * count * max(length(polygons), 1),
         :layout
       )
@@ -162,7 +162,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry do
   defp edge_x({{ax, ay}, {bx, by}}, y), do: ax + (bx - ax) * (y - ay) / (by - ay)
 
   defp inside?(edges, x, y) do
-    HtmlValidator.reserve_render_resource(:max_image_map_geometry_work, length(edges), :layout)
+    HtmlValidator.reserve_render_resource(:max_work, length(edges), :layout)
 
     rem(
       Enum.count(edges, fn {{ax, ay}, {bx, by}} ->

@@ -242,12 +242,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
       assert diagnostic.source == "document_root_sizing"
     end
 
-    Limits.install(%{Limits.effective() | max_html_numeric_token_bytes: 4})
+    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 4})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssSizingValidator.prepare_math("calc(123pt)")
 
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "lazy image resolution retains its surviving source viewport" do

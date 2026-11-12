@@ -23,7 +23,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidatorTest do
       objects: %{{1, 0} => object, {2, 0} => object, {3, 0} => %{value: {:ref, {1, 0}}}}
     }
 
-    Limits.install(%{limits | max_pdf_reader_decoded_bytes: 20, max_pdf_form_font_uses: 3})
+    Limits.install(%{limits | max_decoded_bytes: 20, max_entries: 3})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FormInspectionValidator.with_scope(document, fn ->
@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidatorTest do
 
     assert diagnostic.message =~ "decoded stream" and diagnostic.message =~ "object 2 0"
     # Every use is still admitted, even when the decoded bytes are cached.
-    Limits.install(%{limits | max_pdf_form_font_uses: 1})
+    Limits.install(%{limits | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FormInspectionValidator.with_scope(document, fn ->
@@ -48,8 +48,16 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidatorTest do
                FormInspectionValidator.decoded_font(document, {:ref, {3, 0}})
              end)
 
-    assert diagnostic.stage == :forms and diagnostic.message =~ "max_pdf_form_font_uses"
-    Limits.install(%{limits | max_pdf_form_font_work_bytes: 39})
+    assert diagnostic.stage == :forms and diagnostic.message =~ "max_entries"
+
+    assert {{:ok, ^bytes}, work} =
+             NativeElixirPdfUtilities.TestSupport.ResourceBudget.measure(:max_work, fn ->
+               FormInspectionValidator.with_scope(document, fn ->
+                 FormInspectionValidator.decoded_font(document, {:ref, {1, 0}})
+               end)
+             end)
+
+    Limits.install(%{limits | max_work: work})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FormInspectionValidator.with_scope(document, fn ->
@@ -59,7 +67,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidatorTest do
                FormInspectionValidator.decoded_font(document, {:ref, {1, 0}})
              end)
 
-    assert diagnostic.message =~ "max_pdf_form_font_work_bytes"
+    assert diagnostic.message =~ "max_work"
 
     assert {:ok, ^bytes} =
              FormInspectionValidator.with_scope(document, fn ->

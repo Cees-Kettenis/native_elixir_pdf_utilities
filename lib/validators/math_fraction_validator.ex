@@ -16,7 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathFractionValidator do
         math_style = Map.get(style, :math_style, :normal)
 
         if math_style in [:normal, :compact] and is_number(style.font_size) and
-             style.font_size <= Limits.get(:max_css_numeric_magnitude) do
+             style.font_size <= Limits.get(:max_numeric_magnitude) do
           with {:ok, metrics} <- Font.math_metrics(style.font_face) do
             names =
               if math_style == :compact do
@@ -90,7 +90,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathFractionValidator do
 
               with {:ok, thickness} <- thickness do
                 if thickness > 0,
-                  do: HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+                  do: HtmlValidator.reserve_render_resource(:max_entries, 1, :layout)
 
                 {:ok,
                  row

@@ -275,7 +275,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     Limits.install(
       Map.put(
         Limits.effective(),
-        :max_aggregate_css_source_bytes,
+        :max_input_bytes,
         byte_size(css) + byte_size("color:red")
       )
     )
@@ -286,14 +286,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
                CssParser.prepare_source_stylesheet(css)
              end)
 
-    assert diagnostic.message =~ "max_aggregate_css_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
     assert diagnostic.stage == :css
-    Limits.install(Map.put(Limits.effective(), :max_css_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssParser.prepare_source_stylesheet(css)
 
-    assert diagnostic.message =~ "max_css_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "superseded supported font values use the existing responsible descriptor rules" do
@@ -524,10 +524,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     assert {:error, {:invalid_css, _}} = CssReferenceValidator.scan("url ('x.png')")
     limits = Limits.effective()
     good = "url('safe.png')"
-    Limits.install(Map.put(limits, :max_css_work, 4 * byte_size(good) - 1))
+    Limits.install(Map.put(limits, :max_work, 4 * byte_size(good) - 1))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = CssReferenceValidator.scan(good)
-    assert diagnostic.message =~ "max_css_work" and diagnostic.stage == :css
-    Limits.install(Map.put(limits, :max_css_work, 4 * byte_size(good) + 1))
+    assert diagnostic.message =~ "max_work" and diagnostic.stage == :css
+    Limits.install(Map.put(limits, :max_work, 4 * byte_size(good) + 1))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              HtmlValidator.with_render_budget(fn ->

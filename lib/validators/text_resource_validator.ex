@@ -8,6 +8,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   alias NativeElixirPdfUtilities.Pdf.TextEncoding
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
+  alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
   import Bitwise
 
   @max_cid 65_535
@@ -214,7 +215,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         with {:ok, value} <- Reader.resolve(document, value) do
           case value do
             {kind, bytes} when kind in [:string, :hex, :hex_string] and is_binary(bytes) ->
-              remaining = Limits.get(:max_extracted_text_bytes) - preparation.extracted_bytes
+              remaining = Limits.get(:max_output_bytes) - preparation.extracted_bytes
 
               minimum_decoded_bytes =
                 case bytes do
@@ -275,7 +276,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
          depth,
          preparation_context
        ) do
-    case depth >= Limits.get(:max_form_xobject_depth) do
+    case depth >= Limits.get(:max_depth) do
       true ->
         error(:limits, :resource_limit_exceeded, "Form XObject nesting exceeds the limit",
           page: page
@@ -739,20 +740,29 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp reserve_font_work(preparation, count) do
     work = preparation.font_work + count
 
-    if work <= Limits.get(:max_text_font_work) do
+    admitted =
+      if ResourceBudgetValidator.active?(),
+        do:
+          ResourceBudgetValidator.reserve(:max_work, count, :font,
+            operation: :extract,
+            module: __MODULE__
+          ),
+        else: if(work <= Limits.get(:max_work), do: :ok, else: :error)
+
+    if admitted == :ok do
       {:ok, %{preparation | font_work: work}}
     else
       error(
         :font,
         :resource_limit_exceeded,
-        "aggregate font preparation work exceeds max_text_font_work"
+        "aggregate font preparation work exceeds max_work"
       )
     end
   end
 
   defp validate_cid_width_entries(first, count, entry_count) do
     cond do
-      entry_count + count > Limits.get(:max_cid_width_entries) ->
+      entry_count + count > Limits.get(:max_entries) ->
         error(:font, :resource_limit_exceeded, "CID font width entry count exceeds the limit")
 
       first > @max_cid or (count > 0 and first + count - 1 > @max_cid) ->
@@ -764,7 +774,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp decode_string(string, font, page, preparation) do
-    remaining = Limits.get(:max_extracted_text_bytes) - preparation.extracted_bytes
+    remaining = Limits.get(:max_output_bytes) - preparation.extracted_bytes
 
     {_kind, bytes} = string
 
@@ -1024,6 +1034,11 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   end
 
   defp parse_cmap(stream, page, font, cmap_bytes) do
+    allowance =
+      if ResourceBudgetValidator.active?(),
+        do: ResourceBudgetValidator.remaining(:max_decoded_bytes),
+        else: Limits.get(:max_decoded_bytes) - cmap_bytes
+
     stream = strip_cmap_comments(stream)
 
     case Regex.match?(~r/\/[^#{@cmap_whitespace}]+#{@cmap_space}+usecmap\b/, stream) do
@@ -1041,9 +1056,21 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
              {:ok, mappings, remaining} <-
                parse_unicode_mappings(
                  stream,
-                 Limits.get(:max_cmap_expanded_bytes) - cmap_bytes
+                 allowance
                ),
-             true <- map_size(mappings) > 0 do
+             true <- map_size(mappings) > 0,
+             :ok <-
+               if(ResourceBudgetValidator.active?(),
+                 do:
+                   ResourceBudgetValidator.reserve(
+                     :max_decoded_bytes,
+                     allowance - remaining,
+                     :limits,
+                     operation: :extract,
+                     module: __MODULE__
+                   ),
+                 else: :ok
+               ) do
           sizes =
             codespaces
             |> Enum.map(fn {first, _last} -> byte_size(first) end)
@@ -1057,7 +1084,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
              sizes: sizes,
              min_width: List.last(sizes),
              lookup_work: length(sizes) * (length(codespaces) + 1)
-           }, Limits.get(:max_cmap_expanded_bytes) - remaining}
+           }, cmap_bytes + allowance - remaining}
         else
           false ->
             error(
@@ -1139,8 +1166,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   # Reserve expansion and lookup work independently of retained map cardinality.
   # The normal parsers below remain responsible for syntax and mapping validity.
   defp reserve_cmap_work(stream, preparation, page, font, label) do
-    if byte_size(stream) > Limits.get(:max_cmap_bytes) do
-      error(:cmap, :resource_limit_exceeded, "#{label} CMap exceeds the byte limit",
+    if byte_size(stream) > Limits.get(:max_input_bytes) do
+      error(:cmap, :resource_limit_exceeded, "#{label} CMap exceeds max_input_bytes",
         page: page,
         font: font
       )
@@ -1209,13 +1236,22 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
   defp charge_cmap_work(preparation, work, page, font) do
     used = preparation.cmap_work + work
 
-    if used <= Limits.get(:max_cmap_work) do
+    admitted =
+      if ResourceBudgetValidator.active?(),
+        do:
+          ResourceBudgetValidator.reserve(:max_work, work, :limits,
+            operation: :extract,
+            module: __MODULE__
+          ),
+        else: if(used <= Limits.get(:max_work), do: :ok, else: :error)
+
+    if admitted == :ok do
       {:ok, %{preparation | cmap_work: used}}
     else
       error(
         :limits,
         :resource_limit_exceeded,
-        "aggregate CMap processing work exceeds max_cmap_work",
+        "aggregate CMap processing work exceeds max_work",
         page: page,
         font: font
       )
@@ -1237,7 +1273,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         {:ok, section_mappings, remaining} ->
           mappings = Map.merge(mappings, section_mappings)
 
-          case map_size(mappings) <= Limits.get(:max_cmap_entries) do
+          case map_size(mappings) <= Limits.get(:max_entries) do
             true ->
               {:cont, {:ok, mappings, remaining}}
 
@@ -1357,7 +1393,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             true ->
               mappings = Map.merge(mappings, Map.new(parsed))
 
-              case existing + map_size(mappings) <= Limits.get(:max_cmap_entries) do
+              case existing + map_size(mappings) <= Limits.get(:max_entries) do
                 true -> {:cont, {:ok, mappings}}
                 false -> {:halt, :limit}
               end
@@ -1410,7 +1446,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                       (mapping_type == :sequential and cid + count - 1 > @max_cid) ->
                     {:halt, :error}
 
-                  existing + map_size(mappings) + count > Limits.get(:max_cmap_entries) ->
+                  existing + map_size(mappings) + count > Limits.get(:max_entries) ->
                     {:halt, :limit}
 
                   true ->
@@ -1516,7 +1552,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           with true <- byte_size(last) == byte_size(first),
                true <- first <= last,
                count <- :binary.decode_unsigned(last) - :binary.decode_unsigned(first) + 1,
-               true <- count + existing + map_size(mappings) <= Limits.get(:max_cmap_entries),
+               true <- count + existing + map_size(mappings) <= Limits.get(:max_entries),
                {:ok, entries, remaining} <- bfrange_entries(first, count, target, remaining) do
             {:cont, {:ok, Map.merge(mappings, entries), remaining}}
           else

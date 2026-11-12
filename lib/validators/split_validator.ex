@@ -46,7 +46,7 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   @spec validate_aggregate_output_bytes(non_neg_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_aggregate_output_bytes(bytes) do
-    case bytes <= Limits.get(:max_aggregate_split_output_bytes) do
+    case bytes <= Limits.get(:max_output_bytes) do
       true -> :ok
       false -> limit_error("aggregate split output bytes exceed the limit")
     end
@@ -69,7 +69,7 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   defp validate_range_list(ranges) do
     case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
            ranges,
-           Limits.get(:max_split_outputs)
+           Limits.get(:max_entries)
          ) do
       {:ok, count} when count > 0 -> :ok
       :limit_exceeded -> limit_error("split output count exceeds the limit")
@@ -102,7 +102,7 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
   end
 
   defp validate_output_count(output_count) do
-    case output_count <= Limits.get(:max_split_outputs) do
+    case output_count <= Limits.get(:max_entries) do
       true -> :ok
       false -> limit_error("split output count exceeds the limit")
     end
@@ -151,7 +151,7 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
       outline_objects = if outline_items == 0, do: 0, else: outline_items + 1
       object_writes = object_writes + length(input.objects) + outline_objects + 2
 
-      case object_writes <= Limits.get(:max_split_object_writes) do
+      case object_writes <= Limits.get(:max_entries) do
         true -> {:ok, input, object_writes}
         false -> limit_error("split object writes exceed the limit")
       end

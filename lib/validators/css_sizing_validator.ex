@@ -370,11 +370,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
                 case value do
                   {positive, negative} ->
                     is_number(positive) and is_number(negative) and positive >= 0 and
-                      negative <= 0 and positive <= Limits.get(:max_css_numeric_magnitude) and
-                      -negative <= Limits.get(:max_css_numeric_magnitude)
+                      negative <= 0 and positive <= Limits.get(:max_numeric_magnitude) and
+                      -negative <= Limits.get(:max_numeric_magnitude)
 
                   number ->
-                    is_number(number) and abs(number) <= Limits.get(:max_css_numeric_magnitude)
+                    is_number(number) and abs(number) <= Limits.get(:max_numeric_magnitude)
                 end
             end)
 
@@ -455,7 +455,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
 
   defp valid_ratio?(ratio) do
     if is_number(ratio) and ratio > 0 do
-      HtmlValidator.check_render_resource(:max_css_numeric_magnitude, ratio, :layout)
+      HtmlValidator.check_render_resource(:max_numeric_magnitude, ratio, :layout)
       match?({:ok, _}, HtmlValidator.normalize_geometry_number(ratio))
     else
       false
@@ -515,7 +515,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
   end
 
   defp valid_size?(size, depth) do
-    HtmlValidator.check_render_resource(:max_media_query_depth, depth, :layout)
+    HtmlValidator.check_render_resource(:max_depth, depth, :layout)
 
     case size do
       size when size in [nil, :auto] ->
@@ -531,11 +531,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
         NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator.valid?(intrinsic)
 
       {:min, sizes} when is_list(sizes) and sizes != [] ->
-        HtmlValidator.reserve_render_resource(:max_css_work, length(sizes), :layout)
+        HtmlValidator.reserve_render_resource(:max_work, length(sizes), :layout)
         Enum.all?(sizes, &valid_size?(&1, depth + 1))
 
       number when is_number(number) and number >= 0 ->
-        HtmlValidator.check_render_resource(:max_css_numeric_magnitude, number, :layout)
+        HtmlValidator.check_render_resource(:max_numeric_magnitude, number, :layout)
         match?({:ok, _}, HtmlValidator.normalize_geometry_number(number))
 
       _ ->

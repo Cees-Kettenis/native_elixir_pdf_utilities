@@ -222,26 +222,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
       fn ->
         limits = Limits.effective()
         on_exit(fn -> Limits.install(limits) end)
-        Limits.install(%{limits | max_html_nodes: 5})
+        Limits.install(%{limits | max_entries: 5})
         assert {:ok, _fragment} = HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
-        Limits.install(%{limits | max_html_nodes: 3})
+        Limits.install(%{limits | max_entries: 3})
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
 
-        assert diagnostic.stage == :html and diagnostic.message =~ "max_html_nodes"
-        Limits.install(%{limits | max_html_depth: 2})
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
+        Limits.install(%{limits | max_depth: 2})
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
 
-        assert diagnostic.stage == :html and diagnostic.message =~ "max_html_depth"
-        Limits.install(%{limits | max_html_tree_work: 1})
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_depth"
+        Limits.install(%{limits | max_work: 1})
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  HtmlParser.parse_fragment_tree_detailed("<?marker>", "div")
 
-        assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
       end
     )
   end
@@ -348,7 +348,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
         limits = Limits.effective()
         on_exit(fn -> Limits.install(limits) end)
 
-        Limits.install(%{limits | max_html_nodes: 3})
+        Limits.install(%{limits | max_entries: 3})
         assert {:ok, _empty_document} = HtmlParser.parse_document_detailed("")
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -356,24 +356,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
 
         assert diagnostic.stage == :html
         assert diagnostic.reason == :resource_limit_exceeded
-        assert diagnostic.message =~ "max_html_nodes"
+        assert diagnostic.message =~ "max_entries"
 
-        Limits.install(%{limits | max_html_depth: 2})
+        Limits.install(%{limits | max_depth: 2})
         assert {:ok, _document} = HtmlParser.parse_document_detailed("")
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  HtmlParser.parse_document_detailed("<p>A</p>")
 
-        assert diagnostic.message =~ "max_html_depth"
+        assert diagnostic.message =~ "max_depth"
 
-        Limits.install(%{limits | max_html_nodes: 9})
+        Limits.install(%{limits | max_entries: 9})
         assert {:ok, _document} = HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
-        Limits.install(%{limits | max_html_nodes: 8})
+        Limits.install(%{limits | max_entries: 8})
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
 
-        assert diagnostic.message =~ "max_html_nodes"
+        assert diagnostic.message =~ "max_entries"
       end
     )
   end
@@ -441,7 +441,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     token = "<TITLE>"
-    Limits.install(%{limits | max_html_tree_work: 2 * byte_size(token)})
+    Limits.install(%{limits | max_work: 2 * byte_size(token)})
 
     assert {:imply, "html"} =
              HtmlValidator.with_render_budget(fn ->
@@ -450,11 +450,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+               HtmlValidator.reserve_render_resource(:max_work, 1, :html)
                HtmlValidator.html_insertion_action(:document, token, nil, false)
              end)
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
 
     source = %{text: "", line: 1, column: 1}
     tree = HtmlTree.new(source)
@@ -472,16 +472,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
         tree
       end)
 
-    Limits.install(%{limits | max_html_tree_work: 2})
+    Limits.install(%{limits | max_work: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                HtmlTree.last_element_tag(tree, tree.root)
              end)
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
 
-    Limits.install(%{limits | max_html_tree_work: 3})
+    Limits.install(%{limits | max_work: 3})
 
     assert HtmlValidator.with_render_budget(fn -> HtmlTree.last_element_tag(tree, tree.root) end) ==
              nil
@@ -601,12 +601,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
     assert :ok = HtmlTreeValidator.validate_transport(HtmlTree.fetch(changed, changed.root))
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_html_tree_work: 2})
+    Limits.install(%{limits | max_work: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn -> HtmlTree.insert(tree, group.node_id, new) end)
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 
   test "all authored nodes retain original source spans and text token boundaries" do
@@ -784,13 +784,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
       source: %{text: "<?marker" <> source <> ">", line: 1, column: 1}
     }
 
-    Limits.install(%{limits | max_html_tree_work: 100})
+    Limits.install(%{limits | max_work: 100})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.validate_html_processing_instruction(pi)
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
-    Limits.install(%{limits | max_html_depth: 0})
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+    Limits.install(%{limits | max_depth: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlTreeValidator.validate_transport(%{
@@ -805,7 +805,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
                ]
              })
 
-    assert diagnostic.message =~ "max_html_depth"
+    assert diagnostic.message =~ "max_depth"
   end
 
   test "source capture and metadata consistency use cumulative bounded work on a long single line" do
@@ -814,7 +814,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
 
     for count <- [500, 1000] do
       html = "<div>" <> String.duplicate("<p>é</p>", count) <> "</div>"
-      Limits.install(%{limits | max_html_tree_work: 40 * byte_size(html)})
+      Limits.install(%{limits | max_work: 40 * byte_size(html)})
       assert {:ok, document} = HtmlParser.parse_detailed(html)
       assert :ok = HtmlTreeValidator.validate_transport(document)
     end
@@ -822,11 +822,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
     assert {:ok, document} = HtmlParser.parse_detailed("<p>A</p>")
     source = String.duplicate("large source ", 100)
     document = put_in(document, [:children, Access.at(0), :source, :text], source)
-    Limits.install(%{limits | max_html_tree_work: byte_size(source) - 1})
+    Limits.install(%{limits | max_work: byte_size(source) - 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Style.compute_detailed(document)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
 
-    Limits.install(%{limits | max_html_tree_work: 1})
+    Limits.install(%{limits | max_work: 1})
     assert {:error, {:resource_limit_exceeded, _}} = HtmlParser.parse_detailed("<p>A</p>")
 
     assert {:error, {:resource_limit_exceeded, _}} =
@@ -838,7 +838,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
   test "malformed metadata diagnostics bound source scanning before rejecting its shape" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_html_tree_work: 100})
+    Limits.install(%{limits | max_work: 100})
     source = %{text: String.duplicate("source", 50), line: 0, column: 1}
 
     for node <- [
@@ -852,13 +852,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
       assert diagnostic.stage == :html
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.module == HtmlValidator
-      assert diagnostic.message =~ "max_html_tree_work"
+      assert diagnostic.message =~ "max_work"
     end
 
     # Shape rejection skips normal source validation, but its diagnostic still
     # consumes the same shared work budget before examining the original bytes.
     node = %{source: %{text: "é", line: 0, column: 2}}
-    Limits.install(%{limits | max_html_tree_work: 4})
+    Limits.install(%{limits | max_work: 4})
 
     assert {:error, {:invalid_document, diagnostic}} =
              HtmlTreeValidator.validate_node_metadata(node)
@@ -868,7 +868,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
 
     assert {:error, {:resource_limit_exceeded, _}} =
              HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+               HtmlValidator.reserve_render_resource(:max_work, 1, :html)
                HtmlTreeValidator.validate_node_metadata(node)
              end)
   end

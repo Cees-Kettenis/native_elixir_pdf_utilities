@@ -227,12 +227,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlRecoveryTest do
   end
 
   test "recovery still enforces nesting budgets before preparing recovered output" do
-    Limits.install(Map.put(Limits.effective(), :max_html_depth, 2))
+    Limits.install(Map.put(Limits.effective(), :max_depth, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlParser.parse_detailed("<div><div><div>Deep", html_recovery: true)
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_depth"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_depth"
     assert {:ok, _} = HtmlParser.parse("<p>Next</p>")
   end
 end

@@ -14,7 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         {:ok, parsed}
 
       ranges ->
-        reserve(:max_font_cmap_work, length(ranges) + map_size(parsed.cmap))
+        reserve(:max_work, length(ranges) + map_size(parsed.cmap))
 
         {_ranges, coverage} =
           parsed.cmap
@@ -106,7 +106,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           {:ok, [map()]} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_configs(fonts) do
     with_budget(fn ->
-      case validate_font_list(fonts, :max_font_count) do
+      case validate_font_list(fonts, :max_entries) do
         :ok ->
           Enum.reduce_while(fonts, {:ok, []}, fn font, {:ok, prepared} ->
             case normalize_config(font) do
@@ -141,7 +141,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     with_budget(fn ->
       case family do
         families when is_list(families) and families != [] ->
-          with :ok <- validate_font_list(families, :max_font_candidates) do
+          with :ok <- validate_font_list(families, :max_entries) do
             Enum.reduce_while(families, {:ok, []}, fn family, {:ok, prepared} ->
               case prepare_family(family) do
                 {:ok, family} -> {:cont, {:ok, [family | prepared]}}
@@ -266,7 +266,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
             {:ok, %{data: [data]}}
 
           candidates when is_list(candidates) ->
-            case validate_font_list(candidates, :max_font_candidates) == :ok and candidates != [] and
+            case validate_font_list(candidates, :max_entries) == :ok and candidates != [] and
                    Enum.all?(candidates, &(is_binary(&1) and byte_size(&1) > 0)) do
               true -> {:ok, %{data: candidates}}
               false -> :error
@@ -290,7 +290,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         end
 
       paths when is_list(paths) ->
-        case validate_font_list(paths, :max_font_candidates) == :ok and paths != [] and
+        case validate_font_list(paths, :max_entries) == :ok and paths != [] and
                Enum.all?(paths, &(is_binary(&1) and String.trim(&1) != "")) do
           true -> {:ok, Enum.map(paths, &String.trim/1)}
           false -> :error
@@ -525,7 +525,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
          true <-
            format in [0, 1] and count > 0 and storage >= 6 + count * 12 and
              storage <= byte_size(names) do
-      reserve(:max_font_math_work, count)
+      reserve(:max_work, count)
 
       records =
         for index <- 0..(count - 1),
@@ -556,8 +556,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   # the selection policy and reserve conservative UTF-8 expansion before work.
   defp decode_family_record(names, identity, record) do
     memo({:family_string, identity, record.unicode?, record.offset, record.length}, fn ->
-      reserve(:max_font_math_work, record.length)
-      reserve(:max_font_name_bytes, record.length * if(record.unicode?, do: 2, else: 3))
+      reserve(:max_work, record.length)
+      reserve(:max_decoded_bytes, record.length * if(record.unicode?, do: 2, else: 3))
       bytes = binary_part(names, record.offset, record.length)
 
       if record.unicode? do
@@ -599,7 +599,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
              {:ok, _},
              NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
                faces,
-               Limits.get(:max_font_count)
+               Limits.get(:max_entries)
              )
            ) and
              Enum.all?(faces, fn face ->
@@ -754,7 +754,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         %{type: :embedded, id: id, data: data, widths: widths}
         when is_binary(data) and is_list(widths) ->
           with :ok <- MathFontValidator.validate_pair_request(length(widths), pairs, script) do
-            reserve(:max_font_math_work, length(pairs))
+            reserve(:max_work, length(pairs))
 
             fingerprint = :crypto.hash(:sha256, data)
             reserve_source_fingerprint(fingerprint, byte_size(data))
@@ -807,24 +807,26 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
     case Process.get(key) do
       nil ->
-        {:garbage_collection, flags} = Process.info(self(), :garbage_collection)
-        previous_binary_floor = Keyword.fetch!(flags, :min_bin_vheap_size)
+        NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+          {:garbage_collection, flags} = Process.info(self(), :garbage_collection)
+          previous_binary_floor = Keyword.fetch!(flags, :min_bin_vheap_size)
 
-        Process.put(key, %{
-          budget_id: make_ref(),
-          sources: MapSet.new(),
-          faces: MapSet.new(),
-          memo: %{}
-        })
+          Process.put(key, %{
+            budget_id: make_ref(),
+            sources: MapSet.new(),
+            faces: MapSet.new(),
+            memo: %{}
+          })
 
-        try do
-          fun.()
-        catch
-          {:font_resource_limit, error} -> error
-        after
-          :erlang.process_flag(:min_bin_vheap_size, previous_binary_floor)
-          Process.delete(key)
-        end
+          try do
+            fun.()
+          catch
+            {:font_resource_limit, error} -> error
+          after
+            :erlang.process_flag(:min_bin_vheap_size, previous_binary_floor)
+            Process.delete(key)
+          end
+        end)
 
       _ ->
         fun.()
@@ -853,7 +855,9 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     try do
       result =
         try do
-          with_budget(loader)
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+            with_budget(loader)
+          end)
         catch
           {:font_resource_limit, error} -> error
         end
@@ -868,17 +872,21 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @doc false
   @spec reserve(Limits.key(), non_neg_integer()) :: :ok
   def reserve(limit, amount) do
-    key = {__MODULE__, :budget}
-    budget = Process.get(key)
+    case NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(limit, amount, :font,
+           operation: :load_registry,
+           module: __MODULE__
+         ) do
+      :ok -> :ok
+      error -> throw({:font_resource_limit, error})
+    end
 
-    used =
-      case budget do
-        %{^limit => used} -> used + amount
-        _ -> amount
-      end
+    # Source bytes also size the font scope's binary heap floor. All resource
+    # enforcement and parser-receipt counters belong to the operation ledger.
+    if limit == :max_input_bytes do
+      key = {__MODULE__, :budget}
+      Process.put(key, Map.update(Process.get(key), :max_input_bytes, amount, &(&1 + amount)))
+    end
 
-    check(limit, used)
-    Process.put(key, Map.put(budget, limit, used))
     :ok
   end
 
@@ -907,8 +915,12 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @spec read_limit() :: pos_integer()
   def read_limit do
     used = source_bytes()
-    check(:max_aggregate_font_source_bytes, used + 1)
-    min(Limits.get(:max_font_source_bytes), Limits.get(:max_aggregate_font_source_bytes) - used)
+    check(:max_input_bytes, used + 1)
+
+    min(
+      Limits.get(:max_input_bytes) - used,
+      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_input_bytes)
+    )
   end
 
   @doc "Returns cumulative checked source bytes in the current font scope, or zero outside one."
@@ -916,7 +928,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   def source_bytes do
     case Process.get({__MODULE__, :budget}) do
       nil -> 0
-      budget -> Map.get(budget, :max_aggregate_font_source_bytes, 0)
+      budget -> Map.get(budget, :max_input_bytes, 0)
     end
   end
 
@@ -955,7 +967,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
        ])}
 
     faces = MapSet.put(budget.faces, identity)
-    check(:max_font_count, MapSet.size(faces))
+    check(:max_entries, MapSet.size(faces))
     Process.put(key, %{budget | faces: faces})
     :ok
   end
@@ -964,7 +976,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @spec reserve_source(binary()) :: :ok
   @spec reserve_source(binary(), binary() | nil) :: :ok
   def reserve_source(data, cached_fingerprint \\ nil) do
-    check(:max_font_source_bytes, byte_size(data))
+    check(:max_input_bytes, byte_size(data))
 
     # Cache-owned fingerprints describe these immutable bytes. Retain the
     # admission by exact payload so later stages need no additional SHA pass.
@@ -977,7 +989,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @doc false
   @spec reserve_source_fingerprint(binary(), non_neg_integer()) :: :ok
   def reserve_source_fingerprint(identity, source_bytes) do
-    check(:max_font_source_bytes, source_bytes)
+    check(:max_input_bytes, source_bytes)
     key = {__MODULE__, :budget}
     budget = Process.get(key)
 
@@ -986,7 +998,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         :ok
 
       false ->
-        reserve(:max_aggregate_font_source_bytes, source_bytes)
+        reserve(:max_input_bytes, source_bytes)
         Process.put(key, %{Process.get(key) | sources: MapSet.put(budget.sources, identity)})
 
         # Font bytes stay referenced by this scope's parse memo and registries.
@@ -1005,7 +1017,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @spec memo(term(), (-> result)) :: result when result: term()
   def memo(identity, loader) do
     key = {__MODULE__, :budget}
-    budget = Process.get(key)
+    budget = :erlang.get(key)
 
     case Map.fetch(budget.memo, identity) do
       {:ok, result} ->
@@ -1013,8 +1025,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
       :error ->
         result = loader.()
-        budget = Process.get(key)
-        Process.put(key, %{budget | memo: Map.put(budget.memo, identity, result)})
+        budget = :erlang.get(key)
+        :erlang.put(key, %{budget | memo: Map.put(budget.memo, identity, result)})
         result
     end
   end
@@ -1028,7 +1040,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           diagnostic
           | stage: :font,
             message:
-              "font source exceeds max_font_source_bytes or remaining max_aggregate_font_source_bytes: " <>
+              "font source exceeds remaining max_input_bytes: " <>
                 diagnostic.message
         }
 
@@ -1093,7 +1105,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           | :error
           | {:error, {:resource_limit_exceeded, Diagnostics.diagnostic()}}
   def prepare_cmap(cmap, glyph_count) do
-    limit = Limits.get(:max_font_cmap_work)
+    limit = Limits.get(:max_work)
 
     case is_integer(glyph_count) and glyph_count > 0 and glyph_count <= 65_536 do
       false ->
@@ -1146,7 +1158,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @spec prepare_kerning(binary(), pos_integer()) ::
           {:ok, map()} | :error | {:error, {:resource_limit_exceeded, Diagnostics.diagnostic()}}
   def prepare_kerning(data, glyph_count) do
-    limit = Limits.get(:max_font_kerning_pairs)
+    limit = Limits.get(:max_work)
 
     case data do
       <<0::16, count::16, subtables::binary>> when count <= limit ->
@@ -1233,7 +1245,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     Diagnostics.error(
       :limits,
       :resource_limit_exceeded,
-      "font kerning-pair work exceeds the limit",
+      "font kerning-pair work exceeds max_work",
       operation: :load_registry,
       module: NativeElixirPdfUtilities.HtmlToPdf.Font,
       source: "kern"
@@ -1244,7 +1256,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     Diagnostics.error(
       :limits,
       :resource_limit_exceeded,
-      "font character-map work exceeds the limit",
+      "font character-map work exceeds max_work",
       operation: :load_registry,
       module: NativeElixirPdfUtilities.HtmlToPdf.Font
     )
@@ -1530,8 +1542,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     prepare_text_ink_geometry(box, :rectangle)
   end
 
-  # Both callers use the same glyph and outline authority. The existing vertical
-  # measurement avoids allocating advances when horizontal geometry is not needed.
+  # Measurement and painting consume the same visual glyph plan. Explicit
+  # Math/selected glyphs already have their positions and must not be reshaped.
   defp prepare_text_ink_geometry(box, geometry) do
     with_budget(fn ->
       case box do
@@ -1543,128 +1555,131 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         }
         when is_binary(text) and is_integer(units) and units > 0 and is_map(cmap) and
                is_number(size) and size >= 0 and is_number(baseline) ->
-          check(:max_rendered_text_bytes, byte_size(text))
-          reserve(:max_font_math_work, byte_size(text))
+          check(:max_output_bytes, byte_size(text))
+          reserve(:max_work, byte_size(text))
 
           with true <- String.valid?(text),
                {:ok, bounds} <- prepare_glyph_bounds(font) do
-            selected_text =
-              if Map.has_key?(box, :glyph_ids),
-                do: text,
-                else:
-                  NativeElixirPdfUtilities.HtmlToPdf.Font.shape_ligatures(
-                    text,
-                    font,
-                    Map.get(box, :letter_spacing, 0.0)
-                  )
-
-            ids =
-              Map.get(
-                box,
-                :glyph_ids,
-                Enum.map(String.to_charlist(selected_text), &Map.get(cmap, &1, 0))
-              )
+            explicit? = Map.has_key?(box, :glyph_ids)
+            ids = Map.get(box, :glyph_ids, [])
 
             selected? =
-              valid_text_glyph_selection?(
-                ids,
-                tuple_size(bounds),
-                length(String.codepoints(selected_text))
-              )
+              not explicit? or
+                valid_text_glyph_selection?(
+                  ids,
+                  tuple_size(bounds),
+                  length(String.codepoints(text))
+                )
 
             widths =
-              if geometry == :rectangle and selected? and ids != [] and
-                   is_list(Map.get(font, :widths)),
+              if explicit? and selected? and ids != [] and is_list(Map.get(font, :widths)) and
+                   font.widths != [],
                  do: NativeElixirPdfUtilities.HtmlToPdf.Font.glyph_widths(font, Enum.max(ids)),
                  else: {}
 
             valid? =
               selected? and
-                (geometry != :rectangle or
-                   Enum.all?(ids, &(&1 < tuple_size(widths)))) and
-                size <= Limits.get(:max_css_numeric_magnitude) and
-                abs(baseline) <= Limits.get(:max_pdf_numeric_magnitude) and
+                (not explicit? or Enum.all?(ids, &(&1 < tuple_size(widths)))) and
+                (geometry != :rectangle or (is_list(Map.get(font, :widths)) and font.widths != [])) and
+                size <= Limits.get(:max_numeric_magnitude) and
+                abs(baseline) <= Limits.get(:max_numeric_magnitude) and
                 (geometry == :vertical or
                    (is_number(Map.get(box, :x)) and
-                      abs(box.x) <= Limits.get(:max_pdf_numeric_magnitude) and
-                      is_number(Map.get(box, :letter_spacing, 0.0)) and
-                      abs(Map.get(box, :letter_spacing, 0.0)) <=
-                        Limits.get(:max_css_numeric_magnitude)))
+                      abs(box.x) <= Limits.get(:max_numeric_magnitude))) and
+                match?(
+                  {:ok, _},
+                  NativeElixirPdfUtilities.Validators.HtmlValidator.normalize_geometry_number(
+                    Map.get(box, :letter_spacing, 0.0)
+                  )
+                ) and
+                NativeElixirPdfUtilities.Validators.TextBidiValidator.valid_paint?(box) and
+                NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.valid_paint?(box) and
+                NativeElixirPdfUtilities.Validators.CssWritingModeValidator.valid_paint?(box)
 
             if valid? do
-              baseline =
-                baseline + NativeElixirPdfUtilities.HtmlToPdf.Font.baseline_offset(font, size)
+              points =
+                if explicit? do
+                  scale = NativeElixirPdfUtilities.HtmlToPdf.Font.used_size(font, size) / units
+                  offset = NativeElixirPdfUtilities.HtmlToPdf.Font.baseline_offset(font, size)
 
-              size = NativeElixirPdfUtilities.HtmlToPdf.Font.used_size(font, size)
-              ink = ids |> Enum.map(&elem(bounds, &1)) |> Enum.reject(&(&1 == {0, 0, 0, 0}))
+                  {a, b, c, d} =
+                    NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.glyph_basis(box)
 
-              case ink do
-                [] ->
-                  {:ok, nil}
+                  {points, _cursor} =
+                    Enum.map_reduce(ids, 0.0, fn id, cursor ->
+                      reserve(:max_work, 1)
+                      outline = elem(bounds, id)
+                      {left, bottom, right, top} = outline
 
-                _ ->
-                  minimum = Enum.min(Enum.map(ink, &elem(&1, 1))) * size / units + baseline
-                  maximum = Enum.max(Enum.map(ink, &elem(&1, 3))) * size / units + baseline
+                      points =
+                        if outline == {0, 0, 0, 0},
+                          do: [],
+                          else:
+                            Enum.map(
+                              [{left, bottom}, {right, bottom}, {right, top}, {left, top}],
+                              fn {x, y} ->
+                                {Map.get(box, :x, 0.0) + a * cursor + scale * (a * x + c * y),
+                                 baseline + offset + b * cursor + scale * (b * x + d * y)}
+                              end
+                            )
 
-                  case geometry do
-                    :vertical ->
-                      {:ok, {maximum, minimum}}
+                      {points,
+                       cursor + elem(widths, id) * scale + Map.get(box, :letter_spacing, 0.0)}
+                    end)
 
-                    :rectangle ->
-                      reserve(:max_font_math_work, 2 * length(ids))
+                  {:ok, List.flatten(points)}
+                else
+                  piece = %{
+                    text: text,
+                    box: box,
+                    style: %{
+                      font_face: font,
+                      font_size: size,
+                      letter_spacing: Map.get(box, :letter_spacing, 0.0),
+                      word_spacing: Map.get(box, :word_spacing, 0.0)
+                    }
+                  }
 
-                      scale = size / units
-                      spacing = Map.get(box, :letter_spacing, 0.0)
-                      explicit? = Map.has_key?(box, :glyph_ids)
+                  with {:ok, ink} <-
+                         NativeElixirPdfUtilities.HtmlToPdf.TextInk.measure([piece], false) do
+                    {a, b, c, d} = Map.get(box, :glyph_basis, {1, 0, 0, 1})
+                    offset = NativeElixirPdfUtilities.HtmlToPdf.Font.baseline_offset(font, size)
 
-                      {_cursor, _previous, left, right} =
-                        Enum.reduce(ids, {box.x, nil, nil, nil}, fn id,
-                                                                    {cursor, previous, left,
-                                                                     right} ->
-                          adjustment =
-                            if explicit?,
-                              do: 0,
-                              else: Map.get(Map.get(font, :kerning, %{}), {previous, id}, 0)
-
-                          cursor = cursor + adjustment * scale
-                          outline = elem(bounds, id)
-
-                          {left, right} =
-                            case outline do
-                              {0, 0, 0, 0} ->
-                                {left, right}
-
-                              {xmin, _ymin, xmax, _ymax} ->
-                                glyph_left = cursor + xmin * scale
-                                glyph_right = cursor + xmax * scale
-
-                                {if(left == nil, do: glyph_left, else: min(left, glyph_left)),
-                                 if(right == nil, do: glyph_right, else: max(right, glyph_right))}
-                            end
-
-                          # Canonical hmtx preparation expands the final advance
-                          # through glyph_count; selection validation above also
-                          # rejects incomplete caller metric descriptors.
-                          advance = elem(widths, id)
-                          {cursor + advance * scale + spacing, id, left, right}
-                        end)
-
-                      if Enum.all?(
-                           [left, minimum, right, maximum],
-                           &(abs(&1) <= Limits.get(:max_pdf_numeric_magnitude))
-                         ) do
-                        {:ok, {left, minimum, right, maximum}}
-                      else
-                        Diagnostics.error(
-                          :font,
-                          :resource_limit_exceeded,
-                          "text ink rectangle exceeds max_pdf_numeric_magnitude; reduce text size or spacing",
-                          operation: :measure_child,
-                          module: __MODULE__,
-                          source: text
-                        )
-                      end
+                    {:ok,
+                     Enum.map(ink.points, fn {x, y} ->
+                       {Map.get(box, :x, 0.0) + a * x + c * (y - offset),
+                        baseline + offset + b * x + d * (y - offset)}
+                     end)}
                   end
+                end
+
+              with {:ok, points} <- points do
+                case points do
+                  [] ->
+                    {:ok, nil}
+
+                  _ ->
+                    {left, bottom, right, top} =
+                      NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry.bounds([points])
+
+                    if Enum.all?(
+                         [left, bottom, right, top],
+                         &(abs(&1) <= Limits.get(:max_numeric_magnitude))
+                       ) do
+                      if geometry == :vertical,
+                        do: {:ok, {top, bottom}},
+                        else: {:ok, {left, bottom, right, top}}
+                    else
+                      Diagnostics.error(
+                        :font,
+                        :resource_limit_exceeded,
+                        "text ink rectangle exceeds max_numeric_magnitude; reduce text size or spacing",
+                        operation: :measure_child,
+                        module: __MODULE__,
+                        source: text
+                      )
+                    end
+                end
               end
             else
               Diagnostics.error(
@@ -1707,7 +1722,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
         remaining == 0
 
       [id | tail] ->
-        reserve(:max_font_math_work, 1)
+        reserve(:max_work, 1)
 
         is_integer(id) and id > 0 and id < glyph_count and remaining > 0 and
           valid_text_glyph_selection?(tail, glyph_count, remaining - 1)
@@ -2190,6 +2205,105 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
 
       false ->
         :error
+    end
+  end
+
+  @doc "Admits selected embedded-font metrics and the work needed to validate their kerning records."
+  @spec validate_embedded_face(term()) ::
+          :ok | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_embedded_face(face) do
+    with_budget(fn ->
+      # Shaping and each form appearance can share one physical face while
+      # carrying different language or paint metadata. Reuse its admission
+      # only when every metric consumed by this validator remains identical.
+      metrics =
+        if is_map(face),
+          do:
+            Map.take(face, [
+              :data,
+              :pdf_name,
+              :units_per_em,
+              :widths,
+              :default_width,
+              :cmap,
+              :ascent,
+              :descent,
+              :bbox,
+              :kerning
+            ]),
+          else: face
+
+      validate = fn ->
+        kerning = if is_map(face), do: Map.get(face, :kerning, %{}), else: nil
+        work = if is_map(kerning), do: map_size(kerning), else: 0
+
+        with :ok <-
+               NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+                 :max_work,
+                 work,
+                 :font,
+                 module: __MODULE__,
+                 operation: :validate_font
+               ) do
+          if valid_embedded_face?(face), do: :ok, else: :error
+        end
+      end
+
+      id = if is_map(face), do: Map.get(face, :id)
+      {previous, result} = memo({:embedded_face, id}, fn -> {metrics, validate.()} end)
+      if previous == metrics, do: result, else: validate.()
+    end)
+  end
+
+  defp valid_embedded_face?(face) do
+    case face do
+      %{
+        data: data,
+        pdf_name: pdf_name,
+        units_per_em: units_per_em,
+        widths: widths,
+        default_width: default_width,
+        cmap: cmap,
+        ascent: ascent,
+        descent: descent,
+        bbox: {x_min, y_min, x_max, y_max}
+      }
+      when is_binary(data) and is_binary(pdf_name) and is_integer(units_per_em) and
+             units_per_em > 0 and is_list(widths) and is_integer(default_width) and
+             default_width >= 0 and is_map(cmap) and is_integer(ascent) and
+             is_integer(descent) and is_integer(x_min) and is_integer(y_min) and
+             is_integer(x_max) and is_integer(y_max) ->
+        valid_kerning?(Map.get(face, :kerning, %{}), length(widths)) and
+          Regex.match?(~r/\A[A-Za-z0-9_.+-]+\z/, pdf_name) and
+          units_per_em <= 65_535 and default_width <= 65_535 and
+          Enum.all?([ascent, descent, x_min, y_min, x_max, y_max], &(&1 in -32_768..32_767)) and
+          length(widths) <= 65_535 and
+          Enum.all?(widths, &(is_integer(&1) and &1 in 0..65_535)) and
+          map_size(cmap) <= 65_535
+
+      _ ->
+        false
+    end
+  end
+
+  defp valid_kerning?(kerning, glyph_count) do
+    case kerning do
+      pairs when is_map(pairs) ->
+        Enum.all?(pairs, fn
+          {{left, right}, value} ->
+            # Legacy kern records are signed 16-bit adjustments and their
+            # table count is unsigned 16-bit. These format invariants bound
+            # every possible accumulated adjustment, independent of budgets.
+            is_integer(left) and left >= 0 and left < glyph_count and
+              is_integer(right) and right >= 0 and right < glyph_count and
+              is_integer(value) and value >= -32_768 * 65_535 and value <= 32_767 * 65_535
+
+          _ ->
+            false
+        end)
+
+      _ ->
+        false
     end
   end
 end

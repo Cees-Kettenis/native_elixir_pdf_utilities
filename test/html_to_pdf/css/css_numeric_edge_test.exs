@@ -150,10 +150,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssNumericEdgeTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssMathValidator.resolve_length(
                calculation,
-               Limits.get(:max_css_numeric_magnitude) + 1
+               Limits.get(:max_numeric_magnitude) + 1
              )
 
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "font-dependent calculations use selected initial metrics and retain loading failures" do
@@ -163,14 +163,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssNumericEdgeTest do
 
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_font_source_bytes, 1))
+    Limits.install(Map.put(previous, :max_input_bytes, 1))
 
     assert {:render_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}} =
              catch_throw(CssMathValidator.evaluate("1ex", environment))
 
     assert is_atom(diagnostic.stage)
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_font_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "percentage color calculations retain their percentage scale" do

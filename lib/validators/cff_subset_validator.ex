@@ -14,7 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
       with %{data: data} when is_binary(data) <- font,
            true <- is_boolean(subset?),
            {:ok, selected_count} <-
-             CollectionValidator.bounded_length(glyph_ids, Limits.get(:max_font_subset_work)),
+             CollectionValidator.bounded_length(glyph_ids, Limits.get(:max_work)),
            :ok <- FontValidator.reserve_source(data),
            {:ok, %{cff: face} = parsed} <-
              FontValidator.memo({:validated_ttf, data}, fn -> FontValidator.prepare_ttf(data) end),
@@ -27,7 +27,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
            {:ok, registry_strings, [registry_sid, ordering_sid]} <-
              identity_registry(face.strings) do
         count = tuple_size(face.charstrings)
-        FontValidator.reserve(:max_font_subset_work, count + selected_count)
+        FontValidator.reserve(:max_work, count + selected_count)
 
         cond do
           not Enum.all?(glyph_ids, &(is_integer(&1) and &1 >= 0 and &1 < count)) ->
@@ -65,12 +65,12 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
                       parsed.units_per_em
                     )
 
-                  FontValidator.reserve(:max_font_subset_work, length(commands))
+                  FontValidator.reserve(:max_work, length(commands))
                   Cff.program(%{commands: commands, width: Enum.at(parsed.widths, id)}, 0)
                 end)
 
               bytes = Cff.static_face(programs, parsed.units_per_em, parsed.bbox, retained)
-              FontValidator.check(:max_font_subset_bytes, byte_size(bytes))
+              FontValidator.check(:max_decoded_bytes, byte_size(bytes))
               {:ok, %{parts: [bytes], subset?: subset?}}
             else
               # Bound copied INDEX payloads before constructing their binaries.
@@ -85,7 +85,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
                     end)
                   )
 
-              FontValidator.check(:max_font_subset_bytes, payload_bytes)
+              FontValidator.check(:max_decoded_bytes, payload_bytes)
               # CIDs are original OpenType glyph IDs. Multiple document character
               # codes can map to the same CID without duplicating its program.
               charset = <<0, for(glyph <- tl(retained), into: <<>>, do: <<glyph::16>>)::binary>>
@@ -205,13 +205,13 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
                 Enum.zip_with(privates, subrs, fn a, b -> [a, b] end)
               ]
 
-              FontValidator.check(:max_font_subset_bytes, IO.iodata_length(plan))
+              FontValidator.check(:max_decoded_bytes, IO.iodata_length(plan))
               {:ok, %{parts: plan, subset?: subset?}}
             end
         end
       else
         :limit_exceeded ->
-          FontValidator.check(:max_font_subset_work, Limits.get(:max_font_subset_work) + 1)
+          FontValidator.check(:max_work, Limits.get(:max_work) + 1)
 
         {:error, _} = error ->
           error
@@ -242,7 +242,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
     end
 
     FontValidator.check(
-      :max_font_subset_bytes,
+      :max_decoded_bytes,
       Enum.sum(Enum.map(programs ++ subrs, &byte_size/1))
     )
 
@@ -250,7 +250,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffSubsetValidator do
   end
 
   defp identity_registry(strings) do
-    FontValidator.reserve(:max_font_cff_work, 2 * tuple_size(strings))
+    FontValidator.reserve(:max_work, 2 * tuple_size(strings))
 
     {identifiers, strings} =
       Enum.map_reduce(["Adobe", "Identity"], Tuple.to_list(strings), fn name, strings ->

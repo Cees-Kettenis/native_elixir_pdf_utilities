@@ -83,6 +83,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyFragmentContractTest do
     assert Enum.map_join(first.source_group.base ++ last.source_group.base, & &1.text) == "A B"
   end
 
+  test "joined columns keep their complete sources and split only inside a breakable column" do
+    ruby = styled_ruby("<ruby>(<rt>first</rt>A B C D E F<rt>longreadingtext</rt></ruby>")
+    assert {:ok, [measured]} = RubyLayout.measure(ruby, nil)
+    assert RubyValidator.group_length(measured.source_group) == 12
+    assert length(measured.source_columns) == 2
+    assert length(measured.source_group.annotations) == 2
+    first_width = hd(measured.source_columns).width
+
+    assert {:ok, {first, last}} =
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+               RubyLayout.split(measured, first_width + 30)
+             end)
+
+    assert first.width <= first_width + 30
+
+    assert Enum.map_join(first.source_group.base ++ last.source_group.base, & &1.text) ==
+             "(A B C D E F"
+
+    assert Enum.map_join(first.source_group.annotations, fn annotation ->
+             Enum.map_join(annotation.children, & &1.text)
+           end) =~ "first"
+
+    readings =
+      Enum.flat_map(
+        first.source_group.annotations ++ last.source_group.annotations,
+        & &1.children
+      )
+
+    assert Enum.map_join(readings, & &1.text) == "firstlongreadingtext"
+  end
+
+  test "base nowrap prevents both internal and inter-column breaks despite anywhere opportunities" do
+    for property <- ["white-space:nowrap", "text-wrap-mode:nowrap"] do
+      ruby =
+        styled_ruby(
+          "<ruby style='#{property};line-break:anywhere'>A B C D E F<rt>longreading</rt>G H<rt>reading</rt></ruby>"
+        )
+
+      assert {:ok, groups} = RubyValidator.prepare(ruby)
+      assert Enum.all?(groups, &(&1.break_counts == []))
+      assert {:ok, [measured]} = RubyLayout.measure(ruby, nil)
+      assert {:ok, nil} = RubyLayout.split(measured, measured.width / 2)
+    end
+  end
+
   test "annotation roles cannot be assigned to ordinary styled elements" do
     ruby = styled_ruby("<ruby>Base<rt>Reading</rt></ruby>")
     ordinary = %{ruby | style: Map.put(ruby.style, :_ruby_annotation, true)}
@@ -103,9 +148,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyFragmentContractTest do
 
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_html_tree_work, 1))
+    Limits.install(Map.put(previous, :max_work, 1))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = RubyValidator.prepare(ruby)
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "empty readings reject unreadable caller font metadata before emitting paint" do
@@ -133,17 +178,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyFragmentContractTest do
 
     for source <- [
           "<ruby style='font-family:CJK Ruby Fixture'>東京京都大阪<rt style='font-family:DejaVu Sans'>long reading text</rt></ruby>",
-          "<ruby>A B C D E<rt style='font-family:CJK Ruby Fixture'>東京京都</rt></ruby>"
+          "<ruby>A B C D E<rt style='font-family:CJK Ruby Fixture'>東京京都</rt></ruby>",
+          "<ruby>(<rt>first</rt>A B C D E F<rt>longreadingtext</rt></ruby>"
         ] do
       Limits.install(previous)
       ruby = styled_ruby(source)
       assert {:ok, [measured]} = RubyLayout.measure(ruby, nil)
-      Limits.install(Map.put(previous, :max_font_source_bytes, File.stat!(@font).size))
+      Limits.install(Map.put(previous, :max_input_bytes, File.stat!(@font).size))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                RubyLayout.split(measured, measured.width / 2)
 
-      assert diagnostic.message =~ "max_font_source_bytes"
+      assert diagnostic.message =~ "max_input_bytes"
     end
   end
 
@@ -155,10 +201,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyFragmentContractTest do
 
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_font_source_bytes, File.stat!(@font).size))
+    Limits.install(Map.put(previous, :max_input_bytes, File.stat!(@font).size))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = RubyLayout.measure(ruby, nil)
-    assert diagnostic.message =~ "max_font_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
+
+    assert {:error, {:resource_limit_exceeded, nested}} =
+             NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+               RubyLayout.measure(ruby, nil)
+             end)
+
+    assert nested.stage == :font and nested.message =~ "max_input_bytes"
+  end
+
+  test "ruby alignment and joined columns preserve failures at their final allocation" do
+    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+
+    for {key, source} <- [
+          {:max_work,
+           "<ruby style='font-family:CJK Ruby Fixture;ruby-align:space-around'>東京<rt style='font-size:12pt'>東京京都</rt></ruby>"},
+          {:max_entries, "<ruby>(<rt>first</rt>A B<rt>secondreading</rt></ruby>"}
+        ] do
+      Limits.install(previous)
+      ruby = styled_ruby(source)
+
+      operation = fn ->
+        NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+          RubyLayout.measure(ruby, nil)
+        end)
+      end
+
+      assert {:ok, _} = operation.()
+      assert {{:ok, _}, used} = ResourceBudget.measure(key, operation)
+      assert used > 0
+
+      allowances =
+        if key == :max_work, do: [div(used, 2), div(used * 95, 100), used - 1], else: [used - 1]
+
+      for allowance <- allowances do
+        Limits.install(Map.put(previous, key, allowance))
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.message =~ Atom.to_string(key)
+      end
+    end
   end
 
   defp styled_ruby(source) do

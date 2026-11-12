@@ -307,7 +307,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidatorTest do
                             flunk("changed tree")
                           end)
 
-                 Limits.install(Map.put(limits, :max_css_numeric_magnitude, 1))
+                 Limits.install(Map.put(limits, :max_numeric_magnitude, 1))
 
                  assert {:error, {:invalid_document, diagnostic}} =
                           TemplatePatchValidator.with_candidate_evidence(handle, tree, fn _ ->
@@ -328,14 +328,14 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidatorTest do
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              with_plan(source, tree, parent, origin, fn plan ->
-               Limits.install(Map.put(limits, :max_html_tree_work, 1))
+               Limits.install(Map.put(limits, :max_work, 1))
 
                TemplatePatchValidator.with_candidate_projection(plan, tree, fn _ ->
                  flunk("unbounded capture")
                end)
              end)
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
     Limits.install(limits)
   end
 
@@ -781,9 +781,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateCandidateValidatorTest do
     limits = Limits.effective()
 
     resolver = fn %{reference: "pixel.png"} ->
-      Limits.install(
-        Map.put(limits, :max_css_numeric_magnitude, limits.max_css_numeric_magnitude + 1)
-      )
+      Limits.install(Map.put(limits, :max_numeric_magnitude, limits.max_numeric_magnitude + 1))
 
       {:ok, png}
     end

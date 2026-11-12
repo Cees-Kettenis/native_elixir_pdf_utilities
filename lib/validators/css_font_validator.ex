@@ -297,7 +297,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontValidator do
         prepare_unicode_range(value)
 
       ranges when is_list(ranges) and ranges != [] ->
-        maximum = NativeElixirPdfUtilities.Limits.get(:max_font_cmap_work)
+        maximum = NativeElixirPdfUtilities.Limits.get(:max_work)
 
         with {:ok, _} <-
                NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
@@ -316,7 +316,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontValidator do
         else
           :limit_exceeded ->
             NativeElixirPdfUtilities.Validators.FontValidator.check(
-              :max_font_cmap_work,
+              :max_work,
               maximum + 1
             )
 
@@ -337,7 +337,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontValidator do
         value
         |> String.split(",")
         |> Enum.reduce_while({:ok, []}, fn token, {:ok, ranges} ->
-          HtmlValidator.reserve_render_resource(:max_css_work, 1, :font)
+          HtmlValidator.reserve_render_resource(:max_work, 1, :font)
           token = token |> String.trim() |> String.upcase(:ascii)
 
           parsed =

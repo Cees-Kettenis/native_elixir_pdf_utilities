@@ -41,14 +41,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest d
   end
 
   test "extraction charges XML source before building its canonical tree" do
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_svg_source_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                SvgConverterValidator.prepare_extraction("<svg/>")
              end)
 
-    assert diagnostic.source == "SVG" and diagnostic.message =~ "max_aggregate_svg_source_bytes"
+    assert diagnostic.source == "SVG" and diagnostic.message =~ "max_input_bytes"
   end
 
   test "extracted scenes support optional budgets and independently discovered text fonts" do
@@ -279,12 +279,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest d
     assert request.source =~ "data:image/svg+xml;base64,"
     refute request.source =~ "svg-resource:px"
 
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_decoded_image_bytes, 20 * 20 * 4))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 20 * 20 * 4))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgConverterValidator.prepare(source, [], nil, [], context)
 
     assert diagnostic.stage == :limits
-    assert diagnostic.message =~ "aggregate decoded image bytes exceed the limit"
+    assert diagnostic.message =~ "max_decoded_bytes"
   end
 end

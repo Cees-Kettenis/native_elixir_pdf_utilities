@@ -18,6 +18,41 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     :ok
   end
 
+  test "text alignment match-parent resolves start and end using the parent's direction" do
+    for {direction, alignment, expected} <- [
+          {:rtl, :start, :right},
+          {:rtl, :end, :left},
+          {:ltr, :start, :left}
+        ] do
+      style = %{_cascade_inherited: %{direction: direction, text_align: alignment}}
+
+      assert {:ok, prepared} =
+               CssValueValidator.validate_declaration(
+                 style,
+                 {"text-align", "match-parent"},
+                 HtmlValidator.new_css_budget()
+               )
+
+      assert prepared.text_align == expected and prepared._text_align_initial == false
+    end
+  end
+
+  test "legacy wrapping projections delegate to the same admitted whitespace and break grammar" do
+    for {property, value, expected} <- [
+          {"white-space", "preserve wrap", {:ok, :white_space, :pre_wrap}},
+          {"line-break", "loose", {:ok, :line_break, :loose}},
+          {"word-break", "break-all", {:ok, :word_break, :break_all}},
+          {"word-break", "keep-all", {:ok, :word_break, :keep_all}}
+        ] do
+      assert HtmlValidator.parse_css_text_wrapping(property, value) == expected
+    end
+
+    assert {:ok, %{line_break: :normal}} =
+             NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator.prepare_policy(%{
+               line_break: :auto
+             })
+  end
+
   test "declaration pairs share value validation's ordinary and important representations" do
     for declaration <- [
           {"width", "100px"},
@@ -204,32 +239,36 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
   end
 
   test "value and source complexity use unchanged shared Limits and cumulative reservations" do
-    Limits.install(Map.put(Limits.effective(), :max_layout_cardinality, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssValueValidator.validate_declarations("grid-template-columns:repeat(2, 1fr)")
 
     assert diagnostic.message =~ "grid"
 
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_bytes, 2))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssValueValidator.validate_declarations("--unused:abc")
 
-    assert diagnostic.message =~ "max_css_variable_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
 
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_bytes, 100))
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, 5))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 100))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 5))
     budget = HtmlValidator.new_css_budget()
     assert :ok = CssValueValidator.validate_declarations("--x:abc", budget)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssValueValidator.validate_declarations("--x:abc", budget)
 
-    assert diagnostic.message =~ "max_css_variable_total_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
 
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, 1_000))
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_css_source_bytes, 20))
+    Limits.install(
+      Map.put(Limits.effective(), :max_decoded_bytes, Limits.defaults().max_decoded_bytes)
+    )
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1_000))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 20))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -238,7 +277,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
                CssValueValidator.validate_declarations("color:red")
              end)
 
-    assert diagnostic.message =~ "max_aggregate_css_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "normalized raw declarations share custom, variable and malformed-input policy" do
@@ -512,7 +551,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
   end
 
   test "overflow clip math preserves the shared resource-limit diagnostic" do
-    Limits.install(Map.put(Limits.effective(), :max_css_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.Validators.CssOverflowValidator.prepare(

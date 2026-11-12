@@ -97,13 +97,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontMetricTest do
              })
 
     assert top > 20 and bottom > top
-    limit = Limits.get(:max_pdf_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                FontMetricValidator.used_size(%{metric_scale: limit}, 2)
              end)
 
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 end

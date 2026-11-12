@@ -2,27 +2,53 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
 
-  @emoji Regex.compile!(
-           "\\A(?:" <>
-             NativeElixirPdfUtilities.HtmlToPdf.UnicodeCharacterProperty.expression(
-               "Emoji",
-               false
-             ) <> ")\\z",
-           "u"
-         )
-  @emoji_default Regex.compile!(
-                   "\\A(?:" <>
-                     NativeElixirPdfUtilities.HtmlToPdf.UnicodeCharacterProperty.expression(
-                       "Emoji_Presentation",
-                       false
-                     ) <> ")\\z",
-                   "u"
-                 )
-  alias NativeElixirPdfUtilities.Validators.{CssFontControlsValidator, FontValidator}
+  alias NativeElixirPdfUtilities.Validators.{
+    CssFontControlsValidator,
+    EmojiPresentationValidator,
+    FontValidator
+  }
 
   @doc "Prepares selected variation coordinates, feature precedence and permitted synthetic weight/style for one physical face."
   @spec prepare(map(), map()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare(font, style) do
+    with {:ok, prepared} <- prepare_face(Map.get(font, :language_source, font), style),
+         {:ok, parts} <-
+           NativeElixirPdfUtilities.Validators.LanguageValidator.prepare_identifier(
+             Map.get(style, :_text_language, "und")
+           ) do
+      language = Enum.join(parts, "-")
+
+      {:ok, prepared} =
+        if prepared.type == :embedded and language not in ["", "und"] do
+          suffix =
+            :crypto.hash(:sha256, language) |> binary_part(0, 6) |> Base.encode16(case: :lower)
+
+          {:ok,
+           prepared
+           |> Map.put(:language_source, prepared)
+           |> Map.put(:shaping_language, language)
+           |> Map.update!(:id, &(&1 <> "-lang-" <> suffix))}
+        else
+          {:ok, prepared}
+        end
+
+      mode = Map.get(style, :writing_mode, :horizontal_tb)
+
+      prepared =
+        if mode != :horizontal_tb and prepared.type == :embedded,
+          do:
+            Map.put(prepared, :_vertical_text, %{
+              mode: mode,
+              orientation: Map.get(style, :text_orientation, :mixed),
+              combine: Map.get(style, :text_combine_upright, :none)
+            }),
+          else: Map.delete(prepared, :_vertical_text)
+
+      {:ok, prepared}
+    end
+  end
+
+  defp prepare_face(font, style) do
     ordinary? =
       Map.get(style, :font_controls, %{}) == %{} and not Map.has_key?(font, :rendering_source) and
         not Map.has_key?(font, :variation_source) and
@@ -72,14 +98,17 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
   @doc "Prepares fallback candidates with one shared check for ordinary static requests."
   @spec prepare_candidates([map()], map()) :: {:ok, [map()]} | {:error, {atom(), map()}}
   def prepare_candidates(fonts, style) do
-    if Map.get(style, :font_controls, %{}) == %{} and
+    if Map.get(style, :writing_mode, :horizontal_tb) == :horizontal_tb and
+         Map.get(style, :_text_language, "und") in ["", "und"] and
+         Map.get(style, :font_controls, %{}) == %{} and
          Map.get(style, :font_style, :normal) == :normal and
          Map.get(style, :font_weight, 400) < 600 and
          not Enum.any?(
            fonts,
            &(Map.has_key?(&1, :variation_source) or Map.has_key?(&1, :metric_descriptors) or
                Map.has_key?(&1, :color_tables) or Map.has_key?(&1, :rendering_source) or
-               Map.has_key?(&1, :feature_defaults) or Map.has_key?(&1, :language_default))
+               Map.has_key?(&1, :feature_defaults) or Map.has_key?(&1, :language_default) or
+               Map.has_key?(&1, :language_source))
          ) do
       {:ok, fonts}
     else
@@ -318,6 +347,39 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
     {:font_rendering_error, error} -> error
   end
 
+  @doc "Selects a covered cluster, preferring complete emoji shaping and its requested presentation."
+  @spec select_face([map()], String.t()) :: map() | nil
+  def select_face(candidates, text) do
+    sequence? = EmojiPresentationValidator.sequence?(text)
+
+    {selected, _rank} =
+      Enum.reduce_while(candidates, {nil, nil}, fn font, {selected, best} ->
+        if supports_text?(font, text) do
+          preference = EmojiPresentationValidator.preference(text, font)
+          color? = Map.get(font, :color_tables, []) != []
+
+          presentation =
+            if preference == :normal or preference == :emoji == color?, do: 0, else: 1
+
+          complete =
+            if sequence? do
+              {:ok, shaped} = selected_shape(text, font)
+              if length(Enum.reject(shaped.glyphs, & &1.ignorable?)) == 1, do: 0, else: 1
+            else
+              0
+            end
+
+          rank = {complete, presentation}
+          result = if best == nil or rank < best, do: {font, rank}, else: {selected, best}
+          if rank == {0, 0}, do: {:halt, result}, else: {:cont, result}
+        else
+          {:cont, {selected, best}}
+        end
+      end)
+
+    selected
+  end
+
   @doc "Checks selected synthetic glyph coverage through the same face preparation used for painting."
   @spec supports_text?(map(), String.t()) :: boolean()
   def supports_text?(font, text) do
@@ -331,130 +393,146 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
         font
       end
 
-    NativeElixirPdfUtilities.HtmlToPdf.Font.supports_text?(selected, text)
+    if NativeElixirPdfUtilities.Validators.TextShapingValidator.required?(selected, text) do
+      case selected_shape(text, selected) do
+        {:ok, shaped} -> Enum.all?(shaped.glyphs, &(&1.glyph != 0 or &1.ignorable?))
+        error -> throw({:font_resource_limit, error})
+      end
+    else
+      NativeElixirPdfUtilities.HtmlToPdf.Font.supports_text?(selected, text)
+    end
   end
 
   @doc "Selects a synthetic small-cap or script glyph face while preserving its original Unicode and line strut."
   @spec prepare_grapheme(map(), String.t()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare_grapheme(font, text) do
-    case Map.get(font, :synthetic_variants) do
-      nil ->
-        {:ok, font}
+    result =
+      case Map.get(font, :synthetic_variants) do
+        nil ->
+          {:ok, font}
 
-      variants ->
-        FontValidator.with_budget(fn ->
-          with {:ok, available} <-
-                 FontValidator.memo({:feature_capabilities, font.data}, fn ->
-                   capabilities(font.data)
-                 end) do
-            caps = variants.caps
-            petite? = caps in [["petite-caps"], ["all-petite-caps"]]
+        variants ->
+          FontValidator.with_budget(fn ->
+            with {:ok, available} <-
+                   FontValidator.memo({:feature_capabilities, font.data}, fn ->
+                     capabilities(font.data)
+                   end) do
+              caps = variants.caps
+              petite? = caps in [["petite-caps"], ["all-petite-caps"]]
 
-            cap_tag =
-              cond do
-                petite? and MapSet.member?(available, "pcap") -> "pcap"
-                caps == ["unicase"] -> "unic"
-                true -> "smcp"
-              end
-
-            uppercase? = String.upcase(text) == text
-
-            cap? =
-              String.upcase(text) != String.downcase(text) and variants.caps_allowed and
-                caps in [
-                  ["small-caps"],
-                  ["all-small-caps"],
-                  ["petite-caps"],
-                  ["all-petite-caps"],
-                  ["unicase"]
-                ] and
-                if(caps == ["unicase"],
-                  do: uppercase?,
-                  else: not uppercase? or caps in [["all-small-caps"], ["all-petite-caps"]]
-                ) and
-                not MapSet.member?(available, cap_tag)
-
-            position = variants.position
-
-            position_tag =
-              case position do
-                ["sub"] -> "subs"
-                ["super"] -> "sups"
-                _ -> nil
-              end
-
-            script? =
-              variants.position_allowed and position_tag != nil and
-                not MapSet.member?(available, position_tag)
-
-            if cap? or script? do
-              FontValidator.memo(
-                {:synthetic_glyph_face, font.id, cap?, petite?, script?, position},
-                fn ->
-                  cmap =
-                    if cap? do
-                      FontValidator.reserve(:max_font_cmap_work, map_size(font.cmap))
-
-                      Map.new(font.cmap, fn {codepoint, glyph} ->
-                        upper = String.upcase(<<codepoint::utf8>>)
-
-                        selected =
-                          case String.to_charlist(upper) do
-                            [upper] -> Map.get(font.cmap, upper, 0)
-                            _ -> glyph
-                          end
-
-                        {codepoint, selected}
-                      end)
-                    else
-                      font.cmap
-                    end
-
-                  {script_scale, shift} =
-                    if script? do
-                      {:ok, metrics} = FontValidator.prepare_text_metrics(font)
-                      key = if position == ["sub"], do: :subscript, else: :superscript
-                      sign = if key == :subscript, do: -1, else: 1
-
-                      case metrics[key] do
-                        nil ->
-                          {0.65, sign * 0.35}
-
-                        metrics ->
-                          {metrics.y_size / font.units_per_em,
-                           sign * metrics.y_offset / font.units_per_em}
-                      end
-                    else
-                      {1, 0}
-                    end
-
-                  scale = script_scale * if(cap?, do: 0.7, else: 1)
-                  key = {scale, shift, cap?}
-
-                  suffix =
-                    :crypto.hash(:sha256, :erlang.term_to_binary(key))
-                    |> binary_part(0, 6)
-                    |> Base.encode16(case: :lower)
-
-                  {:ok,
-                   font
-                   |> Map.put(:cmap, cmap)
-                   |> then(fn font ->
-                     if Map.has_key?(font, :unicode_cmap),
-                       do:
-                         Map.put(font, :unicode_cmap, Map.take(cmap, Map.keys(font.unicode_cmap))),
-                       else: font
-                   end)
-                   |> Map.put(:glyph_scale, scale)
-                   |> Map.put(:baseline_shift, shift)
-                   |> Map.update!(:id, &(&1 <> "-glyph-" <> suffix))}
+              cap_tag =
+                cond do
+                  petite? and MapSet.member?(available, "pcap") -> "pcap"
+                  caps == ["unicase"] -> "unic"
+                  true -> "smcp"
                 end
-              )
-            else
-              {:ok, font}
+
+              uppercase? = String.upcase(text) == text
+
+              cap? =
+                String.upcase(text) != String.downcase(text) and variants.caps_allowed and
+                  caps in [
+                    ["small-caps"],
+                    ["all-small-caps"],
+                    ["petite-caps"],
+                    ["all-petite-caps"],
+                    ["unicase"]
+                  ] and
+                  if(caps == ["unicase"],
+                    do: uppercase?,
+                    else: not uppercase? or caps in [["all-small-caps"], ["all-petite-caps"]]
+                  ) and
+                  not MapSet.member?(available, cap_tag)
+
+              position = variants.position
+
+              position_tag =
+                case position do
+                  ["sub"] -> "subs"
+                  ["super"] -> "sups"
+                  _ -> nil
+                end
+
+              script? =
+                variants.position_allowed and position_tag != nil and
+                  not MapSet.member?(available, position_tag)
+
+              if cap? or script? do
+                FontValidator.memo(
+                  {:synthetic_glyph_face, font.id, cap?, petite?, script?, position},
+                  fn ->
+                    cmap =
+                      if cap? do
+                        FontValidator.reserve(:max_work, map_size(font.cmap))
+
+                        Map.new(font.cmap, fn {codepoint, glyph} ->
+                          upper = String.upcase(<<codepoint::utf8>>)
+
+                          selected =
+                            case String.to_charlist(upper) do
+                              [upper] -> Map.get(font.cmap, upper, 0)
+                              _ -> glyph
+                            end
+
+                          {codepoint, selected}
+                        end)
+                      else
+                        font.cmap
+                      end
+
+                    {script_scale, shift} =
+                      if script? do
+                        {:ok, metrics} = FontValidator.prepare_text_metrics(font)
+                        key = if position == ["sub"], do: :subscript, else: :superscript
+                        sign = if key == :subscript, do: -1, else: 1
+
+                        case metrics[key] do
+                          nil ->
+                            {0.65, sign * 0.35}
+
+                          metrics ->
+                            {metrics.y_size / font.units_per_em,
+                             sign * metrics.y_offset / font.units_per_em}
+                        end
+                      else
+                        {1, 0}
+                      end
+
+                    scale = script_scale * if(cap?, do: 0.7, else: 1)
+                    key = {scale, shift, cap?}
+
+                    suffix =
+                      :crypto.hash(:sha256, :erlang.term_to_binary(key))
+                      |> binary_part(0, 6)
+                      |> Base.encode16(case: :lower)
+
+                    {:ok,
+                     font
+                     |> Map.put(:cmap, cmap)
+                     |> then(fn font ->
+                       if Map.has_key?(font, :unicode_cmap),
+                         do:
+                           Map.put(
+                             font,
+                             :unicode_cmap,
+                             Map.take(cmap, Map.keys(font.unicode_cmap))
+                           ),
+                         else: font
+                     end)
+                     |> Map.put(:glyph_scale, scale)
+                     |> Map.put(:baseline_shift, shift)
+                     |> Map.update!(:id, &(&1 <> "-glyph-" <> suffix))}
+                  end
+                )
+              else
+                {:ok, font}
+              end
             end
-          end
-        end)
+          end)
+      end
+
+    with {:ok, prepared} <- result do
+      {:ok, EmojiPresentationValidator.prepare(prepared, text)}
     end
   end
 
@@ -489,26 +567,15 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
     end
   end
 
-  @doc "Checks whether requested active features need the later script-shaping stage rather than silently ignoring them."
+  @doc "Admits active shaping requests and reports unsupported synthetic or presentation matching."
   @spec validate_execution(map(), String.t()) :: :ok | {:error, {atom(), map()}}
   def validate_execution(font, text) do
     case font do
-      %{feature_plan: plan, data: data} ->
+      %{feature_plan: _plan, data: data} ->
         FontValidator.with_budget(fn ->
-          with {:ok, available} <-
+          with {:ok, _available} <-
                  FontValidator.memo({:feature_capabilities, data}, fn -> capabilities(data) end) do
-            pending =
-              plan.features
-              |> Enum.filter(fn {tag, value} ->
-                value != 0 and tag not in ["kern", "liga"] and
-                  MapSet.member?(available, tag)
-              end)
-              |> Enum.map(&elem(&1, 0))
-
-            pending =
-              if plan.language != :normal and not Enum.empty?(available),
-                do: ["language-specific OpenType selection" | pending],
-                else: pending
+            pending = []
 
             variants = Map.get(font, :synthetic_variants)
 
@@ -519,32 +586,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
                      &(length(String.codepoints(String.upcase(&1))) > 1)
                    ), do: ["multi-scalar synthetic capitalization" | pending], else: pending
 
-            pending =
-              if Map.get(plan.features, "kern", 0) != 0 and MapSet.member?(available, "kern") and
-                   Map.get(font, :kerning, %{}) == %{},
-                 do: ["GPOS kerning" | pending],
-                 else: pending
-
-            emoji_text? =
-              Regex.match?(@emoji, text) and
-                (plan.emoji == :text or
-                   (plan.emoji == :unicode and not Regex.match?(@emoji_default, text)))
-
-            pending =
-              cond do
-                emoji_text? and Map.has_key?(font, :color_tables) ->
-                  ["text emoji presentation matching" | pending]
-
-                Regex.match?(@emoji, text) and plan.emoji == :emoji and
-                    not Map.has_key?(font, :color_tables) ->
-                  ["emoji presentation matching" | pending]
-
-                true ->
-                  pending
-              end
-
             if pending == [] or String.trim(text) == "" do
-              :ok
+              validate_shaping(font, text)
             else
               Diagnostics.error(
                 :font,
@@ -563,6 +606,25 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
     end
   end
 
+  defp selected_shape(text, font) do
+    if Map.has_key?(font, :_vertical_text),
+      do: NativeElixirPdfUtilities.HtmlToPdf.VerticalText.shape(text, font, []),
+      else: NativeElixirPdfUtilities.HtmlToPdf.TextShaper.shape(text, font)
+  end
+
+  defp validate_shaping(font, text) do
+    if NativeElixirPdfUtilities.Validators.TextShapingValidator.required?(font, text) and
+         String.trim(text) != "" do
+      with {:ok, shaped} <- NativeElixirPdfUtilities.HtmlToPdf.TextShaper.shape(text, font) do
+        NativeElixirPdfUtilities.Validators.TextShapingValidator.validate_visible_glyphs(
+          shaped.glyphs
+        )
+      end
+    else
+      :ok
+    end
+  end
+
   defp capabilities(data) do
     with {:ok, _, directory} <- FontValidator.prepare_table_directory(data) do
       Enum.reduce_while(["GSUB", "GPOS"], {:ok, MapSet.new()}, fn tag, {:ok, tags} ->
@@ -577,7 +639,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
               <<major::16, minor::16, _script::16, features::16, _lookup::16, _::binary>>
               when major == 1 and minor in [0, 1] and features + 2 <= byte_size(table) ->
                 <<count::16>> = binary_part(table, features, 2)
-                FontValidator.reserve(:max_font_variation_work, count)
+                FontValidator.reserve(:max_work, count)
 
                 if features + 2 + count * 6 <= byte_size(table) do
                   records = binary_part(table, features + 2, count * 6)

@@ -486,7 +486,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           with {:ok, box_count} <- table_collection_size(boxes, 0, :pagination),
                {:ok, marker_count} <- table_collection_size(markers, 0, :pagination) do
             HtmlValidator.reserve_render_resource(
-              :max_table_grid_work,
+              :max_work,
               4 * box_count + 6 * marker_count,
               :pagination
             )
@@ -597,7 +597,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
   defp atomic_flow_table?(children, stage) do
     Enum.any?(children, fn child ->
-      HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, stage)
+      HtmlValidator.reserve_render_resource(:max_work, 1, stage)
 
       case child do
         %{style: %{display: :none}} -> false
@@ -666,13 +666,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
       valid =
         valid_rows and proper_heights == {:ok, row_count} and is_number(spacing) and
-          spacing >= 0 and spacing <= Limits.get(:max_css_numeric_magnitude) and
+          spacing >= 0 and spacing <= Limits.get(:max_numeric_magnitude) and
           Enum.all?(heights, fn height ->
-            is_number(height) and height >= 0 and height <= Limits.get(:max_css_numeric_magnitude)
+            is_number(height) and height >= 0 and height <= Limits.get(:max_numeric_magnitude)
           end)
 
       if valid do
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, 8 * row_count, :layout)
+        HtmlValidator.reserve_render_resource(:max_work, 8 * row_count, :layout)
 
         {prefixes, _total} =
           Enum.map_reduce(heights, 0.0, fn height, offset ->
@@ -686,14 +686,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
         Enum.each(
           prefixes,
-          &HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, abs(&1), :layout)
+          &HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(&1), :layout)
         )
 
         plans =
           Enum.reduce(placements, %{}, fn {{start, _column} = key, placement}, plans ->
             if placement.rowspan > 1 do
               HtmlValidator.reserve_render_resource(
-                :max_table_grid_work,
+                :max_work,
                 5 * placement.rowspan,
                 :layout
               )
@@ -747,7 +747,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
             spacing
           ) and
           Enum.all?(Tuple.to_list(spacing) ++ heights ++ widths, fn value ->
-            is_number(value) and value >= 0 and value <= Limits.get(:max_css_numeric_magnitude)
+            is_number(value) and value >= 0 and value <= Limits.get(:max_numeric_magnitude)
           end)
 
       valid =
@@ -771,7 +771,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         columns = elem(width_count, 1)
 
         HtmlValidator.reserve_render_resource(
-          :max_table_grid_work,
+          :max_work,
           10 * row_count + 4 * columns + 12 * length(placements),
           :layout
         )
@@ -822,7 +822,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           end)
 
         Enum.each(row_starts ++ column_starts ++ [row_end, column_end], fn value ->
-          HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, value, :layout)
+          HtmlValidator.check_render_resource(:max_numeric_magnitude, value, :layout)
         end)
 
         geometry =
@@ -902,10 +902,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                true <-
                  Enum.all?(
                    [x, y, width, height],
-                   &(abs(&1) <= Limits.get(:max_pdf_numeric_magnitude))
+                   &(abs(&1) <= Limits.get(:max_numeric_magnitude))
                  ),
                :ok <-
-                 HtmlValidator.reserve_render_resource(:max_table_grid_work, 3 * count, :layout),
+                 HtmlValidator.reserve_render_resource(:max_work, 3 * count, :layout),
                :ok <-
                  NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes(boxes),
                :ok <- NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_boxes(boxes),
@@ -976,7 +976,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                       # The scoped form validator has already validated this
                       # immutable context and admitted the complete field count.
                       {:ok, descriptor} = EmbeddedFormValidator.issue(context, [field])
-                      HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+                      HtmlValidator.reserve_render_resource(:max_entries, 1, :layout)
 
                       carrier =
                         host
@@ -1029,6 +1029,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         _ -> cell_fields_failure()
       end
     end)
+  catch
+    {:render_resource_limit, error} -> error
   end
 
   defp cell_fields_failure do
@@ -1048,7 +1050,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   def prepare_cell_band_paint(boxes, bands, top) do
     HtmlValidator.with_render_budget(fn ->
       with {:ok, _count} <- table_collection_size(bands),
-           true <- is_number(top) and abs(top) <= Limits.get(:max_pdf_numeric_magnitude),
+           true <- is_number(top) and abs(top) <= Limits.get(:max_numeric_magnitude),
            true <-
              Enum.all?(bands, fn band ->
                case band do
@@ -1057,7 +1059,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                      is_number(height) and height >= 0 and
                      Enum.all?(
                        [offset, height, top - offset - height],
-                       &(abs(&1) <= Limits.get(:max_pdf_numeric_magnitude))
+                       &(abs(&1) <= Limits.get(:max_numeric_magnitude))
                      )
 
                  _ ->
@@ -1075,13 +1077,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
              end) != false,
            {:ok, bounds, count} <- table_paint_ink_bounds(boxes) do
         HtmlValidator.reserve_render_resource(
-          :max_table_grid_work,
+          :max_work,
           (2 * count + 3) * length(bands),
           :layout
         )
 
         HtmlValidator.reserve_render_resource(
-          :max_layout_boxes,
+          :max_entries,
           (2 * count + 3) * length(bands),
           :layout
         )
@@ -1095,7 +1097,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
             total_height = if last == nil, do: 0.0, else: last.offset + last.height
             fragment_identity = make_ref()
             content_identity = make_ref()
-            HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, right - left, :layout)
+            HtmlValidator.check_render_resource(:max_numeric_magnitude, right - left, :layout)
 
             {:ok,
              Enum.map(bands, fn band ->
@@ -1144,7 +1146,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   def prepare_row_start_inset(boxes) do
     HtmlValidator.with_render_budget(fn ->
       with {:ok, _bounds, count} <- table_paint_ink_bounds(boxes) do
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, count, :pagination)
+        HtmlValidator.reserve_render_resource(:max_work, count, :pagination)
 
         inset =
           Enum.reduce(boxes, 0.0, fn box, inset ->
@@ -1166,9 +1168,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
       with {:ok, count} <- table_collection_size(boxes, 0, :pagination),
            true <- is_number(delta) and is_number(bottom) and bottom >= 0,
            true <-
-             abs(delta) <= Limits.get(:max_pdf_numeric_magnitude) and
-               bottom <= Limits.get(:max_pdf_numeric_magnitude) do
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, count, :pagination)
+             abs(delta) <= Limits.get(:max_numeric_magnitude) and
+               bottom <= Limits.get(:max_numeric_magnitude) do
+        HtmlValidator.reserve_render_resource(:max_work, count, :pagination)
 
         Enum.reduce_while(boxes, {:ok, false}, fn box, {:ok, continuing} ->
           case box do
@@ -1215,15 +1217,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
            true <-
              is_nil(fragmentainer_height) or
                (is_number(fragmentainer_height) and fragmentainer_height >= capacity and
-                  fragmentainer_height <= Limits.get(:max_pdf_numeric_magnitude)),
+                  fragmentainer_height <= Limits.get(:max_numeric_magnitude)),
            true <-
              Enum.all?(
                [top, bottom, capacity],
-               &(abs(&1) <= Limits.get(:max_pdf_numeric_magnitude))
+               &(abs(&1) <= Limits.get(:max_numeric_magnitude))
              ),
            {:ok, bounds, count} <- table_paint_ink_bounds(boxes),
            {:ok, units} <- row_break_units(boxes, fragmentainer_height) do
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, count * 3, :pagination)
+        HtmlValidator.reserve_render_resource(:max_work, count * 3, :pagination)
         cut = whole_unit_cut(units, top, max(bottom, top - capacity))
         height = max(top - cut, 0.0)
 
@@ -1245,7 +1247,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           {left, _bottom, right, _top} = bounds
 
           HtmlValidator.check_render_resource(
-            :max_pdf_numeric_magnitude,
+            :max_numeric_magnitude,
             right - left,
             :pagination
           )
@@ -1274,7 +1276,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
               0.0
             end
 
-          HtmlValidator.reserve_render_resource(:max_layout_boxes, count * 2 + 1, :pagination)
+          HtmlValidator.reserve_render_resource(:max_entries, count * 2 + 1, :pagination)
 
           {spans, ordinary} = Enum.split_with(boxes, &Map.has_key?(&1, :table_span_fragment))
 
@@ -1563,9 +1565,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
            true <-
              is_number(top) and is_number(bottom) and top > bottom and
                bottom >= 0,
-           true <- Enum.all?([top, bottom], &(abs(&1) <= Limits.get(:max_pdf_numeric_magnitude))) do
+           true <- Enum.all?([top, bottom], &(abs(&1) <= Limits.get(:max_numeric_magnitude))) do
         HtmlValidator.reserve_render_resource(
-          :max_table_grid_work,
+          :max_work,
           3 * source_count + page_count,
           :pagination
         )
@@ -1596,7 +1598,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                   height = top - bottom
 
                   HtmlValidator.reserve_render_resource(
-                    :max_layout_boxes,
+                    :max_entries,
                     length(box.boxes) + 1,
                     :pagination
                   )
@@ -1628,7 +1630,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                     case Map.fetch(prepared, :html_targets) do
                       {:ok, targets} ->
                         HtmlValidator.reserve_render_resource(
-                          :max_table_grid_work,
+                          :max_work,
                           length(targets),
                           :pagination
                         )
@@ -1685,18 +1687,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
            true <-
              is_nil(fragmentainer_height) or
                (is_number(fragmentainer_height) and fragmentainer_height > 0 and
-                  fragmentainer_height <= Limits.get(:max_pdf_numeric_magnitude)),
+                  fragmentainer_height <= Limits.get(:max_numeric_magnitude)),
            :ok <- validate_cell_consumed_state(previous),
            true <-
              is_number(bottom) and bottom >= 0 and
-               bottom <= Limits.get(:max_pdf_numeric_magnitude) do
+               bottom <= Limits.get(:max_numeric_magnitude) do
         HtmlValidator.reserve_render_resource(
-          :max_table_grid_work,
+          :max_work,
           6 * count + map_size(previous),
           :pagination
         )
 
-        HtmlValidator.reserve_render_resource(:max_layout_boxes, 2 * count, :pagination)
+        HtmlValidator.reserve_render_resource(:max_entries, 2 * count, :pagination)
 
         source_gaps =
           Enum.reduce(boxes, %{}, fn box, gaps ->
@@ -1736,7 +1738,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                      {:ok, _bounds, descendants} <- table_paint_ink_bounds(box.boxes),
                      :ok <-
                        HtmlValidator.reserve_render_resource(
-                         :max_table_grid_work,
+                         :max_work,
                          descendants + 1,
                          :pagination
                        ),
@@ -1793,13 +1795,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                           delta = paint_height + source_consumed - box.height - descriptor.offset
 
                           HtmlValidator.reserve_render_resource(
-                            :max_layout_boxes,
+                            :max_entries,
                             2 * descendants + 2,
                             :pagination
                           )
 
                           HtmlValidator.reserve_render_resource(
-                            :max_table_grid_work,
+                            :max_work,
                             4 * descendants + 2,
                             :pagination
                           )
@@ -1849,7 +1851,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
                                 {:ok, targets} ->
                                   HtmlValidator.reserve_render_resource(
-                                    :max_table_grid_work,
+                                    :max_work,
                                     2 * length(targets),
                                     :pagination
                                   )
@@ -1859,7 +1861,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                                       offset = target.dy + paint_height - box.height
 
                                       HtmlValidator.check_render_resource(
-                                        :max_pdf_numeric_magnitude,
+                                        :max_numeric_magnitude,
                                         abs(offset),
                                         :pagination
                                       )
@@ -1937,7 +1939,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
       is_map(previous) and
         Enum.all?(previous, fn {identity, consumed} ->
           is_reference(identity) and is_number(consumed) and consumed >= 0 and
-            consumed <= Limits.get(:max_pdf_numeric_magnitude)
+            consumed <= Limits.get(:max_numeric_magnitude)
         end)
 
     if valid?,
@@ -2079,7 +2081,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
              column >= 0 and
              is_integer(part) and part >= 0 and is_number(height) and height >= 0 and
              is_number(offset) and offset >= 0 and offset <= height and
-             height <= Limits.get(:max_pdf_numeric_magnitude) do
+             height <= Limits.get(:max_numeric_magnitude) do
           :ok
         else
           cell_fragment_failure(
@@ -2209,10 +2211,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   # Actual selected outlines preserve italic and atomic overflow without an
   # invented horizontal ceiling. Native groups keep their existing transforms.
   defp table_paint_ink_bounds(boxes, depth \\ 1) do
-    HtmlValidator.check_render_resource(:max_drawing_group_depth, depth, :layout)
+    HtmlValidator.check_render_resource(:max_depth, depth, :layout)
 
     with {:ok, count} <- table_collection_size(boxes) do
-      HtmlValidator.reserve_render_resource(:max_table_grid_work, 3 * count, :layout)
+      HtmlValidator.reserve_render_resource(:max_work, 3 * count, :layout)
 
       Enum.reduce_while(boxes, {:ok, nil, count}, fn box, {:ok, union, count} ->
         result =
@@ -2226,7 +2228,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                     with {:ok, count} <- table_collection_size(children),
                          :ok <-
                            HtmlValidator.reserve_render_resource(
-                             :max_table_grid_work,
+                             :max_work,
                              count,
                              :layout
                            ) do
@@ -2255,7 +2257,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                        ),
                      :ok <-
                        HtmlValidator.reserve_render_resource(
-                         :max_table_grid_work,
+                         :max_work,
                          descendants + 1,
                          :layout
                        ),
@@ -2342,7 +2344,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
                       Enum.each(Tuple.to_list(bounds), fn value ->
                         HtmlValidator.check_render_resource(
-                          :max_pdf_numeric_magnitude,
+                          :max_numeric_magnitude,
                           abs(value),
                           :layout
                         )
@@ -2417,7 +2419,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                 Enum.each(
                   [intrinsic, minimum, baseline, inset_bottom],
                   &HtmlValidator.check_render_resource(
-                    :max_css_numeric_magnitude,
+                    :max_numeric_magnitude,
                     abs(&1),
                     :layout
                   )
@@ -2433,12 +2435,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
       if valid do
         with :ok <- validate_baseline_dependencies(placements) do
           HtmlValidator.check_render_resource(
-            :max_css_numeric_magnitude,
+            :max_numeric_magnitude,
             vertical_spacing,
             :layout
           )
 
-          HtmlValidator.reserve_render_resource(:max_table_grid_work, length(placements), :layout)
+          HtmlValidator.reserve_render_resource(:max_work, length(placements), :layout)
 
           row_geometry =
             Enum.with_index(rows, fn row, index ->
@@ -2490,7 +2492,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
               }
             end)
 
-          HtmlValidator.reserve_render_resource(:max_table_grid_work, row_count, :layout)
+          HtmlValidator.reserve_render_resource(:max_work, row_count, :layout)
 
           geometry_by_row =
             Map.new(Enum.with_index(row_geometry), fn {geometry, index} -> {index, geometry} end)
@@ -2517,7 +2519,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                 metric = Map.fetch!(metrics, key)
 
                 HtmlValidator.reserve_render_resource(
-                  :max_table_grid_work,
+                  :max_work,
                   index + placement.rowspan,
                   :layout
                 )
@@ -2531,7 +2533,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                     placement.rowspan
 
                 if extra > 0 do
-                  HtmlValidator.reserve_render_resource(:max_table_grid_work, row_count, :layout)
+                  HtmlValidator.reserve_render_resource(:max_work, row_count, :layout)
 
                   Enum.with_index(heights, fn height, row ->
                     if row >= index and row < index + placement.rowspan,
@@ -2548,7 +2550,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
           Enum.each(
             heights ++ Map.values(offsets),
-            &HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(&1), :layout)
+            &HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(&1), :layout)
           )
 
           baselines =
@@ -2582,7 +2584,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   end
 
   defp percentage_baseline_descendant?(node) do
-    HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
     if get_in(node, [:style, :display]) == :none do
       false
@@ -2631,7 +2633,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   end
 
   defp baseline_dependency(node) do
-    HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
     case node do
       %{style: %{display: :none}} ->
@@ -2672,7 +2674,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
               case table_collection_size(cells) do
                 {:ok, count} ->
                   HtmlValidator.reserve_render_resource(
-                    :max_table_grid_work,
+                    :max_work,
                     2 * count,
                     :layout
                   )
@@ -2721,7 +2723,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         {:ok, count}
 
       [_head | tail] ->
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, stage)
+        HtmlValidator.reserve_render_resource(:max_work, 1, stage)
         table_collection_size(tail, count + 1, stage)
 
       _ ->
@@ -2743,7 +2745,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                 Diagnostics.error(
                   :style,
                   :resource_limit_exceeded,
-                  "table #{name} exceeds max_css_numeric_magnitude; reduce the pixel value",
+                  "table #{name} exceeds max_numeric_magnitude; reduce the pixel value",
                   operation: :compute_style,
                   module: __MODULE__,
                   source: name <> "=" <> value
@@ -2781,7 +2783,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         {scopes, node_count, explicit_scopes} = table_preparation_scopes(children)
 
         if MapSet.size(scopes) > 0 do
-          HtmlValidator.reserve_render_resource(:max_table_model_work, node_count, :style)
+          HtmlValidator.reserve_render_resource(:max_work, node_count, :style)
 
           ids =
             Enum.reduce(explicit_scopes, %{}, fn scope, ids ->
@@ -2912,7 +2914,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                 span + column._table_spans.span
               end)
 
-            HtmlValidator.reserve_render_resource(:max_table_model_work, span, :style)
+            HtmlValidator.reserve_render_resource(:max_work, span, :style)
 
             {[%{source: node._document_order, column: width, colspan: span} | groups],
              width + span}
@@ -2959,7 +2961,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
           |> Enum.reduce({[], start + length(group_rows), width, %{}}, fn {row, y},
                                                                           {placed, height, width,
                                                                            occupied} ->
-            HtmlValidator.reserve_render_resource(:max_table_model_work, 1, :style)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :style)
 
             source_cells = Enum.filter(row.children, &(Map.get(&1, :tag) in ["td", "th"]))
 
@@ -2994,7 +2996,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                 }
 
                 HtmlValidator.reserve_render_resource(
-                  :max_table_model_work,
+                  :max_work,
                   colspan * rowspan,
                   :style
                 )
@@ -3021,7 +3023,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
               rowspan = height - cell.row
 
               HtmlValidator.reserve_render_resource(
-                :max_table_model_work,
+                :max_work,
                 cell.colspan * (rowspan - 1),
                 :style
               )
@@ -3042,7 +3044,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
             do: [],
             else: Enum.map(start..(height - 1), &%{row: &1, source: Map.get(actual_rows, &1)})
 
-        HtmlValidator.reserve_render_resource(:max_table_model_work, height - start, :style)
+        HtmlValidator.reserve_render_resource(:max_work, height - start, :style)
 
         groups =
           if group && height > start,
@@ -3090,7 +3092,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         end)
       end)
 
-    HtmlValidator.reserve_render_resource(:max_table_model_work, width * height, :style)
+    HtmlValidator.reserve_render_resource(:max_work, width * height, :style)
 
     uncovered =
       for y <- indices(height), x <- indices(width), not Map.has_key?(slots, {x, y}), do: {x, y}
@@ -3164,7 +3166,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   defp indices(count), do: if(count == 0, do: [], else: 0..(count - 1))
 
   defp next_logical_column(occupied, row, column) do
-    HtmlValidator.reserve_render_resource(:max_table_model_work, 1, :style)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :style)
 
     case Map.get(occupied, column, 0) do
       :infinity -> next_logical_column(occupied, row, column + 1)
@@ -3229,7 +3231,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     headers =
       Map.new(header_cells, fn cell ->
         HtmlValidator.reserve_render_resource(
-          :max_table_header_work,
+          :max_work,
           length(data) * 2 + 1,
           :style
         )
@@ -3260,7 +3262,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         case Map.fetch(cell.attributes, "headers") do
           {:ok, explicit} ->
             HtmlValidator.reserve_render_resource(
-              :max_table_header_work,
+              :max_work,
               byte_size(explicit),
               :style
             )
@@ -3311,7 +3313,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
               )
 
             HtmlValidator.reserve_render_resource(
-              :max_table_header_work,
+              :max_work,
               length(group_headers),
               :style
             )
@@ -3348,7 +3350,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     visits = if x < 0 or y < 0, do: 0, else: if(dx == 0, do: y + 1, else: x + 1)
 
     if visits > 0,
-      do: HtmlValidator.reserve_render_resource(:max_table_header_work, visits, :style)
+      do: HtmlValidator.reserve_render_resource(:max_work, visits, :style)
 
     # A data cell starts outside a header block. Slots beyond the last header
     # cannot alter that state, so jump over them after charging the original
@@ -3379,7 +3381,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     else
       if state.opaque != [] do
         HtmlValidator.reserve_render_resource(
-          :max_table_header_work,
+          :max_work,
           length(state.opaque),
           :style
         )
@@ -3499,7 +3501,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
                       with {:ok, span} <- validated_span(column, "span") do
                         HtmlValidator.reserve_render_resource(
-                          :max_table_grid_work,
+                          :max_work,
                           span,
                           :layout
                         )
@@ -3721,7 +3723,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
       if Map.get(Map.get(hd(siblings), :style, %{}), :display) in proper do
         siblings
       else
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, length(siblings), :layout)
+        HtmlValidator.reserve_render_resource(:max_work, length(siblings), :layout)
         [anonymous_table_box(parent_style, display, siblings)]
       end
     end)
@@ -3757,7 +3759,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         missing =
           if count == 0, do: [], else: Enum.reject(0..(count - 1), &MapSet.member?(covered, &1))
 
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, length(missing), :layout)
+        HtmlValidator.reserve_render_resource(:max_work, length(missing), :layout)
 
         cells =
           Enum.map(missing, fn column ->
@@ -3942,7 +3944,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
         )
       )
 
-    HtmlValidator.reserve_render_resource(:max_table_grid_work, length(keys), :layout)
+    HtmlValidator.reserve_render_resource(:max_work, length(keys), :layout)
 
     Enum.reduce(keys, edges, fn {key, side}, acc ->
       # Row/column borders do not cut through the interior of a spanning cell.
@@ -4040,7 +4042,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], %{}}, fn {{row, group_length}, row_index},
                                             {:ok, prepared, occupied} ->
-      HtmlValidator.reserve_render_resource(:max_table_grid_work, 1 + map_size(occupied), :layout)
+      HtmlValidator.reserve_render_resource(:max_work, 1 + map_size(occupied), :layout)
 
       active = for {column, end_row} <- occupied, end_row > row_index, do: column
 
@@ -4058,7 +4060,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
                 else: min(requested_rowspan, group_length)
 
             column = next_free_column(occupied, row_index, next_column)
-            HtmlValidator.reserve_render_resource(:max_table_grid_work, colspan, :layout)
+            HtmlValidator.reserve_render_resource(:max_work, colspan, :layout)
 
             overlap =
               Enum.find(column..(column + colspan - 1), &(Map.get(occupied, &1, 0) > row_index))
@@ -4116,7 +4118,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   end
 
   defp next_free_column(occupied, row_index, column) do
-    HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
     if Map.get(occupied, column, 0) > row_index,
       do: next_free_column(occupied, row_index, column + 1),

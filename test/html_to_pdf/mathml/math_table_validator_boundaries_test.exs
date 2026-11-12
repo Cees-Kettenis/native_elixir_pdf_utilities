@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
   use ExUnit.Case, async: false
 
+  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout, ResourceContext}
 
@@ -88,7 +89,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
   end
 
   test "resolved font-relative padding is bounded after multiplication", %{style: style} do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 100))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 100))
 
     deferred =
       Map.put(style, :padding, %{top: {:math_cell_em, 6}, right: 0.0, bottom: 0.0, left: 0.0})
@@ -221,7 +222,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
       | children: Enum.map(source.children, &%{&1 | style: Map.put(&1.style, :height, 80.0)})
     }
 
-    Limits.install(Map.put(limits, :max_css_numeric_magnitude, 100))
+    Limits.install(Map.put(limits, :max_numeric_magnitude, 100))
     assert {:error, {_, diagnostic}} = MathLayout.measure(source)
     assert diagnostic.stage == :layout and diagnostic.message != ""
   end
@@ -270,15 +271,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     padding = %{top: 0.0, right: 8.0, bottom: 0.0, left: 8.0}
     node = matrix([[cell("1", style, padding), cell("2", style, padding)]], style)
     assert {:ok, _} = MathLayout.measure(node)
-    Limits.install(Map.put(limits, :max_css_numeric_magnitude, 30))
+    Limits.install(Map.put(limits, :max_numeric_magnitude, 30))
     assert {:error, {:unsupported_html, diagnostic}} = MathLayout.measure(node)
     assert diagnostic.source == "mtable" and diagnostic.message =~ "decorated box extents"
     assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
 
-    Limits.install(Map.put(limits, :max_table_grid_work, 8))
+    Limits.install(Map.put(limits, :max_work, 8))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = MathLayout.measure(node)
     assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "bounded span-one preparation admits ragged prefixes and diagnoses gapped public state", %{
@@ -334,27 +335,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
 
     assert {:ok, child} = MathLayout.measure(token("1", style))
 
-    # One row/cell pair costs2; geometry costs10; row paint eligibility costs1.
-    Limits.install(Map.put(limits, :max_table_grid_work, 13))
-    assert {:ok, expected} = MathTableValidator.prepare_geometry(prepared, [[child]])
-    Limits.install(Map.put(limits, :max_table_grid_work, 12))
+    assert {{:ok, expected}, work} =
+             ResourceBudget.measure(:max_work, fn ->
+               MathTableValidator.prepare_geometry(prepared, [[child]])
+             end)
+
+    Limits.install(Map.put(limits, :max_work, work))
+    assert {:ok, ^expected} = MathTableValidator.prepare_geometry(prepared, [[child]])
+    Limits.install(Map.put(limits, :max_work, work - 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathTableValidator.prepare_geometry(prepared, [[child]])
 
     assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
     Limits.install(limits)
     assert {:ok, ^expected} = MathTableValidator.prepare_geometry(prepared, [[child]])
 
     malformed = %{prepared | rows: [[%{hd(hd(prepared.rows)) | style: nil}]]}
-    Limits.install(Map.put(limits, :max_table_grid_work, 1))
+    Limits.install(Map.put(limits, :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathTableValidator.prepare_geometry(malformed, [[child]])
 
-    assert diagnostic.message =~ "max_table_grid_work"
-    Limits.install(Map.put(limits, :max_table_grid_work, 2))
+    assert diagnostic.message =~ "max_work"
+    Limits.install(limits)
 
     assert {:error, {:unsupported_html, diagnostic}} =
              MathTableValidator.prepare_geometry(malformed, [[child]])
@@ -364,13 +369,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     # Two authored empty rows are already over a one-row budget, even when
     # the caller's measured shape is malformed and cannot be paired.
     oversized = %{prepared | rows: [[], []]}
-    Limits.install(Map.put(limits, :max_table_grid_work, 1))
+    Limits.install(Map.put(limits, :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathTableValidator.prepare_geometry(oversized, [])
 
     assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
-    Limits.install(Map.put(limits, :max_table_grid_work, 2))
+    Limits.install(limits)
 
     assert {:error, {:unsupported_html, diagnostic}} =
              MathTableValidator.prepare_geometry(oversized, [])
@@ -413,15 +418,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     row = %{row | style: Map.put(row.style, :background_color, {1, 1, 0})}
     assert {:ok, prepared} = MathLayoutValidator.prepare_element(%{node | children: [row]}, %{})
     assert {:ok, child} = MathLayout.measure(token("1", style))
-    Limits.install(Map.put(limits, :max_table_grid_work, 14))
-    assert {:ok, geometry} = MathTableValidator.prepare_geometry(prepared, [[child]])
+
+    assert {{:ok, geometry}, work} =
+             ResourceBudget.measure(:max_work, fn ->
+               MathTableValidator.prepare_geometry(prepared, [[child]])
+             end)
+
+    Limits.install(Map.put(limits, :max_work, work))
+    assert {:ok, ^geometry} = MathTableValidator.prepare_geometry(prepared, [[child]])
     assert length(geometry.row_backgrounds) == 1
-    Limits.install(Map.put(limits, :max_table_grid_work, 13))
+    Limits.install(Map.put(limits, :max_work, work - 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathTableValidator.prepare_geometry(prepared, [[child]])
 
-    assert diagnostic.message =~ "max_table_grid_work" and diagnostic.operation == :measure_math
+    assert diagnostic.message =~ "max_work" and diagnostic.operation == :measure_math
   end
 
   test "shared CSS matrix measurement preserves layout budget diagnostics", %{style: style} do
@@ -431,13 +442,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     source =
       matrix([[cell("1", style, zero)]], Map.merge(style, %{table_layout: :fixed, width: 80.0}))
 
-    Limits.install(Map.put(Limits.effective(), :max_layout_boxes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
                MathLayout.measure(source, %{resource_context: context})
              end)
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_entries"
   end
 end

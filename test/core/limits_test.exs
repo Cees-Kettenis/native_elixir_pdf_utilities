@@ -19,7 +19,7 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
   end
 
   test "HTML protocol span bounds remain fixed when resource limits are raised" do
-    Limits.install(Map.put(Limits.effective(), :max_layout_cardinality, 70_000))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 70_000))
 
     assert {:ok, 65_534} =
              HtmlValidator.validate_table_span_attribute(%{"rowspan" => "99999"}, "rowspan")
@@ -30,7 +30,7 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert {:ok, 1_000} =
              HtmlValidator.validate_table_span_attribute(%{"span" => "99999"}, "span")
 
-    Limits.install(Map.put(Limits.effective(), :max_layout_cardinality, 2))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.validate_table_span_attribute(%{"rowspan" => "3"}, "rowspan")
@@ -42,96 +42,92 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
                "<table><colgroup span=3></colgroup><tr><td>Column limit</td></tr></table>"
              )
 
-    assert column_diagnostic.stage == :limits and
-             column_diagnostic.reason == :resource_limit_exceeded
-
-    assert column_diagnostic.operation == :render and column_diagnostic.message =~ "2-item limit"
+    assert column_diagnostic.reason == :resource_limit_exceeded
+    assert column_diagnostic.operation == :render and column_diagnostic.message =~ "max_entries"
     alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
     cell = %{tag: "td", style: %{display: :table_cell, colspan: 3}, children: []}
     row = %{tag: "tr", style: %{display: :table_row}, children: [cell]}
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlTableValidator.form([row])
     assert diagnostic.source == "td"
-    Limits.install(Map.put(Limits.effective(), :max_table_grid_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render("<table><tr><td>Work</td></tr></table>")
 
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 
-  test "chosen image budget failures preserve the selected resource diagnostic" do
+  test "the shared source budget rejects the first source before later image preparation" do
     png =
       Base.decode64!(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNg+A8AAQIBAM9Vq9EAAAAASUVORK5CYII="
       )
 
-    Limits.install(Map.put(Limits.effective(), :max_image_source_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render("<img srcset='chosen 2x'>",
                assets: %{"chosen" => {:bytes, png}}
              )
 
-    assert diagnostic.source == "chosen" and diagnostic.message =~ "image"
+    assert diagnostic.stage == :html and diagnostic.operation == :render
+    assert diagnostic.message =~ "HTML input exceeds max_input_bytes"
   end
 
   test "responsive candidate and print predicate complexity use centralized limits" do
     alias NativeElixirPdfUtilities.HtmlToPdf
     original = Limits.effective()
-    Limits.install(Map.put(original, :max_responsive_image_candidates, 2))
+    Limits.install(Map.put(original, :max_entries, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<img srcset='a 1x, b 2x, c 3x'>")
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_responsive_image_candidates"
-    Limits.install(Map.put(original, :max_media_query_depth, 2))
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
+    Limits.install(Map.put(original, :max_depth, 2))
 
     html =
       "<picture style='display:block'><source media='((((width:20px))))' srcset=a><img src=b></picture>"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :style and diagnostic.message =~ "max_media_query_depth"
-    Limits.install(Map.put(original, :max_html_numeric_token_bytes, 3))
+    assert diagnostic.message =~ "max_depth"
+    Limits.install(Map.put(original, :max_numeric_token_bytes, 3))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<img srcset='a 1234w'>")
 
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "gauge numeric work and artwork use existing centralized resource budgets" do
-    Limits.install(Map.put(Limits.effective(), :max_html_numeric_token_bytes, 3))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 3))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render("<meter value='1234'></meter>")
 
     assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
-    Limits.install(Map.put(Limits.defaults(), :max_layout_boxes, 2))
+    assert diagnostic.message =~ "max_numeric_token_bytes"
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render("<progress value=.5></progress>")
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.operation == :render and diagnostic.message =~ "max_entries"
   end
 
   test "uses every built-in default when no overrides are configured" do
     assert {:ok, defaults} = LimitsValidator.validate([])
     assert defaults == Limits.defaults()
     assert Limits.effective() == Limits.defaults()
-    assert defaults.max_svg_bytes == 5_000_000
-    assert map_size(defaults) == 185
-    assert defaults.max_font_name_bytes == 1_000_000
-    assert defaults.max_font_subset_bytes == 40_000_000
-    assert defaults.max_font_subset_checksum_work == 10_000_000
-    assert defaults.max_svg_turbulence_octaves == 16
-    assert defaults.max_clip_expression_depth == 256
-    assert defaults.max_css_transform_operations == 1_000
-    assert defaults.max_svg_raster_pixels == 16_777_216
-    assert defaults.max_clip_projection_work == 2_000_000
-    assert defaults.clip_curve_precision == 1_024
-    assert defaults.max_frameset_tracks == 1_024
-    assert defaults.max_frameset_cells == 65_536
+    assert map_size(defaults) == 21
+    assert defaults.max_input_bytes == 50_000_000
+    assert defaults.max_output_bytes == 50_000_000
+    assert defaults.max_decoded_bytes == 100_000_000
+    assert defaults.max_entries == 1_000_000
+    assert defaults.max_work == 1_000_000_000
+    assert defaults.max_depth == 1_000
+    assert defaults.max_cache_bytes == 100_000_000
+    assert defaults.max_raster_pixels == 134_217_728
+    assert defaults.max_raster_work == 250_000_000_000
   end
 
   test "the public key type exactly describes every accepted limit" do
@@ -147,11 +143,7 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
 
   test "accepts a partial override for every configurable resource limit" do
     Enum.each(Limits.defaults(), fn {key, default} ->
-      configured =
-        case key do
-          :max_cid_width_entries -> default - 1
-          _ -> default + 1
-        end
+      configured = default + 1
 
       assert {:ok, limits} = LimitsValidator.validate([{key, configured}])
       assert limits[key] == configured
@@ -173,14 +165,14 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
       assert HtmlValidator.parse_html_integer(source) == :error
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_html_numeric_token_bytes, 3))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 3))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render("<ol start='1234'><li>A</li></ol>")
 
     assert diagnostic.stage == :html
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
     assert diagnostic.source == "1234"
     assert diagnostic.operation == :render
 
@@ -196,56 +188,31 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert unknown_message =~ ":max_typo_bytes"
 
     assert {:error, "resource limit keys must not be repeated"} =
-             LimitsValidator.validate(max_svg_bytes: 1, max_svg_bytes: 2)
+             LimitsValidator.validate(max_input_bytes: 1, max_input_bytes: 2)
 
     for value <- [0, -1, :infinity, 9_223_372_036_854_775_808] do
-      assert {:error, value_message} = LimitsValidator.validate(max_svg_bytes: value)
-      assert value_message =~ ":max_svg_bytes"
+      assert {:error, value_message} = LimitsValidator.validate(max_input_bytes: value)
+      assert value_message =~ ":max_input_bytes"
     end
   end
 
-  test "rejects inconsistent aggregate, object-stream, and CID limits" do
-    assert {:error, source_message} =
-             LimitsValidator.validate(
-               max_image_source_bytes: 10,
-               max_aggregate_image_source_bytes: 9
-             )
+  test "shared budgets require no paired per-feature settings or configurable format bounds" do
+    for key <- [:max_input_bytes, :max_decoded_bytes, :max_entries] do
+      assert {:ok, limits} = LimitsValidator.validate([{key, 2}])
+      assert limits[key] == 2
+    end
 
-    assert source_message =~ ":max_aggregate_image_source_bytes"
-
-    assert {:error, decoded_message} =
-             LimitsValidator.validate(
-               max_decoded_image_bytes: 10,
-               max_aggregate_decoded_image_bytes: 9
-             )
-
-    assert decoded_message =~ ":max_aggregate_decoded_image_bytes"
-
-    assert {:error, object_message} =
-             LimitsValidator.validate(
-               max_pdf_objects: 10,
-               max_pdf_object_stream_entries: 11
-             )
-
-    assert object_message =~ ":max_pdf_object_stream_entries"
-
-    assert {:error, info_message} =
-             LimitsValidator.validate(
-               max_pdf_info_value_bytes: 10,
-               max_pdf_info_total_bytes: 9
-             )
-
-    assert info_message =~ ":max_pdf_info_total_bytes"
-
-    assert {:error, cid_message} = LimitsValidator.validate(max_cid_width_entries: 65_537)
-    assert cid_message =~ "PDF CID range"
+    # PDF CID bounds belong to the format and remain fixed independently of this collection allowance.
+    assert {:ok, %{max_entries: 100_000}} = LimitsValidator.validate(max_entries: 100_000)
+    assert {:error, message} = LimitsValidator.validate(max_cid_width_entries: 65_537)
+    assert message =~ "unknown resource limit keys"
   end
 
   test "all receive timeout settings share the runtime's inclusive range" do
     for key <- [
           :max_operation_timeout_ms,
           :operation_memory_check_interval_ms,
-          :max_html_form_value_timeout_ms
+          :max_operation_timeout_ms
         ] do
       for value <- [1, 4_294_967_295] do
         assert {:ok, limits} = LimitsValidator.validate([{key, value}])
@@ -270,7 +237,7 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     for key <- [
           :max_operation_timeout_ms,
           :operation_memory_check_interval_ms,
-          :max_html_form_value_timeout_ms
+          :max_operation_timeout_ms
         ] do
       Application.put_env(:native_elixir_pdf_utilities, :limits, [{key, 4_294_967_296}])
 
@@ -284,16 +251,14 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
 
   test "installed overrides are enforced by each major validation boundary" do
     configured = [
-      max_svg_bytes: 10,
-      max_layout_cardinality: 2,
-      max_pdf_input_bytes: 8,
-      max_merge_inputs: 1
+      max_input_bytes: 8,
+      max_entries: 1
     ]
 
     assert {:ok, limits} = LimitsValidator.validate(configured)
     assert :ok = Limits.install(limits)
     assert Limits.effective() == limits
-    assert Limits.get(:max_svg_bytes) == 10
+    assert Limits.get(:max_input_bytes) == 8
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              HtmlValidator.validate_svg_raster(String.duplicate("x", 11), [])
@@ -315,11 +280,11 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
       Application.put_env(:native_elixir_pdf_utilities, :limits, original_config)
     end)
 
-    Application.put_env(:native_elixir_pdf_utilities, :limits, max_svg_bytes: 0)
+    Application.put_env(:native_elixir_pdf_utilities, :limits, max_input_bytes: 0)
 
     assert {:error, {:invalid_limits_configuration, message}} =
              LibraryApplication.start(:normal, [])
 
-    assert message =~ ":max_svg_bytes"
+    assert message =~ ":max_input_bytes"
   end
 end

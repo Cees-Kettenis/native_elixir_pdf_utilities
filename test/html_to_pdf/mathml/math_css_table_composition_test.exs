@@ -137,7 +137,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathCssTableCompositionTest do
       <mtd><mn>34</mn></mtd></mtr></mtable></math>
       """
 
-      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, pdf} =
+               HtmlToPdf.render(html, system_font_discovery: false, compress_streams: false)
+
       assert {:ok, text} = Text.extract(pdf, layout: false)
       assert text == "3412"
       assert {:ok, document} = Text.extract_spans(pdf)

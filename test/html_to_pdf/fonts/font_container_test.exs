@@ -290,7 +290,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontContainerTest do
     ttc: ttc
   } do
     limits = Limits.effective()
-    Limits.install(%{limits | max_font_cmap_work: 1})
+    Limits.install(%{limits | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              FontValidator.with_budget(fn ->
@@ -299,22 +299,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontContainerTest do
                })
              end)
 
-    assert message =~ "max_font_cmap_work"
-    Limits.install(%{limits | max_font_decoded_bytes: 1})
+    assert message =~ "max_work"
+    Limits.install(%{limits | max_decoded_bytes: 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = FontContainerValidator.prepare(woff)
-    assert diagnostic.message =~ "max_font_decoded_bytes"
-    Limits.install(%{limits | max_font_container_work: 1})
+    assert diagnostic.message =~ "max_decoded_bytes"
+    Limits.install(%{limits | max_work: 1})
 
     for data <- [woff, ttc] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                FontContainerValidator.prepare(data)
 
-      assert diagnostic.message =~ "max_font_container_work"
+      assert diagnostic.message =~ "max_work"
     end
 
-    Limits.install(%{limits | max_font_candidates: 1})
+    Limits.install(%{limits | max_entries: 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = FontContainerValidator.prepare(ttc)
-    assert diagnostic.message =~ "max_font_candidates"
+    assert diagnostic.message =~ "max_entries"
   end
 
   defp replace_u32(data, offset, value), do: replace_bytes(data, offset, <<value::32>>)

@@ -27,18 +27,22 @@ defmodule NativeElixirPdfUtilities.InfoTest do
         "/Info 4 0 R"
       )
 
-    Limits.install(%{original | max_pdf_container_entries: 8})
+    assert {:ok, context} = Reader.read_validated(source)
+    assert {:ok, replacement} = InfoValidator.prepare_patch(title: "new")
+    assert {:ok, addition} = InfoValidator.prepare_patch(author: "extra")
+    assert {:ok, removal} = InfoValidator.prepare_patch(title: nil, author: "replacement")
+    Limits.install(%{original | max_entries: 8})
+    assert {:ok, _} = InfoValidator.prepare_write(context, replacement)
 
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             InfoValidator.prepare_write(context, addition)
+
+    assert diagnostic.stage == :limits and diagnostic.message =~ "max_entries"
+    assert {:ok, _} = InfoValidator.prepare_write(context, removal)
+    Limits.install(original)
     assert {:ok, updated} = Info.put(source, title: "new")
     assert {:ok, %{title: "new"}} = Info.get(updated)
     assert {:ok, _} = Reader.read(updated)
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Info.put(source, author: "extra")
-    assert diagnostic.stage == :limits
-    assert diagnostic.operation == :put_info
-    assert diagnostic.module == Info
-    assert diagnostic.message =~ "max_pdf_container_entries"
-
     assert {:ok, replaced} = Info.put(source, title: nil, author: "replacement")
     assert {:ok, %{author: "replacement", title: nil}} = Info.get(replaced)
   end
@@ -205,7 +209,7 @@ defmodule NativeElixirPdfUtilities.InfoTest do
       assert diagnostic.message =~ "UserUnit" or diagnostic.message =~ "geometry"
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_pdf_numeric_magnitude, 1.0e308))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 1.0e308))
 
     assert {:error, {:invalid_pdf_input, diagnostic}} =
              Info.page_sizes(page.("1" <> String.duplicate("0", 307) <> ".0"))
@@ -221,7 +225,7 @@ defmodule NativeElixirPdfUtilities.InfoTest do
 
   test "physical size preparation rejects conversion and underflow while preserving exact extents" do
     huge = Integer.pow(10, 400)
-    Limits.install(Map.put(Limits.effective(), :max_pdf_numeric_magnitude, huge))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, huge))
 
     for {box, unit} <- [
           {"0 0 #{huge} 1", "1"},
@@ -503,7 +507,7 @@ defmodule NativeElixirPdfUtilities.InfoTest do
     limits = Limits.effective()
 
     for maximum <- [3, 100, 200], leaf <- ["0", "[]", "<< >>"] do
-      Limits.install(%{limits | max_pdf_value_depth: maximum})
+      Limits.install(%{limits | max_depth: maximum})
       leaf_depth = if leaf == "0", do: 0, else: 1
 
       nested =
@@ -530,18 +534,18 @@ defmodule NativeElixirPdfUtilities.InfoTest do
 
   test "metadata preparation and public updates report the configured PDF depth limit" do
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_value_depth: 3})
+    Limits.install(%{limits | max_depth: 3})
 
     source = pdf(base_objects() ++ [{4, "<< /Custom [[]] >>"}], "/Info 4 0 R")
     assert {:ok, context} = Reader.read_validated(source)
-    Limits.install(%{limits | max_pdf_value_depth: 2})
+    Limits.install(%{limits | max_depth: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              InfoValidator.prepare_write(context, %{})
 
     assert diagnostic.stage == :limits
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message == "PDF value nesting depth exceeds the 2-level limit"
+    assert diagnostic.message == "PDF value nesting depth exceeds max_depth (2-level limit)"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Info.put(source, title: "Updated")
     assert diagnostic.stage == :limits
@@ -555,15 +559,14 @@ defmodule NativeElixirPdfUtilities.InfoTest do
 
     Limits.install(%{
       original_limits
-      | max_pdf_info_value_bytes: 4,
-        max_pdf_info_total_bytes: 6
+      | max_decoded_bytes: 6
     })
 
     pdf = pdf(base_objects())
 
     assert {:error,
             {:resource_limit_exceeded, %{stage: :limits, operation: :put_info, module: Info}}} =
-             Info.put(pdf, title: "12345")
+             Info.put(pdf, title: "1234567")
 
     assert {:error,
             {:resource_limit_exceeded, %{stage: :limits, operation: :put_info, module: Info}}} =
@@ -581,23 +584,38 @@ defmodule NativeElixirPdfUtilities.InfoTest do
       )
 
     original_limits = Limits.effective()
-    Limits.install(%{original_limits | max_pdf_objects: 7})
+    assert {:ok, context} = Reader.read_validated(source)
+    Limits.install(%{original_limits | max_entries: 7})
 
+    assert :ok =
+             InfoValidator.validate_incremental_object_capacity(
+               context.document.trailer,
+               context.document.xref
+             )
+
+    Limits.install(%{original_limits | max_entries: 6})
+
+    assert :ok =
+             PdfValidator.validate_object_capacity(
+               map_size(context.document.xref),
+               context.document.trailer["Size"]
+             )
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             InfoValidator.validate_incremental_object_capacity(
+               context.document.trailer,
+               context.document.xref
+             )
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.message == "PDF object count cannot accommodate an information update"
+
+    assert {:error, {:resource_limit_exceeded, %{operation: :put_info, module: Info}}} =
+             Info.put(source, title: "At the boundary")
+
+    Limits.install(original_limits)
     assert {:ok, updated} = Info.put(source, title: "Within the boundary")
     assert {:ok, _document} = Reader.read(updated)
-
-    Limits.install(%{original_limits | max_pdf_objects: 6})
-
-    assert {:ok, _document} = Reader.read(source)
-
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{
-               stage: :limits,
-               operation: :put_info,
-               module: Info,
-               message: "PDF object count cannot accommodate an information update"
-             }}} = Info.put(source, title: "At the boundary")
   end
 
   test "internal validation and incremental writing reject malformed prepared contexts" do
@@ -674,7 +692,7 @@ defmodule NativeElixirPdfUtilities.InfoTest do
              InfoWriter.write(context, malformed_dictionary)
 
     original_limits = Limits.effective()
-    Limits.install(%{original_limits | max_pdf_objects: 2})
+    Limits.install(%{original_limits | max_entries: 2})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              InfoWriter.write(context, %{})

@@ -71,7 +71,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGaussianSourceValidationTest do
   end
 
   test "Gaussian scalars use the existing central numeric magnitude bound" do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 2))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 2))
 
     assert :ok =
              SvgFilterValidator.validate_source_attributes("feGaussianBlur", %{

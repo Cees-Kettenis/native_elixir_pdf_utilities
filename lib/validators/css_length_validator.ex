@@ -285,7 +285,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssLengthValidator do
   @doc "Checks computed box calculations before layout consumes their containing-width dependencies."
   @spec validate_style(map(), String.t()) :: :ok | {:error, {atom(), map()}}
   def validate_style(style, source) do
-    maximum = NativeElixirPdfUtilities.Limits.get(:max_css_numeric_magnitude)
+    maximum = NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude)
 
     plain? =
       plain_edges?(Map.get(style, :margin), false, -maximum, maximum) and

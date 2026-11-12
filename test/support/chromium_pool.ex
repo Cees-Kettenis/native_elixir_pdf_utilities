@@ -76,6 +76,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
       "--no-sandbox",
       "--disable-gpu",
       "--disable-dev-shm-usage",
+      # Keep fresh profiles from starting updater and background network work.
+      # Document requests still participate in the normal readiness checks.
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--no-first-run",
       "--allow-file-access-from-files",
       "--remote-debugging-pipe",
       "--user-data-dir=#{profile}"

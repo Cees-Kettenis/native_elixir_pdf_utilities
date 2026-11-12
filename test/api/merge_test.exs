@@ -107,12 +107,16 @@ defmodule NativeElixirPdfUtilities.MergeTest do
   end
 
   test "rejects excessive merge work before parsing any input" do
+    original = Limits.effective()
+    Limits.install(%{original | max_entries: 100})
+
     assert {:error, {:resource_limit_exceeded, count_diagnostic}} =
              Merge.merge(List.duplicate("not a PDF", 101))
 
     assert count_diagnostic.stage == :limits
     assert count_diagnostic.message == "merge input count exceeds the limit"
 
+    Limits.install(original)
     shared_input = :binary.copy("x", 1_000_001)
 
     assert {:error, {:resource_limit_exceeded, bytes_diagnostic}} =
@@ -122,14 +126,13 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert bytes_diagnostic.message == "aggregate merge input bytes exceed the limit"
   end
 
-  test "merged page counts honor the stricter general or merge-specific cap" do
+  test "merged page counts honor the shared page allowance" do
     source = File.read!(Path.join(@fixture_directory, "classic-xref.pdf"))
     original = Limits.effective()
 
-    for {pdf_limit, merge_limit} <- [{1, 3}, {3, 1}, {2, 3}, {3, 2}, {2, 2}] do
-      Limits.install(%{original | max_pdf_pages: pdf_limit, max_merged_pages: merge_limit})
+    for limit <- [1, 2, 3] do
+      Limits.install(%{original | max_pages: limit})
       assert {:ok, %{pages: [_]}} = Reader.read_validated(source)
-      limit = min(pdf_limit, merge_limit)
 
       for count <- Enum.uniq([max(limit - 1, 1), limit, limit + 1]) do
         inputs = List.duplicate(source, count)
@@ -142,7 +145,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
             assert diagnostic.operation == :merge
             assert diagnostic.module == Merge
             assert diagnostic.message =~ "#{count} pages"
-            assert diagnostic.message =~ "min(max_pdf_pages, max_merged_pages) (#{limit})"
+            assert diagnostic.message =~ "max_pages (#{limit})"
 
           false ->
             assert {:ok, output} = Merge.merge(inputs)
@@ -153,7 +156,7 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     end
   end
 
-  test "rejects a merged xref that would exceed the readable object count" do
+  test "merging respects the shared parsing allowance and remapping retains its capacity guard" do
     source =
       merge_pdf([
         {1, "<< /Type /Catalog /Pages 2 0 R >>"},
@@ -161,44 +164,35 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"}
       ])
 
-    original_limits = Limits.effective()
+    original = Limits.effective()
 
-    Limits.install(%{
-      original_limits
-      | max_pdf_objects: 6,
-        max_merged_objects: 6
-    })
+    assert {{:ok, _}, used} =
+             NativeElixirPdfUtilities.Operation.run(__MODULE__, :entry_measurement, fn ->
+               result = Merge.merge([source])
 
+               used =
+                 original.max_entries -
+                   NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(
+                     :max_entries
+                   )
+
+               {result, used}
+             end)
+
+    Limits.install(%{original | max_entries: used})
     assert {:ok, merged} = Merge.merge([source])
-    assert {:ok, _document} = Reader.read(merged)
+    Limits.install(original)
+    assert {:ok, _} = Reader.read(merged)
 
-    Limits.install(%{
-      original_limits
-      | max_pdf_objects: 5,
-        max_merged_objects: 5
-    })
+    Limits.install(%{original | max_entries: used - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Merge.merge([source])
+    assert diagnostic.stage == :limits and diagnostic.operation == :merge
+    assert diagnostic.message =~ "max_entries"
 
-    assert {:ok, _document} = Reader.read(source)
-
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{
-               stage: :limits,
-               operation: :merge,
-               message: "merged object count exceeds the limit"
-             }}} = Merge.merge([source])
-
-    Limits.install(%{
-      original_limits
-      | max_pdf_objects: 2,
-        max_merged_objects: 2
-    })
+    Limits.install(%{original | max_entries: 2})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
-             MergeValidator.prepare_remapping(
-               [%{objects: [], pages: [], inherited: %{}}],
-               3
-             )
+             MergeValidator.prepare_remapping([%{objects: [], pages: [], inherited: %{}}], 3)
   end
 
   test "preserves preparation-stage outline limits and identifies the failing input" do
@@ -216,16 +210,15 @@ defmodule NativeElixirPdfUtilities.MergeTest do
              ])
 
     original = Limits.effective()
+    assert {:ok, context} = Reader.read_validated(outlined)
 
     for {limit, value, message} <- [
-          {:max_pdf_outline_items, 1, "outline item count exceeds the limit"},
-          {:max_pdf_outline_depth, 1, "outline nesting depth exceeds the limit"},
-          {:max_pdf_outline_title_bytes, 5, "outline title exceeds the byte limit"},
-          {:max_pdf_outline_total_title_bytes, 6,
-           "aggregate outline title bytes exceed the limit"}
+          {:max_entries, 1, "outline item count exceeds the limit"},
+          {:max_depth, 1, "outline nesting depth exceeds the limit"},
+          {:max_decoded_bytes, 5, "outline title exceeds the byte limit"},
+          {:max_decoded_bytes, 6, "aggregate outline title bytes exceed the limit"}
         ] do
       Limits.install(Map.put(original, limit, value))
-      assert {:ok, context} = Reader.read_validated(outlined)
 
       assert {:error, {:resource_limit_exceeded, original_diagnostic}} =
                MergeValidator.prepare(context)
@@ -236,14 +229,17 @@ defmodule NativeElixirPdfUtilities.MergeTest do
       for inputs <- [[outlined], [source, outlined]] do
         assert {:error, {:resource_limit_exceeded, diagnostic}} = Merge.merge(inputs)
 
-        assert diagnostic ==
-                 Map.merge(original_diagnostic, %{
-                   operation: :merge,
-                   module: Merge,
-                   source: "merge input #{length(inputs)}"
-                 })
+        # The same shared ceiling can reject the reader before outline preparation.
+        # Both paths must retain the public operation and failing input context.
+        assert diagnostic.operation == :merge and diagnostic.module == Merge
 
-        assert diagnostic.reason == :resource_limit_exceeded
+        if limit == :max_entries and length(inputs) > value do
+          assert diagnostic.message == "merge input count exceeds the limit"
+        else
+          assert String.starts_with?(diagnostic.source, "merge input ")
+        end
+
+        assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
       end
     end
   end

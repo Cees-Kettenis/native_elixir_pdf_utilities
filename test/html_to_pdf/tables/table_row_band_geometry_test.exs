@@ -59,7 +59,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableRowBandGeometryTest do
   test "grid quota rejects canonical span plans before band allocation", %{rows: rows} do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_table_grid_work: 1})
+    Limits.install(%{limits | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlTableValidator.prepare_row_band_geometry(rows, [10.0, 20.0, 30.0], 0.0)
@@ -67,6 +67,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableRowBandGeometryTest do
     assert diagnostic.stage == :layout
     assert diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 end

@@ -41,4 +41,4 @@ retain their original reason, stage, and message, with `:operation` set to
 such as `"merge input 2"`. No partial merged PDF is returned.
 
 See [supported PDF inputs](pdf-reader.md#supported-inputs) and
-[merge limits](resource-limits.md#merging-and-splitting).
+[merge limits](resource-limits.md#shared-processing-budgets).

@@ -213,4 +213,4 @@ Earlier values and attachments can remain in PDF history. Flattening is not secu
 
 Inspection and edits do not sanitize a PDF. Apply your own upload policy before sharing it.
 
-[Resource limits](resource-limits.md#forms-and-attachments) · [Attachments](pdf-attachments.md).
+[Resource limits](resource-limits.md#shared-processing-budgets) · [Attachments](pdf-attachments.md).

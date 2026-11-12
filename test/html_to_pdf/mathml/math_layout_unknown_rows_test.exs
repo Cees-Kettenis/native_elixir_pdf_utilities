@@ -163,11 +163,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
 
     assert {:ok, "1"} = Text.extract(pdf, layout: false)
 
-    Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              styled_math("<math><equation-data><mn>12</mn></equation-data></math>")
 
-    assert diagnostic.stage == :font and diagnostic.message =~ "max_font_math_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 end

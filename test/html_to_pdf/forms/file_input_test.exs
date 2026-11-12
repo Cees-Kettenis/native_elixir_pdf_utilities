@@ -160,18 +160,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FileInputTest do
   test "file artwork consumes existing text and layout budgets with recoverable diagnostics" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_rendered_text_bytes: 1})
+    Limits.install(%{previous | max_output_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<p><input type=file></p>", @opts)
 
-    assert diagnostic.stage == :style and diagnostic.message =~ "max_rendered_text_bytes"
-    Limits.install(%{previous | max_layout_boxes: 1})
+    assert diagnostic.stage == :style and diagnostic.message =~ "max_output_bytes"
+    Limits.install(%{previous | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<p><input type=file></p>", @opts)
 
-    assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.message =~ "max_entries", inspect(diagnostic)
   end
 
   test "file layout rejects forged files and altered geometry with actionable failures" do

@@ -33,6 +33,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
     %{dir: dir, png: png, limits: limits}
   end
 
+  test "selected SVG data-URI failures preserve their source-budget diagnostic" do
+    alias NativeElixirPdfUtilities.Validators.SvgImageValidator
+
+    image = %{
+      type: :element,
+      namespace: :svg,
+      style: %{},
+      tag: "image",
+      attributes: %{"href" => "data:image/png;base64,AAAA", "width" => "2", "height" => "2"},
+      children: []
+    }
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 3))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgImageValidator.prepare_tree(image, HtmlValidator.new_image_budget(), [], [])
+
+    assert diagnostic.stage == :limits and diagnostic.message =~ "image source"
+  end
+
+  test "a standalone SVG resource keeps its byte ceiling without an aggregate image counter" do
+    alias NativeElixirPdfUtilities.Validators.SvgImageValidator
+
+    image = %{
+      type: :element,
+      namespace: :svg,
+      style: %{},
+      tag: "image",
+      attributes: %{"href" => "art.png", "width" => "2", "height" => "2"},
+      children: []
+    }
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 3))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgImageValidator.prepare_tree(
+               image,
+               nil,
+               [assets: %{"art.png" => {:bytes, "1234"}}],
+               []
+             )
+
+    assert diagnostic.source == "art.png" and diagnostic.message =~ "max_input_bytes"
+  end
+
+  test "prepared SVG resource descriptors enforce the shared source allowance" do
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 3))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.Validators.SvgImageValidator.validate_descriptors(%{
+               "svg-resource:oversize" => %{data: "1234", media_type: "image/png"}
+             })
+
+    assert diagnostic.stage == :limits and diagnostic.source == "svg-resource:oversize"
+    assert diagnostic.message =~ "max_input_bytes"
+  end
+
   test("unused definitions and display none never call the root resolver", %{png: png}) do
     parent = self()
 
@@ -379,7 +436,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
       "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='2'><foreignObject width='4' height='2'><div xmlns='http://www.w3.org/1999/xhtml'><img src='paint.png' width='2' height='1'/></div></foreignObject></svg>"
     )
 
-    Limits.install(Map.put(limits, :max_aggregate_decoded_image_bytes, 10))
+    Limits.install(Map.put(limits, :max_decoded_bytes, 10))
 
     assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(

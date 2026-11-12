@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
   alias NativeElixirPdfUtilities.Validators.TextResourceValidator
   alias NativeElixirPdfUtilities.Validators.TextValidator
 
@@ -107,7 +108,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_text_decoded_content_bytes, byte_size(content)))
+    Limits.install(Map.put(previous, :max_decoded_bytes, byte_size(content)))
     assert {:ok, "A A"} = Text.extract(source, layout: false)
     assert {:ok, pdf_context} = Reader.read_validated(source)
     assert {:ok, prepared} = TextValidator.prepare(pdf_context)
@@ -181,13 +182,20 @@ defmodule NativeElixirPdfUtilities.TextTest do
            )}
         ])
 
-      Limits.install(Map.put(previous, :max_text_spans, 2))
+      Limits.install(previous)
       assert {:ok, extracted} = Text.extract(source, layout: false)
       assert extracted == Enum.join(expected, " ")
       assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(source, actual_text: true)
       assert Enum.map(spans, & &1.text) == expected
 
-      Limits.install(Map.put(previous, :max_text_spans, 1))
+      Limits.install(Map.put(previous, :max_entries, 2))
+      assert :ok = TextValidator.validate_next_span(1, 1)
+
+      assert {:error, {:resource_limit_exceeded, boundary}} =
+               TextValidator.validate_next_span(2, 1)
+
+      assert boundary.message =~ "span count" and boundary.message =~ "page 1"
+      Limits.install(Map.put(previous, :max_entries, 1))
 
       for {operation, extract} <- [
             extract: fn -> Text.extract(source, layout: false) end,
@@ -198,8 +206,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
         assert diagnostic.reason == :resource_limit_exceeded
         assert diagnostic.operation == operation
         assert diagnostic.module == Text
-        assert String.starts_with?(diagnostic.message, "text span count exceeds the limit")
-        assert diagnostic.message =~ "; page 1"
+        assert diagnostic.message =~ "max_entries"
       end
     end
   end
@@ -600,7 +607,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
   test "marked-content property dictionaries enforce nesting and entry limits" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_pdf_value_depth: 2, max_pdf_container_entries: 1})
+    Limits.install(%{original | max_depth: 2})
 
     for content <- ["/Span << /A << /B << >> >> >> BDC EMC", "/Span << /A [[[]]] >> BDC EMC"] do
       assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
@@ -609,11 +616,15 @@ defmodule NativeElixirPdfUtilities.TextTest do
       assert message =~ "nesting depth"
     end
 
+    Limits.install(%{original | max_entries: 1})
+
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              TextValidator.instructions("/Span << /A () /B () >> BDC EMC", 4)
 
-    assert message =~ "entry count"
+    assert message =~ "max_entries"
     assert message =~ "page 4"
+
+    Limits.install(original)
 
     assert {:error, {:invalid_pdf_input, %{message: message}}} =
              TextValidator.instructions("/Span >> BDC EMC", 4)
@@ -628,7 +639,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     preparation = %{
       TextValidator.new_preparation_context()
-      | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 1
+      | extracted_bytes: Limits.get(:max_output_bytes) - 1
     }
 
     assert {:ok, instructions} =
@@ -643,7 +654,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
                preparation
              )
 
-    assert preparation.extracted_bytes == Limits.get(:max_extracted_text_bytes)
+    assert preparation.extracted_bytes == Limits.get(:max_output_bytes)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              TextResourceValidator.prepare_contents(
@@ -656,7 +667,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     assert diagnostic.message =~ "ActualText"
 
-    preparation = %{preparation | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 1}
+    preparation = %{preparation | extracted_bytes: Limits.get(:max_output_bytes) - 1}
 
     assert {:ok, instructions} =
              TextValidator.instructions("/Span << /ActualText <80> >> BDC EMC", 1)
@@ -672,7 +683,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     assert message =~ "decoded ActualText"
 
-    preparation = %{preparation | extracted_bytes: Limits.get(:max_extracted_text_bytes) - 2}
+    preparation = %{preparation | extracted_bytes: Limits.get(:max_output_bytes) - 2}
 
     assert {:ok, instructions} =
              TextValidator.instructions(
@@ -691,19 +702,23 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_text_spans: 2, max_text_marked_content_depth: 2})
+    Limits.install(%{original | max_entries: 2, max_depth: 2})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              Text.extract(
                page_pdf("/Span << /ActualText (one) >> BDC BT /F1 12 Tf [(a) (b) (c)] TJ ET EMC")
              )
 
-    assert message =~ "span count"
+    assert message =~ "max_entries"
+
+    Limits.install(%{original | max_depth: 2})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              Text.extract(page_pdf("/A BMC /B BMC /C BMC EMC EMC EMC"))
 
     assert message =~ "nesting depth"
+
+    Limits.install(original)
 
     assert {:ok, "one"} =
              Text.extract(
@@ -812,14 +827,15 @@ defmodule NativeElixirPdfUtilities.TextTest do
     original_limits = Limits.effective()
     on_exit(fn -> Limits.install(original_limits) end)
     large = Integer.pow(10, 160)
-    Limits.install(%{original_limits | max_pdf_numeric_magnitude: large})
+    Limits.install(%{original_limits | max_numeric_magnitude: large})
 
     for {operators, expected_operator} <- [
           {"#{large} 0 0 1 0 0 Tm #{large} 0 Td", "Td"},
           {"#{large} 0 0 1 0 0 Tm #{large} 0 TD", "TD"},
           {"1 0 0 #{large} 0 0 Tm #{large} TL T*", "T*"},
           {"/F1 #{large} Tf [#{large}] TJ", "TJ"},
-          {"/F1 #{large} Tf #{large} Tz (A) Tj", "text positioning"}
+          {"/F1 #{large} Tf #{large} Tz (A) Tj", "text positioning"},
+          {"/F1 #{large} Tf #{large} Tz [(A)] TJ", "text positioning"}
         ] do
       source = page_pdf("BT /F1 12 Tf #{operators} ET")
 
@@ -1089,7 +1105,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     original_limits = Limits.effective()
     on_exit(fn -> Limits.install(original_limits) end)
-    Limits.install(%{original_limits | max_text_stream_uses: 1})
+    Limits.install(%{original_limits | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: message}}} =
              TextResourceValidator.prepare_contents(
@@ -1112,6 +1128,8 @@ defmodule NativeElixirPdfUtilities.TextTest do
         }
       }
     }
+
+    Limits.install(original_limits)
 
     assert {:ok, direct_instructions} =
              TextValidator.instructions("BT /Direct 12 Tf (A) Tj ET", 1)
@@ -1162,7 +1180,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
                pdf_context.document,
                {:ref, {6, 0}},
                1,
-               %{preparation_context | stream_uses: 100_000}
+               %{preparation_context | stream_uses: Limits.get(:max_entries)}
              )
 
     assert stream_message =~ "content stream reference count"
@@ -1172,7 +1190,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
                pdf_context.document,
                {:ref, {6, 0}},
                1,
-               %{preparation_context | decoded_bytes: 50_000_000}
+               %{preparation_context | decoded_bytes: Limits.get(:max_decoded_bytes)}
              )
 
     assert byte_message =~ "aggregate decoded content bytes"
@@ -1182,10 +1200,10 @@ defmodule NativeElixirPdfUtilities.TextTest do
                pdf_context.document,
                {:ref, {6, 0}},
                1,
-               %{preparation_context | parsed_instructions: 100_000}
+               %{preparation_context | parsed_tokens: Limits.get(:max_entries)}
              )
 
-    assert parse_message =~ "parsed content instruction count"
+    assert parse_message =~ "parsed content token count"
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: work_message}}} =
              TextValidator.prepare_content_stream(
@@ -1199,7 +1217,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: form_message}}} =
              TextValidator.charge_form_expansion(
-               %{preparation_context | form_expansions: 10_000},
+               %{preparation_context | form_expansions: Limits.get(:max_entries)},
                1
              )
 
@@ -1207,6 +1225,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
   end
 
   test "rejects aggregate parsed instruction work through the public extraction API" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_entries: 25_000})
     oversized_instruction_stream = :binary.copy("x ", 100_001)
 
     assert_error(
@@ -1271,7 +1292,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
   test "limits aggregate whitespace reconstructed from text coordinates" do
     original_limits = Limits.effective()
     on_exit(fn -> Limits.install(original_limits) end)
-    Limits.install(%{original_limits | max_text_layout_whitespace_bytes: 5})
+    Limits.install(%{original_limits | max_output_bytes: 5})
 
     excessive_gaps = [
       "BT /F1 12 Tf 1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 40 20 Tm (B) Tj ET",
@@ -1324,6 +1345,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
   end
 
   test "limits the number of extracted text spans per page" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_entries: 25_000})
     content = "BT /F1 10 Tf " <> String.duplicate("(A) Tj ", 25_000) <> "[(A)] TJ ET"
 
     assert_error(
@@ -2305,6 +2329,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
   end
 
   test "uses CID listed and ranged widths and rejects malformed W arrays" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
     cmap =
       "begincmap\n1 begincodespacerange\n<00> <FF>\nendcodespacerange\n4 beginbfchar\n<01> <0041>\n<02> <0042>\n<03> <0043>\n<04> <0044>\nendbfchar\nendcmap"
 
@@ -2357,7 +2384,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
           "<< /Type /Font /Subtype /CIDFontType2 /DW 500 /W [0 40000 500 0 40000 600] >>"
       )
 
+    Limits.install(%{original | max_entries: 65_536})
     assert_error(Text.extract(excessive_aggregate), :resource_limit_exceeded, :font)
+    Limits.install(original)
 
     out_of_range =
       page_pdf("BT /F1 12 Tf <01> Tj ET",
@@ -2402,7 +2431,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
   test "bounds expanded Unicode text across all text-showing operators" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_extracted_text_bytes: 6})
+    Limits.install(%{original | max_output_bytes: 6})
 
     cmap =
       "1 begincodespacerange <00> <FF> endcodespacerange " <>
@@ -2413,7 +2442,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
     for content <- ["(AA) Tj", "[(A) 0 (A)] TJ", "(A) Tj (A) '", "(A) Tj 0 0 (A) \""] do
       source = page_pdf("BT /F1 10 Tf #{content} ET", font: font, cmap: cmap)
       assert {:ok, _} = Text.extract(source, layout: false)
-      Limits.install(%{original | max_extracted_text_bytes: 5})
+      Limits.install(%{original | max_output_bytes: 5})
 
       for extract <- [&Text.extract/1, &Text.extract_spans/1] do
         assert {:error, {:resource_limit_exceeded, diagnostic}} = extract.(source)
@@ -2425,14 +2454,14 @@ defmodule NativeElixirPdfUtilities.TextTest do
         assert diagnostic.message =~ "F1"
       end
 
-      Limits.install(%{original | max_extracted_text_bytes: 6})
+      Limits.install(%{original | max_output_bytes: 6})
     end
   end
 
   test "bounds simple-font text across pages and repeated Forms" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_extracted_text_bytes: 7})
+    Limits.install(%{original | max_output_bytes: 7})
     assert {:ok, _} = Text.extract(shared_content_pages_pdf(1, "BT /F1 12 Tf (Form) Tj ET"))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
@@ -2474,9 +2503,10 @@ defmodule NativeElixirPdfUtilities.TextTest do
           "1 beginbfchar <41> <00660066> endbfchar 1 beginbfchar <41> <00660067> endbfchar"
         ] do
       source = page_pdf("BT /F1 10 Tf (A) Tj ET", font: font, cmap: prefix <> mappings)
-      Limits.install(%{original | max_cmap_expanded_bytes: 6})
+      overhead = byte_size("BT /F1 10 Tf (A) Tj ET") + byte_size(prefix <> mappings)
+      Limits.install(%{original | max_decoded_bytes: overhead + 6})
       assert {:ok, _} = Text.extract(source)
-      Limits.install(%{original | max_cmap_expanded_bytes: 5})
+      Limits.install(%{original | max_decoded_bytes: overhead + 5})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
       assert diagnostic.stage == :limits
       assert diagnostic.module == Text
@@ -2497,18 +2527,21 @@ defmodule NativeElixirPdfUtilities.TextTest do
           "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <D83DDE00> endbfchar"
       )
 
-    Limits.install(%{original | max_extracted_text_bytes: 4, max_cmap_expanded_bytes: 5})
+    cmap =
+      "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <D83DDE00> endbfchar"
+
+    overhead = byte_size("BT /F1 10 Tf (A) Tj ET") + byte_size(cmap)
+    Limits.install(%{original | max_output_bytes: 4, max_decoded_bytes: overhead + 5})
     assert {:ok, "😀"} = Text.extract(source, layout: false)
-    Limits.install(%{original | max_extracted_text_bytes: 3})
+    Limits.install(%{original | max_output_bytes: 3})
     assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
-    Limits.install(%{original | max_cmap_expanded_bytes: 4})
+    Limits.install(%{original | max_decoded_bytes: overhead + 4})
     assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
   end
 
   test "mapping allocation budget spans fonts but cached aliases reuse it" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_cmap_expanded_bytes: 2})
 
     source =
       page_pdf("BT /F1 10 Tf (A) Tj ET",
@@ -2524,32 +2557,44 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
 
-    assert {:ok, _, preparation} =
-             TextResourceValidator.prepare_contents(
-               context.document,
-               resources,
-               [instructions],
-               1,
-               TextValidator.new_preparation_context()
-             )
+    cmap_bytes =
+      byte_size(
+        "1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <41> <0041> endbfchar"
+      )
 
+    Limits.install(%{original | max_decoded_bytes: cmap_bytes + 2})
+
+    assert {{:ok, _, preparation}, used} =
+             ResourceBudget.measure_operation(:max_decoded_bytes, fn ->
+               TextResourceValidator.prepare_contents(
+                 context.document,
+                 resources,
+                 [instructions],
+                 1,
+                 TextValidator.new_preparation_context()
+               )
+             end)
+
+    assert used == cmap_bytes + 2
     assert preparation.cmap_bytes == 2
     assert preparation.extracted_bytes == 2
     resources = put_in(resources, ["Font", "Alias"], %{"ToUnicode" => {:ref, {7, 0}}})
 
-    assert {:error, {:resource_limit_exceeded, _}} =
-             TextResourceValidator.prepare_contents(
-               context.document,
-               resources,
-               [instructions],
-               1
-             )
+    assert {{:error, {:resource_limit_exceeded, _}}, _} =
+             ResourceBudget.measure_operation(:max_decoded_bytes, fn ->
+               TextResourceValidator.prepare_contents(
+                 context.document,
+                 resources,
+                 [instructions],
+                 1
+               )
+             end)
   end
 
   test "CMap work counts overwritten ranges before their expansion" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_cmap_work: 20_000})
+    Limits.install(%{original | max_work: 20_000})
     prefix = "1 begincodespacerange <0000> <FFFF> endcodespacerange "
 
     for operator <- ["bfrange", "cidrange", "notdefrange"] do
@@ -2583,7 +2628,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
         assert diagnostic.stage == :limits
         assert diagnostic.module == Text
         assert diagnostic.reason == :resource_limit_exceeded
-        assert diagnostic.message =~ "max_cmap_work"
+        assert diagnostic.message =~ "max_work"
         assert diagnostic.message =~ "page 1"
         assert diagnostic.message =~ "F1"
       end
@@ -2593,7 +2638,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
   test "ignored section wrappers cannot hide expansions from CMap work accounting" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_cmap_work: 1_000})
+    Limits.install(%{original | max_work: 1_000})
     prefix = "1 begincodespacerange <0000> <FFFF> endcodespacerange "
 
     for wrapper <- ["cidchar", "codespacerange"] do
@@ -2638,9 +2683,17 @@ defmodule NativeElixirPdfUtilities.TextTest do
         page_pdf("BT /F1 10 Tf (A) Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
 
       # Source bytes, three declarations, and two conservative lookup probes.
-      Limits.install(%{original | max_cmap_work: byte_size(cmap) + 5})
+      Limits.install(original)
+
+      assert {{:ok, _}, work} =
+               ResourceBudget.measure_operation(:max_work, fn ->
+                 Text.extract(source, layout: false)
+               end)
+
+      assert work >= byte_size(cmap) + 5
+      Limits.install(%{original | max_work: work})
       assert {:ok, _} = Text.extract(source)
-      Limits.install(%{original | max_cmap_work: byte_size(cmap) + 4})
+      Limits.install(%{original | max_work: work - 1})
       assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
     end
 
@@ -2656,9 +2709,17 @@ defmodule NativeElixirPdfUtilities.TextTest do
           extra_objects: [{9, stream_object("", encoding)}]
         )
 
-      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 7})
+      Limits.install(original)
+
+      assert {{:ok, _}, work} =
+               ResourceBudget.measure_operation(:max_work, fn ->
+                 Text.extract(source, layout: false)
+               end)
+
+      assert work >= byte_size(cmap) + byte_size(encoding) + 7
+      Limits.install(%{original | max_work: work})
       assert {:ok, "A"} = Text.extract(source, layout: false)
-      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 4})
+      Limits.install(%{original | max_work: work - 1})
       assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
     end
   end
@@ -2674,14 +2735,14 @@ defmodule NativeElixirPdfUtilities.TextTest do
       page_pdf("BT /F1 10 Tf (AA) Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
 
     assert {:ok, "B"} = Text.extract(source, layout: false)
-    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 15})
+    Limits.install(%{original | max_work: byte_size(cmap) + 15})
     assert {:error, {:resource_limit_exceeded, _}} = Text.extract(source)
 
     Limits.install(original)
     assert {:ok, context} = Reader.read_validated(source)
     assert {:ok, instructions} = TextValidator.instructions("BT /F1 10 Tf /Alias 10 Tf ET", 1)
     resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "Alias" => {:ref, {5, 0}}}}
-    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 4})
+    Limits.install(%{original | max_work: byte_size(cmap) + 4})
 
     assert {:ok, _} =
              TextResourceValidator.prepare_contents(
@@ -2726,7 +2787,6 @@ defmodule NativeElixirPdfUtilities.TextTest do
   test "limits aggregate ToUnicode mappings across ordered sections" do
     original_limits = Limits.effective()
     on_exit(fn -> Limits.install(original_limits) end)
-    Limits.install(%{original_limits | max_cmap_entries: 1})
 
     cmap =
       "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
@@ -2735,14 +2795,16 @@ defmodule NativeElixirPdfUtilities.TextTest do
     pdf =
       page_pdf("BT /F1 10 Tf <41> Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             Text.extract(pdf, layout: false)
+    assert {:ok, "A"} = Text.extract(pdf, layout: false)
+    prepare = resource_preparation(pdf, "BT /F1 10 Tf <41> Tj ET")
+    Limits.install(%{original_limits | max_entries: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = prepare.()
 
     assert %{
              stage: :cmap,
              reason: :resource_limit_exceeded,
              operation: :extract,
-             module: Text,
+             module: TextResourceValidator,
              message: "ToUnicode CMap entry count exceeds the limit; page 1"
            } = diagnostic
   end
@@ -2817,6 +2879,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
   end
 
   test "validates supported Type0 Encoding CMap boundaries" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
     to_unicode =
       "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n" <>
         "1 beginbfchar\n<01> <0041>\nendbfchar"
@@ -2864,8 +2929,12 @@ defmodule NativeElixirPdfUtilities.TextTest do
                stream_object("", "/WMode 1 def\n" <> encoding)
              )
 
-    assert {:error, {:resource_limit_exceeded, %{stage: :cmap}}} =
+    Limits.install(%{original | max_decoded_bytes: 1_000_000})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              render.(" /Encoding 9 0 R", stream_object("", :binary.copy(" ", 1_000_001)))
+
+    Limits.install(original)
 
     malformed_encodings = [
       "1 begincodespacerange\n<00> <FFFF>\nendcodespacerange",
@@ -2887,6 +2956,8 @@ defmodule NativeElixirPdfUtilities.TextTest do
       assert {:error, {:invalid_pdf_input, %{stage: :cmap}}} =
                render.(" /Encoding 9 0 R", stream_object("", malformed))
     end
+
+    Limits.install(%{original | max_entries: 100_000})
 
     range_limit =
       "2 begincodespacerange\n<0000> <FFFF>\n<000000> <00FFFF>\nendcodespacerange\n" <>
@@ -3086,10 +3157,14 @@ defmodule NativeElixirPdfUtilities.TextTest do
       "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n1 beginbfchar\n<01> <0041>\nendbfchar" <>
         :binary.copy(" ", 1_000_001)
 
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_decoded_bytes: 1_000_000})
+
     assert_error(
       Text.extract(page_pdf("BT /F1 12 Tf <01> Tj ET", font: font, cmap: oversized)),
       :resource_limit_exceeded,
-      :cmap
+      :limits
     )
   end
 
@@ -3306,12 +3381,20 @@ defmodule NativeElixirPdfUtilities.TextTest do
     source =
       page_pdf("BT /F1 10 Tf <00> Tj ET", font: "<< /Type /Font /ToUnicode 7 0 R >>", cmap: cmap)
 
-    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 241 + 2})
+    Limits.install(original)
+
+    assert {{:ok, _}, work} =
+             ResourceBudget.measure_operation(:max_work, fn ->
+               Text.extract(source, layout: false)
+             end)
+
+    assert work >= byte_size(cmap) + 1 + 241 + 2
+    Limits.install(%{original | max_work: work})
     assert {:ok, "A"} = Text.extract(source, layout: false)
-    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 240})
+    Limits.install(%{original | max_work: work - 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
     assert diagnostic.stage == :limits
-    assert diagnostic.message =~ "max_cmap_work"
+    assert diagnostic.message =~ "max_work"
 
     Limits.install(original)
 
@@ -3326,19 +3409,48 @@ defmodule NativeElixirPdfUtilities.TextTest do
           extra_objects: [{9, stream_object("", encoding)}]
         )
 
-      Limits.install(%{
-        original
-        | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 2 + 482 + 2
-      })
+      Limits.install(original)
+
+      assert {{:ok, "A"}, work} =
+               ResourceBudget.measure_operation(:max_work, fn ->
+                 Text.extract(source, layout: false)
+               end)
+
+      assert work >= byte_size(cmap) + byte_size(encoding) + 2 + 482 + 2
+      Limits.install(%{original | max_work: work})
 
       assert {:ok, "A"} = Text.extract(source, layout: false)
-      Limits.install(%{original | max_cmap_work: byte_size(cmap) + byte_size(encoding) + 2 + 481})
+      Limits.install(%{original | max_work: work - 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
-      assert diagnostic.message =~ "max_cmap_work"
+      assert diagnostic.message =~ "max_work"
     end
   end
 
   @tag :cmap_whitespace
+  test "a compressed ToUnicode CMap checks its decoded source size against the input allowance" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    cmap =
+      "%" <>
+        String.duplicate("source comment ", 150) <>
+        "\n1 begincodespacerange <00> <FF> endcodespacerange 1 beginbfchar <01> <0041> endbfchar"
+
+    source =
+      page_pdf("BT /F1 10 Tf <01> Tj ET",
+        font: "<< /Type /Font /ToUnicode 7 0 R >>",
+        extra_objects: [{7, stream_object("/Filter /FlateDecode", :zlib.compress(cmap))}]
+      )
+
+    assert {:ok, "A"} = Text.extract(source, layout: false)
+    assert byte_size(source) < byte_size(cmap) - 1
+    Limits.install(%{original | max_input_bytes: byte_size(cmap) - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+    assert diagnostic.stage == :cmap and diagnostic.operation == :extract
+    assert diagnostic.module == Text and diagnostic.message =~ "ToUnicode CMap"
+    assert diagnostic.message =~ "max_input_bytes"
+  end
+
   test "accepting whitespace does not weaken CMap source, expanded byte or work limits" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
@@ -3352,9 +3464,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert {:ok, "A"} = Text.extract(source, layout: false)
 
     for {key, value} <- [
-          max_cmap_bytes: byte_size(cmap) - 1,
-          max_cmap_expanded_bytes: 1,
-          max_cmap_work: byte_size(cmap) + 1
+          max_input_bytes: byte_size(cmap) - 1,
+          max_decoded_bytes: 1,
+          max_work: byte_size(cmap) + 1
         ] do
       Limits.install(Map.put(original, key, value))
       assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
@@ -3362,7 +3474,7 @@ defmodule NativeElixirPdfUtilities.TextTest do
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.module == Text
       assert diagnostic.operation == :extract
-      assert diagnostic.message =~ "CMap"
+      assert diagnostic.message =~ Atom.to_string(key)
     end
   end
 
@@ -3408,12 +3520,14 @@ defmodule NativeElixirPdfUtilities.TextTest do
         cmap: unicode
       )
 
-    Limits.install(%{original | max_cmap_entries: 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+    prepare = resource_preparation(source, "BT /F1 10 Tf <0102> Tj ET")
+    Limits.install(%{original | max_entries: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = prepare.()
     assert diagnostic.stage == :cmap and diagnostic.message =~ "entry count"
 
+    Limits.install(original)
     unicode = prefix <> "1 beginbfchar <0 1> <0 0 4 1> endbfchar"
-    encoding = prefix <> "2 begincidchar <0 1> 1 <0 2> 2 endcidchar"
+    encoding = prefix <> "3 begincidchar <0 1> 1 <0 2> 2 <0 3> 3 endcidchar"
 
     source =
       page_pdf("BT /F1 10 Tf <01> Tj ET",
@@ -3423,7 +3537,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
         extra_objects: [{9, stream_object("", encoding)}]
       )
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
+    prepare = resource_preparation(source, "BT /F1 10 Tf <01> Tj ET")
+    Limits.install(%{original | max_entries: 2})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = prepare.()
     assert diagnostic.stage == :cmap and diagnostic.message =~ "entry count"
   end
 
@@ -3521,7 +3637,6 @@ defmodule NativeElixirPdfUtilities.TextTest do
   test "normalized Differences are charged once across operands, aliases and pages" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_text_font_work: 5})
 
     font =
       "<< /Type /Font /Subtype /TrueType /Encoding << /BaseEncoding /WinAnsiEncoding /Differences [65 /Ignored 65 /B] >> >>"
@@ -3534,6 +3649,8 @@ defmodule NativeElixirPdfUtilities.TextTest do
                "BT /F1 10 Tf (A) Tj [(A) (A)] TJ /Alias 10 Tf (A) Tj ET",
                1
              )
+
+    Limits.install(%{original | max_work: 5})
 
     assert {:ok, [prepared], preparation} =
              TextResourceValidator.prepare_contents(
@@ -3559,15 +3676,21 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
     assert preparation.font_work == 5
 
-    Limits.install(%{original | max_text_font_work: 4})
+    Limits.install(%{original | max_work: 4})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             Text.extract(page_pdf("BT /F1 10 Tf (A) Tj ET", font: font))
+             TextResourceValidator.prepare_contents(
+               context.document,
+               resources,
+               [instructions],
+               1
+             )
 
     assert diagnostic.operation == :extract and diagnostic.stage == :font
-    assert diagnostic.message =~ "max_text_font_work"
+    assert diagnostic.message =~ "max_work"
     assert diagnostic.message =~ "font F1"
     assert diagnostic.message =~ "page 1"
+    Limits.install(original)
     # Encoding validation remains lazy for fonts selected without showing text.
     assert {:ok, %{pages: [%{spans: []}]}} =
              Text.extract_spans(page_pdf("BT /F1 10 Tf ET", font: font))
@@ -3576,7 +3699,6 @@ defmodule NativeElixirPdfUtilities.TextTest do
   test "shared descendant widths reuse expansion while distinct descendants share a work budget" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_text_font_work: 6})
     font = "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts [8 0 R] >>"
 
     source =
@@ -3589,6 +3711,8 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert {:ok, context} = Reader.read_validated(source)
     resources = %{"Font" => %{"F1" => {:ref, {5, 0}}, "F2" => {:ref, {9, 0}}}}
     assert {:ok, instructions} = TextValidator.instructions("BT /F1 10 Tf /F2 10 Tf ET", 1)
+
+    Limits.install(%{original | max_work: 6})
 
     assert {:ok, _, preparation} =
              TextResourceValidator.prepare_contents(
@@ -3616,9 +3740,9 @@ defmodule NativeElixirPdfUtilities.TextTest do
              TextResourceValidator.prepare_contents(context.document, distinct, [instructions], 1)
 
     assert diagnostic.stage == :font and diagnostic.operation == :extract
-    assert diagnostic.message =~ "max_text_font_work"
+    assert diagnostic.message =~ "max_work"
 
-    Limits.install(%{original | max_text_font_work: 10})
+    Limits.install(%{original | max_work: 10})
 
     assert {:ok, _, preparation} =
              TextResourceValidator.prepare_contents(
@@ -3632,6 +3756,8 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert preparation.font_work == 10
     assert map_size(preparation.cid_metrics) == 1
 
+    Limits.install(original)
+
     missing_descendants =
       "<< /Type /Font /Subtype /Type0 /Encoding /Identity-H /DescendantFonts 9 0 R >>"
 
@@ -3641,27 +3767,27 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert diagnostic.operation == :extract and diagnostic.message =~ "page 1"
 
     for widths <- ["[0 3 500]", "[0 [500 500 500 500]]"] do
-      Limits.install(%{original | max_text_font_work: 4})
+      Limits.install(%{original | max_work: 4})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                Text.extract(
                  page_pdf("BT /F1 10 Tf ET", font: font, descendant: "<< /W #{widths} >>")
                )
 
-      assert diagnostic.message =~ "max_text_font_work"
+      assert diagnostic.message =~ "max_work"
     end
   end
 
   test "simple width expansion and Type 3 FontMatrix validation precede execution" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_text_font_work: 2})
     font = "<< /Type /Font /Subtype /TrueType /FirstChar 65 /Widths [500 500] >>"
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             Text.extract(page_pdf("BT /F1 10 Tf ET", font: font))
+    prepare = resource_preparation(page_pdf("BT /F1 10 Tf ET", font: font), "BT /F1 10 Tf ET")
+    Limits.install(%{original | max_work: 2})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = prepare.()
 
-    assert diagnostic.stage == :font and diagnostic.message =~ "max_text_font_work"
+    assert diagnostic.stage == :font and diagnostic.message =~ "max_work"
 
     Limits.install(original)
 
@@ -3710,11 +3836,29 @@ defmodule NativeElixirPdfUtilities.TextTest do
       "1 begincodespacerange <0> <F> endcodespacerange 1 beginbfrange <0> <F> <0041> endbfrange"
 
     source = page_pdf("BT /F1 10 Tf <00> Tj ET", font: font, cmap: cmap)
-    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 241 + 2})
+    Limits.install(original)
+
+    assert {{:ok, _}, work} =
+             ResourceBudget.measure_operation(:max_work, fn ->
+               Text.extract(source, layout: false)
+             end)
+
+    assert work >= byte_size(cmap) + 1 + 241 + 2
+    Limits.install(%{original | max_work: work})
     assert {:ok, "A"} = Text.extract(source, layout: false)
-    Limits.install(%{original | max_cmap_work: byte_size(cmap) + 1 + 240})
+    Limits.install(%{original | max_work: work - 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Text.extract(source)
     assert diagnostic.message =~ "CMap processing work"
+  end
+
+  defp resource_preparation(source, content) do
+    {:ok, context} = Reader.read_validated(source)
+    {:ok, instructions} = TextValidator.instructions(content, 1)
+    [page] = context.pages
+
+    fn ->
+      TextResourceValidator.prepare_contents(context.document, page.resources, [instructions], 1)
+    end
   end
 
   defp form_transform_pdf(page_content, form_content, matrix) do

@@ -32,31 +32,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubset do
   end
 
   defp glyph_tables(plan) do
-    {glyph_chunks, offsets, position} =
-      Enum.reduce(0..(plan.glyph_count - 1), {[], [], 0}, fn glyph_id,
-                                                             {chunks, offsets, position} ->
-        if MapSet.member?(plan.retained, glyph_id) do
-          start = elem(plan.offsets, glyph_id)
-          finish = elem(plan.offsets, glyph_id + 1)
-          glyph = binary_part(plan.glyf, start, finish - start)
-          padding = rem(2 - rem(byte_size(glyph), 2), 2)
+    # Every omitted slot shares the next retained glyph's offset. Emit those
+    # identical entries in bulk instead of walking all unused glyph programs.
+    {glyph_chunks, locations, position, next_id} =
+      plan.retained
+      |> Enum.sort()
+      |> Enum.reduce({[], [], 0, 0}, fn glyph_id, {chunks, locations, position, next_id} ->
+        start = elem(plan.offsets, glyph_id)
+        finish = elem(plan.offsets, glyph_id + 1)
+        glyph = binary_part(plan.glyf, start, finish - start)
+        padding = rem(2 - rem(byte_size(glyph), 2), 2)
 
-          {[:binary.copy(<<0>>, padding), glyph | chunks], [position | offsets],
-           position + byte_size(glyph) + padding}
-        else
-          {chunks, [position | offsets], position}
-        end
+        offset =
+          case plan.location_format do
+            0 -> <<div(position, 2)::16>>
+            1 -> <<position::32>>
+          end
+
+        {[:binary.copy(<<0>>, padding), glyph | chunks],
+         [:binary.copy(offset, glyph_id - next_id + 1) | locations],
+         position + byte_size(glyph) + padding, glyph_id + 1}
       end)
 
-    offsets = Enum.reverse([position | offsets])
-
-    loca =
+    final_offset =
       case plan.location_format do
-        0 -> for offset <- offsets, into: <<>>, do: <<div(offset, 2)::16>>
-        1 -> for offset <- offsets, into: <<>>, do: <<offset::32>>
+        0 -> <<div(position, 2)::16>>
+        1 -> <<position::32>>
       end
 
-    {glyph_chunks |> Enum.reverse() |> IO.iodata_to_binary(), loca}
+    locations = [:binary.copy(final_offset, plan.glyph_count - next_id + 1) | locations]
+
+    {glyph_chunks |> Enum.reverse() |> IO.iodata_to_binary(),
+     locations |> Enum.reverse() |> IO.iodata_to_binary()}
   end
 
   defp put_u32(data, offset, value) do

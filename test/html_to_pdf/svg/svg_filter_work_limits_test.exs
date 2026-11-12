@@ -16,6 +16,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
     :ok
   end
 
+  test "unresolvable stylesheet geometry keeps conservative filter-work refusal" do
+    alias NativeElixirPdfUtilities.Validators.{SvgSceneValidator, SvgValidator}
+
+    for css <- ["@page{size:unknown}", "@font-face{font-family:;src:url()}"] do
+      source =
+        "<svg width='8' height='8'><style>#{css}</style><defs><filter id='f'><feMorphology radius='1'/></filter></defs><rect width='8' height='8' filter='url(#f)'/></svg>"
+
+      assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :image})
+      assert {:ok, root} = SvgSceneValidator.extraction_root(summary.document)
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               SvgFilterWorkValidator.reserve(root, [width: 8, height: 8], %{
+                 expansion: 1,
+                 counts: %{}
+               })
+
+      assert diagnostic.stage == :limits and diagnostic.source == "SVG"
+
+      assert diagnostic.message =~ "CSS filter declarations" and
+               diagnostic.message =~ "max_raster_work"
+    end
+  end
+
   test "the original small-source, large-radius trigger is rejected without native execution" do
     for radius <- ["512", "1e10", "1e300", "512+512"] do
       source = svg("<feMorphology radius='#{radius}'/>", 512)
@@ -28,12 +51,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
       assert diagnostic.module == HtmlValidator
       assert diagnostic.operation == :prepare
       assert diagnostic.source == "SVG"
-      assert diagnostic.message =~ "max_svg_filter_work"
+      assert diagnostic.message =~ "max_raster_work"
     end
   end
 
   test "inline, mapped and standalone SVGs share actionable work diagnostics" do
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 1))
     source = svg("<feMorphology radius='2'/>")
 
     for {html, options} <- [
@@ -45,7 +68,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
 
       assert diagnostic.stage == :limits
       assert diagnostic.module == HtmlValidator
-      assert diagnostic.message =~ "max_svg_filter_work (configured limit 1)"
+      assert diagnostic.message =~ "max_raster_work (configured limit 1)"
     end
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -56,7 +79,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
 
   test "a configurable limit rejects a kernel while ordinary filters still render" do
     source = svg("<feConvolveMatrix order='3' kernelMatrix='0 0 0 0 1 0 0 0 0'/>")
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 1))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
@@ -70,7 +93,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
 
   test "filter work accumulates across conversions in one document and resets afterward" do
     source = svg("<feMorphology radius='1'/>")
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 200_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 200_000))
 
     assert :ok =
              HtmlValidator.with_render_budget(fn ->
@@ -88,7 +111,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
 
   test "final raster dimensions and a magnified viewBox are accounted for" do
     source = svg("<feMorphology radius='1'/>")
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 10_000_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 10_000_000))
     assert {:ok, _} = SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
 
     assert {:error, {:resource_limit_exceeded, _}} =
@@ -104,7 +127,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
   end
 
   test "transforms and object bounding box units cannot conceal an expensive radius" do
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 500_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 500_000))
 
     for attributes <- [
           "transform='scale(1000)'",
@@ -188,7 +211,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
   end
 
   test "wrap convolution includes repeated edge adjustment work" do
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 50_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 50_000))
 
     assert {:ok, _} =
              SvgConverterValidator.prepare(svg("<feConvolveMatrix order='3'/>"), [], nil, [], %{
@@ -239,7 +262,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
              )
 
     # A rotation must not leave a long, thin filter region estimated as a one-pixel strip.
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 1_000_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 1_000_000))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgConverterValidator.prepare(
@@ -269,15 +292,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
   end
 
   test "work estimation obeys existing CSS complexity limits" do
-    Limits.install(Map.put(Limits.effective(), :max_css_transform_operations, 2))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 2))
     source = svg("<feMorphology/>", 8, "transform='translate(1) translate(2) translate(3)'")
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
 
-    assert diagnostic.message =~ "max_css_transform_operations"
+    assert diagnostic.message =~ "max_entries"
 
-    Limits.install(Map.put(Limits.defaults(), :max_aggregate_css_source_bytes, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 1))
     source = svg("<feMorphology/>", 8, "style='filter:url(#f)'")
 
     assert {:error, {:resource_limit_exceeded, _}} =
@@ -285,7 +308,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
   end
 
   test "native work remains bounded when applications raise numeric magnitude limits" do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 1.0e307))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 1.0e307))
 
     for attributes <- ["transform='scale(1e200)'", "transform='scale(1e200) scale(1e200)'"] do
       assert {:ok, _} =
@@ -320,7 +343,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
     assert {:ok, _} = SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
 
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_css_source_bytes, 1))
+    Limits.install(Map.put(limits, :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
@@ -337,7 +360,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
                SvgConverterValidator.prepare(source, [], nil, [], %{mode: :image})
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_css_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     source =
       String.replace(
@@ -351,7 +374,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
   end
 
   test "reused and CSS-attached filters are charged for every possible application" do
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 150_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 150_000))
     base = svg("<feMorphology radius='1'/>")
     assert {:ok, _} = SvgConverterValidator.prepare(base, [], nil, [], %{mode: :image})
 
@@ -372,7 +395,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
   end
 
   test "presentation inheritance and native-only fragment spellings cannot bypass reuse accounting" do
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 150_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 150_000))
 
     inherited =
       "<svg width='8' height='8'><filter id='f'><feMorphology radius='1'/></filter><g filter='url(#f)'><rect filter='inherit' width='8' height='8'/><rect filter='inherit' width='8' height='8'/></g></svg>"
@@ -405,7 +428,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
   end
 
   test "filter inheritance and nested viewports use a full-plane radius bound" do
-    Limits.install(Map.put(Limits.effective(), :max_svg_filter_work, 500_000))
+    Limits.install(Map.put(Limits.effective(), :max_raster_work, 500_000))
     base = svg("<feMorphology radius='1'/>")
 
     for source <- [

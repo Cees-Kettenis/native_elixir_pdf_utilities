@@ -201,7 +201,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
                    is_integer(whitespace_bytes) and whitespace_bytes >= 0 ->
               total = total + whitespace_bytes
 
-              case total <= Limits.get(:max_text_layout_whitespace_bytes) do
+              case total <= Limits.get(:max_output_bytes) do
                 true ->
                   {:cont, {:ok, total}}
 
@@ -345,7 +345,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   def charge_stream_uses(preparation_context, count, page_number) do
     stream_uses = preparation_context.stream_uses + count
 
-    case stream_uses <= Limits.get(:max_text_stream_uses) do
+    case stream_uses <= Limits.get(:max_entries) do
       true ->
         {:ok, %{preparation_context | stream_uses: stream_uses}}
 
@@ -360,7 +360,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   def charge_form_expansion(preparation_context, page_number) do
     form_expansions = preparation_context.form_expansions + 1
 
-    case form_expansions <= Limits.get(:max_text_form_expansions) do
+    case form_expansions <= Limits.get(:max_entries) do
       true ->
         {:ok, %{preparation_context | form_expansions: form_expansions}}
 
@@ -394,7 +394,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       limits = Limits.effective()
 
       initial =
-        {:ok, [], [], {0, []}, 0, preparation.parsed_tokens, preparation.parsed_values,
+        {:ok, [], [], 0, 0, preparation.parsed_tokens, preparation.parsed_values,
          preparation.parsed_instructions}
 
       Enum.reduce_while(contents, initial, fn content, state ->
@@ -404,7 +404,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
         end
       end)
       |> case do
-        {:ok, operations, [], {0, []}, 0, tokens, values, count} ->
+        {:ok, operations, [], 0, 0, tokens, values, count} ->
           {:ok, Enum.reverse(operations),
            %{
              preparation
@@ -462,14 +462,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
         admission =
           cond do
-            tokens > limits.max_text_parsed_tokens ->
-              resource_limit_error("parsed content token count exceeds the limit", page)
-
-            values > limits.max_text_parsed_values ->
-              resource_limit_error("parsed content value count exceeds the limit", page)
-
-            count > limits.max_text_parsed_instructions ->
-              resource_limit_error("parsed content instruction count exceeds the limit", page)
+            tokens > limits.max_entries ->
+              resource_limit_error("parsed content token count exceeds max_entries", page)
 
             true ->
               :ok
@@ -477,7 +471,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
 
         with :ok <- admission,
              {:ok, operations, operands, nesting, dictionaries} <-
-               instruction_token(token, operations, operands, nesting, dictionaries, page, limits) do
+               instruction_token(token, operations, operands, nesting, dictionaries, page) do
           content_instructions(
             tokenizer,
             {:ok, operations, operands, nesting, dictionaries, tokens, values, count},
@@ -488,15 +482,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
-  @compile {:inline, instruction_token: 7}
+  @compile {:inline, instruction_token: 6}
   defp instruction_token(
          token,
          operations,
          operands,
-         {depth, containers} = nesting,
+         depth,
          dictionaries,
-         page,
-         limits
+         page
        ) do
     case token do
       token when token in [:dict_start, :lbracket] ->
@@ -504,19 +497,17 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
                PdfValidator.validate_value_depth(depth + 1,
                  operation: :extract,
                  module: __MODULE__
-               ),
-             {:ok, containers} <- admit_content_value(containers, page, limits) do
+               ) do
           marker = if token == :dict_start, do: :dictionary_start, else: :array_start
           dictionaries = dictionaries + if(token == :dict_start, do: 1, else: 0)
 
-          {:ok, operations, [marker | operands], {depth + 1, [{token, 0} | containers]},
-           dictionaries}
+          {:ok, operations, [marker | operands], depth + 1, dictionaries}
         end
 
       :dict_end ->
         case close_dictionary(operands) do
           {:ok, operands} ->
-            {:ok, operations, operands, {depth - 1, tl(containers)}, dictionaries - 1}
+            {:ok, operations, operands, depth - 1, dictionaries - 1}
 
           :error ->
             content_error("content dictionary is malformed", page)
@@ -525,7 +516,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       :rbracket ->
         case close_array(operands) do
           {:ok, operands} ->
-            {:ok, operations, operands, {depth - 1, tl(containers)}, dictionaries}
+            {:ok, operations, operands, depth - 1, dictionaries}
 
           :error ->
             content_error("content array is unbalanced", page)
@@ -536,37 +527,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
           content_error("content dictionary contains an operator or is unbalanced", page)
         else
           with {:ok, operation} <- prepare_instruction(operator, Enum.reverse(operands), page) do
-            {:ok, [operation | operations], [], nesting, dictionaries}
+            {:ok, [operation | operations], [], depth, dictionaries}
           end
         end
 
       token ->
-        case containers do
-          [] ->
-            {:ok, operations, [token | operands], nesting, dictionaries}
-
-          _ ->
-            with {:ok, containers} <- admit_content_value(containers, page, limits) do
-              {:ok, operations, [token | operands], {depth, containers}, dictionaries}
-            end
-        end
-    end
-  end
-
-  # Each nested container occupies one parent value. Dictionary keys and values
-  # share an entry, including duplicate keys that Map.new/1 would collapse.
-  defp admit_content_value(containers, page, limits) do
-    case containers do
-      [] ->
-        {:ok, []}
-
-      [{kind, values} | rest] ->
-        entries = if kind == :dict_start, do: div(values, 2) + 1, else: values + 1
-
-        case PdfValidator.validate_container_entries(entries, [], limits) do
-          :ok -> {:ok, [{kind, values + 1} | rest]}
-          {:error, {_reason, diagnostic}} -> resource_limit_error(diagnostic.message, page)
-        end
+        # Every array element and dictionary key/value has already consumed a
+        # parsed-token slot. That shared cap also bounds every container's entries.
+        {:ok, operations, [token | operands], depth, dictionaries}
     end
   end
 
@@ -680,7 +648,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   @spec validate_next_span(non_neg_integer(), pos_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_next_span(count, page) do
-    if count >= Limits.get(:max_text_spans) do
+    if count >= Limits.get(:max_entries) do
       resource_limit_error("text span count exceeds the limit", page)
     else
       :ok
@@ -1035,7 +1003,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp cache_decoded_stream(preparation_context, stream_ref, content, page_number) do
     decoded_bytes = preparation_context.decoded_bytes + byte_size(content)
 
-    case decoded_bytes <= Limits.get(:max_text_decoded_content_bytes) do
+    case decoded_bytes <= Limits.get(:max_decoded_bytes) do
       true ->
         {:ok,
          %{
@@ -1075,7 +1043,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
   defp charge_instruction_uses(preparation_context, count, page_number) do
     instruction_uses = preparation_context.instruction_uses + count
 
-    case instruction_uses <= Limits.get(:max_text_instruction_uses) do
+    case instruction_uses <= Limits.get(:max_entries) do
       true -> {:ok, %{preparation_context | instruction_uses: instruction_uses}}
       false -> resource_limit_error("content instruction work exceeds the limit", page_number)
     end
@@ -1101,7 +1069,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
       case {instruction, scope} do
         {%{operator: operator}, {graphics_depth, in_text?, marked_depth}}
         when operator in ["BMC", "BDC"] ->
-          case marked_depth < Limits.get(:max_text_marked_content_depth) do
+          case marked_depth < Limits.get(:max_depth) do
             true ->
               {:cont, {:ok, {graphics_depth, in_text?, marked_depth + 1}}}
 

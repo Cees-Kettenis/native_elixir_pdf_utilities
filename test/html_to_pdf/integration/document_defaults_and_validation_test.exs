@@ -130,14 +130,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
              HtmlValidator.prepare_css_length_source("0", :margin)
 
     assert :error = HtmlValidator.prepare_css_length_source("wat", :margin)
-    Limits.install(%{Limits.effective() | max_css_work: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                HtmlValidator.validate_prepared_css_size({:min, [1.0, 2.0]})
              end)
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_css_work"
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
   end
 
   test "caller canvas plans reject extra properties and body-only layout keeps source background" do
@@ -200,23 +200,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
   end
 
   test "native URL resource failures remain attributed to the caller input" do
-    Limits.install(%{Limits.effective() | max_html_form_value_bytes: 1})
+    Limits.install(%{Limits.effective() | max_input_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=url value='https://example.test'>")
 
-    assert diagnostic.stage == :html and diagnostic.source == "input/url"
-    assert diagnostic.message =~ "max_html_form_value_bytes"
+    assert diagnostic.stage == :html and diagnostic.operation == :render
+    refute Map.has_key?(diagnostic, :source)
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "native replies cannot reset the cumulative compiler budget between requests" do
     {:ok, initial} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
 
-    {:ok, :matched, %{compile: compile}} =
+    {:ok, :matched, %{compile: compile, matches: matches}} =
       FormValueBackend.run(initial)
 
     assert compile > 0
-    Limits.install(%{Limits.effective() | max_html_pattern_compile_work: compile})
+    Limits.install(%{Limits.effective() | max_work: compile + matches})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -227,23 +228,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
              end)
 
     assert diagnostic.operation == :initial_form_value and
-             diagnostic.message =~ "max_html_pattern_compile_work"
+             diagnostic.message =~ "max_work"
   end
 
   test "Elixir pattern compilation enforces configured work independently of obsolete native operand bounds" do
-    Limits.install(%{Limits.effective() | max_html_pattern_compile_work: 100})
+    Limits.install(%{Limits.effective() | max_work: 100})
     {:ok, request} = HtmlFormValueValidator.prepare(:pattern, String.duplicate("()", 200), [""])
-    assert {:limit, :max_html_pattern_compile_work} = reply = FormValueBackend.run(request)
+    assert {:limit, :max_work} = reply = FormValueBackend.run(request)
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlFormValueValidator.result(reply)
-    assert diagnostic.message =~ "max_html_pattern_compile_work"
+    assert diagnostic.message =~ "max_work"
     assert diagnostic.operation == :initial_form_value
   end
 
   test "fixed OTP engine bounds diagnose valid authored patterns instead of ignoring them" do
     Limits.install(%{
       Limits.effective()
-      | max_html_pattern_bytes: 200_000,
-        max_html_pattern_compile_work: 20_000_000
+      | max_input_bytes: 200_000,
+        max_work: 20_000_000
     })
 
     for pattern <- ["a{100000}", String.duplicate("()", 65_536)] do
@@ -511,15 +512,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
 
   test "CSS dependency resource failures retain the canonical originating validator diagnostic" do
     original = Limits.effective()
-    Limits.install(%{original | max_css_variable_depth: 0})
+    Limits.install(%{original | max_depth: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.compute_custom_properties(%{
                "--actual" => "var(--missing,var(--other,real))"
              })
 
-    assert diagnostic.stage == :limits and diagnostic.message =~ "max_css_variable_depth"
-    Limits.install(%{original | max_html_numeric_token_bytes: 1})
+    assert diagnostic.stage == :limits and diagnostic.message =~ "max_depth"
+    Limits.install(%{original | max_numeric_token_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.prepare_css_length_source("calc(1pt)", :length)
@@ -609,9 +610,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
       original = Limits.effective()
 
       for {key, value, message} <- [
-            {:max_pdf_form_fields, 1, "shared field"},
-            {:max_pdf_form_text_bytes, 7, "child PDF field name"},
-            {:max_html_tree_work, 1, "max_html_tree_work"}
+            {:max_entries, 1, "shared field"},
+            {:max_input_bytes, 7, "child PDF field name"},
+            {:max_work, 1, "max_work"}
           ] do
         Limits.install(Map.put(original, key, value))
 
@@ -657,12 +658,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
     assert field.name == "actual" and field.value == "Actual value"
     refute Map.has_key?(field, :html_owner)
     refute Map.has_key?(field, :html_control_id)
-    Limits.install(%{Limits.effective() | max_appearance_text_bytes: 1})
+    Limits.install(%{Limits.effective() | max_output_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlFormValidator.prepare([%{size: layout.page_size, boxes: layout.boxes}], [])
 
-    assert diagnostic.stage == :forms and diagnostic.message =~ "max_appearance_text_bytes"
+    assert diagnostic.stage == :forms and diagnostic.message =~ "max_output_bytes"
   end
 
   test "already styled image hosts preserve authored dimensions when preparing skipped artwork" do

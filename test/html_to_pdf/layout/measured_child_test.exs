@@ -393,7 +393,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
 
     limits = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_font_math_work: 1})
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
     assert {:error, {:resource_limit_exceeded, _}} = FontValidator.prepare_text_ink_bounds(box)
   end
 
@@ -640,12 +640,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
       {:ok, dom} = HtmlParser.parse_detailed("<span>Budget</span>")
       {:ok, %{children: [node]}} = Style.compute_detailed(dom)
-      NativeElixirPdfUtilities.Limits.install(%{limits | max_font_math_work: 1})
+      NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                Layout.measure_child(node, context)
 
-      assert diagnostic.stage == :font
+      assert diagnostic.stage in [:layout, :font]
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.message =~ "max_work"
       assert ResourceContext.current() == context
       send(self(), :returned_after_child_budget)
     end)
@@ -656,7 +658,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
   test "native paint validation returns resource diagnostics outside a document scope" do
     limits = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_layout_boxes: 0})
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_entries: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes([

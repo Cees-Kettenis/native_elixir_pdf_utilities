@@ -40,7 +40,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextMetricsTest do
   test "preserved-space traversal shares the render text work budget" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_layout_text_work, 10))
+    Limits.install(Map.put(limits, :max_work, 10))
 
     assert {:ok, _} =
              HtmlValidator.with_render_budget(fn ->
@@ -53,7 +53,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextMetricsTest do
              end)
 
     assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_layout_text_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "alphabetic numeric hyphens retain Unicode and complete-grapheme opportunities" do

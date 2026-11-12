@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutExpansionLimitsTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
+  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
   alias NativeElixirPdfUtilities.Limits
 
   setup do
@@ -15,16 +16,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutExpansionLimitsTest do
     item = "<div style='grid-row:1 / span 2;grid-column:1 / span 2'></div>"
     html = "<div style='display:grid'>#{item}#{item}</div>"
     original = Limits.effective()
-    Limits.install(%{original | max_grid_occupied_cells: 8})
-    assert {:ok, _} = HtmlToPdf.render(html, system_font_discovery: false)
-
-    Limits.install(%{original | max_grid_occupied_cells: 7})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :layout and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.operation == :render and diagnostic.message =~ "max_grid_occupied_cells"
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-
-    # A failed grid must release its cumulative budget for the next render.
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {{:ok, _}, work} = ResourceBudget.measure(:max_work, fn -> Layout.layout(styled) end)
+    assert work >= 8
+    Limits.install(%{original | max_work: work})
+    assert {:ok, _} = Layout.layout(styled)
+    Limits.install(%{original | max_work: work - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
+    assert diagnostic.message =~ "max_work"
+    Limits.install(original)
     assert {:ok, _} = HtmlToPdf.render("<div style='display:grid'>#{item}</div>")
   end
 
@@ -36,50 +37,78 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutExpansionLimitsTest do
            22},
           {"<div style='display:grid'></div><div style='display:grid'></div>", 4}
         ] do
-      Limits.install(%{original | max_grid_tracks: tracks})
-      assert {:ok, _} = HtmlToPdf.render(html, system_font_discovery: false)
-      Limits.install(%{original | max_grid_tracks: tracks - 1})
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :layout and diagnostic.message =~ "max_grid_tracks"
+      Limits.install(original)
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+
+      assert {{:ok, _}, entries} =
+               ResourceBudget.measure(:max_entries, fn -> Layout.layout(styled) end)
+
+      required = max(entries, tracks)
+      Limits.install(%{original | max_entries: required})
+      assert {:ok, _} = Layout.layout(styled)
+      Limits.install(%{original | max_entries: required - 1})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
+      assert diagnostic.stage == :layout and diagnostic.message =~ "max_entries"
     end
   end
 
   test "automatic grid searches stop under their shared placement work allowance" do
-    Limits.install(%{Limits.effective() | max_grid_placement_work: 1})
+    original = Limits.effective()
 
     for placement <- ["", "grid-column:1", "grid-row:1"] do
-      html =
-        "<div style='display:grid;grid-template-columns:10pt 10pt'>" <>
-          "<div style='grid-column:1;grid-row:1'></div><div style='#{placement}'></div></div>"
+      Limits.install(original)
 
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :layout and diagnostic.message =~ "max_grid_placement_work"
+      html =
+        "<div style='display:grid;grid-template-columns:10pt 10pt'><div style='grid-column:1;grid-row:1'></div><div style='#{placement}'></div></div>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      Limits.install(%{original | max_work: 1})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
+      assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
     end
   end
 
   test "preserved line work admits its exact boundary and accumulates across elements" do
     original = Limits.effective()
     html = "<pre>A\nB</pre>"
-    Limits.install(%{original | max_layout_line_work: 2})
-    assert {:ok, _} = HtmlToPdf.render(html, system_font_discovery: false)
-    Limits.install(%{original | max_layout_line_work: 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_line_work"
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    # Compare repeated layout work after the shared physical-font analysis is cached.
+    assert {:ok, _} = Layout.layout(styled)
+    assert {{:ok, _}, work} = ResourceBudget.measure(:max_work, fn -> Layout.layout(styled) end)
+    assert {:ok, doubled_dom} = HtmlParser.parse(html <> html)
+    assert {:ok, doubled} = Style.compute_detailed(doubled_dom, system_font_discovery: false)
 
-    Limits.install(%{original | max_layout_line_work: 3})
-    assert {:error, {:resource_limit_exceeded, _}} = HtmlToPdf.render(html <> html)
+    assert {{:ok, _}, double_work} =
+             ResourceBudget.measure(:max_work, fn -> Layout.layout(doubled) end)
+
+    assert double_work > work
+    Limits.install(%{original | max_work: work})
+    assert {:ok, _} = Layout.layout(styled)
+    Limits.install(%{original | max_work: work - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
+    assert diagnostic.message =~ "max_work"
+    Limits.install(%{original | max_work: double_work - 1})
+    assert {:error, {:resource_limit_exceeded, _}} = Layout.layout(doubled)
   end
 
   test "empty preserved lines consume work before the remaining text is expanded" do
-    Limits.install(%{Limits.effective() | max_layout_line_work: 2})
+    original = Limits.effective()
 
     for mode <- ["pre", "pre-wrap", "pre-line", "break-spaces"] do
+      Limits.install(original)
       html = "<div style='white-space:#{mode}'>\n\n\nTail</div>"
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.stage == :layout and diagnostic.message =~ "max_layout_line_work"
-      assert diagnostic.operation == :render and diagnostic.reason == :resource_limit_exceeded
+      assert {:ok, dom} = HtmlParser.parse(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+      Limits.install(%{original | max_work: 2})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
+      assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
+      assert diagnostic.reason == :resource_limit_exceeded
     end
 
+    Limits.install(original)
     assert {:ok, _} = HtmlToPdf.render("<p>Unaffected</p>")
   end
 

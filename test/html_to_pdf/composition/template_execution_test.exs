@@ -416,7 +416,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
 
     opts =
       Keyword.put(@opts, :asset_resolver, fn _ ->
-        Limits.install(Map.update!(limits, :max_css_numeric_magnitude, &(&1 + 1)))
+        Limits.install(Map.update!(limits, :max_numeric_magnitude, &(&1 + 1)))
         {:ok, png}
       end)
 
@@ -453,8 +453,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     html = "<body><?marker name='A'><template for='A'><p>Bounded</p></template></body>"
-    Limits.install(Map.put(limits, :max_aggregate_html_source_bytes, byte_size(html)))
+    assert {:ok, registry} = NativeElixirPdfUtilities.HtmlToPdf.Font.load_registry(@opts)
+    font_bytes = Enum.sum(Enum.map(registry.embedded, &byte_size(&1.data)))
+    Limits.install(Map.put(limits, :max_input_bytes, font_bytes + byte_size(html)))
     assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    Limits.install(limits)
     assert {:ok, text} = Text.extract(pdf)
     assert text =~ "Bounded"
     assert TemplateExecutionValidator.source_charge(html) == byte_size(html)

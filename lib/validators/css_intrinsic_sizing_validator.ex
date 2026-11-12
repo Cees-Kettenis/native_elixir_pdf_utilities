@@ -16,7 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator do
   end
 
   defp prepare_at_depth(value, depth) do
-    HtmlValidator.check_render_resource(:max_css_calculation_depth, depth, :style)
+    HtmlValidator.check_render_resource(:max_depth, depth, :style)
 
     case HtmlValidator.parse_css_identifier(value) do
       {:ok, name, ""} ->
@@ -126,7 +126,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator do
   end
 
   defp valid_at_depth?(value, depth) do
-    HtmlValidator.check_render_resource(:max_css_calculation_depth, depth, :layout)
+    HtmlValidator.check_render_resource(:max_depth, depth, :layout)
 
     case value do
       {:css_intrinsic_size, {:computed, original, scales}} ->

@@ -83,7 +83,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OrdinaryPdfFormCompositionTest do
       assert is_binary(diagnostic.message)
     end
 
-    limit = Limits.get(:max_pdf_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     assert {:error, {_, diagnostic}} =
              WriterValidator.prepare_appearance_projection(
@@ -93,13 +93,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OrdinaryPdfFormCompositionTest do
                {-limit, 0, -limit + 100, 60}
              )
 
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "ordinary affine projection rejects overflow in derived clip coordinates", %{
     frame: frame
   } do
-    limit = Limits.get(:max_pdf_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     assert {:error, {_, diagnostic}} =
              WriterValidator.prepare_appearance_projection(
@@ -109,7 +109,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OrdinaryPdfFormCompositionTest do
                {-limit, 0, -limit + 100, 60}
              )
 
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "ordered PDF content streams and resources survive ordinary Form import", %{

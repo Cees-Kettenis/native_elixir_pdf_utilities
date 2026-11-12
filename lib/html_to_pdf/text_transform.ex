@@ -101,7 +101,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
 
           {id, text, transform, language} ->
             if account?,
-              do: HtmlValidator.reserve_render_resource(:max_css_work, byte_size(text), :style)
+              do: HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :style)
 
             text
             |> String.codepoints()
@@ -188,7 +188,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
 
             if account? do
               HtmlValidator.reserve_render_resource(
-                :max_rendered_text_bytes,
+                :max_output_bytes,
                 max(byte_size(mapped) - byte_size(char), 0),
                 :style
               )

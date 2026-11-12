@@ -71,7 +71,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCompositionValidator do
   @spec composition_required?([map()]) :: boolean()
   def composition_required?(children) do
     Enum.any?(children, fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{type: :element, tag: "template"} ->

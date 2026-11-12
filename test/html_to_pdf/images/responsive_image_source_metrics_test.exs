@@ -49,14 +49,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveImageSourceMetricsTest do
 
     limits = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_css_work: 1})
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              ResponsiveImageValidator.source_size("calc(20px + 10px)", context)
 
     assert diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.stage == :style
-    assert diagnostic.message =~ "max_css_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "styling an automatic lazy image without its resource scope returns the preparation diagnostic" do

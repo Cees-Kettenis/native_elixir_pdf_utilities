@@ -245,8 +245,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
     assert annotation.source == "html_targets/link_destination"
     glyph = %{type: :glyph_group, actual_text: text.text, boxes: [text]}
 
-    assert {:error, {_reason, diagnostic}} =
+    assert {:ok, _} =
              HtmlTableValidator.prepare_cell_band_paint([%{glyph | boxes: [glyph]}], bands, 50.0)
+
+    assert {:error, {_reason, diagnostic}} =
+             HtmlTableValidator.prepare_cell_band_paint(
+               [%{glyph | boxes: [%{glyph | boxes: :bad}]}],
+               bands,
+               50.0
+             )
 
     assert diagnostic.stage == :pdf
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.WriterValidator
@@ -256,13 +263,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
   test "page-fragment quota precedes artwork copying", %{layout: layout} do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_table_grid_work: 1})
+    Limits.install(%{limits | max_work: 1})
     first = Enum.find(layout.boxes, &Map.has_key?(&1, :table_span_fragment))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlTableValidator.prepare_cell_page_fragments([first], %{}, 12.0)
 
     assert diagnostic.stage == :pagination
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 end

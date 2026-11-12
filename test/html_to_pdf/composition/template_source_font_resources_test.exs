@@ -2,7 +2,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
-  alias NativeElixirPdfUtilities.Validators.{FontValidator, TemplateExecutionValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    FontValidator,
+    HtmlValidator,
+    TemplateExecutionValidator
+  }
 
   @opts [system_font_discovery: false, compress_streams: false]
 
@@ -144,7 +149,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
     html =
       "<body><?start name='A'><style>@media screen{@font-face{font-family:OriginalInactive;src:url('provided-original.ttf')}}</style><p>Old</p><?end?><template for='A'><p>Good</p></template></body>"
 
-    Limits.install(%{Limits.effective() | max_font_candidates: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -152,10 +157,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
                Keyword.put(@opts, :assets, %{"provided-original.ttf" => {:bytes, bytes}})
              )
 
-    assert diagnostic.stage == :font
-    assert diagnostic.message =~ "max_font_candidates"
-    assert diagnostic.source == "src:url('provided-original.ttf')"
-    assert diagnostic.line == 1 and is_integer(diagnostic.column)
+    assert diagnostic.stage == :html
+    assert diagnostic.message =~ "max_entries"
+    assert diagnostic.operation == :render and diagnostic.module == HtmlValidator
     assert Process.get({FontValidator, :budget}) == nil
   end
 

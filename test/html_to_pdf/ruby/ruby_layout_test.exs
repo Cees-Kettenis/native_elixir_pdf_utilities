@@ -251,6 +251,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyLayoutTest do
     assert Enum.at(geometries, 0) == Enum.at(geometries, 1)
   end
 
+  test "right-to-left ruby keeps its overhang when nested in inline wrappers" do
+    content = "Wide <ruby dir='rtl'>X<rt>annotation</rt></ruby> end."
+
+    [direct, nested] =
+      for source <- [content, "<span><span>#{content}</span></span>"] do
+        assert {:ok, dom} = HtmlParser.parse_detailed("<p>#{source}</p>")
+        assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+        assert {:ok, layout} = Layout.layout(styled)
+
+        for box <- layout.boxes, box.type == :text, do: {box.text, box.x, box.y, box.width}
+      end
+
+    assert direct == nested
+    assert Enum.any?(direct, fn {text, _, _, _} -> text == "annotation" end)
+  end
+
   test "Ruby optional tag parsing produces the same native base and reading boxes" do
     NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
       [html_recovery: true],

@@ -77,7 +77,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFontResourceAuthorizationTest do
       assert is_binary(diagnostic.message)
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_font_source_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
     assert {:ok, []} = FontValidator.prepare_svg_image_fonts([])
 
     result =
@@ -91,7 +91,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFontResourceAuthorizationTest do
       end)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = result
-    assert diagnostic.stage == :font and diagnostic.message =~ "max_font_source_bytes"
+    assert diagnostic.stage == :font and diagnostic.message =~ "max_input_bytes"
 
     assert {:error, {:invalid_options, invalid_context}} =
              SvgRasterizer.rasterize("<svg/>", [], nil, :invalid)

@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><style>@page{size:600pt 240pt;margin:0}html,body{margin:0;padding:0}
+
+#initial_letter_geometry .sample{position:absolute;top:6pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#initial_letter_geometry .sample:nth-child(1){left:9pt}#initial_letter_geometry .sample:nth-child(2){left:207pt}#initial_letter_geometry .sample:nth-child(3){left:405pt}
+#initial_letter_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 3pt}
+#initial_letter_geometry .text{font:12pt/16pt 'DejaVu Sans';margin:0;width:170pt}
+#initial_letter_geometry .drop::first-letter{initial-letter:3}
+#initial_letter_geometry .raise::first-letter{initial-letter:3 1}
+#initial_letter_geometry .sunken::first-letter{initial-letter:3 2}
+
+#initial_letter_geometry .sample:nth-child(4){left:9pt;top:126pt}#initial_letter_geometry .sample:nth-child(5){left:207pt;top:126pt}
+</style></head><body>
+<!-- Initial letters reuse this existing capture and bundled DejaVu outlines. -->
+<section id="initial_letter_geometry" style="position:absolute;left:0pt;top:0pt;width:600pt;height:240pt;box-sizing:border-box">
+<section class="sample"><p class="label">Drop initial</p><p class="text drop">Alphabet beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Raised initial</p><p class="text raise">Alphabet beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Sunken initial</p><p class="text sunken">Alphabet beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Short paragraph flow</p><p class="text drop">A</p><p class="text">beta gamma delta epsilon zeta eta theta iota kappa lambda mu.</p></section>
+<section class="sample"><p class="label">Independent context</p><p class="text drop">A</p><div class="text" style="display:flow-root">Below the initial.</div></section>
+</section>
+</body></html>

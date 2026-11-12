@@ -37,23 +37,23 @@ defmodule NativeElixirPdfUtilities.TransformTest do
       Limits.install(original)
       assert {:ok, result} = run.()
       output = if is_list(result), do: hd(result), else: result
-      Limits.install(%{original | max_assembled_pdf_bytes: byte_size(output)})
+      Limits.install(%{original | max_output_bytes: byte_size(output)})
       assert {:ok, ^result} = run.()
-      Limits.install(%{original | max_assembled_pdf_bytes: byte_size(output) - 1})
+      Limits.install(%{original | max_output_bytes: byte_size(output) - 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = run.()
       assert diagnostic.stage == :assembly_write
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.module == module
       assert diagnostic.operation == operation
-      assert diagnostic.message =~ "max_assembled_pdf_bytes"
+      assert diagnostic.message =~ "max_output_bytes"
     end
 
-    Limits.install(%{original | max_assembled_pdf_bytes: 1})
+    Limits.install(%{original | max_output_bytes: 1})
     assert {:error, {:resource_limit_exceeded, %{stage: :assembly_write}}} = Merge.merge([source])
     Limits.install(original)
     assert {:ok, merged} = Merge.merge([source, source])
     assert byte_size(merged) > byte_size(source)
-    Limits.install(%{original | max_pdf_input_bytes: byte_size(merged) - 1})
+    Limits.install(%{original | max_output_bytes: byte_size(merged) - 1})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :assembly_write}}} =
              Merge.merge([source, source])
@@ -238,6 +238,7 @@ defmodule NativeElixirPdfUtilities.TransformTest do
 
   test "validates split ranges and split resource limits" do
     source = three_page_pdf()
+    assert {:ok, context} = Reader.read_validated(source)
     oversized_range = 1..1_000_000_000_000
 
     for ranges <- [[], :bad, [1], [0..1], [3..1//-1], [1..4], [oversized_range]] do
@@ -246,22 +247,37 @@ defmodule NativeElixirPdfUtilities.TransformTest do
       assert diagnostic.operation == :split_by_ranges
     end
 
-    Limits.install(%{Limits.effective() | max_split_outputs: 2})
+    Limits.install(%{Limits.effective() | max_entries: 2})
 
     assert {:error, {:resource_limit_exceeded, count_limit}} = Split.by_page(source)
-    assert count_limit.message == "split output count exceeds the limit"
+    assert count_limit.message =~ "max_entries"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SplitValidator.prepare_each_page(context)
+
+    assert diagnostic.message =~ "split output count"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SplitValidator.prepare_ranges(context, [1..1, 2..2, oversized_range])
+
+    assert diagnostic.message =~ "split output count"
 
     assert {:error, {:resource_limit_exceeded, range_count_limit}} =
              Split.by_ranges(source, [1..1, 2..2, oversized_range])
 
-    assert range_count_limit.message == "split output count exceeds the limit"
+    assert range_count_limit.message =~ "max_entries"
 
-    Limits.install(%{Limits.effective() | max_split_outputs: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, after_page_limit}} =
              Split.after_page(source, 1)
 
-    assert after_page_limit.message == "split output count exceeds the limit"
+    assert after_page_limit.message =~ "max_entries"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SplitValidator.prepare_after_page(context, 1)
+
+    assert diagnostic.message =~ "split output count"
   end
 
   test "rejects malformed PDF inputs through the shared diagnostic contract" do
@@ -624,19 +640,32 @@ defmodule NativeElixirPdfUtilities.TransformTest do
     assert split_diagnostic.message =~ "missing indirect object 16 0"
   end
 
-  test "enforces aggregate byte and object-write limits for split outputs" do
+  test "split outputs share aggregate byte and object-write allowances" do
     source = three_page_pdf()
     original = Limits.effective()
+    assert {:ok, {before, after_pdf}} = Split.after_page(source, 1)
+    bytes = byte_size(before) + byte_size(after_pdf)
+    Limits.install(%{original | max_output_bytes: bytes})
+    assert {:ok, {^before, ^after_pdf}} = Split.after_page(source, 1)
+    Limits.install(%{original | max_output_bytes: bytes - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Split.after_page(source, 1)
+    assert diagnostic.operation == :split_after_page and diagnostic.module == Split
+    assert diagnostic.message =~ "aggregate split output bytes"
+    Limits.install(original)
+    assert {:ok, context} = Reader.read_validated(source)
+    assert {:ok, [input, _]} = SplitValidator.prepare_ranges(context, [1..3, 1..3])
+    writes = 2 * (length(input.objects) + 2)
+    Limits.install(%{original | max_entries: writes})
+    assert {:ok, [_, _]} = SplitValidator.prepare_ranges(context, [1..3, 1..3])
+    Limits.install(%{original | max_entries: writes - 1})
 
-    Limits.install(%{original | max_aggregate_split_output_bytes: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SplitValidator.prepare_ranges(context, [1..3, 1..3])
 
-    assert {:error, {:resource_limit_exceeded, bytes}} = Split.after_page(source, 1)
-    assert bytes.message == "aggregate split output bytes exceed the limit"
-
-    Limits.install(%{original | max_split_object_writes: 1})
-
-    assert {:error, {:resource_limit_exceeded, objects}} = Split.by_ranges(source, [1..1])
-    assert objects.message == "split object writes exceed the limit"
+    assert diagnostic.message =~ "split object writes"
+    Limits.install(%{original | max_entries: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Split.by_ranges(source, [1..1])
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "regresses assembled multi-page document content, geometry, and rotation" do

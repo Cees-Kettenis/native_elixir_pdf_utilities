@@ -1,6 +1,6 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><style>
-@page {size:600pt 440pt;margin:0}
+@page {size:600pt 680pt;margin:0}
 html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
 #empty_flex_height,#empty_flex_height{margin:0;padding:0}
 #distributed_gaps,#distributed_gaps{margin:0;padding:0}
@@ -12,6 +12,14 @@ html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
 #quoted_at_rules{font-family:'DejaVu Sans';font-size:12pt}
 #quoted_at_rules p{margin:0}
 #quoted_at_rules p::before{content:"@media print {BOGUS}"}
+#text_wave_geometry .sample{position:absolute;top:8pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#text_wave_geometry .sample:nth-child(1){left:9pt}#text_wave_geometry .sample:nth-child(2){left:207pt}#text_wave_geometry .sample:nth-child(3){left:405pt}
+#text_wave_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 3pt}
+#text_wave_geometry .text{font:18pt/32pt 'DejaVu Sans';margin:0;text-decoration-style:wavy;text-decoration-thickness:0.75pt;text-decoration-color:#336699}
+#text_shadow_geometry .sample{position:absolute;top:8pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#text_shadow_geometry .sample:nth-child(1){left:9pt}#text_shadow_geometry .sample:nth-child(2){left:207pt}#text_shadow_geometry .sample:nth-child(3){left:405pt}
+#text_shadow_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 3pt}
+#text_shadow_geometry .text{font:18pt/32pt 'DejaVu Sans';margin:0}
 </style></head><body>
 <!-- empty_flex_height.html, original canvas 240 x 240 pt -->
 <section id="empty_flex_height" style="position:absolute;left:0pt;top:0pt;width:240pt;height:240pt;box-sizing:border-box"><div style="display:flex;height:100pt;background:red"></div><div style="display:flex;min-height:60pt;background:blue"><span style="display:none">Hidden</span></div><div style="height:10pt;background:green"></div></section>
@@ -63,4 +71,13 @@ html,body{margin:0;padding:0}body{font-family:'DejaVu Sans';font-size:12pt}
 <section style="position:absolute;left:480pt;top:370pt;width:110pt;height:60pt">
   <div style="width:40pt;height:12pt;overflow:clip visible;overflow-clip-margin:5pt;background:#ffe599"><div style="position:relative;left:-8pt;width:60pt;height:30pt;background:#45818e"></div></div>
 </section>
-</body></html>
+<section id="text_wave_geometry" style="position:absolute;left:0pt;top:440pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample"><p class="label">Wavy underline / bidi</p><p class="text" style="text-decoration-line:underline">ABC<span style="color:red">DEF</span></p><p class="text" dir="rtl" style="text-decoration-line:underline">אב<span style="color:red">גד</span></p></section>
+<section class="sample"><p class="label">Wavy overline</p><p class="text" style="text-decoration-line:overline">ABCDEF</p><p class="text" style="text-decoration-line:underline">gyp</p></section>
+<section class="sample"><p class="label">Wavy strike</p><p class="text" style="text-decoration-line:line-through">ABCDEF</p><p class="text" style="text-decoration-line:underline;text-decoration-skip-ink:none">gyp</p></section>
+</section>
+<section id="text_shadow_geometry" style="position:absolute;left:0pt;top:560pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample"><p class="label">Ordered shadows / split text</p><p class="text" style="text-shadow:1.5pt 1.5pt blue,-1.5pt -1.5pt red">ABC<span style="color:#338833">DEF</span></p></section>
+<section class="sample"><p class="label">Blurred selected glyph outlines</p><p class="text" style="text-shadow:2pt 3pt 2pt rgba(0,0,255,0.5)">ABCDEF</p></section>
+<section class="sample"><p class="label">Decoration shadow / hidden ink</p><p class="text" style="text-shadow:2pt 2pt red;text-decoration:underline 0.75pt">ABC<span style="visibility:hidden">H</span>DEF</p></section>
+</section></body></html>

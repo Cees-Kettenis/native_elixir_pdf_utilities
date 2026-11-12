@@ -57,10 +57,10 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
             is_list(settings) ->
               case CollectionValidator.bounded_length(
                      settings,
-                     Limits.get(:max_font_variation_work)
+                     Limits.get(:max_work)
                    ) do
                 {:ok, count} ->
-                  FontValidator.reserve(:max_font_variation_work, count)
+                  FontValidator.reserve(:max_work, count)
                   Map.new(settings)
 
                 :invalid ->
@@ -68,8 +68,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
 
                 :limit_exceeded ->
                   FontValidator.check(
-                    :max_font_variation_work,
-                    Limits.get(:max_font_variation_work) + 1
+                    :max_work,
+                    Limits.get(:max_work) + 1
                   )
               end
 
@@ -88,7 +88,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
                    "variation coordinates require printable four-byte tags, finite numbers and a nonnegative named-instance index"
                  )
 
-        FontValidator.reserve(:max_font_variation_work, map_size(settings))
+        FontValidator.reserve(:max_work, map_size(settings))
         {:ok, %{settings: settings, instance: instance}}
       rescue
         ArgumentError -> failure("variation settings must contain axis/value pairs")
@@ -103,17 +103,17 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
   def prepare_normalized_coordinates(coordinates) do
     FontValidator.with_budget(fn ->
       try do
-        case CollectionValidator.bounded_length(coordinates, Limits.get(:max_font_variation_work)) do
+        case CollectionValidator.bounded_length(coordinates, Limits.get(:max_work)) do
           {:ok, count} ->
-            FontValidator.reserve(:max_font_variation_work, count)
+            FontValidator.reserve(:max_work, count)
 
           :invalid ->
             invalid("normalized coordinates must be a proper list")
 
           :limit_exceeded ->
             FontValidator.check(
-              :max_font_variation_work,
-              Limits.get(:max_font_variation_work) + 1
+              :max_work,
+              Limits.get(:max_work) + 1
             )
         end
 
@@ -271,7 +271,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
     if count == 0 do
       {[], []}
     else
-      FontValidator.reserve(:max_font_variation_work, count + instance_count)
+      FontValidator.reserve(:max_work, count + instance_count)
       records = read(data, offset, count * axis_size, "fvar axes")
 
       axes =
@@ -338,8 +338,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
           sum + byte_size(bytes) + rem(4 - rem(byte_size(bytes), 4), 4)
         end)
 
-    FontValidator.check(:max_font_decoded_bytes, size)
-    FontValidator.reserve(:max_font_variation_work, size)
+    FontValidator.check(:max_decoded_bytes, size)
+    FontValidator.reserve(:max_work, size)
     Sfnt.rebuild(scaler, Enum.sort(tables))
   end
 
@@ -455,7 +455,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
             Enum.reduce(glyphs, {[], [], 0}, fn glyph, {parts, offsets, offset} ->
               validate_glyph(glyph)
               bytes = TrueTypeGlyph.serialize(glyph)
-              FontValidator.check(:max_font_decoded_bytes, offset + byte_size(bytes))
+              FontValidator.check(:max_decoded_bytes, offset + byte_size(bytes))
               {[bytes | parts], [offset | offsets], offset + byte_size(bytes)}
             end)
 
@@ -530,7 +530,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
                   units
                 )
 
-              FontValidator.reserve(:max_font_subset_work, length(commands))
+              FontValidator.reserve(:max_work, length(commands))
 
               bbox =
                 unwrap(
@@ -561,7 +561,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
             do: invalid("static CFF2 design bounds exceed head's signed int16 fields")
 
           payload = NativeElixirPdfUtilities.HtmlToPdf.Font.Cff.static_face(programs, units, bbox)
-          FontValidator.check(:max_font_subset_bytes, byte_size(payload))
+          FontValidator.check(:max_decoded_bytes, byte_size(payload))
           {a, b, c, d} = bbox
 
           head =
@@ -578,7 +578,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
 
   defp validate_glyph(glyph) do
     FontValidator.reserve(
-      :max_font_variation_work,
+      :max_work,
       length(glyph.points) + length(glyph.components)
     )
 
@@ -861,7 +861,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontVariationValidator do
   end
 
   defp read(data, offset, size, source) do
-    FontValidator.reserve(:max_font_variation_work, max(size, 1))
+    FontValidator.reserve(:max_work, max(size, 1))
 
     unless offset >= 0 and size >= 0 and offset + size <= byte_size(data),
       do: invalid("#{source} byte range is outside its owning table")

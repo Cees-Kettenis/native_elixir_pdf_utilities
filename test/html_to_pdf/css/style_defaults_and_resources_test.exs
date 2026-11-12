@@ -69,7 +69,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleDefaultsAndResourcesTest do
     source = "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6'/>"
     assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :image})
     old = Limits.effective()
-    Limits.install(Map.put(old, :max_aggregate_svg_raster_pixels, 1))
+    Limits.install(Map.put(old, :max_raster_pixels, 1))
 
     try do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -80,15 +80,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleDefaultsAndResourcesTest do
                )
 
       assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.module == HtmlValidator
+      assert diagnostic.module == SvgValidator
       assert diagnostic.operation == :rasterize
       assert diagnostic.source == "SVG"
-      assert diagnostic.message =~ "max_aggregate_svg_raster_pixels"
+      assert diagnostic.message =~ "max_raster_pixels"
 
       # Reusing decoded artwork still charges every requested dense raster.
       # One occurrence fits; the cached second occurrence must fail explicitly.
       Limits.install(
-        Map.put(old, :max_aggregate_svg_raster_pixels, 8 * 6 * Limits.get(:svg_raster_scale) ** 2)
+        Map.put(old, :max_raster_pixels, 8 * 6 * Limits.get(:svg_raster_scale) ** 2 * 2)
       )
 
       uri = "data:image/svg+xml;base64," <> Base.encode64(source)
@@ -97,7 +97,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleDefaultsAndResourcesTest do
       assert {:ok, two} = HtmlParser.parse_detailed("<img src='#{uri}'><img src='#{uri}'>")
       assert {:error, {:resource_limit_exceeded, repeated}} = Style.compute_detailed(two, @opts)
       assert repeated.source == "SVG"
-      assert repeated.message =~ "max_aggregate_svg_raster_pixels"
+      assert repeated.message =~ "max_raster_pixels"
     after
       Limits.install(old)
     end

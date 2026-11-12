@@ -50,7 +50,8 @@ defmodule NativeElixirPdfUtilities.Operation do
                       include_shared_binaries: false
                     })
 
-                    value = fun.()
+                    value =
+                      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fun)
 
                     case OperationValidator.memory(self(), request) do
                       :ok -> value

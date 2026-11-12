@@ -15,18 +15,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderTest do
     assert {:ok, tree} = Style.compute_detailed(dom)
     assert {:ok, layout} = Layout.layout(tree, page_size: {480, 360}, margin: 0)
 
-    source_boxes =
-      layout.boxes
-      |> Enum.reject(&(&1.type == :flow_marker))
-      |> Enum.map(&Map.take(&1, [:x, :y, :width, :height, :form_owner]))
-
+    source_boxes = Enum.reject(layout.boxes, &(&1.type == :flow_marker))
     pages = [%{size: {480, 360}, boxes: layout.boxes}]
     assert {:ok, context} = WriterValidator.prepare(pages, [])
 
-    assert Enum.map(
-             hd(context.pages).boxes,
-             &Map.take(&1, [:x, :y, :width, :height, :form_owner])
-           ) == source_boxes
+    painted =
+      Enum.reject(hd(context.pages).boxes, &(&1.type in [:actual_text_start, :actual_text_end]))
+
+    assert length(painted) == length(source_boxes)
+
+    for {source, output} <- Enum.zip(source_boxes, painted) do
+      if Map.has_key?(output, :glyph_ids) do
+        # A ligature changes glyph count and its painted advance. The source
+        # frame, baseline and field identity still belong to the original box.
+        assert Map.take(output, [:x, :y, :height, :form_owner]) ==
+                 Map.take(source, [:x, :y, :height, :form_owner])
+
+        assert_in_delta output.annotation_width, source.annotation_width, 0.015
+      else
+        assert Map.take(output, [:x, :y, :width, :height, :form_owner]) ==
+                 Map.take(source, [:x, :y, :width, :height, :form_owner])
+      end
+    end
 
     for mode <- [:static, :interactive] do
       assert {:ok, pdf} = HtmlToPdf.render(html, forms: mode, compress_streams: false)
@@ -81,7 +91,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderTest do
 
     failure =
       try do
-        Limits.install(Map.put(previous, :max_clip_projection_work, 1))
+        Limits.install(Map.put(previous, :max_work, 1))
 
         HtmlToPdf.render(
           "<div style='width:100pt;height:30pt;background:#eef;border:2px dashed red;border-radius:8px'>Real</div>",
@@ -94,7 +104,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} = failure
 
     assert diagnostic.reason == :resource_limit_exceeded and
-             diagnostic.message =~ "max_clip_projection_work"
+             diagnostic.message =~ "max_work"
 
     assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
 

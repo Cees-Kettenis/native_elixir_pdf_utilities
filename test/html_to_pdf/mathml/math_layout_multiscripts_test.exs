@@ -272,12 +272,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMultiscriptsTest do
         box
       end)
 
-    Limits.install(%{Limits.effective() | max_font_math_work: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathLayoutValidator.prepare_multiscript_placement(prepared, measured)
 
-    assert diagnostic.message =~ "max_font_math_work"
+    assert diagnostic.message =~ "max_work"
     assert diagnostic.operation == :measure_math
   end
 

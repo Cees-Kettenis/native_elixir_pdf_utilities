@@ -106,8 +106,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
   end
 
   defp substitute(value, context, depth) do
-    HtmlValidator.check_render_resource(:max_css_variable_depth, depth, :css)
-    HtmlValidator.check_render_resource(:max_css_variable_bytes, byte_size(value), :css)
+    HtmlValidator.check_render_resource(:max_depth, depth, :css)
+    HtmlValidator.check_render_resource(:max_input_bytes, byte_size(value), :css)
 
     value
     |> CssSyntaxValidator.components()
@@ -158,7 +158,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
     |> case do
       {:ok, result} ->
         value = result |> Enum.reverse() |> IO.iodata_to_binary()
-        HtmlValidator.check_render_resource(:max_css_variable_bytes, byte_size(value), :css)
+        HtmlValidator.check_render_resource(:max_input_bytes, byte_size(value), :css)
         {:ok, value}
 
       error ->

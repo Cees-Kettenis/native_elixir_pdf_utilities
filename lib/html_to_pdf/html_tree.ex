@@ -65,7 +65,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
 
         before ->
           HtmlValidator.reserve_render_resource(
-            :max_html_tree_work,
+            :max_work,
             length(owner.children),
             :html
           )
@@ -108,7 +108,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
   @doc false
   @spec fetch(t(), reference()) :: map()
   def fetch(tree, id) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
     node = Map.fetch!(tree.nodes, id)
 
     case Map.fetch(node, :projection) do
@@ -152,7 +152,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
     |> Map.fetch!(parent)
     |> Map.fetch!(:children)
     |> Enum.reduce_while(nil, fn id, _tag ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case Map.fetch!(tree.nodes, id) do
         %{type: :element, tag: tag} -> {:halt, tag}
@@ -220,7 +220,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
 
             finish ->
               HtmlValidator.reserve_render_resource(
-                :max_html_tree_work,
+                :max_work,
                 length(owner.children),
                 :html
               )
@@ -232,7 +232,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
         tree = %{tree | nodes: Map.put(tree.nodes, target.parent, %{owner | children: children})}
 
         HtmlValidator.reserve_render_resource(
-          :max_html_tree_work,
+          :max_work,
           length(transaction.inserted) + length(ids),
           :html
         )
@@ -258,7 +258,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
     owner = tree.nodes[parent]
 
     HtmlValidator.reserve_render_resource(
-      :max_html_tree_work,
+      :max_work,
       length(owner.children) + length(ids),
       :html
     )
@@ -279,7 +279,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
   # Normalization can add implicit groups or edit a text token. Import those
   # projections without changing an existing logical identity or fragment root.
   defp store_subtree(tree, node, parent, scope, recursive?) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
     id = Map.get_lazy(node, :node_id, &make_ref/0)
     document = Map.fetch!(tree.nodes, tree.root).document_id
     scope = if node.type == :document_fragment, do: id, else: scope
@@ -345,7 +345,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
     if parent == nil do
       # Parser depth is bounded before insertion. Charge the complete ancestor
       # walk once; an uncached node never stops traversal to a cached ancestor.
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, work + 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, work + 1, :html)
       tree
     else
       invalidate(tree, parent, work + 1)

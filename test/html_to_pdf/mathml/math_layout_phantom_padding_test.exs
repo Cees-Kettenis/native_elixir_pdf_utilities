@@ -337,7 +337,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
       assert diagnostic.source == "mpadded" and diagnostic.message =~ "prepared"
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 30))
 
     assert {:error, {:invalid_document, diagnostic}} =
              MathLayoutValidator.prepare_padded_placement(
@@ -386,12 +386,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPhantomPaddingTest do
              )
 
     assert diagnostic.stage == :css and diagnostic.message =~ "visibility"
-    Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathLayout.measure(element("mphantom", [token("mn", "1", style)], style))
 
-    assert diagnostic.message =~ "max_font_math_work"
+    assert diagnostic.message =~ "max_work"
     assert diagnostic.operation == :measure_math
   end
 

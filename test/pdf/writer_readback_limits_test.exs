@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Merge, Outlines, Stamp}
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
   alias NativeElixirPdfUtilities.TestSupport.Paths
 
   alias NativeElixirPdfUtilities.Pdf.{
@@ -26,8 +27,19 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     %{limits: limits, pdf: pdf}
   end
 
+  test "outline dictionary serialization retains a depth failure after flat-tree admission",
+       ctx do
+    Limits.install(%{ctx.limits | max_depth: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: []}], outlines: [{"Start", 1}])
+
+    assert diagnostic.stage == :limits and diagnostic.module == InfoCodec
+    assert diagnostic.message =~ "value nesting depth" and diagnostic.message =~ "max_depth"
+  end
+
   test "arrays and dictionaries share inclusive serialization and readback boundaries", ctx do
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 4})
+    Limits.install(%{ctx.limits | max_entries: 4})
 
     for value <- [
           [],
@@ -49,7 +61,7 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
         ] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} = InfoCodec.serialize_value(value)
       assert diagnostic.stage == :limits
-      assert diagnostic.message =~ "max_pdf_container_entries (4)"
+      assert diagnostic.message =~ "max_entries (4)"
     end
 
     assert {:error, {:invalid_pdf_input, diagnostic}} =
@@ -60,7 +72,7 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
 
   test "generated object checks count references and repeated keys, leaving stream bytes opaque",
        ctx do
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 2})
+    Limits.install(%{ctx.limits | max_entries: 2})
     assert :ok = PdfValidator.validate_output_containers("[1 0 R 2 0 R]")
     assert :ok = PdfValidator.validate_output_containers("<< /A 1 /A 2 >>")
 
@@ -96,21 +108,32 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
              catch_throw(WriterValidator.reserve_output_containers("[1 2 3]"))
   end
 
-  test "merge and render reject a generated Kids array above the shared cap", ctx do
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 8})
+  test "merge and render include Kids growth in their shared entry allowance", ctx do
+    for build <- [
+          fn count -> Merge.merge(List.duplicate(ctx.pdf, count)) end,
+          fn count -> PdfWriter.render(List.duplicate(%{size: {100, 100}, boxes: []}, count)) end
+        ] do
+      Limits.install(ctx.limits)
+      assert {:ok, _} = build.(8)
 
-    for count <- [7, 8, 9] do
-      for operation <- [
-            fn -> Merge.merge(List.duplicate(ctx.pdf, count)) end,
-            fn -> PdfWriter.render(List.duplicate(%{size: {100, 100}, boxes: []}, count)) end
-          ] do
+      assert {{:ok, output}, used} =
+               ResourceBudget.measure_operation(:max_entries, fn -> build.(8) end)
+
+      assert {:ok, document} = Reader.read(output)
+      entries = max(used, map_size(document.xref))
+
+      for count <- [7, 8, 9] do
+        Limits.install(%{ctx.limits | max_entries: entries})
+        result = build.(count)
+
         if count <= 8 do
-          assert {:ok, output} = operation.()
-          assert {:ok, _} = Reader.read(output)
+          assert {:ok, output} = result
+          Limits.install(ctx.limits)
+          assert {:ok, %{pages: pages}} = Reader.read(output)
+          assert length(pages) == count
         else
-          assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
-          assert diagnostic.stage == :limits
-          assert diagnostic.message =~ "max_pdf_container_entries"
+          assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+          assert diagnostic.message =~ "max_entries"
         end
       end
     end
@@ -124,9 +147,9 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     # The input dictionary fits, but materializing inherited Rotate adds an entry.
     [page] = input.pages
     input = put_in(input.inherited[page].rotate, [{:int, 0}])
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 5})
+    Limits.install(%{ctx.limits | max_entries: 5})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = AssemblyWriter.write([input])
-    assert diagnostic.message =~ "max_pdf_container_entries"
+    assert diagnostic.message =~ "max_entries"
     assert is_binary(diagnostic.source)
 
     object = context.document.trailer["Size"]
@@ -136,35 +159,44 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
              IncrementalWriter.write(context, [{object, 0, {:stream, dictionary, ""}}])
   end
 
-  test "generated annotation arrays use the inclusive container boundary", ctx do
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 12})
-
-    for count <- [12, 13] do
-      boxes =
-        for index <- 1..count do
-          %{
-            type: :text,
-            text: "A",
-            font: "Helvetica",
-            font_size: 8,
-            x: index * 3,
-            y: 20,
-            width: 3,
-            color: {0, 0, 0},
-            link_url: "https://example.com/"
-          }
-        end
-
-      result = PdfWriter.render([%{size: {100, 100}, boxes: boxes}])
-
-      if count == 12 do
-        assert {:ok, output} = result
-        assert {:ok, _} = Reader.read(output)
-      else
-        assert {:error, {:resource_limit_exceeded, diagnostic}} = result
-        assert diagnostic.message =~ "max_pdf_container_entries"
+  test "generated annotation inputs use the inclusive shared entry boundary", ctx do
+    boxes =
+      for index <- 1..13 do
+        %{
+          type: :text,
+          text: "A",
+          font: "Helvetica",
+          font_size: 8,
+          x: index * 3,
+          y: 20,
+          width: 3,
+          color: {0, 0, 0},
+          link_url: "https://example.com/"
+        }
       end
-    end
+
+    page = %{size: {100, 100}, boxes: Enum.take(boxes, 12)}
+    assert {:ok, _} = PdfWriter.render([page])
+
+    assert {{:ok, output}, used} =
+             ResourceBudget.measure_operation(:max_entries, fn -> PdfWriter.render([page]) end)
+
+    assert {:ok, document} = Reader.read(output)
+    entries = max(used, map_size(document.xref))
+    Limits.install(%{ctx.limits | max_entries: entries})
+    assert {:ok, output} = PdfWriter.render([page])
+    Limits.install(ctx.limits)
+    assert {:ok, document} = Reader.read(output)
+    assert {:ok, prepared} = Reader.read_validated(output)
+    [page_context] = prepared.pages
+    assert {:ok, annotations} = Reader.resolve(document, page_context.dictionary["Annots"])
+    assert length(annotations) == 12
+    Limits.install(%{ctx.limits | max_entries: entries})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([%{page | boxes: boxes}])
+
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "embedded font width and text-adjustment arrays cannot exceed the shared cap", ctx do
@@ -176,42 +208,53 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     assert {:ok, _, font} = Font.resolve("Fixture Sans", 400, :normal, registry)
     glyph = font.cmap[?A]
     font = Map.put(font, :kerning, %{{glyph, glyph} => -100})
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 12})
 
-    for kind <- [:kerning, :explicit, :widths], count <- [6, 7] do
-      text =
-        if kind == :widths,
-          do: binary_part("ABCDEFG", 0, count),
-          else: String.duplicate("A", count)
+    for kind <- [:kerning, :explicit, :widths] do
+      Limits.install(ctx.limits)
 
-      box = %{
-        type: :text,
-        text: text,
-        font: Font.pdf_name(font),
-        font_face: font,
-        font_size: 10.1,
-        x: 0,
-        y: 20,
-        color: {0, 0, 0}
-      }
+      for count <- [6, 7] do
+        text =
+          if kind == :widths,
+            do: binary_part("ABCDEFG", 0, count),
+            else: String.duplicate("A", count)
 
-      box =
-        if kind == :explicit,
-          do:
-            Map.merge(box, %{
-              glyph_ids: List.duplicate(glyph, count),
-              snap_to_css_pixel_grid: true
-            }),
-          else: box
+        box = %{
+          type: :text,
+          text: text,
+          font: Font.pdf_name(font),
+          font_face: font,
+          font_size: 10.1,
+          x: 0,
+          y: 20,
+          color: {0, 0, 0}
+        }
 
-      result = PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
+        box =
+          if kind == :explicit,
+            do:
+              Map.merge(box, %{
+                glyph_ids: List.duplicate(glyph, count),
+                snap_to_css_pixel_grid: true
+              }),
+            else: box
 
-      if count == 6 do
-        assert {:ok, output} = result
-        assert {:ok, _} = Reader.read(output)
-      else
-        assert {:error, {:resource_limit_exceeded, diagnostic}} = result
-        assert diagnostic.message =~ "max_pdf_container_entries"
+        page = %{size: {100, 100}, boxes: [box]}
+
+        if count == 6 do
+          assert {:ok, _} = PdfWriter.render([page])
+
+          assert {{:ok, output}, entries} =
+                   ResourceBudget.measure_operation(:max_entries, fn ->
+                     PdfWriter.render([page])
+                   end)
+
+          assert {:ok, _} = Reader.read(output)
+          Process.put({__MODULE__, :font_entries}, entries)
+        else
+          Limits.install(%{ctx.limits | max_entries: Process.delete({__MODULE__, :font_entries})})
+          assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render([page])
+          assert diagnostic.message =~ "max_entries"
+        end
       end
     end
   end
@@ -219,24 +262,36 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
   test "generated fixed dictionaries and outline serialization propagate container diagnostics",
        ctx do
     page = %{size: {100, 100}, boxes: []}
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 4})
-    assert {:error, {:resource_limit_exceeded, _}} = PdfWriter.render([page])
-
-    Limits.install(%{ctx.limits | max_pdf_container_entries: 5})
     assert {:ok, output} = PdfWriter.render([page])
-    assert {:ok, _} = Reader.read(output)
+    assert {:ok, document} = Reader.read(output)
 
-    outline = {"Parent", 1, [{"Child", 1}]}
+    dictionary =
+      document.objects
+      |> Map.values()
+      |> Enum.map(& &1.value)
+      |> Enum.filter(&is_map/1)
+      |> Enum.max_by(&map_size/1)
+
+    entries = map_size(dictionary)
+    Limits.install(%{ctx.limits | max_entries: entries})
+    assert {:ok, _} = InfoCodec.serialize_value(dictionary)
+    Limits.install(%{ctx.limits | max_entries: entries - 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             PdfWriter.render([page], outlines: [outline])
+             InfoCodec.serialize_value(dictionary)
 
-    assert diagnostic.message =~ "max_pdf_container_entries"
+    assert diagnostic.message =~ "max_entries"
+    Limits.install(%{ctx.limits | max_entries: entries})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([page], outlines: [{"Parent", 1, [{"Child", 1}]}])
+
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "serialization counts scalar and empty-container boundaries like the reader", ctx do
     for maximum <- [1, 2, 100, 200], leaf <- [0, [], %{}], kind <- [:array, :dictionary] do
-      Limits.install(%{ctx.limits | max_pdf_value_depth: maximum})
+      Limits.install(%{ctx.limits | max_depth: maximum})
       leaf_depth = if is_list(leaf) or is_map(leaf), do: 1, else: 0
 
       value =
@@ -253,7 +308,9 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
 
         assert diagnostic.stage == :limits
         assert diagnostic.reason == :resource_limit_exceeded
-        assert diagnostic.message == "PDF value nesting depth exceeds the #{maximum}-level limit"
+
+        assert diagnostic.message ==
+                 "PDF value nesting depth exceeds max_depth (#{maximum}-level limit)"
       end
     end
   end
@@ -261,7 +318,7 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
   test "incremental values, streams and copied trailers propagate depth diagnostics", ctx do
     assert {:ok, context} = Reader.read_validated(ctx.pdf)
     object = context.document.trailer["Size"]
-    Limits.install(%{ctx.limits | max_pdf_value_depth: 2})
+    Limits.install(%{ctx.limits | max_depth: 2})
 
     for body <- [
           {:value, %{"Custom" => [[]]}},
@@ -271,14 +328,14 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
                IncrementalWriter.write(context, [{object, 0, body}])
 
       assert diagnostic.stage == :limits
-      assert diagnostic.message == "PDF value nesting depth exceeds the 2-level limit"
+      assert diagnostic.message == "PDF value nesting depth exceeds max_depth (2-level limit)"
     end
 
     context = put_in(context.document.trailer["Info"], %{"Custom" => []})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = IncrementalWriter.write(context, [])
     assert diagnostic.stage == :limits
-    assert diagnostic.message == "PDF value nesting depth exceeds the 2-level limit"
+    assert diagnostic.message == "PDF value nesting depth exceeds max_depth (2-level limit)"
   end
 
   test "assembled outline objects propagate the shared depth diagnostic", ctx do
@@ -286,11 +343,11 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     assert {:ok, context} = Reader.read_validated(outlined)
     assert {:ok, input} = MergeValidator.prepare(context)
     assert {:ok, inputs} = MergeValidator.prepare_remapping([input], 3)
-    Limits.install(%{ctx.limits | max_pdf_value_depth: 1})
+    Limits.install(%{ctx.limits | max_depth: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = AssemblyWriter.write(inputs)
     assert diagnostic.stage == :limits
-    assert diagnostic.message == "PDF value nesting depth exceeds the 1-level limit"
+    assert diagnostic.message == "PDF value nesting depth exceeds max_depth (1-level limit)"
   end
 
   test "generated and incremental writers include object zero at exact readback boundaries",
@@ -304,21 +361,18 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
       assert {:ok, output} = operation.()
       assert {:ok, prepared} = Reader.read_validated(output)
       count = map_size(prepared.document.xref)
+      Limits.install(%{ctx.limits | max_entries: count})
+      assert :ok = PdfValidator.validate_object_capacity(count, prepared.document.trailer["Size"])
+      Limits.install(%{ctx.limits | max_entries: count - 1})
 
-      for allowance <- [count - 1, count, count + 1] do
-        Limits.install(%{ctx.limits | max_pdf_objects: allowance})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               PdfValidator.validate_object_capacity(count, prepared.document.trailer["Size"])
 
-        case allowance < count do
-          true ->
-            assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
-            assert diagnostic.reason == :resource_limit_exceeded
-            assert diagnostic.message =~ "object"
-
-          false ->
-            assert {:ok, output} = operation.()
-            assert {:ok, _} = Reader.read_validated(output)
-        end
-      end
+      assert diagnostic.message =~ "object"
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+      assert diagnostic.message =~ "max_entries"
+      Limits.install(ctx.limits)
+      assert {:ok, _} = operation.()
     end
   end
 
@@ -328,16 +382,29 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     assert {:ok, prepared} = Reader.read_validated(sparse)
     assert prepared.document.trailer["Size"] == 9
     assert map_size(prepared.document.xref) == 6
-    Limits.install(%{ctx.limits | max_pdf_objects: 10})
     assert {:ok, updated} = Outlines.put(sparse, [{"Page", 1}])
     assert {:ok, prepared} = Reader.read_validated(updated)
     assert map_size(prepared.document.xref) == 8
     assert prepared.document.trailer["Size"] == 11
 
-    Limits.install(%{ctx.limits | max_pdf_objects: 9})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Outlines.put(sparse, [{"Page", 1}])
+    Limits.install(%{ctx.limits | max_entries: 10})
+
+    assert :ok =
+             PdfValidator.validate_object_capacity(
+               map_size(prepared.document.xref),
+               prepared.document.trailer["Size"]
+             )
+
+    Limits.install(%{ctx.limits | max_entries: 9})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfValidator.validate_object_capacity(
+               map_size(prepared.document.xref),
+               prepared.document.trailer["Size"]
+             )
+
     assert diagnostic.message =~ "object IDs"
-    Limits.install(%{ctx.limits | max_pdf_objects: 8})
+    Limits.install(ctx.limits)
     assert {:ok, removed} = Outlines.put(sparse, [])
     assert {:ok, _} = Reader.read_validated(removed)
   end
@@ -351,18 +418,18 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
   end
 
   test "outline additions and removals reserve an incremental revision before writing", ctx do
-    Limits.install(%{ctx.limits | max_pdf_xref_revisions: 1})
+    assert {:ok, context} = Reader.read_validated(ctx.pdf)
+    Limits.install(%{ctx.limits | max_entries: 1})
 
     for items <- [[], [{"Page", 1}]] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} = Outlines.put(ctx.pdf, items)
-      assert diagnostic.stage == :incremental_write
+      assert diagnostic.stage == :limits
       assert diagnostic.operation == :put_outlines and diagnostic.module == Outlines
-      assert diagnostic.message =~ "max_pdf_xref_revisions"
+      assert diagnostic.message =~ "max_entries"
     end
 
-    assert {:ok, context} = Reader.read_validated(ctx.pdf)
     assert {:error, {:resource_limit_exceeded, _}} = OutlineWriter.write(context, [])
-    Limits.install(%{ctx.limits | max_pdf_xref_revisions: 2})
+    Limits.install(ctx.limits)
     assert {:ok, updated} = Outlines.put(ctx.pdf, [{"Page", 1}])
     assert {:ok, _} = Reader.read_validated(updated)
   end
@@ -375,7 +442,7 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
 
     assert diagnostic.operation == :put_outlines
     assert diagnostic.source == "outline destination"
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
 
     tiny = -1.0e-100
     assert {:ok, encoded} = InfoCodec.serialize_value(tiny)
@@ -383,11 +450,11 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
 
     for kind <- [:fit_h, :fit_v, :fit_bh, :fit_bv] do
       items = [%{title: "Tiny", page: 1, view: {kind, tiny}}]
-      Limits.install(%{ctx.limits | max_pdf_numeric_token_bytes: bytes - 1})
+      Limits.install(%{ctx.limits | max_numeric_token_bytes: bytes - 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = Outlines.put(ctx.pdf, items)
-      assert diagnostic.message =~ "max_pdf_numeric_token_bytes"
+      assert diagnostic.message =~ "max_numeric_token_bytes"
       assert diagnostic.source == "outline destination"
-      Limits.install(%{ctx.limits | max_pdf_numeric_token_bytes: bytes})
+      Limits.install(%{ctx.limits | max_numeric_token_bytes: bytes})
       assert {:ok, updated} = Outlines.put(ctx.pdf, items)
       assert {:ok, [%{view: {^kind, actual}}]} = Outlines.get(updated)
       assert actual == tiny

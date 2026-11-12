@@ -335,7 +335,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorBoundariesTest do
     end
   end
 
-  test "direction selectors can resolve source contexts while unsupported RTL painting stays gated" do
+  test "direction selectors resolve source contexts and computed RTL inheritance" do
     assert {:ok, dom} = HtmlParser.parse_document_detailed("<div dir='rtl'><p>Text</p></div>")
     caller = self()
 
@@ -353,7 +353,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorBoundariesTest do
              )
 
     assert_received {:source_color, {1, 0, 0}}
-    assert {:error, {:not_implemented, diagnostic}} = Style.compute_detailed(dom)
-    assert diagnostic.source == "dir=rtl" and diagnostic.message =~ "bidirectional"
+    assert {:ok, %{children: [%{tag: "body", children: [div]}]}} = Style.compute_detailed(dom)
+    assert div.style.direction == :rtl
+    [paragraph] = div.children
+    assert paragraph.style.direction == :rtl
   end
 end

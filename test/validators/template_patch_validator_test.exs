@@ -222,20 +222,20 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
              )
 
     tree = HtmlTree.from_document(document)
-    Limits.install(%{limits | max_html_tree_work: 1})
+    Limits.install(%{limits | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
 
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
 
-    Limits.install(%{limits | max_html_tree_work: 1000})
+    Limits.install(%{limits | max_work: 1000})
     assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
     assert length(target.removed) == 30
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.reserve_render_resource(:max_html_tree_work, 950, :html)
+               HtmlValidator.reserve_render_resource(:max_work, 950, :html)
                HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
              end)
 
@@ -375,14 +375,16 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
                      end)
                    end)
 
-          budget_key = {HtmlValidator, :render_budget}
+          budget_key = {NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, :scope}
           counters = Process.get(budget_key)
-          Process.put(budget_key, %{})
+          Process.delete(budget_key)
 
-          assert {:error, {:invalid_document, _}} =
-                   TemplatePatchValidator.with_planned_insertion(handle, tree, fn _ ->
-                     flunk("reset budget accepted")
-                   end)
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+            assert {:error, {:invalid_document, _}} =
+                     TemplatePatchValidator.with_planned_insertion(handle, tree, fn _ ->
+                       flunk("reset budget accepted")
+                     end)
+          end)
 
           Process.put(budget_key, counters)
 
@@ -620,7 +622,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     assert {:ok, dom} = HtmlParser.parse_detailed("<?marker name='A'>")
     tree = HtmlTree.from_document(dom)
     assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
-    Limits.install(%{limits | max_html_tree_work: 0})
+    Limits.install(%{limits | max_work: 0})
     assert {:error, {:resource_limit_exceeded, _}} = HtmlTree.begin_content_patch(tree, target)
 
     assert {:error, {:resource_limit_exceeded, _}} =

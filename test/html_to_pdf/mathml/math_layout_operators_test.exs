@@ -324,7 +324,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert {:ok, vertical} = MathLayoutValidator.prepare_element(n.("mo", "(", %{}), %{})
     sum = %{n.("mo", "∑", %{}) | style: %{style | math_style: :normal}}
     assert {:ok, large} = MathLayoutValidator.prepare_element(sum, %{})
-    Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     for prepared <- [vertical, large] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -332,7 +332,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
 
       assert diagnostic.stage == :font
       assert diagnostic.operation == :measure_math
-      assert diagnostic.message =~ "max_font_math_work"
+      assert diagnostic.message =~ "max_work"
     end
   end
 
@@ -766,7 +766,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
              MathLayout.measure(r.([no_assembly]), %{block_stretch_size: {50, 50}})
 
     assert length(fallback.glyphs) == 1
-    huge_style = %{style | font_size: Limits.get(:max_css_numeric_magnitude)}
+    huge_style = %{style | font_size: Limits.get(:max_numeric_magnitude)}
 
     huge = %{
       n.("mo", "(", %{"minsize" => "1000000000%"})
@@ -847,7 +847,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
       assert byte_size(pdf) > 0
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 100))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 100))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>")
@@ -859,7 +859,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert {:error, {:resource_limit_exceeded, operator_diagnostic}} =
              HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>", print_viewport: {80, 80})
 
-    assert operator_diagnostic.message =~ "max_css_numeric_magnitude"
+    assert operator_diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "public operators use caller font bytes and diagnose missing glyphs or MATH data" do

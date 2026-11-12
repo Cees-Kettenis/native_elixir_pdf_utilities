@@ -15,18 +15,18 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
   end
 
   test "token accounting shares byte and token budgets with individual charges" do
-    Limits.install(%{Limits.effective() | max_pdf_reader_work: 5, max_pdf_reader_tokens: 2})
+    Limits.install(%{Limits.effective() | max_work: 5, max_entries: 2})
 
     assert :ok = PdfValidator.charge_reader_token(100)
 
     assert :ok =
              PdfValidator.with_reader_budget(fn ->
                :ok = PdfValidator.charge_reader_token(2)
-               :ok = PdfValidator.charge_reader_budget(:max_pdf_reader_work, 1)
+               :ok = PdfValidator.charge_reader_budget(:max_work, 1)
                PdfValidator.charge_reader_token(2)
              end)
 
-    for {bytes, key} <- [{3, :max_pdf_reader_work}, {0, :max_pdf_reader_tokens}] do
+    for {bytes, key} <- [{3, :max_work}, {0, :max_entries}] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                PdfValidator.with_reader_budget(fn ->
                  :ok = PdfValidator.charge_reader_token(2)
@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
       assert diagnostic.message =~ Atom.to_string(key)
     end
 
-    Limits.install(%{Limits.effective() | max_pdf_reader_tokens: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
 
     assert [{:int, 1}] =
              PdfValidator.with_reader_budget(fn ->
@@ -109,24 +109,33 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     limits = Limits.effective()
     body = "<< /A 1 >>"
     objects = [{1, body}, {2, body}]
-    Limits.install(%{limits | max_pdf_input_bytes: 2 * byte_size(body), max_pdf_objects: 2})
+
+    used =
+      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+        assert {:ok, _} = Reader.parse_object_bodies(objects)
+
+        limits.max_entries -
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_entries)
+      end)
+
+    Limits.install(%{limits | max_entries: used})
     assert {:ok, _} = Reader.parse_object_bodies(objects)
     assert_limit(Reader.parse_object_bodies(objects ++ [{3, body}]))
-    assert_limit(Reader.parse_object_bodies([{3, body}]))
-    Limits.install(%{limits | max_pdf_input_bytes: 2 * byte_size(body) - 1})
+    assert_limit(Reader.parse_object_bodies([{used + 1, body}]))
+    Limits.install(%{limits | max_input_bytes: 2 * byte_size(body) - 1})
     assert_limit(Reader.parse_object_bodies(objects))
 
-    for key <- [:max_pdf_reader_tokens, :max_pdf_reader_values, :max_pdf_reader_work] do
+    for key <- [:max_entries, :max_work] do
       Limits.install(Map.put(limits, key, 1))
       assert_limit(Reader.parse_object_bodies(objects))
     end
 
-    Limits.install(%{limits | max_pdf_reader_values: 4})
+    Limits.install(%{limits | max_entries: used})
     assert {:ok, _} = Reader.parse_object_bodies(objects)
 
     assert_limit(
       PdfValidator.with_reader_budget(fn ->
-        PdfValidator.charge_reader_budget(:max_pdf_reader_values, 1)
+        PdfValidator.charge_reader_budget(:max_entries, 1)
         Reader.parse_object_bodies(objects)
       end)
     )
@@ -140,8 +149,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
 
     Limits.install(%{
       limits
-      | max_pdf_decoded_stream_bytes: 5_000,
-        max_pdf_reader_decoded_bytes: decoded_bytes
+      | max_decoded_bytes: decoded_bytes
     })
 
     assert {:ok, document} = Reader.read(pdf)
@@ -150,8 +158,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
 
     Limits.install(%{
       limits
-      | max_pdf_decoded_stream_bytes: 5_000,
-        max_pdf_reader_decoded_bytes: decoded_bytes - 1
+      | max_decoded_bytes: decoded_bytes - 1
     })
 
     assert_limit(Reader.read(pdf))
@@ -161,12 +168,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
   end
 
   test "all operation budgets accept their boundary and nested scopes cannot reset them" do
-    for key <- [
-          :max_pdf_reader_decoded_bytes,
-          :max_pdf_reader_tokens,
-          :max_pdf_reader_values,
-          :max_pdf_reader_work
-        ] do
+    for key <- [:max_decoded_bytes, :max_entries, :max_work] do
       limit = Limits.get(key)
 
       assert :ok =
@@ -187,14 +189,14 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     end
 
     assert PdfValidator.remaining_reader_decoded_bytes() ==
-             Limits.get(:max_pdf_reader_decoded_bytes)
+             Limits.get(:max_decoded_bytes)
   end
 
   test "reader token, value and work failures retain diagnostics" do
     pdf = File.read!(Paths.fixture("pdf_reader/classic-xref.pdf"))
     limits = Limits.effective()
 
-    for key <- [:max_pdf_reader_tokens, :max_pdf_reader_values, :max_pdf_reader_work] do
+    for key <- [:max_entries, :max_work] do
       Limits.install(Map.put(limits, key, 1))
       assert_limit(Reader.read(pdf))
     end
@@ -210,7 +212,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
           "<< /Values #{array} /Length #{byte_size(stream)} >>\nstream\n#{stream}\nendstream"
         ] do
       input = classic_pdf(value)
-      Limits.install(%{limits | max_pdf_reader_tokens: 1_100})
+      # Each integer contributes a token and a parsed value to the shared
+      # collection allowance. This still excludes a second tokenization pass.
+      Limits.install(%{limits | max_entries: 2_200})
       assert {:ok, document} = Reader.read(input)
 
       case document.objects[{3, 0}] do
@@ -221,23 +225,30 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
           assert values == List.duplicate(7, 1_000)
       end
 
-      Limits.install(%{limits | max_pdf_reader_tokens: 1_000})
+      Limits.install(%{limits | max_entries: 2_000})
       assert_limit(Reader.read(input))
     end
   end
 
   test "container entries count repeated dictionary keys as work" do
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_container_entries: 4})
-    assert {:ok, _} = Reader.read(classic_pdf("[1 2 3 4]"))
-    assert_limit(Reader.read(classic_pdf("[1 2 3 4 5]")))
-    assert {:ok, _} = Reader.read(classic_pdf("<< /A 1 /A 2 /A 3 /A 4 >>"))
-    assert_limit(Reader.read(classic_pdf("<< /A 1 /A 2 /A 3 /A 4 /A 5 >>")))
+    Limits.install(%{limits | max_entries: 4})
+    # Isolate the collection guard from the enclosing PDF's tokens and values,
+    # which now consume the same configured entry allowance.
+    for value <- ["[1 2 3 4]", "<< /A 1 /A 2 /A 3 /A 4 >>"] do
+      tokens = Tokenizer.new(value) |> Tokenizer.tokenize_all()
+      assert {:ok, _, []} = Reader.parse_value_tokens(tokens)
+    end
+
+    for value <- ["[1 2 3 4 5]", "<< /A 1 /A 2 /A 3 /A 4 /A 5 >>"] do
+      tokens = Tokenizer.new(value) |> Tokenizer.tokenize_all()
+      assert_limit(Reader.parse_value_tokens(tokens))
+    end
   end
 
   test "oversized decimal and binary integers fail before large integer construction" do
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_numeric_token_bytes: 10})
+    Limits.install(%{limits | max_numeric_token_bytes: 10})
     assert [{:int, 1_111_111_111}] = Tokenizer.new("1111111111") |> Tokenizer.tokenize_all()
     assert_limit(Tokenizer.new("11111111111") |> Tokenizer.tokenize_all())
     assert_limit(Reader.read(classic_pdf("11111111111")))
@@ -261,20 +272,19 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
 
     Limits.install(%{
       limits
-      | max_pdf_decoded_stream_bytes: 10,
-        max_pdf_reader_decoded_bytes: 100,
-        max_pdf_decompression_ratio: 3
+      | max_decoded_bytes: 100,
+        max_decompression_ratio: 3
     })
 
-    assert PdfValidator.reader_decode_limit(4) == 10
+    assert PdfValidator.reader_decode_limit(4) == 12
     assert PdfValidator.reader_decode_limit(2) == 6
     assert PdfValidator.reader_decode_limit(0) == 1
     assert :ok = PdfValidator.validate_decoded_stream_size(2, 6)
     assert :ok = PdfValidator.validate_decoded_stream_size(0, 0)
 
     for {encoded, decoded, key} <- [
-          {2, 7, :max_pdf_decompression_ratio},
-          {4, 11, :max_pdf_decoded_stream_bytes}
+          {2, 7, :max_decompression_ratio},
+          {4, 101, :max_decoded_bytes}
         ] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                PdfValidator.validate_decoded_stream_size(encoded, decoded)
@@ -286,7 +296,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
 
     assert :ok =
              PdfValidator.with_reader_budget(fn ->
-               PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, 98)
+               PdfValidator.charge_reader_budget(:max_decoded_bytes, 98)
                assert PdfValidator.reader_decode_limit(4) == 2
                assert :ok = PdfValidator.validate_decoding_progress(2, 2, {9, 0})
 
@@ -299,7 +309,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
                assert diagnostic.module == Reader and diagnostic.operation == :read
                assert diagnostic.message =~ "safety limit" and diagnostic.message =~ "object 9 0"
 
-               PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, 2)
+               PdfValidator.charge_reader_budget(:max_decoded_bytes, 2)
                assert PdfValidator.reader_decode_limit(4) == 0
 
                # These bytes have already been charged; final admission must not charge them twice.
@@ -327,13 +337,13 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
         filters: [%{name: filter, parameters: %{"Predictor" => 1}}]
       }
 
-      Limits.install(%{limits | max_pdf_reader_decoded_bytes: byte_size(decoded)})
+      Limits.install(%{limits | max_decoded_bytes: byte_size(decoded)})
       assert {:ok, ^decoded} = Reader.decode_prepared_stream(stream)
-      Limits.install(%{limits | max_pdf_reader_decoded_bytes: byte_size(decoded) - 1})
+      Limits.install(%{limits | max_decoded_bytes: byte_size(decoded) - 1})
       assert_limit(Reader.decode_prepared_stream(stream))
     end
 
-    Limits.install(%{limits | max_pdf_decoded_stream_bytes: 2})
+    Limits.install(%{limits | max_decoded_bytes: 2})
 
     assert_limit(
       Reader.decode_prepared_stream(%{
@@ -357,9 +367,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
       ]
     }
 
-    Limits.install(%{limits | max_pdf_reader_decoded_bytes: byte_size(encoded) + 3})
+    Limits.install(%{limits | max_decoded_bytes: byte_size(encoded) + 3})
     assert {:ok, "abc"} = Reader.decode_prepared_stream(stream)
-    Limits.install(%{limits | max_pdf_reader_decoded_bytes: byte_size(encoded) + 2})
+    Limits.install(%{limits | max_decoded_bytes: byte_size(encoded) + 2})
     assert_limit(Reader.decode_prepared_stream(stream))
   end
 
@@ -376,14 +386,14 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     }
 
     assert {:ok, <<>>} = Reader.decode_prepared_stream(stream)
-    Limits.install(%{limits | max_pdf_reader_work: byte_size(encoded) + 1})
+    Limits.install(%{limits | max_work: byte_size(encoded) + 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Reader.decode_prepared_stream(stream)
 
     assert diagnostic.stage == :limits and diagnostic.operation == :read
     assert diagnostic.source == "object 1 0"
-    assert diagnostic.message =~ "max_pdf_reader_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   defp assert_limit(result) do
@@ -400,11 +410,11 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     stream = "<< /Length 4 0 R >>\nstream\nx\nendstream"
     pdf = classic_pdf(stream, [{4, "5 0 R"}, {5, "1"}, {6, stream}, {7, stream}])
     assert {:ok, _} = Reader.read(pdf)
-    Limits.install(%{limits | max_pdf_reference_resolution_work: 3})
+    Limits.install(%{limits | max_work: 3})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(pdf)
     assert diagnostic.stage == :limits and diagnostic.operation == :read
     assert diagnostic.module == Reader
-    assert diagnostic.message =~ "indirect reference resolution work"
+    assert diagnostic.message =~ "max_work"
     Limits.install(limits)
     assert {:ok, _} = Reader.read(pdf)
   end

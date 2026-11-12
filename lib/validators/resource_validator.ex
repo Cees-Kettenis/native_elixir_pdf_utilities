@@ -368,15 +368,15 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceValidator do
       not is_nil(identity) and identity in context.ancestors ->
         error(:resource_cycle, "embedded document repeats an active ancestor file", source)
 
-      context.depth + 1 > Limits.get(:max_embedded_document_depth) ->
+      context.depth + 1 > Limits.get(:max_depth) ->
         error(
           :resource_limit_exceeded,
-          "embedded documents exceed max_embedded_document_depth",
+          "embedded documents exceed max_depth",
           source
         )
 
       true ->
-        HtmlValidator.reserve_render_resource(:max_embedded_documents, 1, :resource)
+        HtmlValidator.reserve_render_resource(:max_entries, 1, :resource)
 
         child = %{
           context

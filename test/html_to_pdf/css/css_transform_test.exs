@@ -165,12 +165,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
   end
 
   test "function work limits and invalid visible declarations use canonical diagnostics" do
-    Limits.install(%{Limits.effective() | max_css_transform_operations: 1})
+    original = Limits.effective()
+    Limits.install(%{original | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssTransformValidator.prepare("scale(2) rotate(1deg)")
 
-    assert diagnostic.message =~ "max_css_transform_operations"
+    assert diagnostic.message =~ "max_entries"
+
+    Limits.install(original)
 
     assert {:error, {:invalid_css, diagnostic}} =
              HtmlToPdf.render("<div style='transform:rotate(1)'>Invalid</div>")
@@ -349,13 +352,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
              HtmlToPdf.render(clipped, page_size: {240, 180}, margin: 12, compress_streams: false)
 
     refute hidden =~ "https://example.com/overflow"
-    Limits.install(Map.put(Limits.effective(), :max_rendered_pages, 1))
+    Limits.install(Map.put(Limits.effective(), :max_pages, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(html, page_size: {240, 180}, margin: 12)
 
     assert diagnostic.stage == :pagination
-    assert diagnostic.message =~ "max_rendered_pages"
+    assert diagnostic.message =~ "max_pages"
   end
 
   test "checkbox, radio and unnamed text page slices retain source ownership and generated names" do

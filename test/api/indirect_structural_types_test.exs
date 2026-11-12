@@ -182,9 +182,32 @@ defmodule NativeElixirPdfUtilities.IndirectStructuralTypesTest do
     for types <- [["Catalog"], ["Pages"], ["Page"]] do
       Limits.install(limits)
       indirect = indirect_types(context, types)
-      Limits.install(%{limits | max_pdf_reference_chain_depth: 1})
       assert {:ok, _} = Reader.read(direct)
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(indirect)
+      assert {:ok, prepared} = Reader.read_validated(indirect)
+      Limits.install(%{limits | max_depth: 2})
+
+      reference =
+        Enum.find_value(prepared.document.objects, fn {_id, object} ->
+          case object.value do
+            %{"Type" => {:ref, _} = value} -> value
+            _ -> nil
+          end
+        end)
+
+      assert {:ok, {:name, _}} =
+               NativeElixirPdfUtilities.Validators.PdfValidator.resolve(
+                 context.document,
+                 {:name, hd(types)}
+               )
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               NativeElixirPdfUtilities.Validators.PdfValidator.resolve(
+                 prepared.document,
+                 reference,
+                 operation: :read,
+                 module: Reader
+               )
+
       assert diagnostic.stage == :limits
       assert diagnostic.module == Reader
       assert diagnostic.operation == :read
@@ -194,11 +217,15 @@ defmodule NativeElixirPdfUtilities.IndirectStructuralTypesTest do
 
   defp indirect_types(context, types) do
     next = context.document.trailer["Size"]
-    aliases = Map.new(Enum.with_index(types), fn {type, index} -> {type, next + index * 2} end)
+    aliases = Map.new(Enum.with_index(types), fn {type, index} -> {type, next + index * 3} end)
 
     names =
       Enum.flat_map(aliases, fn {type, id} ->
-        [{id, 0, {:value, {:ref, {id + 1, 0}}}}, {id + 1, 0, {:value, {:name, type}}}]
+        [
+          {id, 0, {:value, {:ref, {id + 1, 0}}}},
+          {id + 1, 0, {:value, {:ref, {id + 2, 0}}}},
+          {id + 2, 0, {:value, {:name, type}}}
+        ]
       end)
 
     objects =

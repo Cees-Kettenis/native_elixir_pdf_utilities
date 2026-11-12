@@ -217,7 +217,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
 
   defp index(data, offset, count_bytes \\ 2) do
     count = :binary.decode_unsigned(read(data, offset, count_bytes))
-    FontValidator.reserve(:max_font_cff_work, count + 2)
+    FontValidator.reserve(:max_work, count + 2)
 
     if count == 0 do
       {{}, offset + count_bytes}
@@ -235,7 +235,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
       size_of_data = List.last(offsets) - 1
       start = offset + count_bytes + 1 + byte_size(positions)
       read(data, start, size_of_data)
-      FontValidator.reserve(:max_font_cff_work, byte_size(positions) + size_of_data)
+      FontValidator.reserve(:max_work, byte_size(positions) + size_of_data)
 
       objects =
         offsets
@@ -249,7 +249,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
   defp dictionary(data, context \\ nil) do
     # Admit the complete encoded dictionary before scanning variable-size real
     # operands. Its 48-operand stack is a fixed CFF protocol bound.
-    FontValidator.reserve(:max_font_cff_work, byte_size(data))
+    FontValidator.reserve(:max_work, byte_size(data))
     context = context || %{version: 1, store: {}, vsindex: 0, kind: :cff1}
     dictionary_items(data, [], %{}, context)
   end
@@ -327,7 +327,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
           do: invalid("CFF DICT exceeds its fixed #{maximum}-operand stack", "CFF DICT")
 
         {number, rest} = operand(data)
-        FontValidator.check(:max_font_numeric_magnitude, ceil(abs(number)))
+        FontValidator.check(:max_numeric_magnitude, ceil(abs(number)))
         dictionary_items(rest, [number | operands], values, context)
     end
   end
@@ -454,7 +454,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
       unless glyph_count <= maximum,
         do: invalid("CFF glyph count exceeds its predefined charset", "CFF charset")
 
-      FontValidator.reserve(:max_font_cff_work, glyph_count)
+      FontValidator.reserve(:max_work, glyph_count)
       {predefined |> Tuple.to_list() |> Enum.take(glyph_count) |> tl(), owners}
     else
       maximum = if cid?, do: 65_535, else: 390 + strings
@@ -473,7 +473,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
             invalid("CFF charset format must be 0, 1 or 2", "CFF charset")
         end
 
-      FontValidator.reserve(:max_font_cff_work, glyph_count)
+      FontValidator.reserve(:max_work, glyph_count)
 
       unless Enum.all?(identifiers, &(&1 > 0 and &1 <= maximum)) and
                length(identifiers) == MapSet.size(MapSet.new(identifiers)),
@@ -491,7 +491,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
     if remaining == 0 do
       {ranges |> Enum.reverse() |> List.flatten(), cursor}
     else
-      FontValidator.reserve(:max_font_cff_work, 1)
+      FontValidator.reserve(:max_work, 1)
       <<first::16>> = read(data, cursor, 2)
       width = format
       count = :binary.decode_unsigned(read(data, cursor + 2, width)) + 1
@@ -539,7 +539,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
               invalid("CFF Encoding format must be 0 or 1", "CFF Encoding")
           end
 
-        FontValidator.reserve(:max_font_cff_work, length(codes))
+        FontValidator.reserve(:max_work, length(codes))
 
         unless length(codes) < glyph_count and Enum.all?(codes, &(&1 <= 255)) and
                  length(codes) == MapSet.size(MapSet.new(codes)),
@@ -554,7 +554,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
             <<count>> = read(data, finish, 1)
             bytes = read(data, finish + 1, count * 3)
             supplements = for <<code, sid::16 <- bytes>>, do: {code, sid}
-            FontValidator.reserve(:max_font_cff_work, count)
+            FontValidator.reserve(:max_work, count)
 
             unless length(supplements) ==
                      MapSet.size(MapSet.new(Enum.map(supplements, &elem(&1, 0)))),
@@ -603,7 +603,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
           entry_width = if format == 3, do: 3, else: 6
           count = :binary.decode_unsigned(read(data, start + 1, count_width))
           unless count > 0, do: invalid("CFF FDSelect ranges must not be empty", "CFF FDSelect")
-          FontValidator.reserve(:max_font_cff_work, count)
+          FontValidator.reserve(:max_work, count)
           bytes = read(data, start + 1 + count_width, count * entry_width)
 
           sentinel =
@@ -638,7 +638,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
           invalid("CFF 1 FDSelect format must be 0 or 3", "CFF FDSelect")
       end
 
-    FontValidator.reserve(:max_font_cff_work, glyph_count)
+    FontValidator.reserve(:max_work, glyph_count)
 
     unless Enum.all?(indices, &(&1 < font_count)),
       do: invalid("CFF FDSelect references a missing font dictionary", "CFF FDSelect")
@@ -684,7 +684,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffFontValidator do
     if start == finish do
       owners
     else
-      FontValidator.reserve(:max_font_cff_work, length(owners) + 1)
+      FontValidator.reserve(:max_work, length(owners) + 1)
       owner = {kind, start, finish}
 
       unless Enum.all?(owners, fn {_, first, last} = existing ->

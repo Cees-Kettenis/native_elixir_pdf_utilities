@@ -55,7 +55,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       if is_tuple(viewport) and tuple_size(viewport) == 2, do: Tuple.to_list(viewport), else: []
 
     for value <- [density | dimensions], is_number(value) and value > 0 do
-      HtmlValidator.check_render_resource(:max_css_numeric_magnitude, value, :options)
+      HtmlValidator.check_render_resource(:max_numeric_magnitude, value, :options)
     end
 
     valid_viewport? =
@@ -250,8 +250,8 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
   defp select_media(css, context, depth, mode, origin) do
     alias NativeElixirPdfUtilities.Validators.CssSyntaxValidator
-    HtmlValidator.check_render_resource(:max_media_query_depth, depth, :css)
-    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(css), :css)
+    HtmlValidator.check_render_resource(:max_depth, depth, :css)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(css), :css)
 
     {output, records, cursor} =
       css
@@ -435,7 +435,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
     case parsed do
       {:ok, value} when value >= 0 or sign_policy == :signed ->
-        HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(value), :style)
+        HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(value), :style)
         HtmlValidator.normalize_geometry_number(value)
 
       _ ->

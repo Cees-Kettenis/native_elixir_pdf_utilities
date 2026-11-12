@@ -46,7 +46,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
         valid? and
           case {canonical?, Map.get(node, :type), Map.fetch(node, :source)} do
             {false, :processing_instruction, {:ok, %{text: text}}} when is_binary(text) ->
-              HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(text), :html)
+              HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :html)
               true
 
             {false, :processing_instruction, _} ->
@@ -58,7 +58,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
             {_, _, {:ok, %{text: text, line: line, column: column} = source}}
             when is_binary(text) and is_integer(line) and line > 0 and is_integer(column) and
                    column > 0 ->
-              HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(text), :html)
+              HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :html)
               map_size(source) == 3 and String.valid?(text, :fast_ascii)
 
             _ ->
@@ -115,7 +115,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
       if name == "" do
         {:ok, nil}
       else
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :html)
         owner = Map.fetch!(tree.nodes, insertion_parent)
 
         scope =
@@ -124,7 +124,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
               content
 
             {:html, %{type: :element, tag: "body", parent_id: parent}} when not is_nil(parent) ->
-              HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
               case Map.fetch!(tree.nodes, parent) do
                 %{type: :element, tag: "html"} -> parent
@@ -169,7 +169,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
       finish = if target.end, do: Map.get(tree.nodes, target.end)
 
       HtmlValidator.reserve_render_resource(
-        :max_html_tree_work,
+        :max_work,
         if(is_map(parent), do: 2 * length(parent.children), else: 1),
         :html
       )
@@ -218,7 +218,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
   def validate_patch_adoption(tree, target, ids) do
     HtmlValidator.with_render_budget(fn ->
       with :ok <- validate_patch_boundaries(tree, target, false) do
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, length(ids), :html)
+        HtmlValidator.reserve_render_resource(:max_work, length(ids), :html)
 
         valid? =
           Enum.uniq(ids) == ids and
@@ -246,8 +246,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
   end
 
   defp adoptable_subtree?(tree, id, parent, document, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
     node = Map.get(tree.nodes, id)
 
     if is_map(node) and id != parent and node.document_id == document do
@@ -262,12 +262,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
   # tree order; template content is a different tree, never a light descendant.
   defp find_patch_marker(tree, parent, name) do
     children = Map.fetch!(tree.nodes, parent) |> Map.get(:children, [])
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, length(children), :html)
+    HtmlValidator.reserve_render_resource(:max_work, length(children), :html)
 
     children
     |> Enum.reverse()
     |> Enum.reduce_while({:ok, nil}, fn id, _result ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
       node = Map.fetch!(tree.nodes, id)
 
       result =
@@ -293,13 +293,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
   # irrespective of its name or whether its pseudo-attribute data is malformed.
   defp patch_range(tree, parent, start) do
     siblings = Map.fetch!(tree.nodes, parent).children
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * length(siblings), :html)
+    HtmlValidator.reserve_render_resource(:max_work, 3 * length(siblings), :html)
     {later, [^start | _earlier]} = Enum.split_while(siblings, &(&1 != start))
 
     later
     |> Enum.reverse()
     |> Enum.reduce_while({nil, [], 0}, fn id, {nil, removed, nesting} ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case Map.fetch!(tree.nodes, id) do
         %{type: :processing_instruction, target: "end"} when nesting == 0 ->
@@ -319,8 +319,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
   end
 
   defp walk(node, canonical?, document, scope, parent, seen, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
     fragment? = Map.get(node, :type) == :document_fragment
     scope = if fragment?, do: Map.get(node, :node_id), else: scope
     parent = if fragment?, do: nil, else: parent
@@ -415,7 +415,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
     if is_binary(source) do
       # Invalid metadata can bypass the ordinary source checks. Bound diagnostic
       # UTF-8 scanning and invalid-binary inspection before either operation.
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 2 * byte_size(source), :html)
+      HtmlValidator.reserve_render_resource(:max_work, 2 * byte_size(source), :html)
     end
 
     source =

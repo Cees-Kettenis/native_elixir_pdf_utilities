@@ -25,16 +25,29 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   ]
   @font_control_properties NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties() ++
                              ["font-variant", "font-synthesis"]
+  @hyphenation_properties NativeElixirPdfUtilities.Validators.CssHyphenationValidator.properties()
+  @text_spacing_properties NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.properties()
+  @baseline_properties NativeElixirPdfUtilities.Validators.CssBaselineValidator.properties()
+  @initial_letter_properties NativeElixirPdfUtilities.Validators.CssInitialLetterValidator.properties()
+  @text_emphasis_properties NativeElixirPdfUtilities.Validators.CssTextEmphasisValidator.properties()
+  @text_shadow_properties NativeElixirPdfUtilities.Validators.CssTextShadowValidator.properties()
+  @underline_properties NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.properties()
   @source_wide_keywords ~w(inherit initial unset revert revert-layer)
   @source_layout_properties ~w(width height min-width max-width min-height max-height
           margin padding border-width border-style border-radius border-spacing
-          text-align text-transform white-space word-break word-wrap overflow-wrap line-break
+          text-align text-transform unicode-bidi white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style text-wrap tab-size word-break word-wrap overflow-wrap line-break
           break-before page-break-before break-after page-break-after break-inside page-break-inside
-          content-visibility visibility resize appearance writing-mode direction display box-sizing position z-index isolation contain object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
+          content-visibility visibility resize appearance ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction display box-sizing position z-index isolation contain object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
           border-collapse caption-side table-layout flex-direction flex-wrap gap row-gap column-gap
           justify-content align-items align-self justify-self justify-items align-content order
           flex-grow flex-shrink flex-basis flex grid-column grid-row grid-column-start grid-column-end
-          grid-row-start grid-row-end grid-area)
+          grid-row-start grid-row-end grid-area) ++
+                              @hyphenation_properties ++
+                              @text_spacing_properties ++
+                              @baseline_properties ++
+                              @initial_letter_properties ++
+                              @underline_properties ++
+                              @text_shadow_properties ++ @text_emphasis_properties
   @source_margin_properties ~w(margin-top margin-right margin-bottom margin-left)
   @source_padding_properties ~w(padding-top padding-right padding-bottom padding-left)
   @source_border_width_properties ~w(border-top-width border-right-width border-bottom-width border-left-width)
@@ -186,7 +199,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           {property, value, :important} -> {property, value}
         end
 
-      HtmlValidator.reserve_render_resource(:max_css_work, 4 * byte_size(value) + 1, :css)
+      HtmlValidator.reserve_render_resource(:max_work, 4 * byte_size(value) + 1, :css)
       tokens = HtmlValidator.split_css_tokens(String.downcase(value, :ascii))
 
       requires_context? =
@@ -599,6 +612,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     with {:ok, style} <- CssLengthValidator.resolve_text(style),
          {:ok, style} <- CssMathValidator.resolve_scalars(style),
          {:ok, style} <- CssLengthValidator.resolve_edges(style),
+         {:ok, style} <-
+           NativeElixirPdfUtilities.Validators.CssBaselineValidator.compute_style(style),
          {:ok, style} <- CssSizingValidator.compute_dimensions(style),
          {:ok, style} <- CssPositionValidator.compute_style(style),
          do: NativeElixirPdfUtilities.Validators.CssOverflowValidator.compute_style(style)
@@ -741,8 +756,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         else:
           Enum.filter(declarations, fn declaration ->
             case declaration_pair(declaration) do
-              {property, _} -> property in ["writing-mode", "direction", "all"]
-              _ -> false
+              {property, _} ->
+                property in ["writing-mode", "text-orientation", "direction", "all"]
+
+              _ ->
+                false
             end
           end)
 
@@ -752,7 +770,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           Enum.filter(declarations, fn declaration ->
             case declaration_pair(declaration) do
               {property, _} ->
-                property in ["writing-mode", "direction", "all"] or
+                property in ["writing-mode", "text-orientation", "direction", "all"] or
                   String.starts_with?(property, "--")
 
               _ ->
@@ -768,13 +786,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                  fn _, validated -> {:ok, validated} end,
                  failure
                ),
-             do: {:ok, Map.merge(style, Map.take(axes, [:writing_mode, :direction]))}
+             do:
+               {:ok,
+                Map.merge(style, Map.take(axes, [:writing_mode, :text_orientation, :direction]))}
       else
         {:ok, style}
       end
 
     with {:ok, style} <- result,
-         do: validate_computed_cascade_steps(style, declarations, budget, consumer, failure)
+         {:ok, style} <-
+           validate_computed_cascade_steps(style, declarations, budget, consumer, failure),
+         do:
+           {:ok,
+            style
+            |> NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.compute_style()
+            |> NativeElixirPdfUtilities.Validators.RubyValidator.compute_style()}
   end
 
   defp validate_computed_cascade_steps(style, declarations, budget, consumer, failure) do
@@ -799,6 +825,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                 property in [
                   "color",
                   "writing-mode",
+                  "text-orientation",
                   "direction",
                   "font-size",
                   "font",
@@ -812,6 +839,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                 property in [
                   "color",
                   "writing-mode",
+                  "text-orientation",
                   "direction",
                   "font-size",
                   "font",
@@ -1280,6 +1308,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                    ),
                  do: {:ok, Map.put(style, field, axis)}
 
+          "unicode-bidi" ->
+            with {:ok, value} <-
+                   NativeElixirPdfUtilities.Validators.TextBidiValidator.prepare_css(value),
+                 do: {:ok, Map.put(style, :unicode_bidi, value)}
+
           "color" ->
             with {:ok, color} <-
                    HtmlValidator.parse_css_color_declaration(
@@ -1456,12 +1489,84 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           "counter-set" ->
             put_counter_values(style, :counter_set, value, 0)
 
+          property when property in @hyphenation_properties ->
+            NativeElixirPdfUtilities.Validators.CssHyphenationValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property when property in @text_emphasis_properties ->
+            NativeElixirPdfUtilities.Validators.CssTextEmphasisValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property when property in @text_shadow_properties ->
+            NativeElixirPdfUtilities.Validators.CssTextShadowValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property when property in @underline_properties ->
+            NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property when property in @initial_letter_properties ->
+            NativeElixirPdfUtilities.Validators.CssInitialLetterValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property when property in @text_spacing_properties ->
+            NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property
+          when property in ["ruby-align", "ruby-position", "ruby-merge", "ruby-overhang"] ->
+            NativeElixirPdfUtilities.Validators.RubyValidator.prepare_property(
+              style,
+              property,
+              value
+            )
+
+          property when property in ["text-orientation", "text-combine-upright"] ->
+            NativeElixirPdfUtilities.Validators.CssWritingModeValidator.prepare(
+              style,
+              property,
+              value
+            )
+
           "letter-spacing" ->
             put_letter_spacing(style, value)
 
           property
           when property in [
                  "white-space",
+                 "white-space-collapse",
+                 "white-space-trim",
+                 "text-wrap-mode",
+                 "text-wrap-style",
+                 "text-wrap",
+                 "tab-size"
+               ] ->
+            NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property
+          when property in [
                  "word-break",
                  "word-wrap",
                  "overflow-wrap",
@@ -1495,9 +1600,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               _ -> {:error, :invalid_document}
             end
 
-          "vertical-align" ->
-            with {:ok, align} <- HtmlValidator.parse_vertical_align(value, style.font_size),
-                 do: {:ok, Map.put(style, :vertical_align, align)}
+          property when property in @baseline_properties ->
+            with {:ok, admitted} <-
+                   NativeElixirPdfUtilities.Validators.CssBaselineValidator.prepare(
+                     style,
+                     property,
+                     value
+                   ),
+                 do:
+                   NativeElixirPdfUtilities.Validators.CssBaselineValidator.compute_style(
+                     admitted
+                   )
 
           "min-height" ->
             put_size(style, :min_height, value)
@@ -2873,7 +2986,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
   defp put_text_align(style, value) do
     case String.downcase(String.trim(value)) do
-      value when value in ["left", "center", "right"] ->
+      "match-parent" ->
+        {:ok,
+         style
+         |> Map.put(
+           :text_align,
+           NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.parent_alignment(
+             style,
+             :text_align
+           )
+         )
+         |> Map.put(:_text_align_initial, false)}
+
+      value when value in ["left", "center", "right", "start", "end", "justify"] ->
         {:ok,
          style
          |> Map.put(:text_align, String.to_existing_atom(value))

@@ -136,11 +136,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
               not Regex.match?(~r/\Asvg-resource:[A-Za-z0-9_.-]+\z/, name) ->
                 invalid("SVG resource keys must be opaque svg-resource: identifiers", "SVG")
 
-              byte_size(data) > Limits.get(:max_svg_resource_bytes) ->
+              byte_size(data) > Limits.get(:max_input_bytes) ->
                 Diagnostics.error(
                   :limits,
                   :resource_limit_exceeded,
-                  "SVG resource exceeds max_svg_resource_bytes",
+                  "SVG resource exceeds max_input_bytes",
                   source: name,
                   module: __MODULE__,
                   operation: :prepare
@@ -230,7 +230,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
          (not selected? and node.tag in ~w(defs symbol pattern marker mask clipPath)) do
       MapSet.new()
     else
-      HtmlValidator.reserve_render_resource(:max_svg_expansion_work, 1, :style)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :style)
       values = Map.values(node.attributes) ++ Map.values(Map.get(node, :style, %{}))
 
       ids =
@@ -359,11 +359,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
 
   defp prepare_bytes(bytes, reference, budget, opts) do
     cond do
-      byte_size(bytes) > Limits.get(:max_svg_resource_bytes) ->
+      byte_size(bytes) > Limits.get(:max_input_bytes) ->
         Diagnostics.error(
           :limits,
           :resource_limit_exceeded,
-          "SVG resource exceeds max_svg_resource_bytes",
+          "SVG resource exceeds max_input_bytes",
           source: reference,
           module: __MODULE__,
           operation: :prepare

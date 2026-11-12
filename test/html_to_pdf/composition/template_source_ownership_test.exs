@@ -493,7 +493,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateSourceOwnershipTest do
                         diagnostic.message =~ "remove"
 
                TemplatePatchValidator.with_renderer_policy_context(plan, tree, opts, fn policy ->
-                 for key <- [:max_css_numeric_magnitude, :max_font_source_bytes] do
+                 for key <- [:max_numeric_magnitude, :max_input_bytes] do
                    Limits.install(Map.put(limits, key, 1))
 
                    assert {:error, {:invalid_document, changed}} =

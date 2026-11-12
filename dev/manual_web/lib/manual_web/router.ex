@@ -26,7 +26,7 @@ defmodule ManualWeb.Router do
   @favicon_path Path.expand("../../priv/static/favicon.ico", __DIR__)
   @external_resource @favicon_path
   @favicon File.read!(@favicon_path)
-  @request_length Limits.defaults().max_aggregate_merge_input_bytes
+  @request_length Limits.defaults().max_input_bytes
 
   plug(Plug.Logger)
   plug(:match)

@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ObjectMapping do
           {:cont, acc} | {:halt, acc}
         when acc: term()
   def reduce_references_while(value, acc, fun) do
-    PdfValidator.charge_reader_budget(:max_pdf_reader_work, 1)
+    PdfValidator.charge_reader_budget(:max_work, 1)
 
     case value do
       {:ref, reference} ->

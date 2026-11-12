@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontRuleValidator do
   @spec prepare([map()]) :: map()
   def prepare(records) do
     Enum.reduce(records, %{features: %{}, palettes: %{}}, fn record, result ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
       case record.kind do
         "font-feature-values" ->

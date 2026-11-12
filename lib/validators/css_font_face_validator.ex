@@ -55,17 +55,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
           {:ok, [map()]} | {:error, {atom(), map()}}
   def prepare_original_resources(entries) do
     Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, selected} ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :font)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :font)
 
       case entry do
         %{prepared: %{authored_fonts: records} = prepared} when is_list(records) ->
           result =
             Enum.reduce_while(records, {:ok, selected}, fn record, {:ok, selected} ->
-              HtmlValidator.reserve_render_resource(:max_css_work, 1, :font)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :font)
 
               Enum.reduce_while(record.declarations, {:ok, selected}, fn declaration,
                                                                          {:ok, selected} ->
-                HtmlValidator.reserve_render_resource(:max_css_work, 1, :font)
+                HtmlValidator.reserve_render_resource(:max_work, 1, :font)
 
                 if elem(declaration.declaration, 0) == "src" do
                   # Every original src descriptor keeps its normal ordered fallback
@@ -192,7 +192,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssFontFaceValidator do
           declarations
           |> Enum.with_index()
           |> Enum.reduce_while(:ok, fn {declaration, index}, :ok ->
-            HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :css)
             property = elem(declaration, 0)
 
             valid? =

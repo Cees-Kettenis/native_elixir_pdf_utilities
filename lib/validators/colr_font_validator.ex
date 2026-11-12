@@ -255,7 +255,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrFontValidator do
   @spec paint(map(), non_neg_integer(), map()) :: tuple() | :empty
   defp paint(state, offset, seen) do
     work(1)
-    FontValidator.check(:max_font_glyph_depth, map_size(seen) + 1)
+    FontValidator.check(:max_depth, map_size(seen) + 1)
     if Map.has_key?(seen, offset), do: invalid("COLR paint graph contains a cycle")
     seen = Map.put(seen, offset, true)
     <<format>> = read(state.data, offset, 1)
@@ -422,7 +422,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrFontValidator do
     [a, b, c, d, e, f] = matrix
     {cx, cy} = center
     matrix = [a, b, c, d, e + cx - a * cx - c * cy, f + cy - b * cx - d * cy]
-    Enum.each(matrix, &FontValidator.check(:max_font_numeric_magnitude, abs(&1)))
+    Enum.each(matrix, &FontValidator.check(:max_numeric_magnitude, abs(&1)))
     matrix
   end
 
@@ -508,7 +508,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrFontValidator do
     binary_part(data, offset, size)
   end
 
-  defp work(count), do: FontValidator.reserve(:max_font_color_work, count)
+  defp work(count), do: FontValidator.reserve(:max_work, count)
 
   defp unwrap(result) do
     case result do

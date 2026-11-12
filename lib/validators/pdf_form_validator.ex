@@ -110,7 +110,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormValidator do
 
         _ ->
           {:invalid_pdf_input,
-           "reciprocal dimensions must be representable within max_pdf_numeric_magnitude"}
+           "reciprocal dimensions must be representable within max_numeric_magnitude"}
       end
 
     Diagnostics.error(:geometry, reason, "PDF Form normalization geometry is invalid: #{detail}",
@@ -135,7 +135,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormValidator do
         Enum.reduce_while(streams, {:ok, []}, fn reference, {:ok, data} ->
           # Decoders charge every occurrence. Reserve its joining separator
           # first, including for empty streams, before decoding or retaining it.
-          if data != [], do: PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, 1)
+          if data != [], do: PdfValidator.charge_reader_budget(:max_decoded_bytes, 1)
 
           case Reader.decoded_stream(document, reference) do
             {:ok, stream} -> {:cont, {:ok, [stream | data]}}

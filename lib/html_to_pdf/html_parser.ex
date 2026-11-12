@@ -1,4 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
+  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeGrapheme
+
   @moduledoc """
   Strict HTML parser for the native HTML-to-PDF renderer.
 
@@ -222,7 +224,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
     HtmlValidator.with_render_budget(fn ->
       TemplatePatchValidator.with_parser_invocation(html, fn html ->
         HtmlValidator.reserve_render_resource(
-          :max_aggregate_html_source_bytes,
+          :max_input_bytes,
           NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.source_charge(html),
           :html
         )
@@ -240,7 +242,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
   defp source_stream(html) do
     # Normalize the input stream before tokenization, not decoded references.
     # Keep the caller's bytes for diagnostics and resource accounting.
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(html), :html)
+    HtmlValidator.reserve_render_resource(:max_work, 3 * byte_size(html), :html)
     input = HtmlValidator.preprocess_html(html)
     crlf = :binary.matches(html, "\r\n")
 
@@ -325,7 +327,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
 
     case HtmlValidator.html_text_mode(context) != :data do
       true ->
-        HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_entries, 1, :html)
 
         text =
           if HtmlValidator.html_text_mode(context) != :rcdata,
@@ -396,7 +398,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         source: plan.source
       }
 
-      HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_entries, 1, :html)
       {original, host} = attach_node(tree, plan.original.parent, element, source_context)
 
       {original, fragment} =
@@ -439,7 +441,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
               tuple_size(source_context.crlf)
             )
 
-          HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+          HtmlValidator.reserve_render_resource(:max_work, work, :html)
           finish = normalized_finish + crlf_offset
 
           with {:ok, provenance} <-
@@ -547,7 +549,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         :eof
 
       {:source, html} ->
-        HtmlValidator.reserve_render_resource(:max_html_nodes, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_entries, 1, :html)
         read_token(html, context)
     end
   end
@@ -985,7 +987,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                       tuple_size(source_context.crlf)
                     )
 
-                  HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+                  HtmlValidator.reserve_render_resource(:max_work, work, :html)
 
                   {tree, parent,
                    %{
@@ -1011,7 +1013,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                  planning
                ) do
             {:replace, projected, finish} ->
-              HtmlValidator.reserve_render_resource(:max_html_tree_work, finish, :html)
+              HtmlValidator.reserve_render_resource(:max_work, finish, :html)
 
               normalized_finish =
                 byte_size(
@@ -1358,7 +1360,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
           {first - line_start - first_extra + line_extra + 1, work}
       end
 
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, work, :html)
+    HtmlValidator.reserve_render_resource(:max_work, work, :html)
 
     {binary_part(context.original, first, last - first), line, column}
   end
@@ -1376,7 +1378,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         # to it. All other ASCII bytes can be skipped in one binary scan.
         skipped = max(index - 1, 0)
         relevant = binary_part(html, skipped, byte_size(html) - skipped)
-        {grapheme, remaining} = String.next_grapheme(relevant)
+        {grapheme, remaining} = UnicodeGrapheme.next(relevant)
         size = byte_size(grapheme)
         offset = offset + skipped + size
 

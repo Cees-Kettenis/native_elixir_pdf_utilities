@@ -22,6 +22,27 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
     :ok
   end
 
+  test "legacy inline descriptors reject invalid CSS encoding before declarations are used" do
+    dom = %{
+      type: :document,
+      children: [%{type: :element, tag: "div", attributes: %{"style" => <<255>>}, children: []}]
+    }
+
+    assert {:error, {:invalid_css, diagnostic}} = HtmlCssSourceValidator.prepare(dom)
+    assert diagnostic.stage == :css and diagnostic.message =~ "UTF-8"
+    assert {:error, {:invalid_document, diagnostic}} = Style.compute_detailed(dom, @opts)
+
+    assert diagnostic.stage == :style and diagnostic.source == "div" and
+             diagnostic.message =~ "UTF-8"
+  end
+
+  test "inline source preparation retains a returned declaration-source limit failure" do
+    assert {:ok, dom} = HtmlParser.parse_detailed("<div style='color:red'></div>")
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 4))
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlCssSourceValidator.prepare(dom)
+    assert is_atom(diagnostic.stage) and diagnostic.message =~ "max_input_bytes"
+  end
+
   test "authored important literals and symbolic font keywords retain exact source grammar" do
     css = "width:3pt!important;font-size:math!important;accent-color:auto!important;fill:inherit"
 
@@ -131,10 +152,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssFontFaceValidator.with_original_resource(entry, fn ->
                HtmlValidator.check_render_resource(
-                 :max_css_work,
-                 Limits.effective().max_css_work + 1,
+                 :max_work,
+                 Limits.effective().max_work + 1,
                  :font
                )
+             end)
+
+    assert diagnostic.stage == :font and diagnostic.source == "src:url('source.ttf')"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.Validators.FontValidator.with_budget(fn ->
+               CssFontFaceValidator.with_original_resource(entry, fn ->
+                 NativeElixirPdfUtilities.Validators.FontValidator.reserve(
+                   :max_work,
+                   Limits.effective().max_work + 1
+                 )
+               end)
              end)
 
     assert diagnostic.stage == :font and diagnostic.source == "src:url('source.ttf')"
@@ -189,7 +222,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
 
     assert diagnostic.stage == :layout
 
-    Limits.install(%{Limits.effective() | max_layout_boxes: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlFileValidator.prepare_display(
@@ -218,7 +251,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
     assert {:ok, [record]} =
              CssParser.prepare_source_declarations(css, HtmlCssSourceValidator.local(css))
 
-    Limits.install(%{Limits.effective() | max_html_numeric_token_bytes: 3})
+    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 3})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssValueValidator.prepare_unapplied_declaration(
@@ -227,6 +260,33 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
              )
 
     assert diagnostic.source == css and diagnostic.line == 1 and diagnostic.column == 1
+  end
+
+  test "prepared literals and computed declarations preserve later expansion failures" do
+    css = "width:12pt"
+
+    assert {:ok, [record]} =
+             CssParser.prepare_source_declarations(css, HtmlCssSourceValidator.local(css))
+
+    original = Limits.effective()
+    Limits.install(%{original | max_decoded_bytes: 0})
+
+    assert {:error, {:resource_limit_exceeded, literal}} =
+             CssValueValidator.validate_source_literal(record, HtmlValidator.new_css_budget())
+
+    assert literal.message =~ "max_decoded_bytes"
+
+    Limits.install(%{original | max_decoded_bytes: 0})
+
+    assert {:error, {:resource_limit_exceeded, expansion}} =
+             CssValueValidator.validate_declaration(
+               %{_custom_properties: %{"--color" => "red"}},
+               {"color", "var(--color)"},
+               HtmlValidator.new_css_budget()
+             )
+
+    assert expansion.message =~ "max_decoded_bytes"
+    assert is_atom(expansion.stage)
   end
 
   test "prospective foreign style placement cannot borrow original HTML tokenizer ownership" do

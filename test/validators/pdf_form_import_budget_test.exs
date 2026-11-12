@@ -19,15 +19,15 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
 
   test "combined stream bytes and separators share one admission allowance", %{context: context} do
     source = source(context, [{%{}, "q\n"}, {%{}, "Q\n"}], [0, 1])
-    Limits.install(Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, 3))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 3))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfFormValidator.prepare_source(source)
 
     assert diagnostic.stage == :limits
-    assert diagnostic.message =~ "max_pdf_reader_decoded_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
 
-    Limits.install(Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, 5))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 5))
     assert {:ok, prepared} = PdfFormValidator.prepare_source(source)
     assert prepared.stream == "q\n\nQ\n"
   end
@@ -77,13 +77,13 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
                {id, generation, {:value, Map.put(page.dictionary, "MediaBox", [0, 0, 3, 60])}}
              ])
 
-    Limits.install(Map.put(Limits.effective(), :max_pdf_numeric_token_bytes, 12))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 12))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfFormValidator.prepare_source(source)
 
     assert diagnostic.message =~ "normalization" and
-             diagnostic.message =~ "max_pdf_numeric_token_bytes"
+             diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "nonpositive imported dimensions retain the ordinary invalid-source diagnostic", %{
@@ -133,7 +133,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
     Limits.install(
       Map.put(
         Limits.effective(),
-        :max_pdf_reader_decoded_bytes,
+        :max_decoded_bytes,
         parse_bytes + byte_size(content) - 1
       )
     )
@@ -143,10 +143,10 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              PdfFormValidator.prepare_source(source)
 
-    assert diagnostic.message =~ "max_pdf_reader_decoded_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
 
     Limits.install(
-      Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, parse_bytes + byte_size(content))
+      Map.put(Limits.effective(), :max_decoded_bytes, parse_bytes + byte_size(content))
     )
 
     assert {:ok, %{stream: ^content}} = PdfFormValidator.prepare_source(source)
@@ -166,7 +166,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
           [0, 0, 1]
         )
 
-      Limits.install(Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, 6))
+      Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 6))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                PdfFormValidator.prepare_source(source)
@@ -175,7 +175,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
 
       assert diagnostic.message =~
                if(dictionary == %{},
-                 do: "max_pdf_reader_decoded_bytes",
+                 do: "max_decoded_bytes",
                  else: "decoded stream exceeds its safety limit"
                )
     end
@@ -185,7 +185,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
     context: context
   } do
     source = source(context, [{%{}, ""}], [0, 0, 0])
-    Limits.install(Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 1))
 
     image = %{
       format: :pdf_form,
@@ -201,10 +201,10 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
              PdfWriter.render([%{size: {100, 60}, boxes: [box]}])
 
     assert diagnostic.stage == :limits
-    assert diagnostic.message =~ "max_pdf_reader_decoded_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
     assert diagnostic.operation == :write_pdf
 
-    Limits.install(Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, 2))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 2))
     assert {:ok, prepared} = PdfFormValidator.prepare_source(source)
     assert prepared.stream == "\n\n"
     assert {:ok, _pdf} = PdfWriter.render([%{size: {100, 60}, boxes: [box]}])
@@ -277,7 +277,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
       end)
 
     assert sources[source] == outer and outer.stream == "q\nq"
-    Limits.install(Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, 2))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 2))
     assert {:error, {:resource_limit_exceeded, _}} = PdfFormValidator.prepare_source(source)
     assert Process.get({PdfFormValidator, :prepared_sources}) == nil
   end
@@ -286,12 +286,12 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
     context: context
   } do
     source = source(context, [{%{}, "q"}], [0, 0])
-    Limits.install(Map.put(Limits.effective(), :max_pdf_reader_decoded_bytes, 3))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 3))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              Operation.run(__MODULE__, :import_with_reader, fn ->
                PdfValidator.with_reader_budget(fn ->
-                 PdfValidator.charge_reader_budget(:max_pdf_reader_decoded_bytes, 1)
+                 PdfValidator.charge_reader_budget(:max_decoded_bytes, 1)
                  PdfFormValidator.prepare_source(source)
                end)
              end)

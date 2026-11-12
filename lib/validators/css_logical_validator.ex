@@ -38,8 +38,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssLogicalValidator do
   @doc "Returns physical sides and dimensions for all selected writing-mode and direction combinations."
   @spec axes(map()) :: map()
   def axes(style) do
-    rtl? = Map.get(style, :direction, :ltr) == :rtl
     mode = Map.get(style, :writing_mode, :horizontal_tb)
+
+    rtl? =
+      Map.get(style, :direction, :ltr) == :rtl and
+        not (mode in [:vertical_rl, :vertical_lr] and
+               Map.get(style, :text_orientation) == :upright)
 
     {inline_start, inline_end, block_start, block_end, inline_size, block_size} =
       case mode do

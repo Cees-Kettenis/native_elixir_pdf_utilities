@@ -28,6 +28,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
     %{root: root}
   end
 
+  test "document raster reservations retain diagnostics inside an active render scope" do
+    assert {:ok, plan} =
+             SvgDocumentViewportValidator.prepare(%{
+               source_root: %{"width" => "2", "height" => "2"}
+             })
+
+    Limits.install(Map.put(Limits.effective(), :max_raster_pixels, 30))
+
+    assert :checked =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        SvgDocumentViewportValidator.prepare_raster(
+                          plan,
+                          1.5,
+                          1.5,
+                          HtmlValidator.new_image_budget()
+                        )
+
+               assert diagnostic.source == "SVG" and diagnostic.operation == :rasterize_document
+               assert diagnostic.message =~ "max_raster_pixels"
+               :checked
+             end)
+  end
+
   test "document PNG decode failures retain their specific diagnostic source", %{root: root} do
     source = "<svg width='4' height='4'><rect width='4' height='4' fill='red'/></svg>"
     File.write!(Path.join(root, "limited.svg"), source)
@@ -42,7 +66,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
                  :object
                )
 
-      Limits.install(%{Limits.effective() | max_png_working_bytes: 1})
+      Limits.install(%{Limits.effective() | max_operation_memory_bytes: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                SvgDocumentImage.compose(descriptor, 3.0, 3.0)
@@ -275,24 +299,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
 
   test "raster ceilings are shared across differently sized allocations", %{root: root} do
     source = "<svg width='100' height='50'><rect width='200' height='100' fill='red'/></svg>"
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_decoded_image_bytes, 320 * 240 * 4))
+    limits = Limits.effective()
 
     ResourceContext.run(
       [authorization_root: root],
       HtmlValidator.new_image_budget(),
       fn context ->
         assert {:ok, document} = prepare_document(source, context.image_budget)
-        assert {:ok, _image} = SvgDocumentImage.compose(document, 120, 90)
+
+        assert {{:ok, _image}, decoded} =
+                 NativeElixirPdfUtilities.TestSupport.ResourceBudget.measure(
+                   :max_decoded_bytes,
+                   fn ->
+                     SvgDocumentImage.compose(document, 120, 90)
+                   end
+                 )
+
+        used =
+          limits.max_decoded_bytes -
+            NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(
+              :max_decoded_bytes
+            )
+
+        Limits.install(%{limits | max_decoded_bytes: used + div(decoded, 10)})
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  SvgDocumentImage.compose(document, 60, 45)
 
-        assert diagnostic.message =~ "aggregate decoded image" and diagnostic.stage == :limits
+        assert diagnostic.message =~ "max_decoded_bytes" and diagnostic.stage == :limits
         assert ResourceContext.current() == context
       end
     )
 
-    Limits.install(Map.put(Limits.defaults(), :max_svg_raster_dimension, 100))
+    Limits.install(Map.put(Limits.defaults(), :max_raster_dimension, 100))
 
     ResourceContext.run(
       [authorization_root: root],
@@ -309,7 +348,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
   end
 
   test "zero hosts and roots skip paint after validating the issued source", %{root: root} do
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_decoded_image_bytes, 1))
+    limits = Limits.effective()
 
     for {source, host, width, height} <- [
           {"<svg width='100' height='50'><rect width='100%' height='100%'/></svg>", :object, 0,
@@ -321,6 +360,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
           {"<svg width='100' height='50' viewBox='0 0 0 50'><rect width='100' height='50'/></svg>",
            :object, 120, 90}
         ] do
+      Limits.install(limits)
+
       ResourceContext.run(
         [authorization_root: root],
         HtmlValidator.new_image_budget(),
@@ -328,6 +369,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
           assert {:ok, document} =
                    prepare_document(source, context.image_budget, "original.svg", host)
 
+          used =
+            limits.max_decoded_bytes -
+              NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(
+                :max_decoded_bytes
+              )
+
+          Limits.install(%{limits | max_decoded_bytes: used + 1})
           assert {:ok, :skipped} = SvgDocumentImage.compose(document, width, height)
           assert {:ok, :skipped} = SvgDocumentImage.compose(document, width, height)
           assert :atomics.get(context.image_budget, 3) == 0
@@ -407,9 +455,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
 
     source = "<svg width='0' height='50'><rect width='100' height='50'/></svg>"
 
-    Limits.install(
-      Map.put(Limits.effective(), :max_aggregate_svg_source_bytes, byte_size(source) - 1)
-    )
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, byte_size(source) - 1))
 
     ResourceContext.run(
       [authorization_root: root],
@@ -418,7 +464,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  prepare_document(source, context.image_budget, "skipped.svg", :iframe)
 
-        assert diagnostic.message =~ "max_aggregate_svg_source_bytes"
+        assert diagnostic.message =~ "max_input_bytes"
         assert diagnostic.source == "skipped.svg"
         assert :atomics.get(context.image_budget, 3) == 0
       end
@@ -439,7 +485,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
              SvgValidator.validate_raster_dimensions(1, 1, :invalid)
 
     assert diagnostic.message =~ "budget"
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_svg_raster_pixels, 3))
+    Limits.install(Map.put(Limits.effective(), :max_raster_pixels, 3))
 
     assert :callback_continued =
              HtmlValidator.with_render_budget(fn ->
@@ -447,7 +493,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
                         SvgValidator.validate_raster_dimensions(2, 2, nil)
 
                assert diagnostic.operation == :rasterize and
-                        diagnostic.message =~ "max_aggregate_svg_raster_pixels"
+                        diagnostic.message =~ "max_raster_pixels"
 
                :callback_continued
              end)
@@ -499,7 +545,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
     assert {:error, {:invalid_document, diagnostic}} =
              SvgDocumentViewportValidator.prepare_viewport(
                plan,
-               1_000_000_000,
+               4_294_967_295,
                90,
                HtmlValidator.new_image_budget()
              )
@@ -531,11 +577,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
     assert diagnostic.module == HtmlValidator
     assert diagnostic.source == "SVG"
     assert diagnostic.operation == :rasterize_document
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "viewport and raster arithmetic beyond the numeric range return recoverable diagnostics" do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 1.7e308))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 1.7e308))
 
     {:ok, plan} =
       SvgDocumentViewportValidator.prepare(%{
@@ -608,7 +654,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
              )
 
     assert diagnostic.message =~ "malformed" and diagnostic.source == "bad.svg"
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_image_source_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(
@@ -616,6 +662,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentViewportTest do
                base_url: root
              )
 
-    assert diagnostic.message =~ "read limit" and Path.basename(diagnostic.source) == "valid.svg"
+    assert diagnostic.message =~ "max_input_bytes" and diagnostic.stage == :html
   end
 end

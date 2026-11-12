@@ -174,6 +174,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PrintedPositioningTest do
     result.boxes
   end
 
+  defp physical_rectangles(boxes, composition \\ nil) do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, ImageMapGeometry}
+
+    Enum.flat_map(boxes, fn box ->
+      case box do
+        %{type: :drawing_group, boxes: children} ->
+          physical_rectangles(children, DrawingGeometry.compose_group(box, composition))
+
+        %{type: :rect} ->
+          if composition == nil do
+            [box]
+          else
+            {matrix, _, _} = DrawingGeometry.composition_parts(composition)
+
+            {:polygon, points} =
+              DrawingGeometry.transform_clip(
+                Map.take(box, [:x, :y, :width, :height]),
+                DrawingGeometry.affine_matrix(matrix)
+              )
+
+            {left, bottom, right, top} = ImageMapGeometry.bounds([points])
+            [%{box | x: left, y: bottom, width: right - left, height: top - bottom}]
+          end
+
+        _ ->
+          []
+      end
+    end)
+  end
+
   test "fixed controls stay on their first printed page and child viewports keep their own fixed origin" do
     alias NativeElixirPdfUtilities.Forms
 
@@ -228,11 +258,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PrintedPositioningTest do
         layout(
           "<div style='#{axes}'><div style='position:relative;direction:ltr;writing-mode:horizontal-tb;left:10pt;right:20pt;top:10pt;bottom:30pt;width:20pt;height:20pt;background:red'></div></div>"
         )
+        |> physical_rectangles()
 
       red = Enum.find(boxes, &(Map.get(&1, :fill_color) == {1, 0, 0}))
-      # RTL normal flow aligns the 20pt child to the right edge before movement.
-      natural_x =
-        if axes == "direction:rtl" or String.contains?(axes, "direction:rtl"), do: 180, else: 0
+      # Horizontal RTL fills the parent's width. An orthogonal vertical auto
+      # block instead has the child's 20pt physical width, as Chromium confirms.
+      natural_x = if axes == "direction:rtl", do: 180, else: 0
 
       assert_in_delta red.x - natural_x, expected_x, 0.01
       assert_in_delta red.y + red.height - 200, expected_y, 0.01
@@ -250,6 +281,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PrintedPositioningTest do
         layout(
           "<div style='position:relative;width:100pt;height:100pt;#{axes}'><div style='position:absolute;direction:ltr;writing-mode:horizontal-tb;left:10pt;right:20pt;top:10pt;bottom:30pt;width:20pt;height:20pt;background:red'></div></div>"
         )
+        |> physical_rectangles()
         |> Enum.find(&(Map.get(&1, :fill_color) == {1, 0, 0}))
 
       assert_in_delta red.x, x, 0.01

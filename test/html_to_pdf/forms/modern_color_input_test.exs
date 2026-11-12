@@ -155,31 +155,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputTest do
   test "native color calculation budget failures remain actionable public diagnostics" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_css_work: 1})
+    Limits.install(%{previous | max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=color value='rgb(calc(1 * 10) 20 30)'>",
                forms: :static
              )
 
-    assert diagnostic.stage == :style and diagnostic.module == HtmlValidator
-    assert diagnostic.message =~ "max_css_work"
-    assert diagnostic.source == "input/color"
+    assert diagnostic.stage == :html and diagnostic.module == HtmlValidator
+    assert diagnostic.message =~ "max_work"
+    refute Map.has_key?(diagnostic, :source)
   end
 
   test "shared math depth exhaustion is recoverable and source-specific" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_css_calculation_depth: 1})
+    Limits.install(%{previous | max_depth: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<input type=color value='rgb(calc(calc(10)) 20 30)'>",
                forms: :static
              )
 
-    assert diagnostic.stage == :style
-    assert diagnostic.message =~ "max_css_calculation_depth"
-    assert diagnostic.source == "input/color"
+    assert diagnostic.stage == :html
+    assert diagnostic.message =~ "max_depth"
+    refute Map.has_key?(diagnostic, :source)
     Limits.install(previous)
 
     assert {:ok, state} =

@@ -4,7 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidator do
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
     HtmlUrlValidator,
-    HtmlUrlIdnaValidator
+    TextBidiValidator
   }
 
   @doc "Matches authored initial selector states without simulating user interaction."
@@ -118,9 +118,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidator do
             do: get_in(node, [:_initial_form_state, :value]) || Map.get(attributes, "value", ""),
             else: directional_text(Map.get(node, :children, []))
 
-        HtmlValidator.reserve_render_resource(:max_css_work, byte_size(text), :css)
+        HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :css)
 
-        Enum.find_value(String.to_charlist(text), &HtmlUrlIdnaValidator.strong_direction/1) ||
+        TextBidiValidator.first_strong_direction(text) ||
           inherited_direction(ancestors)
 
       node.tag == "input" and
@@ -132,20 +132,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidator do
     end
   end
 
-  @doc "Keeps right-to-left painting gated while allowing initial direction selector matching."
-  @spec validate_paint_direction(map(), [map()]) :: :ok | {:error, {atom(), map()}}
-  def validate_paint_direction(node, ancestors) do
-    if Map.has_key?(node.attributes, "dir") and direction(node, ancestors) == "rtl" do
-      NativeElixirPdfUtilities.Diagnostics.error(
-        :style,
-        :not_implemented,
-        "right-to-left direction is available for selector matching; bidirectional layout and painting are not implemented yet",
-        module: __MODULE__,
-        source: "dir=" <> node.attributes["dir"]
-      )
-    else
-      :ok
-    end
+  @doc "Prepares HTML directionality defaults before the authored CSS cascade."
+  @spec direction_defaults(map(), [map()]) :: map()
+  def direction_defaults(node, ancestors) do
+    value = Map.get(Map.get(node, :attributes, %{}), "dir", "") |> String.downcase(:ascii)
+    dir? = value in ["ltr", "rtl", "auto"] or node.tag == "bdi"
+
+    defaults =
+      if dir?,
+        do: %{direction: if(direction(node, ancestors) == "rtl", do: :rtl, else: :ltr)},
+        else: %{}
+
+    bidi =
+      cond do
+        node.tag == "bdo" -> :isolate_override
+        value == "auto" and node.tag in ["pre", "textarea", "input"] -> :plaintext
+        dir? -> :isolate
+        true -> :normal
+      end
+
+    Map.put(defaults, :unicode_bidi, bidi)
   end
 
   defp inherited_direction(ancestors) do
@@ -157,7 +163,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidator do
 
   defp directional_text(children) do
     Enum.map_join(children, fn child ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
       case child do
         %{type: :text, text: text} ->

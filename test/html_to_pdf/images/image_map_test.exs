@@ -30,23 +30,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
 
     # Four edges need six pair checks, eight level-edge visits and one
     # four-edge containment scan. The previous accounting omitted that scan.
-    Limits.install(%{original | max_image_map_geometry_work: 18})
+    Limits.install(%{original | max_work: 18})
 
     assert [_] =
              HtmlValidator.with_render_budget(fn ->
                ImageMapGeometry.regions(model, viewport, viewport)
              end)
 
-    Limits.install(%{original | max_image_map_geometry_work: 17})
+    Limits.install(%{original | max_work: 17})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                ImageMapGeometry.regions(model, viewport, viewport)
              end)
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_image_map_geometry_work"
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
 
-    Limits.install(%{original | max_image_map_geometry_work: 35})
+    Limits.install(%{original | max_work: 35})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              HtmlValidator.with_render_budget(fn ->
@@ -75,16 +75,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
 
     model = %{identity: make_ref(), areas: [area]}
     viewport = %{x: 0.0, y: 0.0, width: 75.0, height: 75.0}
-    Limits.install(%{original | max_image_map_geometry_work: 5_000})
+    Limits.install(%{original | max_work: 5_000})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                ImageMapGeometry.regions(model, viewport, viewport)
              end)
 
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_image_map_geometry_work"
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
 
-    Limits.install(%{original | max_image_map_geometry_work: 50_000})
+    Limits.install(%{original | max_work: 50_000})
 
     assert [region] =
              HtmlValidator.with_render_budget(fn ->
@@ -131,9 +131,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
     alias NativeElixirPdfUtilities.Limits
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_image_map_geometry_work, 16))
+    Limits.install(Map.put(original, :max_work, 16))
     assert ImageMapValidator.circle_segments(1.0e-320) == 4
-    Limits.install(Map.put(original, :max_image_map_geometry_work, 15))
+    Limits.install(Map.put(original, :max_work, 15))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -142,9 +142,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
 
     assert diagnostic.stage == :layout
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_image_map_geometry_work"
+    assert diagnostic.message =~ "max_work"
 
-    Limits.install(Map.put(original, :max_css_numeric_magnitude, 1_000_000_000_000_000_000))
+    Limits.install(Map.put(original, :max_numeric_magnitude, 1_000_000_000_000_000_000))
 
     html =
       "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='5,5,1e18' href='https://example.com/large'></map>"
@@ -152,7 +152,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
     assert diagnostic.stage == :layout
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_image_map_geometry_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "map association, permissive shapes and first-area masks use authored nodes" do
@@ -327,20 +327,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
     alias NativeElixirPdfUtilities.Limits
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_image_map_coordinates, 3))
+    Limits.install(Map.put(original, :max_entries, 3))
 
     html =
       "<img src='#{@image}' usemap='#m'><map name=m><area coords='0,0,10,10' href='https://example.com'></map>"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_image_map_coordinates"
-    Limits.install(Map.put(original, :max_image_map_geometry_work, 1))
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
+    Limits.install(Map.put(original, :max_work, 1))
 
     html =
       "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='8,4,3' href='https://example.com'></map>"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_image_map_geometry_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
     Limits.install(original)
 
     malformed = %{

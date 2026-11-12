@@ -219,6 +219,83 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   @doc false
+  @spec typography_reference(String.t()) :: String.t()
+  def typography_reference(html) do
+    # Chromium cannot consume the caller's dictionary option. These explicit,
+    # independently authored soft opportunities provide the CSS Text 4 reference
+    # without changing the native automatic-hyphenation input or its extraction.
+    Regex.replace(
+      ~r/(<p\b[^>]* data-hyphen-reference="([^"]*)"[^>]*>)[^<]*(<\/p>)/u,
+      html,
+      fn _, opening, reference, closing ->
+        opening <> String.replace(reference, "&amp;", "&") <> closing
+      end
+    )
+    |> String.replace("hyphens:auto", "hyphens:manual")
+    # CSS Sizing 4 fit-content(18pt) clamps 18pt between this authored
+    # sample's authored min/max advances. Chromium lacks the functional
+    # box-size syntax, so the reference spells out the independently known size.
+    |> String.replace(
+      "data-intrinsic-reference=\"18pt\" style=\"display:inline-grid;inline-size:fit-content(18pt)\"",
+      "data-intrinsic-reference=\"18pt\" style=\"display:inline-grid;inline-size:18pt\""
+    )
+    # CSS Text 3, 2024-09-30 section 8.2.1: one opening glyph is excluded
+    # from the first line's fit and alignment. In this monospaced sample its
+    # independent advance is exactly 1ch, equivalent to a negative first indent.
+    |> String.replace("hanging-punctuation:first", "text-indent:-1ch")
+    # CSS Fonts 3 section 6.5 requires vkrn for vertical text with normal
+    # kerning. This Chromium version leaves it off unless explicitly enabled.
+    |> String.replace(
+      "data-vkrn-reference=\"required\" style=\"",
+      "data-vkrn-reference=\"required\" style=\"font-feature-settings:'vkrn' 1;"
+    )
+    # Writing Modes 4 (2019-07-30) section 9.1.3 specifies a one-em
+    # advance. Chromium permits a 1.1-em composition. Authored SVG textLength
+    # supplies the independent 12pt width and 9.6pt alphabetic baseline here.
+    |> String.replace(
+      ~s(<span data-combine-reference="one-em" style="text-combine-upright:all">AB</span>),
+      ~s(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" style="writing-mode:horizontal-tb"><text x="0" y="12.8" font-family="Authored Vertical" font-size="16" textLength="16" lengthAdjust="spacingAndGlyphs">AB</text></svg>)
+    )
+    # CSS Ruby 1 (2022-12-31) section 4.2 explicitly gives this group
+    # equivalence for merge. The browser still uses the older property grammar.
+    |> String.replace(
+      ~s(<ruby data-merge-reference="group" style="ruby-merge:merge">京<rt>東京京都</rt>都<rt>京</rt></ruby>),
+      ~s(<ruby>京都<rt>東京京都京</rt></ruby>)
+    )
+    # Section 3.2 puts the inter-character column to the right, centered in
+    # the base em box. This exact font has a 9.75/2.25pt normalized base em;
+    # two 6pt vertical advances give a 12pt column and -2.25pt baseline.
+    |> String.replace(
+      ~s(<ruby data-intercharacter-reference="em" style="ruby-position:inter-character">京<rt>とう</rt></ruby>),
+      ~s(<span>京</span><span style="display:inline-block;writing-mode:vertical-rl;font-size:6pt;line-height:8.25pt;width:8.25pt;height:12pt;vertical-align:-2.25pt">とう</span>)
+    )
+    # CSS Inline 3 (2026-10-14) section 4. CSS2 shifts independently express
+    # the selected longhands: 25% of 20pt, UA sub/super shifts, the 20pt
+    # first-to-last stride and the .6em hanging baseline's 6pt size difference.
+    |> String.replace(
+      ~s(data-baseline-reference="percent" style="baseline-shift:25%"),
+      ~s(data-baseline-reference="percent" style="vertical-align:25%")
+    )
+    |> String.replace(
+      ~s(data-baseline-reference="super" style="baseline-shift:super"),
+      ~s(data-baseline-reference="super" style="vertical-align:super")
+    )
+    |> String.replace(
+      ~s(data-baseline-reference="sub" style="baseline-shift:sub"),
+      ~s(data-baseline-reference="sub" style="vertical-align:sub")
+    )
+    |> String.replace(
+      ~s(data-baseline-reference="first" style="display:inline-block;baseline-source:first"),
+      ~s(data-baseline-reference="first" style="display:inline-block;vertical-align:-20pt")
+    )
+    |> String.replace("line-height:30pt;dominant-baseline:hanging", "line-height:30pt")
+    |> String.replace(
+      ~s(data-baseline-reference="hang-child" style="font-size:10pt"),
+      ~s(data-baseline-reference="hang-child" style="font-size:10pt;vertical-align:6pt")
+    )
+  end
+
+  @doc false
   @spec box_geometry_reference(String.t()) :: String.t()
   def box_geometry_reference(html) do
     # Independently authored references for dated specifications that Chromium
@@ -995,6 +1072,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     directory
   end
 
+  @doc "Adds scenario fonts to the existing exact reference faces and page options."
+  @spec render_options_with_fonts(String.t(), [map()]) :: keyword()
+  def render_options_with_fonts(fixture_path, fonts),
+    do: Keyword.update!(default_render_opts(fixture_path), :fonts, &(&1 ++ fonts))
+
   defp default_render_opts(fixture_path) do
     page_opts =
       fixture_path
@@ -1683,7 +1765,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
     |> IO.iodata_to_binary()
   end
 
-  defp read_ppm!(path) do
+  @doc "Reads an existing Poppler RGB page without performing another rasterization."
+  @spec read_ppm!(String.t()) :: %{width: pos_integer(), height: pos_integer(), pixels: binary()}
+  def read_ppm!(path) do
     binary = File.read!(path)
 
     with {"P6", offset} <- next_ppm_token(binary, 0),

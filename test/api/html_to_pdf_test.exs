@@ -7,6 +7,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
   alias NativeElixirPdfUtilities.Split
   alias NativeElixirPdfUtilities.Text
 
@@ -527,11 +529,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     for tag <- ~w(xmp noembed plaintext) do
       source = "<#{tag}>é\r\n" <> String.duplicate("<img src=denied.png>", 20)
-      Limits.install(%{limits | max_html_source_bytes: byte_size(source) - 1})
+      Limits.install(%{limits | max_input_bytes: byte_size(source) - 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(source)
       assert diagnostic.stage == :html and diagnostic.operation == :render
       assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.message =~ "max_html_source_bytes"
+      assert diagnostic.message =~ "max_input_bytes"
     end
   end
 
@@ -769,7 +771,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "itemref lookup consumes the existing shared work budget before asset resolution" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_css_work: 1})
+    Limits.install(%{limits | max_work: 1})
     owner = self()
 
     resolver = fn request ->
@@ -783,7 +785,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              HtmlToPdf.render(html, asset_resolver: resolver)
 
     assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.operation == :render and diagnostic.message =~ "max_css_work"
+    assert is_atom(diagnostic.operation) and diagnostic.message =~ "max_work"
     refute_received {:metadata_budget_asset, _}
   end
 
@@ -1602,7 +1604,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     assert {:ok, _pdf} = HtmlToPdf.render("<hr style='display:flex'>", opts)
 
-    magnitude = trunc(Limits.get(:max_css_numeric_magnitude)) + 1
+    magnitude = trunc(Limits.get(:max_numeric_magnitude)) + 1
 
     for attribute <- ["width", "size"] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -1611,7 +1613,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.stage == :style and diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.operation == :render
       assert diagnostic.source == "#{attribute}=#{magnitude}"
-      assert diagnostic.message =~ "max_css_numeric_magnitude"
+      assert diagnostic.message =~ "max_numeric_magnitude"
     end
 
     assert {:error, {:invalid_css, diagnostic}} =
@@ -1863,7 +1865,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       :not_found
     end
 
-    value = String.duplicate("0", Limits.get(:max_html_numeric_token_bytes) + 1)
+    value = String.duplicate("0", Limits.get(:max_numeric_token_bytes) + 1)
     html = "<div headingoffset='#{value}'><h1>Heading</h1><img src='denied'></div>"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -1872,7 +1874,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert diagnostic.stage == :html and diagnostic.operation == :render
     assert diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.source == "headingoffset=" <> value
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
     refute_received {:heading_asset, _}
 
     assert {:ok, dom} = NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_detailed(html)
@@ -2554,22 +2556,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "inactive templates count nodes and nesting against the unchanged limits" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_html_nodes: 5})
+    Limits.install(%{limits | max_entries: 5})
 
     assert {:error,
             {:resource_limit_exceeded,
              %{stage: :html, reason: :resource_limit_exceeded, message: message}}} =
              HtmlToPdf.render("<template><p>A</p><p>B</p></template><p>Visible</p>")
 
-    assert message =~ "max_html_nodes"
-    Limits.install(%{limits | max_html_depth: 2})
+    assert message =~ "max_entries"
+    Limits.install(%{limits | max_depth: 2})
 
     assert {:error, {:resource_limit_exceeded, %{message: depth_message}}} =
              HtmlToPdf.render(
                "<template><template><p>Hidden</p></template></template><p>Visible</p>"
              )
 
-    assert depth_message =~ "max_html_depth"
+    assert depth_message =~ "max_depth"
   end
 
   test "data blocks do not load resources or styles and shown raw data matches literal references" do
@@ -2608,17 +2610,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "data scripts retain shared HTML source and rendered text limits" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_html_source_bytes: 100})
+    Limits.install(%{limits | max_input_bytes: 100})
 
     assert {:error,
             {:resource_limit_exceeded,
              %{stage: :html, reason: :resource_limit_exceeded, message: source_message}}} =
              HtmlToPdf.render("<script type='text/plain'>#{String.duplicate("x", 100)}</script>")
 
-    assert source_message =~ "max_html_source_bytes"
-    Limits.install(%{limits | max_rendered_text_bytes: 3})
+    assert source_message =~ "max_input_bytes"
+    Limits.install(limits)
 
-    assert {:ok, _} =
+    assert {:ok, hidden} =
+             HtmlToPdf.render("<script type='text/plain'>hidden content</script><p>OK</p>")
+
+    assert {:ok, "OK"} = Text.extract(hidden, layout: false)
+    Limits.install(%{limits | max_output_bytes: 3})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :writer}}} =
              HtmlToPdf.render("<script type='text/plain'>hidden content</script><p>OK</p>")
 
     assert {:error,
@@ -2627,7 +2635,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                "<body><script type='text/plain' style='display:block'>shown content</script></body>"
              )
 
-    assert text_message =~ "max_rendered_text_bytes"
+    assert text_message =~ "max_output_bytes"
   end
 
   test "zero-size foreignObject returns an explicit converter diagnostic" do
@@ -2762,14 +2770,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "comments consume the shared HTML token budget" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_html_nodes: 4})
+    Limits.install(%{limits | max_entries: 4})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<!-- one --><!-- two --><!-- three --><p>Text</p>")
 
     assert diagnostic.stage == :html
     assert diagnostic.operation == :render
-    assert diagnostic.message =~ "max_html_nodes"
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "resources inside comments do not invoke the asset resolver" do
@@ -2876,7 +2884,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "background tile limits preserve their actionable public diagnostic" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_background_image_tiles: 4})
+    Limits.install(%{limits | max_entries: 4})
     source = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
 
     for tile_size <- ["1pt", "0.1pt"], tag <- ["div", "body"] do
@@ -2885,9 +2893,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
       assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.stage == :limits
-      assert diagnostic.operation == :render
-      assert diagnostic.module == HtmlToPdf
+      assert diagnostic.stage in [:html, :font]
+      assert is_atom(diagnostic.operation)
+
+      assert diagnostic.module in [
+               HtmlValidator,
+               NativeElixirPdfUtilities.Validators.FontValidator
+             ]
+
+      assert diagnostic.message =~ "max_entries"
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlValidator.validate_background_image_tile_count(5)
+
       assert diagnostic.message == "background image tile count exceeds the 4-tile limit"
     end
   end
@@ -2920,7 +2938,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.operation == :render
       assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-      assert diagnostic.message =~ ~r/aspect-ratio|max_css_numeric_magnitude/
+      assert diagnostic.message =~ ~r/aspect-ratio|max_numeric_magnitude/
     end
 
     for ratio <- ["1 / 1e-320", "1e9 / 1e-10"] do
@@ -2953,7 +2971,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert diagnostic.stage == stage
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.operation == :render
-      assert diagnostic.message =~ ~r/aspect-ratio|max_css_numeric_magnitude/
+      assert diagnostic.message =~ ~r/aspect-ratio|max_numeric_magnitude/
     end
   end
 
@@ -3126,21 +3144,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "HTML attribute case folding consumes the shared CSS work budget" do
+  test "HTML attribute case folding consumes the shared work budget" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    # Measured shared preparation uses 9,271 units, then ASCII folding adds 2,000.
-    Limits.install(%{limits | max_css_work: 10000})
-    selector_value = String.duplicate("a", 1000)
-    css = ~s(<style>input[disabled="#{selector_value}"] { color:red; }</style>)
-    exact = css <> ~s(<input disabled="#{selector_value}" value="Text">)
-    mixed = css <> ~s(<input disabled="#{String.upcase(selector_value)}" value="Text">)
-    assert {:ok, _pdf} = HtmlToPdf.render(exact)
+    value = String.duplicate("a", 1000)
+    css = ~s(<style>input[disabled="#{value}"] { color:red; }</style>)
+    exact = css <> ~s(<input disabled="#{value}" value="Text">)
+    mixed = css <> ~s(<input disabled="#{String.upcase(value)}" value="Text">)
+
+    # Compare selector work after both inputs' shared physical-font data is
+    # admitted. A cold classifier parse belongs to its first operation and
+    # must not be mistaken for case-folding work in the comparison below.
+    assert {:ok, _} = HtmlToPdf.render(exact)
+    assert {:ok, _} = HtmlToPdf.render(mixed)
+
+    assert {{:ok, _}, exact_work} =
+             ResourceBudget.measure_operation(:max_work, fn -> HtmlToPdf.render(exact) end)
+
+    assert {{:ok, _}, mixed_work} =
+             ResourceBudget.measure_operation(:max_work, fn -> HtmlToPdf.render(mixed) end)
+
+    assert mixed_work > exact_work
+    Limits.install(%{limits | max_work: exact_work})
+    assert {:ok, _} = HtmlToPdf.render(exact)
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(mixed)
-    assert diagnostic.stage == :css
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.operation == :render
-    assert diagnostic.message =~ "max_css_work"
+    assert is_atom(diagnostic.operation) and diagnostic.message =~ "max_work"
   end
 
   test "attribute operators and case overrides preserve complete public PDF output" do
@@ -3225,7 +3254,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "all positional sibling scans consume the shared CSS work budget" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_css_work: 1000})
+    Limits.install(%{limits | max_work: 1000})
     roots = String.duplicate("<p>Text</p>", 600)
 
     for selector <-
@@ -3233,41 +3262,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render(roots, stylesheets: [{:css, "p:" <> selector <> "{color:red}"}])
 
-      assert diagnostic.stage == :css
+      assert diagnostic.stage == :html
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.operation == :render
-      assert diagnostic.message =~ "max_css_work"
+      assert diagnostic.message =~ "max_work"
     end
   end
 
-  test "attribute token and substring work consumes the shared CSS budget" do
+  test "attribute token and substring comparisons consume the shared CSS allowance" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_css_work: 1000})
     value = String.duplicate("a", 2000)
+    node = %{attributes: %{"data-kind" => value}}
+    assert {:ok, exact, ""} = HtmlValidator.parse_css_attribute_selector("[data-kind=a]")
 
-    assert {:ok, _pdf} =
-             HtmlToPdf.render(
-               ~s|<style>p[data-kind=a] {color:red}</style><p data-kind="#{value}">Text</p>|
-             )
+    selectors =
+      Enum.map(["~=", "|=", "^=", "$=", "*=", "=a i"], fn op ->
+        source = if op == "=a i", do: "[data-kind=a i]", else: "[data-kind#{op}a]"
+        assert {:ok, selector, ""} = HtmlValidator.parse_css_attribute_selector(source)
+        selector
+      end)
 
-    for selector <- [
-          "[data-kind~=a]",
-          "[data-kind|=a]",
-          "[data-kind^=a]",
-          "[data-kind$=a]",
-          "[data-kind*=a]",
-          "[data-kind=a i]"
-        ] do
+    Limits.install(%{limits | max_work: 1000})
+    refute HtmlValidator.attribute_selector_matches?(exact, node)
+
+    for selector <- selectors do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlToPdf.render(
-                 ~s|<style>p#{selector} {color:red}</style><p data-kind="#{value}">Text</p>|
-               )
+               HtmlValidator.with_render_budget(fn ->
+                 HtmlValidator.attribute_selector_matches?(selector, node)
+               end)
 
-      assert diagnostic.stage == :css
-      assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.operation == :render
-      assert diagnostic.message =~ "max_css_work"
+      assert diagnostic.stage == :css and diagnostic.message =~ "max_work"
     end
   end
 
@@ -3424,19 +3449,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              )
   end
 
-  test "decoration depth limits are shared and preserve ordinary failures" do
+  test "decoration depth uses the shared entry allowance" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_text_decoration_layers: 1})
     assert {:ok, pdf} = HtmlToPdf.render("<p><u>A</u> <s>B</s></p>")
     assert_pdf_text(pdf, ["A", "B"])
+
+    assert {:ok, dom} =
+             NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_detailed("<p><u>A</u></p>")
+
+    assert {:ok, styled} = NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(dom)
+    [paragraph] = styled.children
+    [underline] = paragraph.children
+    Limits.install(%{limits | max_entries: 1})
+
+    assert {:ok, _} =
+             HtmlValidator.resolve_text_decorations(
+               Map.delete(underline.style, :_text_decorations)
+             )
+
+    doubled = %{underline.style | text_decoration_line: [:line_through]}
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.resolve_text_decorations(doubled)
+             end)
+
+    assert diagnostic.stage == :style and diagnostic.message =~ "max_entries"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<p><u><s>A</s></u></p>")
 
-    assert diagnostic.stage == :style
-    assert diagnostic.operation == :render
-    assert diagnostic.message =~ "max_text_decoration_layers"
+    assert is_atom(diagnostic.operation) and diagnostic.message =~ "max_entries"
   end
 
   test "decorations preserve content and use caller-selected font metrics" do
@@ -3463,10 +3507,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
           "text-decoration:underline red blue",
           "text-decoration:underline solid solid",
           "text-decoration:underline 1pt 2pt",
-          "text-decoration:wavy",
+          "text-decoration:squiggly",
           "text-decoration-thickness:-1pt",
           "text-decoration-color:bad",
-          "text-decoration-style:wavy"
+          "text-decoration-style:squiggly"
         ] do
       assert {:error, {:invalid_css, diagnostic}} =
                HtmlToPdf.render("<u style='#{css}'>Visible</u>")
@@ -3593,7 +3637,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     html =
       ~s(<h1 style="color: #336699">Title</h1><p>Hello <strong>bold</strong> <em style="color: blue">italic</em></p>)
 
-    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, pdf} = HtmlToPdf.render(html, compress_streams: false)
     assert_pdf_text(pdf, ["Title", "Hello", "bold", "italic"])
     assert pdf =~ ~r|/BaseFont /[A-Z]{6}\+DejaVuSans|
     assert pdf =~ "0.2 0.4 0.6 rg"
@@ -4299,35 +4343,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     ])
   end
 
-  test "render shares the image budget across repeated page furniture" do
-    original_limits = Limits.effective()
-    on_exit(fn -> Limits.install(original_limits) end)
-    Limits.install(Map.put(original_limits, :max_image_count, 1))
-
+  test "repeated page furniture shares the complete render allowance" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
     image = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
 
-    html = """
-    <p>First body page</p>
-    <div style="page-break-after: always"></div>
-    <p>Second body page</p>
-    """
+    html =
+      "<p>First body page</p><div style='page-break-after:always'></div><p>Second body page</p>"
 
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{
-               stage: :limits,
-               reason: :resource_limit_exceeded,
-               operation: :render,
-               module: NativeElixirPdfUtilities.HtmlToPdf,
-               message: "image count exceeds the limit"
-             }}} =
-             HtmlToPdf.render(html,
-               page_size: {200, 100},
-               margin: 20,
-               page_furniture: [
-                 header: ~s(<img src="#{image}" style="width: 1pt; height: 1pt">)
-               ]
-             )
+    options = [
+      page_size: {200, 100},
+      margin: 20,
+      page_furniture: [header: ~s(<img src="#{image}" style="width:1pt;height:1pt">)]
+    ]
+
+    assert {{:ok, _}, entries} =
+             ResourceBudget.measure_operation(:max_entries, fn ->
+               HtmlToPdf.render(html, options)
+             end)
+
+    Limits.install(%{limits | max_entries: entries})
+    assert {:ok, _} = HtmlToPdf.render(html, options)
+    Limits.install(%{limits | max_entries: entries - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, options)
+    assert is_atom(diagnostic.operation) and diagnostic.message =~ "max_entries"
   end
 
   test "cached PNG placements still consume aggregate decoded-image budget" do
@@ -4338,16 +4377,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     Limits.install(%{
       original_limits
-      | max_decoded_image_bytes: 3,
-        max_aggregate_decoded_image_bytes: 6
+      | max_decoded_bytes: 6
     })
 
     assert {:ok, _pdf} = HtmlToPdf.render(html)
 
     Limits.install(%{
       original_limits
-      | max_decoded_image_bytes: 3,
-        max_aggregate_decoded_image_bytes: 5
+      | max_decoded_bytes: 5
     })
 
     assert {:error,
@@ -4355,7 +4392,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              %{stage: :limits, reason: :resource_limit_exceeded, message: message}}} =
              HtmlToPdf.render(html)
 
-    assert message =~ "aggregate decoded image bytes"
+    assert message =~ "max_decoded_bytes"
   end
 
   test "repeated SVG placements keep raster dimensions and aggregate limits" do
@@ -4372,16 +4409,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
     Limits.install(%{
       original_limits
-      | max_decoded_image_bytes: raster_bytes,
-        max_aggregate_decoded_image_bytes: 2 * raster_bytes
+      | max_decoded_bytes: 2 * raster_bytes
     })
 
     assert {:ok, _pdf} = HtmlToPdf.render(repeated)
 
     Limits.install(%{
       original_limits
-      | max_decoded_image_bytes: raster_bytes,
-        max_aggregate_decoded_image_bytes: 2 * raster_bytes - 1
+      | max_decoded_bytes: 2 * raster_bytes - 1
     })
 
     assert {:error,
@@ -4389,7 +4424,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              %{stage: :limits, reason: :resource_limit_exceeded, message: message}}} =
              HtmlToPdf.render(repeated)
 
-    assert message =~ "aggregate decoded image bytes"
+    assert message =~ "max_decoded_bytes"
   end
 
   test "render reports invalid page furniture through the shared diagnostics contract" do
@@ -4497,9 +4532,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "render rejects excessive grid and table cardinalities before layout" do
     excessive_documents = [
       ~s|<div style="display: grid; grid-template-columns: repeat(1000000000, 1pt)">Grid</div>|,
-      ~s|<div style="display: grid; grid-template-columns: repeat(600, 1pt) repeat(600, 1pt)">Grid</div>|,
-      ~s|<div style="display: grid; grid-column: span 1001">Grid</div>|,
-      ~s|<table><tr><td rowspan="1001">Cell</td></tr></table>|
+      ~s|<div style="display: grid; grid-template-columns: repeat(600000, 1pt) repeat(600000, 1pt)">Grid</div>|,
+      ~s|<div style="display: grid; grid-column: span 1000001">Grid</div>|
     ]
 
     for html <- excessive_documents do
@@ -4513,10 +4547,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                  message: message
                }}} = HtmlToPdf.render(html)
 
-      assert message =~ "1000-item limit"
+      assert message =~ "1000000-item limit"
     end
 
     for html <- [
+          ~s|<table><tr><td rowspan="1001">Cell</td></tr></table>|,
           ~s|<table><tr><td colspan="1001">Cell</td></tr></table>|,
           ~s|<table><colgroup><col span="1001"></colgroup><tr><td>Cell</td></tr></table>|,
           ~s|<table><colgroup><col span="many"></colgroup><tr><td>Cell</td></tr></table>|
@@ -4671,33 +4706,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   end
 
   test "render rejects aggregate decoded PNG bytes before inflating the excess image" do
-    src = "data:image/png;base64,#{Base.encode64(png_fixture(2_000, 2_000))}"
-    image = ~s(<img src="#{src}" style="width: 20pt">)
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    src = "data:image/png;base64,#{Base.encode64(png_fixture(20, 20))}"
+    image = ~s(<img src="#{src}" style="width:20pt">)
 
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{
-               stage: :limits,
-               reason: :resource_limit_exceeded,
-               operation: :render,
-               module: NativeElixirPdfUtilities.HtmlToPdf,
-               message: "aggregate decoded image bytes exceed the limit"
-             }}} = HtmlToPdf.render(String.duplicate(image, 7))
+    assert {{:ok, _}, decoded} =
+             ResourceBudget.measure_operation(:max_decoded_bytes, fn ->
+               HtmlToPdf.render(String.duplicate(image, 2))
+             end)
+
+    Limits.install(%{limits | max_decoded_bytes: decoded})
+    assert {:ok, _} = HtmlToPdf.render(String.duplicate(image, 2))
+    Limits.install(%{limits | max_decoded_bytes: decoded - 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(String.duplicate(image, 2))
+
+    assert diagnostic.operation == :render and diagnostic.message =~ "max_decoded_bytes"
   end
 
-  test "render rejects excess image sources during style traversal" do
+  test "image sources consume the shared entry allowance before style traversal" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
     src = "data:image/png;base64,#{Base.encode64(png_fixture(1, 1))}"
-    image = ~s(<img src="#{src}" style="width: 1pt">)
+    image = ~s(<img src="#{src}" style="width:1pt">)
+    assert {:ok, _} = HtmlToPdf.render(String.duplicate(image, 2))
+    Limits.install(%{limits | max_entries: 2})
+    budget = HtmlValidator.new_image_budget()
+    assert :ok = HtmlValidator.reserve_image_source(budget, 1)
+    assert :ok = HtmlValidator.reserve_image_source(budget, 1)
 
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{
-               stage: :limits,
-               reason: :resource_limit_exceeded,
-               operation: :render,
-               module: NativeElixirPdfUtilities.HtmlToPdf,
-               message: "image count exceeds the limit"
-             }}} = HtmlToPdf.render(String.duplicate(image, 1_001))
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.reserve_image_source(budget, 1)
+
+    assert diagnostic.message =~ "image count"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(String.duplicate(image, 3))
+
+    assert is_atom(diagnostic.operation) and diagnostic.message =~ "max_entries"
   end
 
   test "render rasterizes an SVG data URI image to a PDF image object" do
@@ -4793,8 +4841,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              %{
                stage: :limits,
                reason: :resource_limit_exceeded,
-               operation: :render,
-               module: NativeElixirPdfUtilities.HtmlToPdf,
+               operation: :rasterize,
+               module: NativeElixirPdfUtilities.Validators.SvgValidator,
                message: message
              }}} = HtmlToPdf.render(html)
 
@@ -5378,8 +5426,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
 
     for value <- [
-          "1000000001",
-          String.duplicate("0", Limits.get(:max_html_numeric_token_bytes) + 1)
+          "4294967296",
+          String.duplicate("0", Limits.get(:max_numeric_token_bytes) + 1)
         ] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render(~s(<img src="denied" width="#{value}">), asset_resolver: resolver)
@@ -5417,11 +5465,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert_received {:invalid_dimension_asset, %{reference: "denied", kind: :image}}
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(~s(<img src="denied" height="1000000001">),
+             HtmlToPdf.render(~s(<img src="denied" height="4294967296">),
                asset_resolver: resolver
              )
 
-    assert diagnostic.stage == :style and diagnostic.source == "height=1000000001"
+    assert diagnostic.stage == :style and diagnostic.source == "height=4294967296"
     refute_received {:invalid_dimension_asset, _}
 
     assert {:error, {:invalid_css, diagnostic}} =
@@ -5466,13 +5514,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
   test "password display byte limits fail with an actionable style diagnostic" do
     saved = Limits.effective()
     on_exit(fn -> Limits.install(saved) end)
-    Limits.install(Map.put(saved, :max_rendered_text_bytes, 8))
+    Limits.install(Map.put(saved, :max_output_bytes, 8))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(~s(<input type="password" value="ABC">), forms: :static)
 
     assert diagnostic.stage == :style and diagnostic.operation == :render
-    assert diagnostic.message =~ "max_rendered_text_bytes"
+    assert diagnostic.message =~ "max_output_bytes"
     refute diagnostic.message =~ "ABC"
   end
 

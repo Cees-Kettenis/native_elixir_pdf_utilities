@@ -111,12 +111,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
           Map.put(outer, :border_radius, -1),
           Map.put(outer, :border_radius, "round"),
           Map.put(outer, :width, -1),
-          Map.put(outer, :x, 1_000_000_001),
-          Map.put(outer, :x, 1_000_000_000),
+          Map.put(outer, :x, 4_294_967_296),
+          Map.put(outer, :x, 4_294_967_295),
           Map.put(outer, :unrecognized, true),
           Map.put(outer, :inner_clip, nil),
           put_in(outer.inner_clip.border_radius, -1),
-          put_in(outer.inner_clip.x, 1_000_000_000),
+          put_in(outer.inner_clip.x, 4_294_967_295),
           Map.update!(outer, :inner_clip, &Map.put(&1, :inner_clip, ordinary))
         ] do
       assert {:error, {:invalid_pdf_input, diagnostic}} =
@@ -158,7 +158,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
     assert clip.x == 0.75 and clip.y == 0.0 and clip.width == 1.5 and clip.height == 1.5
     assert clip.border_radius == 0.75 and clip.inner_clip.border_radius == 0
 
-    Limits.install(%{Limits.effective() | max_css_numeric_magnitude: 1.2})
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 1.2})
 
     box = %{
       box
@@ -255,7 +255,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
           %{},
           Map.put(origin, :height, 0),
           Map.put(origin, :x, "12"),
-          Map.put(origin, :x, 1_000_000_000),
+          Map.put(origin, :x, 4_294_967_295),
           Map.put(origin, :inner_clip, origin),
           Map.put(origin, :border_radius, 0)
         ] do
@@ -426,8 +426,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
                "<select size=1000000000 style='font-size:100pt'><option>A</option></select>"
              )
 
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
-    Limits.install(%{Limits.effective() | max_css_numeric_magnitude: 100})
+    assert diagnostic.message =~ "max_numeric_magnitude"
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 100})
     rows = String.duplicate("<option>A</option>", 20)
 
     assert {:error, {:invalid_layout, diagnostic}} =

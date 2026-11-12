@@ -56,6 +56,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
     end
   end
 
+  test "vertical bitmap glyphs preserve the page clip outside their glyph transform" do
+    source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
+    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
+    clip = %{x: 5.0, y: 5.0, width: 30.0, height: 30.0}
+
+    box = %{
+      type: :text,
+      text: "H",
+      x: 10,
+      y: 20,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 15,
+      color: {0, 0, 0},
+      glyph_basis: {0, 1, -1, 0},
+      clip: clip
+    }
+
+    assert {:ok, %{pages: [%{boxes: boxes}]}} =
+             NativeElixirPdfUtilities.Validators.ColorFontValidator.prepare(
+               %{color_fonts?: true, pages: [%{size: {80, 60}, boxes: [box]}]},
+               []
+             )
+
+    assert hd(boxes) == %{type: :actual_text_start, text: "H"}
+    assert List.last(boxes) == %{type: :actual_text_end}
+    [outer, rotation] = Enum.filter(boxes, &(&1.type == :drawing_group_start))
+    assert outer.clip == clip
+    assert outer.transform == {1, 0, 0, 1, 0, 0}
+    assert {0, 1, -1, 0, _, _} = rotation.transform
+    image = Enum.find(boxes, &(&1.type == :image))
+    assert image.type == :image and image.width > 0 and image.height > 0
+    assert Map.get(image, :clip) == nil
+    assert rotation.clip == nil
+  end
+
   test "bitmap header, directory, sparse index, metrics and payload failures retain source diagnostics" do
     source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
@@ -203,7 +239,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
       if valid? do
         assert {:ok, pdf} = result
         assert pdf =~ "/DCTDecode"
-        NativeElixirPdfUtilities.Limits.install(Map.put(limits, :max_decoded_image_bytes, 1))
+        NativeElixirPdfUtilities.Limits.install(Map.put(limits, :max_decoded_bytes, 1))
 
         assert {:error, {:resource_limit_exceeded, _}} =
                  PdfWriter.render([%{size: {600, 600}, boxes: [box]}])
@@ -255,7 +291,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
         else: assert(match?({:error, {:invalid_font, _}}, result))
 
       if valid? do
-        NativeElixirPdfUtilities.Limits.install(Map.put(limits, :max_decoded_image_bytes, 1))
+        NativeElixirPdfUtilities.Limits.install(Map.put(limits, :max_decoded_bytes, 1))
 
         assert {:error, {:resource_limit_exceeded, _}} =
                  PdfWriter.render([%{size: {80, 80}, boxes: [box]}])

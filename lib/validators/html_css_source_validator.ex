@@ -1,4 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
+  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeGrapheme
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
@@ -88,7 +89,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
           placements =
             Enum.reduce_while(nodes, {:ok, %{}}, fn node, {:ok, bindings} ->
               HtmlValidator.reserve_render_resource(
-                :max_html_tree_work,
+                :max_work,
                 1 + byte_size(node.source.text),
                 :html
               )
@@ -155,7 +156,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
         finish when is_integer(finish) and finish >= 0 and finish <= byte_size(source) ->
           prefix = binary_part(source, 0, finish)
-          HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(prefix), :html)
+          HtmlValidator.reserve_render_resource(:max_work, byte_size(prefix), :html)
 
           if String.valid?(prefix),
             do: {:ok, prefix},
@@ -176,7 +177,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
   # reads the original stream once and does not build another tree or count nodes.
   defp bind_tokens(dom, finish) do
     original = dom.source.text
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 4 * byte_size(original), :html)
+    HtmlValidator.reserve_render_resource(:max_work, 4 * byte_size(original), :html)
 
     with {:ok, token_source} <- validate_source_prefix(original, finish) do
       lines = [
@@ -222,7 +223,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
             true ->
               HtmlValidator.reserve_render_resource(
-                :max_html_tree_work,
+                :max_work,
                 byte_size(original),
                 :html
               )
@@ -236,7 +237,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
                   if source.column <= String.length(line) + 1 do
                     prefix =
-                      line |> String.graphemes() |> Enum.take(source.column - 1) |> Enum.join()
+                      line
+                      |> UnicodeGrapheme.graphemes()
+                      |> Enum.take(source.column - 1)
+                      |> Enum.join()
 
                     line_start + byte_size(prefix)
                   end
@@ -277,7 +281,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
   defp source_nodes(nodes) do
     Enum.flat_map(nodes, fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
       nested = source_nodes(Map.get(node, :children, []))
 
       detached =
@@ -303,7 +307,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
             )
 
       input ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1 + length(crlf), :html)
+        HtmlValidator.reserve_render_resource(:max_work, 1 + length(crlf), :html)
 
         context =
           case stack do
@@ -445,7 +449,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
   end
 
   defp original_parent(id, ownership) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
     cond do
       is_nil(id) -> nil
@@ -456,7 +460,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
   defp descriptors(nodes, bound, canonical?, dom, inline, embedded, contexts, insertion) do
     Enum.reduce(nodes, {inline, embedded, contexts}, fn node, {inline, embedded, contexts} ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{type: :element, attributes: attributes, children: children} ->
@@ -577,7 +581,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
   end
 
   defp inline_descriptor(node, span, dom) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 4 * byte_size(span.raw), :html)
+    HtmlValidator.reserve_render_resource(:max_work, 4 * byte_size(span.raw), :html)
     captures = HtmlValidator.html_attribute_captures(span.raw, return: :index)
 
     capture =
@@ -603,7 +607,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
   end
 
   defp decoded_segments(raw, base, context) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 4 * byte_size(raw), :html)
+    HtmlValidator.reserve_render_resource(:max_work, 4 * byte_size(raw), :html)
 
     {raw, base, context} =
       if context == :cdata,
@@ -624,7 +628,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
     segments =
       Enum.map(segments, fn {at, size, input_at, input_size} ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, length(crlf) + 1, :html)
+        HtmlValidator.reserve_render_resource(:max_work, length(crlf) + 1, :html)
         first = input_at + Enum.count(crlf, &(&1 < input_at))
         last = input_at + input_size + Enum.count(crlf, &(&1 < input_at + input_size))
         {at, size, base + first, last - first}
@@ -663,7 +667,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
     Map.put(mapping, :mapper, fn
       :validate, supplied ->
         HtmlValidator.reserve_render_resource(
-          :max_html_tree_work,
+          :max_work,
           byte_size(mapping.original) +
             if(mapping.segments, do: tuple_size(mapping.segments), else: 0),
           :html
@@ -713,7 +717,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
 
   defp map_validated_span(descriptor, offset, length) do
     HtmlValidator.reserve_render_resource(
-      :max_html_tree_work,
+      :max_work,
       byte_size(descriptor.original) +
         if(descriptor.segments, do: tuple_size(descriptor.segments), else: 0),
       :html

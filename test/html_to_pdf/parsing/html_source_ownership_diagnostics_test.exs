@@ -49,12 +49,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSourceOwnershipDiagnosticsTest
 
     assert {:ok, []} = CssParser.style_declaration_records("p {")
 
-    Limits.install(Map.put(Limits.effective(), :max_css_source_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
 
-    assert {:error, {:invalid_css, diagnostic}} =
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssValueValidator.stylesheet_declaration_sources("p { width: bananas }")
 
-    assert diagnostic.stage == :css and diagnostic.message =~ "max_css_source_bytes"
+    assert diagnostic.stage == :css and diagnostic.message =~ "max_input_bytes"
   end
 
   test "wrong patch parent and missing end marker are recoverable without changing the tree" do

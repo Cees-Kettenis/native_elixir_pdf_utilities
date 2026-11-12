@@ -63,7 +63,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache do
 
     state.table
     |> :ets.tab2list()
-    |> FontValidator.cache_evictions(state.maximum_entries, :max_system_font_cache_bytes)
+    |> FontValidator.cache_evictions(state.maximum_entries, :max_cache_bytes)
     |> Enum.each(&:ets.delete(state.table, &1))
 
     {:reply, result, %{state | sequence: sequence}}

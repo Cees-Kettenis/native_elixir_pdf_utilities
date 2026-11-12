@@ -87,7 +87,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableVisibility do
 
   defp compress(boxes, x_bands, y_bands) do
     HtmlValidator.reserve_render_resource(
-      :max_table_grid_work,
+      :max_work,
       length(boxes) * (length(x_bands) + length(y_bands) + 1),
       :layout
     )
@@ -109,7 +109,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableVisibility do
         vertical = intervals(bottom, top, y_bands)
 
         HtmlValidator.reserve_render_resource(
-          :max_layout_boxes,
+          :max_entries,
           length(horizontal) * length(vertical),
           :layout
         )

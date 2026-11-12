@@ -83,7 +83,7 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
               Diagnostics.error(
                 :layout,
                 :resource_limit_exceeded,
-                "scrollbar artwork exceeds max_css_numeric_magnitude; reduce the viewport dimensions",
+                "scrollbar artwork exceeds max_numeric_magnitude; reduce the viewport dimensions",
                 operation: :prepare_scrollbar,
                 module: __MODULE__,
                 source: "scrollbar geometry"

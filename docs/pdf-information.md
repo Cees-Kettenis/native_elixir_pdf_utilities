@@ -84,4 +84,4 @@ operations require an unencrypted PDF.
 
 Failures return the shared [diagnostic tuple](diagnostics.md). See
 [PDF input support](pdf-reader.md#supported-inputs) and
-[metadata limits](resource-limits.md#metadata-and-bookmarks) for restrictions.
+[metadata limits](resource-limits.md#shared-processing-budgets) for restrictions.

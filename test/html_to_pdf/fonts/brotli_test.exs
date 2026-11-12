@@ -62,9 +62,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrotliTest do
 
   test "source, decoded-size and cumulative work allowances stop decoding" do
     for {limit, value, input, expected} <- [
-          {:max_font_source_bytes, 1, <<6, 0>>, 0},
-          {:max_font_decoded_bytes, 1, <<6>>, 2},
-          {:max_font_brotli_work, 1, <<6>>, 0}
+          {:max_input_bytes, 1, <<6, 0>>, 0},
+          {:max_decoded_bytes, 1, <<6>>, 2},
+          {:max_work, 1, <<6>>, 0}
         ] do
       original = Limits.effective()
       Limits.install(%{original | limit => value})

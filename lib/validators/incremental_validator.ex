@@ -40,13 +40,13 @@ defmodule NativeElixirPdfUtilities.Validators.IncrementalValidator do
     case context do
       %{document: %{xref_revisions: count}}
       when is_integer(count) and count > 0 and is_integer(additional) and additional > 0 ->
-        if count + additional <= Limits.get(:max_pdf_xref_revisions) do
+        if count + additional <= Limits.get(:max_entries) do
           :ok
         else
           Diagnostics.error(
             :incremental_write,
             :resource_limit_exceeded,
-            "incremental PDF output requires #{count + additional} xref revisions, exceeding max_pdf_xref_revisions (#{Limits.get(:max_pdf_xref_revisions)})",
+            "incremental PDF output requires #{count + additional} xref revisions, exceeding max_entries (#{Limits.get(:max_entries)})",
             module: __MODULE__
           )
         end
@@ -60,7 +60,7 @@ defmodule NativeElixirPdfUtilities.Validators.IncrementalValidator do
   @spec validate_output_size(non_neg_integer()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_output_size(bytes) do
-    limit = min(Limits.get(:max_pdf_input_bytes), Limits.get(:max_rendered_pdf_bytes))
+    limit = min(Limits.get(:max_input_bytes), Limits.get(:max_output_bytes))
 
     if bytes <= limit do
       :ok
@@ -68,7 +68,7 @@ defmodule NativeElixirPdfUtilities.Validators.IncrementalValidator do
       Diagnostics.error(
         :incremental_write,
         :resource_limit_exceeded,
-        "incremental PDF output requires #{bytes} bytes, exceeding min(max_pdf_input_bytes, max_rendered_pdf_bytes) (#{limit})"
+        "incremental PDF output requires #{bytes} bytes, exceeding min(max_input_bytes, max_output_bytes) (#{limit})"
       )
     end
   end

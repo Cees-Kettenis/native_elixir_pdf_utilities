@@ -63,7 +63,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
              {:ok, number, type} when type == %{} <- evaluate(value, environment),
              number = if(number == :nan, do: 0.0, else: number),
              true <- is_number(number) do
-          HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(number), :style)
+          HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(number), :style)
 
           # floor(x + 0.5) loses large odd integers when x + 0.5 rounds in binary64.
           rounded =
@@ -233,22 +233,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
 
   defp prepare_measured_length(value, scales, unit) do
     if is_map(scales),
-      do: HtmlValidator.check_render_resource(:max_css_work, map_size(scales), :style)
+      do: HtmlValidator.check_render_resource(:max_work, map_size(scales), :style)
 
     valid? =
       unit in [:point, :css_pixel] and is_binary(value) and String.valid?(value) and
         is_map(scales) and
         Enum.all?(scales, fn {unit, scale} ->
           is_binary(unit) and is_number(scale) and scale >= 0 and
-            scale <= Limits.get(:max_css_numeric_magnitude)
+            scale <= Limits.get(:max_numeric_magnitude)
         end)
 
     cond do
       unit == :point and is_binary(value) and
-          byte_size(value) > Limits.get(:max_html_numeric_token_bytes) ->
+          byte_size(value) > Limits.get(:max_numeric_token_bytes) ->
         length_failure(
           :resource_limit_exceeded,
-          "CSS calculation exceeds max_html_numeric_token_bytes",
+          "CSS calculation exceeds max_numeric_token_bytes",
           value
         )
 
@@ -331,14 +331,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
           Process.put(collector, [])
 
           try do
-            HtmlValidator.reserve_render_resource(:max_css_work, byte_size(value), :css)
+            HtmlValidator.reserve_render_resource(:max_work, byte_size(value), :css)
 
             environment =
               Map.merge(context, %{
                 type_check: true,
                 percentage_basis: 1.0,
                 unit_scales: Map.new(@length_units, &{&1, 1.0}),
-                _depth_limit: :max_css_calculation_depth,
+                _depth_limit: :max_depth,
                 _unit_collector: collector
               })
 
@@ -384,17 +384,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
       when is_binary(value) and is_map(scales) and is_number(basis) and
              (basis >= 0 or policy == :property) ->
         HtmlValidator.with_render_budget(fn ->
-          if abs(basis) > Limits.get(:max_css_numeric_magnitude) do
+          if abs(basis) > Limits.get(:max_numeric_magnitude) do
             length_failure(
               :resource_limit_exceeded,
-              "CSS calculation exceeds max_css_numeric_magnitude",
+              "CSS calculation exceeds max_numeric_magnitude",
               value
             )
           else
             environment = %{
               unit_scales: scales,
               percentage_basis: basis / factor,
-              _depth_limit: :max_css_calculation_depth,
+              _depth_limit: :max_depth,
               _bounded_length: policy == :source
             }
 
@@ -403,7 +403,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                 result = number * factor
 
                 HtmlValidator.check_render_resource(
-                  :max_css_numeric_magnitude,
+                  :max_numeric_magnitude,
                   abs(result),
                   :layout
                 )
@@ -518,7 +518,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     is_map(scales) and map_size(scales) <= length(@length_units) and
       Enum.all?(scales, fn {unit, scale} ->
         unit in @length_units and is_number(scale) and scale >= 0 and
-          scale <= Limits.get(:max_css_numeric_magnitude)
+          scale <= Limits.get(:max_numeric_magnitude)
       end)
   end
 
@@ -608,8 +608,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     case result do
       {:ok, number, _} when is_number(number) ->
         if Map.get(environment, :_bounded_length, false),
-          do:
-            HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(number), :layout)
+          do: HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(number), :layout)
 
         result
 
@@ -620,13 +619,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
 
   defp expression_value(value, environment, depth) do
     HtmlValidator.check_render_resource(
-      Map.get(environment, :_depth_limit, :max_css_calculation_depth),
+      Map.get(environment, :_depth_limit, :max_depth),
       depth,
       :style
     )
 
     terms = component_terms(value, true)
-    HtmlValidator.reserve_render_resource(:max_css_work, length(terms), :style)
+    HtmlValidator.reserve_render_resource(:max_work, length(terms), :style)
 
     additive =
       terms
@@ -779,8 +778,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                 case HtmlValidator.parse_css_number(mantissa) do
                   {number, ""} when number != 0 and exponent > 308 ->
                     {if(number < 0,
-                       do: -Limits.get(:max_css_numeric_magnitude),
-                       else: Limits.get(:max_css_numeric_magnitude)
+                       do: -Limits.get(:max_numeric_magnitude),
+                       else: Limits.get(:max_numeric_magnitude)
                      ), ""}
 
                   _ ->
@@ -795,12 +794,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
           end
 
         if is_tuple(parsed_number) and
-             byte_size(value) > Limits.get(:max_html_numeric_token_bytes) do
+             byte_size(value) > Limits.get(:max_numeric_token_bytes) do
           throw(
             {:render_resource_limit,
              length_failure(
                :resource_limit_exceeded,
-               "CSS numeric token exceeds max_html_numeric_token_bytes",
+               "CSS numeric token exceeds max_numeric_token_bytes",
                Map.get(environment, :_source_expression, value)
              )}
           )

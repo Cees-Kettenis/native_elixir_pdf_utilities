@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page{size:600pt 120pt;margin:0}html,body{margin:0;padding:0}
+#vertical_emphasis_geometry .sample{position:absolute;top:0;width:150pt;height:120pt}
+#vertical_emphasis_geometry .caption{position:absolute;left:9pt;top:9pt;font:8pt/12pt 'DejaVu Sans'}
+#vertical_emphasis_geometry .probe{position:absolute;left:42pt;top:27pt;margin:0;width:48pt;height:72pt;font:18pt/48pt 'Authored Vertical';text-orientation:upright;text-emphasis:'B' #336699}
+</style></head><body>
+<!-- CSS Text Decoration 3, 5 May 2022, sections 3.1 and 3.4:
+     https://www.w3.org/TR/2022/CRD-css-text-decor-3-20220505/#text-emphasis-position-property
+     The authored B uses H outlines, whose 90-degree rotation is visibly different.
+     These cases check upright marks as well as their physical side.
+     The existing authored vertical face and shared capture add no font asset or browser launch. -->
+<section id="vertical_emphasis_geometry" style="position:absolute;left:0pt;top:0pt;width:600pt;height:120pt;box-sizing:border-box">
+<section class="sample" style="left:0pt"><span class="caption">RL right</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-rl;text-emphasis-position:over right">AB</p></section>
+<section class="sample" style="left:150pt"><span class="caption">RL left</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-rl;text-emphasis-position:over left">AB</p></section>
+<section class="sample" style="left:300pt"><span class="caption">LR right</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-lr;text-emphasis-position:over right">AB</p></section>
+<section class="sample" style="left:450pt"><span class="caption">LR left</span><p class="probe" data-vkrn-reference="required" style="writing-mode:vertical-lr;text-emphasis-position:over left">AB</p></section>
+</section></body></html>

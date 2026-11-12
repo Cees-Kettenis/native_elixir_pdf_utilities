@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.Validators.StyleWorkBudgetTest do
     operations = Enum.map(1..8, &{"item#{&1}", &1})
     parent = CounterState.apply(%{counter_reset: operations}, empty, empty, :parent)
     sibling = CounterState.apply(%{counter_reset: [{"extra", 3}]}, parent, empty, :sibling)
-    Limits.install(Map.put(Limits.effective(), :max_css_work, 8))
+    Limits.install(Map.put(Limits.effective(), :max_work, 8))
 
     for fun <- [
           fn ->
@@ -33,14 +33,14 @@ defmodule NativeElixirPdfUtilities.Validators.StyleWorkBudgetTest do
 
       assert diagnostic.stage == :style and diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.module == HtmlValidator
-      assert diagnostic.message =~ "max_css_work"
+      assert diagnostic.message =~ "max_work"
     end
 
     assert CounterState.value(CounterState.inherit(empty, nil, empty), "missing") == 0
   end
 
   test "public casing failures retain actionable rendered-text diagnostics" do
-    Limits.install(Map.put(Limits.effective(), :max_rendered_text_bytes, 2))
+    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 2))
 
     for html <- [
           "<p lang=tr style='text-transform:uppercase'>ii</p>",
@@ -51,12 +51,12 @@ defmodule NativeElixirPdfUtilities.Validators.StyleWorkBudgetTest do
 
       assert diagnostic.stage == :style and diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.module == HtmlValidator
-      assert diagnostic.message =~ "max_rendered_text_bytes"
+      assert diagnostic.message =~ "max_output_bytes"
     end
   end
 
   test "deferred context work is admitted before allocating case tokens" do
-    Limits.install(Map.put(Limits.effective(), :max_css_work, 4))
+    Limits.install(Map.put(Limits.effective(), :max_work, 4))
     alias NativeElixirPdfUtilities.HtmlToPdf.TextTransform
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -71,12 +71,12 @@ defmodule NativeElixirPdfUtilities.Validators.StyleWorkBudgetTest do
              end)
 
     assert diagnostic.stage == :style and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_css_work"
+    assert diagnostic.message =~ "max_work"
     assert Process.get({TextTransform, :pending}) == nil
   end
 
   test "Lithuanian dot insertion shares the rendered-text allowance" do
-    Limits.install(Map.put(Limits.effective(), :max_rendered_text_bytes, 4))
+    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 4))
 
     for source <- ["I\u0301", "Í"] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -88,7 +88,7 @@ defmodule NativeElixirPdfUtilities.Validators.StyleWorkBudgetTest do
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.module == HtmlValidator
       assert diagnostic.operation == :render
-      assert diagnostic.message =~ "max_rendered_text_bytes"
+      assert diagnostic.message =~ "max_output_bytes"
     end
   end
 end

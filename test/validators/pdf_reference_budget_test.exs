@@ -33,7 +33,7 @@ defmodule NativeElixirPdfUtilities.PdfReferenceBudgetTest do
   end
 
   test "fresh resolution caches share a reader's reference allowance", %{limits: limits} do
-    Limits.install(%{limits | max_pdf_reference_resolution_work: 2})
+    Limits.install(%{limits | max_work: 2})
     first = %{objects: %{{1, 0} => %{value: 1}}}
     second = %{objects: %{{1, 0} => %{value: 2}}}
 
@@ -46,7 +46,7 @@ defmodule NativeElixirPdfUtilities.PdfReferenceBudgetTest do
 
     assert diagnostic.stage == :limits
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "reference resolution work"
+    assert diagnostic.message =~ "max_work"
     assert {:ok, 1} = PdfValidator.resolve(first, {:ref, {1, 0}})
   end
 
@@ -62,7 +62,7 @@ defmodule NativeElixirPdfUtilities.PdfReferenceBudgetTest do
 
     owned = fn -> Enum.filter(:ets.all(), &(:ets.info(&1, :owner) == self())) end
     before = owned.()
-    Limits.install(%{limits | max_pdf_reference_chain_depth: 2})
+    Limits.install(%{limits | max_depth: 2})
 
     PdfValidator.with_reference_resolution([], fn opts ->
       assert {:ok, 42} = PdfValidator.resolve(document, {:ref, {1, 2}}, opts)

@@ -11,23 +11,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
   end
 
   test "distinct attributes are rejected before SAX or native parsing" do
+    Limits.install(%{Limits.effective() | max_work: 1_000_000})
     attrs = Enum.map_join(1..8_000, " ", &"a#{&1}='0'")
     source = "<svg width='1' height='1' #{attrs}/>"
 
     for result <- [
           SvgValidator.validate_processing(source, %{mode: :image}),
           SvgValidator.validate_extraction(source),
-          SvgRasterizer.rasterize(source, [], nil),
-          HtmlToPdf.render(source, system_font_discovery: false)
+          SvgRasterizer.rasterize(source, [], nil)
         ] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} = result
       assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.message =~ "max_html_tree_work"
+      assert diagnostic.message =~ "max_work"
       assert diagnostic.source == "SVG"
     end
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(source, system_font_discovery: false)
+
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 
   test "name and namespace lengths contribute to comparison work" do
+    Limits.install(%{Limits.effective() | max_work: 1_000_000})
+
     for attrs <- [
           Enum.map_join(1..100, " ", &"#{String.duplicate("a", 10_000)}#{&1}='0'"),
           Enum.map_join(1..100, " ", &"xmlns:n#{&1}='urn:#{String.duplicate("a", 10_000)}'")
@@ -35,7 +42,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                SvgValidator.validate_processing("<svg #{attrs}/>", %{mode: :image})
 
-      assert diagnostic.message =~ "max_html_tree_work"
+      assert diagnostic.message =~ "max_work"
     end
   end
 
@@ -43,7 +50,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
     source = "<svg/>"
     # Six scanned bytes, three name bytes and the implicit XML namespace binding.
     exact = byte_size(source) + 3 + 4 + byte_size("http://www.w3.org/XML/1998/namespace")
-    Limits.install(%{limits | max_html_tree_work: exact})
+    Limits.install(%{limits | max_work: exact})
     assert :ok = SvgParserWorkValidator.validate(source)
     assert :ok = SvgParserWorkValidator.validate(source)
 
@@ -53,9 +60,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
                SvgParserWorkValidator.validate(source)
              end)
 
-    Limits.install(%{limits | max_html_tree_work: exact - 1})
+    Limits.install(%{limits | max_work: exact - 1})
     assert {:error, {:resource_limit_exceeded, _}} = SvgParserWorkValidator.validate(source)
-    Limits.install(%{limits | max_html_tree_work: exact * 2})
+    Limits.install(%{limits | max_work: exact * 2})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgParserWorkValidator.validate("<svg><g/><g/></svg>")
@@ -70,7 +77,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
       "<?xml version='1.0'?><svg width='1' height='1'><desc data-q='\" &gt; a=1'>" <>
         "<![CDATA[<g #{fake}/>]]><!--<g #{fake}/>--><?example <g #{fake}/>?></desc></svg>"
 
-    Limits.install(%{limits | max_html_tree_work: byte_size(source) + 5_000})
+    Limits.install(%{limits | max_work: byte_size(source) + 5_000})
     assert :ok = SvgParserWorkValidator.validate(source)
 
     assert {:error, {:invalid_document, diagnostic}} =
@@ -84,7 +91,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
   test "namespace scopes end at their element and ordinary SVG still converts", %{limits: limits} do
     child = "<g xmlns:p='urn:#{String.duplicate("a", 100)}'><desc p:title='ok'/></g>"
     source = "<svg width='1' height='1'>" <> String.duplicate(child, 100) <> "</svg>"
-    Limits.install(%{limits | max_html_tree_work: 1_000_000})
+    Limits.install(%{limits | max_work: 1_000_000})
     assert :ok = SvgParserWorkValidator.validate(source)
     assert {:ok, _} = SvgValidator.validate_processing(source, %{mode: :image})
     Limits.install(limits)
@@ -98,6 +105,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
   end
 
   test "namespace insertion work includes declarations on separate siblings" do
+    Limits.install(%{Limits.effective() | max_work: 1_000_000})
+
     children =
       Enum.map_join(1..2_000, fn index ->
         "<g xmlns:p='urn:#{index}'/>"
@@ -106,10 +115,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgValidator.validate_processing("<svg>" <> children <> "</svg>", %{mode: :image})
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "namespace merging includes bindings inherited from ancestors" do
+    Limits.install(%{Limits.effective() | max_work: 1_000_000})
     bindings = Enum.map_join(1..100, " ", &"xmlns:p#{&1}='urn:#{&1}'")
     children = String.duplicate("<g xmlns:q='urn:q'/>", 200)
 
@@ -118,7 +128,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
                mode: :image
              })
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "converter preparation charges generated XML as well as authored XML", %{limits: limits} do
@@ -134,13 +144,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
              )
 
     assert prepared.source =~ "xmlns="
-    Limits.install(%{limits | max_html_tree_work: 1_500})
+    Limits.install(%{limits | max_work: 1_500})
     assert {:ok, _} = SvgValidator.validate_processing(source, %{mode: :image})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgRasterizer.rasterize(source, [], nil)
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
     assert diagnostic.source == "SVG"
 
     assert {:error, {:resource_limit_exceeded, _}} =
@@ -159,20 +169,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
     }
 
     assert {:ok, _} = SvgRasterizer.rasterize(source, [], nil, [], context)
-    Limits.install(%{limits | max_html_tree_work: 4_500})
+    Limits.install(%{limits | max_work: 4_500})
     assert {:ok, _} = SvgValidator.validate_processing(child, %{mode: :image})
     assert {:ok, _} = SvgValidator.validate_processing(source, context)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgRasterizer.rasterize(source, [], nil, [], context)
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
     assert diagnostic.source == "SVG"
   end
 
   test "only prefixed attributes incur namespace URI comparison work", %{limits: limits} do
     binding = "xmlns:p='urn:#{String.duplicate("a", 10_000)}'"
-    Limits.install(%{limits | max_html_tree_work: 500_000})
+    Limits.install(%{limits | max_work: 500_000})
     plain = Enum.map_join(1..32, " ", &"a#{&1}='0'")
     qualified = Enum.map_join(1..32, " ", &"p:a#{&1}='0'")
 
@@ -182,12 +192,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgValidator.validate_processing("<svg #{binding} #{qualified}/>", %{mode: :image})
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "identical namespace bindings do not inflate the native namespace pool", %{limits: limits} do
     source = "<svg>" <> String.duplicate("<g xmlns:p='urn:shared'/>", 2_000) <> "</svg>"
-    Limits.install(%{limits | max_html_tree_work: 1_000_000})
+    Limits.install(%{limits | max_work: 1_000_000})
     assert {:ok, _} = SvgValidator.validate_processing(source, %{mode: :image})
   end
 

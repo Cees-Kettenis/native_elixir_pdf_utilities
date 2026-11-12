@@ -13,6 +13,83 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
 
+  @doc "Returns the admitted glyph basis with selected synthetic oblique shear applied."
+  @spec glyph_basis(map()) :: {number(), number(), number(), number()}
+  def glyph_basis(box) do
+    basis = Map.get(box, :glyph_basis, {1, 0, 0, 1})
+
+    case box do
+      %{font_face: %{type: :embedded, synthesis: %{shear: shear}}} ->
+        {a, b, c, d} = basis
+        {a, b, c + a * shear, d + b * shear}
+
+      _ ->
+        basis
+    end
+  end
+
+  @doc "Measures selected outline and artwork rectangles through local affine contexts and clips."
+  @spec ink_rectangles([map()]) :: {:ok, [tuple()]} | {:error, term()}
+  def ink_rectangles(boxes) do
+    Enum.reduce_while(boxes, {:ok, []}, fn box, {:ok, extents} ->
+      NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
+        :max_work,
+        1,
+        :layout
+      )
+
+      result =
+        case box do
+          %{type: :text} ->
+            case NativeElixirPdfUtilities.Validators.FontValidator.prepare_text_ink_rectangle(box) do
+              {:ok, nil} -> {:ok, []}
+              {:ok, bounds} -> {:ok, [bounds]}
+              error -> error
+            end
+
+          %{type: :glyph_group, boxes: children} ->
+            ink_rectangles(children)
+
+          %{type: :drawing_group, boxes: children} ->
+            with {:ok, rectangles} <- ink_rectangles(children) do
+              clip = box_clip_bounds(local_clip(box))
+
+              rectangles =
+                rectangles
+                |> Enum.flat_map(fn rectangle ->
+                  {left, bottom, right, top} = intersect_clip(rectangle, clip)
+
+                  if left < right and bottom < top do
+                    points =
+                      Enum.map(
+                        [{left, bottom}, {right, bottom}, {right, top}, {left, top}],
+                        fn {x, y} -> transform_point(x, y, box.transform) end
+                      )
+
+                    [NativeElixirPdfUtilities.HtmlToPdf.ImageMapGeometry.bounds([points])]
+                  else
+                    []
+                  end
+                end)
+
+              {:ok, rectangles}
+            end
+
+          %{type: type} when type in [:image, :rect] ->
+            bounds = {box.x, box.y, box.x + box.width, box.y + box.height}
+            {:ok, [intersect_clip(bounds, box_clip_bounds(Map.get(box, :clip)))]}
+
+          _ ->
+            {:ok, []}
+        end
+
+      case result do
+        {:ok, bounds} -> {:cont, {:ok, bounds ++ extents}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
   @doc "Translates validated native boxes, including glyph-group children in the parent coordinate space."
   @spec translate_boxes([map()], number(), number()) :: [map()]
   def translate_boxes(boxes, delta_x, delta_y) do
@@ -304,10 +381,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
   def text_position(box, height) do
     case Map.get(box, :snap_to_css_pixel_grid, false) do
       true ->
+        offset = Map.get(box, :text_baseline_offset, 0.0)
+
         baseline =
           case box do
-            %{baseline_snap_depth: depth} -> text_baseline(box.y, height, depth)
-            _ -> height - snap_css_pixel(height - box.y)
+            %{baseline_snap_depth: depth} -> text_baseline(box.y - offset, height, depth) + offset
+            _ -> height - snap_css_pixel(height - box.y + offset) + offset
           end
 
         case Map.get(box, :font_face) do
@@ -432,6 +511,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     # Linear coefficients multiply local coordinates. Decimal-place rounding
     # can erase a nonzero scale or amplify its error across a large box.
     {a, b, c, d, Float.round(e * 1.0, 4), Float.round(f * 1.0, 4)}
+  end
+
+  @doc "Rebases admitted writing canvases onto the final physical CSS grid without moving source geometry."
+  @spec rebase_writing_canvas(map(), tuple() | map() | nil, number()) :: map()
+  def rebase_writing_canvas(group, parent, page_height) do
+    if Map.get(group, :role) == :writing_mode do
+      composition = compose_group(group, parent)
+      {matrix, _, _} = composition_parts(composition)
+      {a, b, c, d, e, f} = affine_matrix(matrix)
+      determinant = a * d - b * c
+
+      if abs(determinant) == 1 and Enum.all?([a, b, c, d], &(&1 in [-1, 0, 1])) do
+        dx = e - snap_css_pixel(e)
+        dy = f - (page_height - snap_css_pixel(page_height - f))
+        local_x = (d * dx - c * dy) / determinant
+        local_y = (a * dy - b * dx) / determinant
+        {ga, gb, gc, gd, ge, gf} = group.transform
+
+        %{
+          group
+          | boxes: translate_boxes(group.boxes, local_x, local_y),
+            transform:
+              {ga, gb, gc, gd, ge - ga * local_x - gc * local_y, gf - gb * local_x - gd * local_y}
+        }
+      else
+        group
+      end
+    else
+      group
+    end
   end
 
   defp rounded_viewport_origin(x, y, height, parent_height) do
@@ -690,7 +799,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     boundary = clip_polygon_points(clip)
 
     NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
-      :max_clip_projection_work,
+      :max_work,
       length(points) * length(boundary),
       :writer
     )

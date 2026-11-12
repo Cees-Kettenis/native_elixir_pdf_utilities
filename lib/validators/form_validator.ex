@@ -43,13 +43,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     count = String.length(value)
     # Bound the rendered bytes before allocating the grapheme masks. Form writes
     # also reserve aggregate appearance bytes before reaching this helper.
-    if count * byte_size("•") <= Limits.get(:max_rendered_text_bytes) do
+    if count * byte_size("•") <= Limits.get(:max_output_bytes) do
       {:ok, String.duplicate("•", count)}
     else
       Diagnostics.error(
         stage,
         :resource_limit_exceeded,
-        "password display exceeds max_rendered_text_bytes; reduce the value",
+        "password display exceeds max_output_bytes; reduce the value",
         module: __MODULE__
       )
     end
@@ -113,13 +113,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
       operation == :flatten and Keyword.get(opts, :fields, :all) != :all ->
         with {:ok, count} <-
-               CollectionValidator.bounded_length(opts[:fields], Limits.get(:max_pdf_form_fields)),
+               CollectionValidator.bounded_length(opts[:fields], Limits.get(:max_entries)),
              true <- Enum.all?(opts[:fields], &is_binary/1),
              true <- length(Enum.uniq(opts[:fields])) == count do
           {:ok, Map.new(opts)}
         else
           :limit_exceeded ->
-            error(:resource_limit_exceeded, "field selection exceeds max_pdf_form_fields")
+            error(:resource_limit_exceeded, "field selection exceeds max_entries")
 
           _ ->
             error(:invalid_options, "fields must be :all or a list of unique field names")
@@ -256,7 +256,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   @doc false
   @spec capacity(map(), non_neg_integer()) :: :ok | {:error, {atom(), map()}}
   def capacity(context, count) do
-    if context.document.trailer["Size"] + count <= Limits.get(:max_pdf_objects),
+    if context.document.trailer["Size"] + count <= Limits.get(:max_entries),
       do: :ok,
       else:
         error(:resource_limit_exceeded, "PDF object count cannot accommodate form appearances")
@@ -406,7 +406,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           {:resource_limit_exceeded, diagnostic.message}
 
         _ ->
-          {:invalid_form, "values must remain representable within max_pdf_numeric_magnitude"}
+          {:invalid_form, "values must remain representable within max_numeric_magnitude"}
       end
 
     source = "widget #{inspect(widget.ref)} on page #{widget.page}"
@@ -426,7 +426,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
            true <- is_list(annots) do
         with :ok <-
                FormInspectionValidator.reserve(
-                 :max_pdf_form_preparation_entries,
+                 :max_entries,
                  length(annots),
                  "Annots"
                ) do
@@ -449,14 +449,14 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           {:ok, walk_state()} | {:error, {atom(), map()}}
   defp walk(document, refs, inherited, prefix, depth, state) do
     cond do
-      depth > Limits.get(:max_pdf_form_depth) ->
-        error(:resource_limit_exceeded, "field tree exceeds max_pdf_form_depth")
+      depth > Limits.get(:max_depth) ->
+        error(:resource_limit_exceeded, "field tree exceeds max_depth")
 
       true ->
         Enum.reduce_while(refs, {:ok, state}, fn ref, {:ok, state} ->
           cond do
-            map_size(state.seen) >= Limits.get(:max_pdf_form_fields) ->
-              {:halt, error(:resource_limit_exceeded, "field tree exceeds max_pdf_form_fields")}
+            map_size(state.seen) >= Limits.get(:max_entries) ->
+              {:halt, error(:resource_limit_exceeded, "field tree exceeds max_entries")}
 
             not match?({:ref, _}, ref) or Map.has_key?(state.seen, ref) ->
               {:halt,
@@ -474,7 +474,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                    true <-
                      is_list(kids) and
                        length(kids) + 1 + map_size(state.seen) <=
-                         Limits.get(:max_pdf_form_fields),
+                         Limits.get(:max_entries),
                    {:ok, child_dicts, terminals} <- resolve_children(document, kids),
                    {:ok, subtype} <- PdfValidator.resolve(document, dictionary["Subtype"]),
                    {:ok, name} <- prepare_field_name(prefix, partial) do
@@ -544,10 +544,10 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     bytes =
       byte_size(prefix) + byte_size(partial) + if(prefix != "" and partial != "", do: 1, else: 0)
 
-    if bytes > Limits.get(:max_pdf_form_text_bytes) do
-      error(:resource_limit_exceeded, "field name exceeds max_pdf_form_text_bytes")
+    if bytes > Limits.get(:max_input_bytes) do
+      error(:resource_limit_exceeded, "field name exceeds max_input_bytes")
     else
-      with :ok <- FormInspectionValidator.reserve(:max_pdf_form_metadata_bytes, bytes, partial) do
+      with :ok <- FormInspectionValidator.reserve(:max_decoded_bytes, bytes, partial) do
         {:ok, Enum.reject([prefix, partial], &(&1 == "")) |> Enum.join(".")}
       end
     end
@@ -610,7 +610,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
          {:ok, value} <- read_value(document, Map.get(effective, "V"), type),
          :ok <-
            FormInspectionValidator.reserve(
-             :max_pdf_form_metadata_bytes,
+             :max_decoded_bytes,
              if(is_binary(value), do: byte_size(value), else: 0),
              name
            ) do
@@ -656,13 +656,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       states when is_map(states) ->
         with :ok <-
                FormInspectionValidator.reserve(
-                 :max_pdf_form_preparation_entries,
+                 :max_entries,
                  map_size(states),
                  "AP"
                ),
              :ok <-
                FormInspectionValidator.reserve(
-                 :max_pdf_form_metadata_bytes,
+                 :max_decoded_bytes,
                  Enum.reduce(states, 0, fn {name, _}, bytes -> bytes + byte_size(name) end),
                  "AP"
                ),
@@ -742,7 +742,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   defp choices(document, value) do
     with {:ok, values} <- PdfValidator.resolve(document, value), true <- is_list(values) do
       Enum.reduce_while(values, {:ok, []}, fn value, {:ok, choices} ->
-        with :ok <- FormInspectionValidator.reserve(:max_pdf_form_preparation_entries, 1, "Opt"),
+        with :ok <- FormInspectionValidator.reserve(:max_entries, 1, "Opt"),
              {:ok, value} <- PdfValidator.resolve(document, value),
              {export, display} =
                (case value do
@@ -755,7 +755,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
              {:ok, display} <- text(display),
              :ok <-
                FormInspectionValidator.reserve(
-                 :max_pdf_form_metadata_bytes,
+                 :max_decoded_bytes,
                  byte_size(export) + byte_size(display),
                  "Opt"
                ) do
@@ -795,12 +795,12 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
             {:choice, values} when is_list(values) ->
               Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
                 with :ok <-
-                       FormInspectionValidator.reserve(:max_pdf_form_preparation_entries, 1, "V"),
+                       FormInspectionValidator.reserve(:max_entries, 1, "V"),
                      {:ok, value} <- PdfValidator.resolve(document, value),
                      {:ok, value} <- text(value),
                      :ok <-
                        FormInspectionValidator.reserve(
-                         :max_pdf_form_metadata_bytes,
+                         :max_decoded_bytes,
                          byte_size(value),
                          "V"
                        ) do
@@ -910,8 +910,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           not is_binary(value) or not String.valid?(value) ->
             error(:invalid_form_value, "text value must be valid UTF-8")
 
-          byte_size(value) > Limits.get(:max_pdf_form_text_bytes) ->
-            error(:resource_limit_exceeded, "text exceeds max_pdf_form_text_bytes")
+          byte_size(value) > Limits.get(:max_input_bytes) ->
+            error(:resource_limit_exceeded, "text exceeds max_input_bytes")
 
           not is_nil(max_length) and (not is_integer(max_length) or max_length < 0) ->
             error(:invalid_form, "MaxLen must be a non-negative integer")
@@ -1013,13 +1013,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
 
     bytes = bytes + text_bytes * length(field.widgets)
 
-    if count <= Limits.get(:max_appearance_widgets) and
-         bytes <= Limits.get(:max_appearance_text_bytes),
+    if count <= Limits.get(:max_entries) and
+         bytes <= Limits.get(:max_output_bytes),
        do: {:ok, count, bytes},
        else:
          error(
            :resource_limit_exceeded,
-           "form appearances exceed the aggregate text or widget count limit"
+           "form appearances exceed the aggregate text or widget count limit (max_output_bytes or max_entries)"
          )
   end
 
@@ -1072,59 +1072,58 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                     |> then(&{:ok, &1})
                 end
 
-              with {:ok, text} <- text do
-                lines = String.split(String.replace(text, "\r\n", "\n"), "\n")
+              # reserve_appearances/5 admitted every widget's complete display
+              # bytes before this allocation, including password grapheme masks.
+              {:ok, text} = text
+              lines = String.split(String.replace(text, "\r\n", "\n"), "\n")
 
-                max_width =
-                  Enum.map(lines, &Font.text_width(&1, font, 1.0)) |> Enum.max(fn -> 0 end)
+              max_width =
+                Enum.map(lines, &Font.text_width(&1, font, 1.0)) |> Enum.max(fn -> 0 end)
 
-                size =
+              size =
+                min(
+                  12.0,
                   min(
-                    12.0,
-                    min(
-                      (height - 4) / max(length(lines) * 1.2, 1),
-                      (width - 4) / max(max_width, 0.001)
-                    )
+                    (height - 4) / max(length(lines) * 1.2, 1),
+                    (width - 4) / max(max_width, 0.001)
                   )
+                )
 
-                cond do
-                  size <= 0 ->
-                    {:halt, error(:unsupported_form, "widget is too small to draw an appearance")}
+              cond do
+                size <= 0 ->
+                  {:halt, error(:unsupported_form, "widget is too small to draw an appearance")}
 
-                  not Enum.all?(lines, &Font.supports_text?(font, &1)) ->
-                    {:halt,
-                     error(
-                       :unsupported_form,
-                       "value contains glyphs unsupported by the bundled appearance font"
-                     )}
+                not Enum.all?(lines, &Font.supports_text?(font, &1)) ->
+                  {:halt,
+                   error(
+                     :unsupported_form,
+                     "value contains glyphs unsupported by the bundled appearance font"
+                   )}
 
-                  true ->
-                    boxes =
-                      lines
-                      |> Enum.with_index()
-                      |> Enum.reject(fn {line, _index} -> line == "" end)
-                      |> Enum.map(fn {line, index} ->
-                        %{
-                          type: :text,
-                          text: line,
-                          x:
-                            case Map.get(field.effective, "Q", 0) do
-                              0 -> 2.0
-                              1 -> (width - Font.text_width(line, font, size)) / 2
-                              2 -> width - 2.0 - Font.text_width(line, font, size)
-                            end,
-                          y: height - 2 - size - index * size * 1.2,
-                          font_size: size,
-                          font: Font.pdf_name(font),
-                          font_face: font,
-                          color: {0, 0, 0}
-                        }
-                      end)
+                true ->
+                  boxes =
+                    lines
+                    |> Enum.with_index()
+                    |> Enum.reject(fn {line, _index} -> line == "" end)
+                    |> Enum.map(fn {line, index} ->
+                      %{
+                        type: :text,
+                        text: line,
+                        x:
+                          case Map.get(field.effective, "Q", 0) do
+                            0 -> 2.0
+                            1 -> (width - Font.text_width(line, font, size)) / 2
+                            2 -> width - 2.0 - Font.text_width(line, font, size)
+                          end,
+                        y: height - 2 - size - index * size * 1.2,
+                        font_size: size,
+                        font: Font.pdf_name(font),
+                        font_face: font,
+                        color: {0, 0, 0}
+                      }
+                    end)
 
-                    {:cont, {:ok, [%{size: {width, height}, boxes: boxes} | pages]}}
-                end
-              else
-                {:error, _} = error -> {:halt, error}
+                  {:cont, {:ok, [%{size: {width, height}, boxes: boxes} | pages]}}
               end
             end)
             |> case do

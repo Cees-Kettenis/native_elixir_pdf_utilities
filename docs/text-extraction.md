@@ -45,7 +45,7 @@ endpoint, rather than the group's bounding box. An image drawn with an
 position. This reads the label; it does not perform OCR.
 
 Covered text still needs reliable font mappings and valid geometry. Text and
-labels share the [extraction limits](resource-limits.md#text-extraction).
+labels share the [extraction limits](resource-limits.md#shared-processing-budgets).
 Unbalanced marked-content groups return diagnostics. Structure-tree recovery
 and replacement text for vector-only artwork are unsupported.
 
@@ -134,7 +134,7 @@ whitespace, including between digits. An odd final digit is padded with zero
 after whitespace removal. Invalid or mismatched codespace endpoints return
 `:invalid_pdf_input` with page and font context.
 
-[Extraction limits](resource-limits.md#text-extraction) cap content, work, spans,
+[Extraction limits](resource-limits.md#shared-processing-budgets) cap content, work, spans,
 and reconstructed spacing. Oversized numeric operands or font metrics return
 `:invalid_pdf_input` before execution. Overflow in composed transforms or text
 positioning also returns `:invalid_pdf_input`, with the page and failing

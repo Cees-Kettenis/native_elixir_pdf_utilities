@@ -150,7 +150,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidator do
 
   @doc "Identifies pseudo-elements whose layout and painting already have an implementation owner."
   @spec paint_ready?(atom() | tuple()) :: boolean()
-  def paint_ready?(pseudo), do: pseudo in [:before, :after, :picker_icon]
+  def paint_ready?(pseudo), do: pseudo in [:before, :after, :picker_icon, :first_letter]
 
   @doc "Keeps selected pseudo-elements gated until their layout and painting implementation is ready."
   @spec validate_paint([map()], map()) :: :ok | {:error, {atom(), map()}}

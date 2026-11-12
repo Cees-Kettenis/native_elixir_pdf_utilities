@@ -67,8 +67,8 @@ Vera license; WHATWG character-reference data and Adobe glyph-name data retain
 their respective BSD 3-Clause notices. Brotli dictionary and transform data retain Google's MIT notice. See the complete
 [license texts](docs/licenses.md).
 
-Text extraction bounds aggregate decoded UTF-8 operands with `max_extracted_text_bytes` and
+Text extraction bounds aggregate decoded UTF-8 operands with `max_output_bytes` and
 expanded ToUnicode mapping keys and UTF-8 destinations with
-`max_cmap_expanded_bytes`. Both are configurable through `Limits`. Mapping
+`max_decoded_bytes`. Both are configurable through `Limits`. Mapping
 allocations count overwritten entries; cached font aliases reuse their mappings.
 Output separators and reconstructed layout whitespace have separate bounds.

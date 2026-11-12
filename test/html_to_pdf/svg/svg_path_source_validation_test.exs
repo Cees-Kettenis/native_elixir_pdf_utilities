@@ -161,7 +161,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationTest do
   end
 
   test "path source syntax uses existing numeric and path byte ceilings without new work counters" do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 10))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 10))
 
     assert :ok =
              SvgSceneValidator.validate_node(%{
@@ -177,7 +177,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationTest do
                children: []
              })
 
-    Limits.install(Map.put(Limits.effective(), :max_svg_path_bytes, 3))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 3))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgSceneValidator.validate_node(%{
@@ -186,7 +186,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationTest do
                children: []
              })
 
-    assert diagnostic.message =~ "max_svg_path_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
 
     assert :ok =
              SvgSceneValidator.validate_node(%{

@@ -439,18 +439,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
   test "resource diagnostics cover text, positional work, numeric tokens and resolved spacing" do
     Limits.install(
       Map.merge(Limits.effective(), %{
-        max_rendered_text_bytes: 1,
-        max_html_nodes: 3,
-        max_html_numeric_token_bytes: 4,
-        max_css_numeric_magnitude: 100
+        max_output_bytes: 1,
+        max_entries: 3,
+        max_numeric_token_bytes: 4,
+        max_numeric_magnitude: 100
       })
     )
 
     for {text, attrs, context, message} <- [
-          {"++", %{}, %{}, "max_rendered_text_bytes"},
-          {"+", %{}, %{count: 4}, "max_html_nodes"},
-          {"+", %{}, %{child_index: 4}, "max_html_nodes"},
-          {"+", %{"lspace" => "100pt"}, %{}, "max_html_numeric_token_bytes"},
+          {"++", %{}, %{}, "max_output_bytes"},
+          {"+", %{}, %{count: 4}, "max_entries"},
+          {"+", %{}, %{child_index: 4}, "max_entries"},
+          {"+", %{"lspace" => "100pt"}, %{}, "max_numeric_token_bytes"},
           {"+", %{"lspace" => "100%"}, %{font_size: 100}, nil}
         ] do
       case message do
@@ -469,15 +469,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
 
     Limits.install(
       Map.merge(Limits.effective(), %{
-        max_html_numeric_token_bytes: 100,
-        max_css_numeric_magnitude: 1_000
+        max_numeric_token_bytes: 100,
+        max_numeric_magnitude: 1_000
       })
     )
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathOperatorValidator.prepare("+", %{"lspace" => "1000%"}, %{font_size: 1_000})
 
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
     assert diagnostic.source == "1000%"
 
     for {attribute, value, context} <- [
@@ -489,13 +489,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                MathOperatorValidator.prepare("+", %{attribute => value}, context)
 
-      assert diagnostic.message =~ "max_css_numeric_magnitude"
+      assert diagnostic.message =~ "max_numeric_magnitude"
       assert diagnostic.source == value
     end
   end
 
   test "resolved viewport operator lengths retain shared calculation diagnostics" do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 1_000))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 1_000))
 
     assert {:error, {:invalid_document, diagnostic}} =
              MathOperatorValidator.prepare("+", %{"lspace" => "200vw"}, %{
@@ -577,7 +577,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
   end
 
   test "ignored calculated attributes consume no calculation budget and need no font metrics" do
-    Limits.install(Map.put(Limits.effective(), :max_css_calculation_depth, 2))
+    Limits.install(Map.put(Limits.effective(), :max_depth, 2))
 
     for value <- ["calc(1em / 0)", "calc(1em + 1rch)", "calc(min(max(1em, 2em), 3em))"] do
       assert {:ok, operator} = MathOperatorValidator.prepare("+", %{"lspace" => value})

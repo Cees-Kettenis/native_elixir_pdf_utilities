@@ -333,7 +333,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffFontStructureTest do
   end
 
   test "CFF work is bounded before indexing, decimal scanning or namespace expansion" do
-    Limits.install(%{Limits.effective() | max_font_cff_work: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
     for run <- [
           fn -> CffFontValidator.prepare_index(index(["a"]), 0) end,
@@ -341,7 +341,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffFontStructureTest do
           fn -> CffFontValidator.prepare(face_fixture(), 3) end
         ] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} = run.()
-      assert diagnostic.message =~ "max_font_cff_work" and diagnostic.stage == :font
+      assert diagnostic.message =~ "max_work" and diagnostic.stage == :font
     end
 
     Limits.install(Limits.defaults())
@@ -351,7 +351,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffFontStructureTest do
 
     assert {:error, {:resource_limit_exceeded, _}} =
              FontValidator.with_budget(fn ->
-               Limits.install(%{Limits.effective() | max_font_source_bytes: 1})
+               Limits.install(%{Limits.effective() | max_input_bytes: 1})
                CffFontValidator.prepare_dictionary(<<139, 5>>)
              end)
   end

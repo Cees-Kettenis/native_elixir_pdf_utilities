@@ -197,7 +197,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectTest do
 
     assert diagnostic.message =~ "ancestor"
     File.write!(Path.join(root, "child/document.html"), "<p>Leaf</p>")
-    Limits.install(Map.put(Limits.defaults(), :max_embedded_documents, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -205,6 +205,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectTest do
                base_url: root
              )
 
-    assert diagnostic.message =~ "max_embedded_documents"
+    assert diagnostic.message =~ "max_entries"
   end
 end

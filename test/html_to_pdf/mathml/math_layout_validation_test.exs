@@ -191,13 +191,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
              )
 
     assert diagnostic.message =~ "bounded"
-    Limits.install(Map.put(Limits.effective(), :max_html_depth, 1))
+    Limits.install(Map.put(Limits.effective(), :max_depth, 1))
     deep = node("mrow", [node("mrow", [token("1", style)], style)], style)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathLayoutValidator.prepare_block_flow_dependency(deep)
 
-    assert diagnostic.message =~ "max_html_depth"
+    assert diagnostic.message =~ "max_depth"
   end
 
   test "matrix allocated vertical alignment and row spans retain every selected glyph" do
@@ -299,7 +299,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     assert {:error, {_, diagnostic}} = MathLayout.measure(node("mrow", [nil], style))
     assert diagnostic.stage == :layout and diagnostic.message =~ "typed source"
     bounded = Map.put(style, :_root_font_size, 20)
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 50))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 50))
 
     assert {:error, {_, diagnostic}} =
              MathLayout.measure(node("mpadded", [], bounded, %{"height" => "3rem"}))
@@ -386,7 +386,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
   end
 
   test "bounded padded shifts account for every positioned glyph", %{style: style} do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 40))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 40))
 
     assert {:error, {_, diagnostic}} =
              MathLayout.measure(
@@ -398,7 +398,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
 
   test "allocated table baselines reject combined cell insets beyond shared numeric bounds",
        %{style: style} do
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 50))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 50))
     padding = %{top: 30.0, bottom: 30.0, left: 0.0, right: 0.0}
     cell_style = Map.merge(style, %{display: :table_cell, padding: padding, vertical_align: :top})
     row_style = Map.put(style, :display, :table_row)
@@ -406,7 +406,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     cell = node("mtd", [token("1", style)], cell_style)
     table = node("mtable", [node("mtr", [cell], row_style)], table_style)
     assert {:error, {:resource_limit_exceeded, diagnostic}} = MathLayout.measure(table)
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "public script placements reject incomplete caller font descriptors before layout", %{
@@ -470,7 +470,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     assert diagnostic.stage == :layout
     assert {:error, {_, diagnostic}} = MathLayoutValidator.prepare_multiscript_placement(nil, [])
     assert diagnostic.message =~ "validator-prepared"
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 50))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 50))
     bounded = Map.put(style, :_root_font_size, 20)
 
     assert {:error, {_, diagnostic}} =
@@ -501,12 +501,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
              MathLayout.measure(node("mspace", [], Map.put(style, :background_image, image)))
 
     assert [%{kind: :background, style: %{background_image: ^image}}] = space.drawing_items
-    Limits.install(Map.put(Limits.effective(), :max_layout_boxes, 0))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 0))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathLayoutValidator.validate_background_style(%{background_image: image}, "mrow")
 
-    assert diagnostic.source == "mrow" and diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.source == "mrow" and diagnostic.message =~ "max_entries"
   end
 
   test "native matrix reflow preserves shared font and grid quota diagnostics" do
@@ -521,13 +521,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
         result = Style.compute_detailed(dom, system_font_discovery: false)
         # Read actual consumed work, including this runtime's font-cache state.
         # The assertion is the public quota failure, not an invented cost receipt.
-        font = Process.get({NativeElixirPdfUtilities.Validators.FontValidator, :budget})
-        grid = Process.get({HtmlValidator, :render_budget})
 
         {result,
          %{
-           max_font_math_work: Map.fetch!(font, :max_font_math_work),
-           max_table_grid_work: Map.fetch!(grid, :max_table_grid_work)
+           max_work:
+             Limits.get(:max_work) -
+               NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_work)
          }}
       end)
     end
@@ -535,7 +534,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     assert {{:ok, _document}, usage} = run.()
 
     for {limit, used} <- usage,
-        deficit <- if(limit == :max_table_grid_work, do: [4, 2, 1], else: [32, 16, 1]) do
+        deficit <- if(limit == :max_work, do: [4, 2, 1], else: [32, 16, 1]) do
       Limits.install(Map.put(limits, limit, max(used - deficit, 0)))
       {result, _usage} = run.()
       assert {:error, {:resource_limit_exceeded, diagnostic}} = result
@@ -544,7 +543,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     end
   end
 
-  test "direct native cell allocation respects both cumulative resource quotas", %{
+  test "direct native cell allocation respects the cumulative work budget", %{
     style: style,
     registry: registry
   } do
@@ -577,17 +576,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     run = fn ->
       ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
         result = MathLayout.measure(table, %{resource_context: context})
-        font = Process.get({NativeElixirPdfUtilities.Validators.FontValidator, :budget})
-        grid = Process.get({HtmlValidator, :render_budget})
 
         {result,
          %{
-           max_font_math_work: Map.fetch!(font, :max_font_math_work),
-           max_table_grid_work: Map.fetch!(grid, :max_table_grid_work)
+           max_work:
+             Limits.get(:max_work) -
+               NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_work)
          }}
       end)
     end
 
+    # The shared physical-font classifier can be populated by this first run.
+    # Measure the steady path so a lower quota cannot succeed merely because
+    # it reuses that admitted classifier instead of repeating its parse work.
+    assert {{:ok, _box}, _cold_usage} = run.()
     assert {{:ok, _box}, usage} = run.()
 
     for {limit, used} <- usage, deficit <- [4, 2, 1] do

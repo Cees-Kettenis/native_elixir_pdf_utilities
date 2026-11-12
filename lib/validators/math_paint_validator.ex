@@ -19,7 +19,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
     MathLayout.with_context(fn ->
       with :ok <- MathLayoutValidator.validate_measured_geometry(measured) do
         Enum.reduce_while(measured.drawing_items, {:ok, nil}, fn item, {:ok, bounds} ->
-          FontValidator.reserve(:max_font_math_work, 1)
+          FontValidator.reserve(:max_work, 1)
 
           result =
             case item do
@@ -140,7 +140,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
         {:ok, Enum.reverse(result)}
 
       [box | rest] ->
-        HtmlValidator.reserve_render_resource(:max_layout_boxes, 1, :layout)
+        HtmlValidator.reserve_render_resource(:max_entries, 1, :layout)
 
         case prepare_flow_box(box, dimensions) do
           {:ok, nil} -> prepare_flow_links(rest, dimensions, result)
@@ -246,7 +246,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathPaintValidator do
   # The writer's shared composition supplies actual local transforms and clips.
   # Group viewport rectangles alone do not restrict visible child artwork.
   defp native_geometry(box, composition) do
-    FontValidator.reserve(:max_font_math_work, 1)
+    FontValidator.reserve(:max_work, 1)
 
     {transform, clip, paint_height} =
       DrawingGeometry.composition_parts(composition || {1, 1, 0, 0, nil, nil})

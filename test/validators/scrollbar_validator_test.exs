@@ -135,7 +135,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
                diagnostic.message =~ "finite nonnegative"
     end
 
-    Limits.install(%{Limits.effective() | max_css_numeric_magnitude: 10})
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 10})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              ScrollbarValidator.prepare(%{
@@ -149,7 +149,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
                scroll_height: 1.0
              })
 
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
   test "direct clipped arrow paths preserve accepted shapes and diagnose invalid transport" do

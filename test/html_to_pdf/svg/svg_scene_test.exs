@@ -31,14 +31,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
   end
 
   test("converter image objects obey the shared PDF object budget", %{limits: limits}) do
-    Limits.install(Map.put(limits, :max_pdf_objects, 2))
+    Limits.install(Map.put(limits, :max_entries, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<svg width=20 height=20><rect width=20 height=20 /></svg>")
 
-    assert diagnostic.stage == :writer
+    assert diagnostic.stage == :html
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_pdf_objects"
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "computed scene retains affine artwork and separates transparent ink from layout" do

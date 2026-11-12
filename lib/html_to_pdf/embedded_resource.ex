@@ -57,7 +57,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
                      {:ok, maximum} <-
                        if(kind in [:raster, :svg],
                          do: HtmlValidator.image_source_read_limit(context.image_budget),
-                         else: {:ok, Limits.get(:max_html_source_bytes)}
+                         else: {:ok, Limits.get(:max_input_bytes)}
                        ),
                      {:ok, bytes} <- FileReader.read(path, maximum),
                      {:ok, kind, _mime} <-
@@ -104,7 +104,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
          {:ok, maximum} <-
            if(mime in ["image/png", "image/jpeg", "image/svg+xml"],
              do: HtmlValidator.image_source_read_limit(context.image_budget),
-             else: {:ok, Limits.get(:max_html_source_bytes)}
+             else: {:ok, Limits.get(:max_input_bytes)}
            ),
          {:file, path} <- descriptor,
          {:ok, bytes} <- FileReader.read(path, maximum),
@@ -142,7 +142,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
            (case descriptor do
               {:srcdoc, html} -> {:ok, html}
               {:blank, _url} -> {:ok, ""}
-              {:file, path} -> FileReader.read(path, Limits.get(:max_html_source_bytes))
+              {:file, path} -> FileReader.read(path, Limits.get(:max_input_bytes))
             end),
          :ok <-
            if(kind == :object, do: ObjectValidator.validate_content(html, descriptor), else: :ok),

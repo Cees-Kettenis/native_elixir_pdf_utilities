@@ -81,11 +81,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
 
   test "compiler fuel, allocation, recursion and native backtracking exhaust as diagnostics" do
     for {limit, ceiling, pattern, value} <- [
-          {:max_html_pattern_compile_work, 8, "(?:abc|def){2}", "abcabc"},
-          {:max_html_form_value_memory_bytes, 100, "(abc)+", "abc"},
-          {:max_html_pattern_depth, 8,
-           String.duplicate("(", 30) <> "a" <> String.duplicate(")", 30), "a"},
-          {:max_html_pattern_match_work, 2_000, "(a+)+b", String.duplicate("a", 30)}
+          {:max_work, 8, "(?:abc|def){2}", "abcabc"},
+          {:max_operation_memory_bytes, 100, "(abc)+", "abc"},
+          {:max_depth, 8, String.duplicate("(", 30) <> "a" <> String.duplicate(")", 30), "a"},
+          {:max_work, 2_000, "(a+)+b", String.duplicate("a", 30)}
         ] do
       original = Limits.effective()
       Limits.install(Map.put(original, limit, ceiling))
@@ -104,18 +103,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
   end
 
   test "Unicode string-property compilation is bounded by worker memory enforcement" do
-    Limits.install(Map.put(Limits.effective(), :max_html_form_value_memory_bytes, 50_000))
+    Limits.install(Map.put(Limits.effective(), :max_operation_memory_bytes, 50_000))
 
     assert {:error, {reason, diagnostic}} =
              HtmlPatternValidator.initial_pattern("\\p{RGI_Emoji}", ["👩‍👩‍👧‍👦"])
 
     assert reason in [:resource_limit_exceeded, :form_value_backend_unavailable]
     assert diagnostic.reason == reason and diagnostic.stage == :html
-    assert diagnostic.message =~ "max_html_form_value_memory_bytes"
+    assert diagnostic.message =~ "max_operation_memory_bytes"
   end
 
   test "early native allocation exhaustion preserves the caller and the limit diagnostic" do
-    Limits.install(Map.put(Limits.effective(), :max_html_form_value_memory_bytes, 100))
+    Limits.install(Map.put(Limits.effective(), :max_operation_memory_bytes, 100))
     flags = Process.info(self(), :trap_exit)
     marker = make_ref()
     send(self(), {:caller_message, marker})
@@ -127,7 +126,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
       assert diagnostic.stage == :html
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.operation == :initial_form_value
-      assert diagnostic.message =~ "max_html_form_value_memory_bytes"
+      assert diagnostic.message =~ "max_operation_memory_bytes"
     end
 
     assert Process.info(self(), :trap_exit) == flags
@@ -136,12 +135,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
   end
 
   test "character scans consume interpreter fuel even without exponential backtracking" do
-    Limits.install(Map.put(Limits.effective(), :max_html_pattern_match_work, 100))
+    Limits.install(Map.put(Limits.effective(), :max_work, 100))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlPatternValidator.initial_pattern(".*", [String.duplicate("😀", 1000)])
 
-    assert diagnostic.message =~ "max_html_pattern_match_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "elapsed exhaustion terminates the helper and leaves later calls usable" do
@@ -149,15 +148,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
 
     Limits.install(
       Map.merge(original, %{
-        max_html_form_value_timeout_ms: 0,
-        max_html_pattern_match_work: 1_000_000_000
+        max_operation_timeout_ms: 0,
+        max_work: 1_000_000_000
       })
     )
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlPatternValidator.initial_pattern("(a+)+b", [String.duplicate("a", 50)])
 
-    assert diagnostic.message =~ "max_html_form_value_timeout_ms"
+    assert diagnostic.message =~ "max_operation_timeout_ms"
     Limits.install(original)
 
     assert {:ok, %{compiled?: true, mismatch: false}} =
@@ -177,9 +176,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
     original = Limits.effective()
 
     for {limit, ceiling, pattern, values} <- [
-          {:max_html_pattern_bytes, 2, "abc", ["abc"]},
-          {:max_html_form_value_bytes, 2, "a", ["aaaa"]},
-          {:max_html_pattern_values, 1, "a", ["a", "a"]}
+          {:max_input_bytes, 2, "abc", ["abc"]},
+          {:max_input_bytes, 2, "a", ["aaaa"]},
+          {:max_entries, 1, "a", ["a", "a"]}
         ] do
       Limits.install(Map.put(original, limit, ceiling))
 
@@ -190,7 +189,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
       assert diagnostic.message =~ Atom.to_string(limit)
     end
 
-    Limits.install(Map.put(original, :max_html_pattern_bytes, 3))
+    Limits.install(Map.put(original, :max_input_bytes, 4))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              NativeElixirPdfUtilities.Validators.HtmlValidator.with_render_budget(fn ->
@@ -297,9 +296,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternValidatorTest do
 
   test "oversized quantifier counts report the numeric token limit" do
     original = Limits.effective()
-    Limits.install(Map.put(original, :max_html_numeric_token_bytes, 8))
+    Limits.install(Map.put(original, :max_numeric_token_bytes, 8))
 
-    assert {:limit, :max_html_numeric_token_bytes} =
+    assert {:limit, :max_numeric_token_bytes} =
              HtmlPatternSyntaxValidator.prepare("a{123456789}", Limits.effective())
   end
 

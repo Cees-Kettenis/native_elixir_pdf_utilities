@@ -12,7 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator do
         unless is_binary(data) and is_integer(count) and count > 0 and count <= 65535,
           do: invalid("glyph decoding requires bytes and a valid maxp glyph count")
 
-        FontValidator.reserve(:max_font_variation_work, byte_size(data) + 1)
+        FontValidator.reserve(:max_work, byte_size(data) + 1)
 
         empty = %{
           contours: 0,
@@ -90,7 +90,7 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator do
         end
 
       if repeat > left, do: invalid("glyph flag repetition exceeds its point count")
-      FontValidator.reserve(:max_font_variation_work, repeat)
+      FontValidator.reserve(:max_work, repeat)
       flags(bytes, left - repeat, List.duplicate(flag, repeat) ++ values)
     end
   end
@@ -195,7 +195,7 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator do
   end
 
   defp read(bytes, size) do
-    FontValidator.reserve(:max_font_variation_work, max(size, 1))
+    FontValidator.reserve(:max_work, max(size, 1))
 
     if byte_size(bytes) < size,
       do: invalid("glyph point, component or instruction stream is truncated")
@@ -221,11 +221,11 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator do
   @spec resolve(non_neg_integer(), tuple(), map(), MapSet.t(), non_neg_integer(), boolean()) ::
           {map(), map()}
   def resolve(id, glyphs, cache, active, depth, quantize \\ true) do
-    FontValidator.check(:max_font_glyph_depth, depth + 1)
+    FontValidator.check(:max_depth, depth + 1)
 
     case Map.fetch(cache, id) do
       {:ok, glyph} ->
-        FontValidator.check(:max_font_glyph_depth, depth + glyph.component_depth)
+        FontValidator.check(:max_depth, depth + glyph.component_depth)
         {glyph, cache}
 
       :error ->
@@ -267,7 +267,7 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator do
                 end
 
               FontValidator.reserve(
-                :max_font_variation_work,
+                :max_work,
                 length(points) + length(ends) + length(transformed)
               )
 
@@ -275,8 +275,8 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator do
                 Enum.map(transformed, fn {x, y, flag} ->
                   x = x + dx
                   y = y + dy
-                  FontValidator.check(:max_font_outline_coordinate, abs(x))
-                  FontValidator.check(:max_font_outline_coordinate, abs(y))
+                  FontValidator.check(:max_numeric_magnitude, abs(x))
+                  FontValidator.check(:max_numeric_magnitude, abs(y))
 
                   if quantize,
                     do:
@@ -308,7 +308,7 @@ defmodule NativeElixirPdfUtilities.Validators.TrueTypeGlyphValidator do
               max(value, Map.fetch!(cache, component.id).component_depth)
             end)
 
-        FontValidator.check(:max_font_glyph_depth, depth + component_depth)
+        FontValidator.check(:max_depth, depth + component_depth)
 
         glyph =
           %{glyph | points: points, ends: ends} |> Map.put(:component_depth, component_depth)

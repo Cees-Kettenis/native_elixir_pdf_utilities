@@ -121,12 +121,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPaintGeometryTest do
 
   test "paint traversal shares the selected-font work budget" do
     box = measured("<math><mn>7</mn></math>")
-    Limits.install(%{Limits.effective() | max_font_math_work: 0})
+    Limits.install(%{Limits.effective() | max_work: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathPaintValidator.prepare_geometry(box)
 
-    assert diagnostic.message =~ "max_font_math_work"
+    assert diagnostic.message =~ "max_work"
     assert diagnostic.operation == :measure_math
   end
 
@@ -266,13 +266,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPaintGeometryTest do
   test "proper emitted-marker work reserves the exact link budget before malformed tails" do
     prepared = prepared("<math><mn>7</mn></math>", page_size: "180pt 120pt", margin: 10)
     marker = Enum.find(prepared.layout_tree.boxes, &(Map.get(&1, :role) == :math_paint))
-    Limits.install(%{Limits.effective() | max_layout_boxes: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
     assert {:ok, [_]} = MathPaintValidator.prepare_flow_boxes([marker], 180, 120)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathPaintValidator.prepare_flow_boxes([marker, marker], 180, 120)
 
-    assert diagnostic.message =~ "max_layout_boxes"
+    assert diagnostic.message =~ "max_entries"
 
     assert {:error, {:invalid_layout, diagnostic}} =
              MathPaintValidator.prepare_flow_boxes([marker | :bad], 180, 120)

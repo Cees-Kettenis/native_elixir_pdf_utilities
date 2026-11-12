@@ -249,7 +249,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
   end
 
   test "min depth is checked before recursion through applied and authored declarations" do
-    Limits.install(Map.put(Limits.effective(), :max_css_calculation_depth, 4))
+    Limits.install(Map.put(Limits.effective(), :max_depth, 4))
 
     assert {:ok, {:css_size_math, _}} =
              HtmlValidator.parse_css_size(
@@ -261,7 +261,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
     assert {:error, {:resource_limit_exceeded, detail}} =
              HtmlValidator.with_render_budget(fn -> HtmlValidator.parse_css_size(nested) end)
 
-    assert detail.message =~ "max_css_calculation_depth"
+    assert detail.message =~ "max_depth"
 
     for selector <- ["p", ".absent"], media <- ["print", "screen"] do
       css = "@media #{media}{#{selector}{width:#{nested}}}"
@@ -274,8 +274,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
                  :ok
                end)
 
-      assert detail.message =~ "max_css_calculation_depth"
-      assert detail.stage == :style and detail.reason == :resource_limit_exceeded
+      assert detail.message =~ "max_depth"
+      assert detail.stage == :css and detail.reason == :resource_limit_exceeded
     end
   end
 

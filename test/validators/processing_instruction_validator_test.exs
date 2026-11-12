@@ -240,23 +240,23 @@ defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidatorTest
     on_exit(fn -> Limits.install(limits) end)
     node = %{type: :processing_instruction, target: "marker", data: "name='A'"}
     work = 3 * byte_size(node.target) + 13 * byte_size(node.data)
-    Limits.install(%{limits | max_html_tree_work: work})
+    Limits.install(%{limits | max_work: work})
     assert PI.attributes(node) == {:ok, %{"name" => "A"}}
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = PI.attribute(node, "name")
     assert diagnostic.stage == :html and diagnostic.module == HtmlValidator
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
 
-    Limits.install(%{limits | max_html_tree_work: work - 1})
+    Limits.install(%{limits | max_work: work - 1})
     assert {:error, {:resource_limit_exceeded, _}} = PI.attributes(node)
 
-    Limits.install(%{limits | max_html_tree_work: 10})
+    Limits.install(%{limits | max_work: 10})
 
     for data <- [String.duplicate("broken ", 50), <<255>> <> String.duplicate("x", 50)] do
       assert {:error, {:resource_limit_exceeded, _}} = PI.attributes(%{node | data: data})
     end
 
-    Limits.install(%{limits | max_html_tree_work: work})
+    Limits.install(%{limits | max_work: work})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              HtmlValidator.with_render_budget(fn ->
@@ -264,9 +264,9 @@ defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidatorTest
                PI.attributes(node)
              end)
 
-    Limits.install(%{limits | max_html_source_bytes: 3})
+    Limits.install(%{limits | max_input_bytes: 3})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = PI.attributes(node)
-    assert diagnostic.message =~ "max_html_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
     assert {:error, {:resource_limit_exceeded, _}} = PI.attribute(node, "name")
   end
 end

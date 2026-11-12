@@ -85,8 +85,8 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     pdf = two_page_pdf()
     original = Limits.effective()
 
-    for max_depth <- [1, original.max_pdf_outline_depth] do
-      Limits.install(%{original | max_pdf_outline_depth: max_depth})
+    for max_depth <- [1, original.max_depth] do
+      Limits.install(%{original | max_depth: max_depth})
 
       items =
         Enum.reduce(max_depth..1//-1, [], fn depth, children ->
@@ -94,6 +94,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
         end)
 
       assert {:ok, expected} = OutlineValidator.normalize(items, 2)
+      Limits.install(original)
       assert {:ok, updated} = Outlines.put(pdf, items)
       assert {:ok, ^expected} = Outlines.get(updated)
     end
@@ -242,7 +243,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
              <p>More ordinary body text follows this heading.</p>
              """)
 
-    Limits.install(%{Limits.effective() | max_pdf_outline_items: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
 
     assert {:error,
             {:resource_limit_exceeded,
@@ -271,43 +272,44 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, [%{title: "Second", page: 1}]} = Outlines.get(second_page)
   end
 
-  test "merge enforces aggregate outline item and title byte limits" do
+  test "nested outline preparation shares the item count and depth ceilings" do
+    original = Limits.effective()
+    Limits.install(%{original | max_entries: 2})
+    input = [{"Parent", 1, [{"Child", 1}]}, {"Sibling", 1}]
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = OutlineValidator.normalize(input, 1)
+    assert diagnostic.stage == :limits and diagnostic.message =~ "outline item count"
+    Limits.install(%{original | max_depth: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             OutlineValidator.normalize(Enum.take(input, 1), 1)
+
+    assert diagnostic.stage == :limits and diagnostic.message =~ "nesting depth"
+  end
+
+  test "merged outlines share item and decoded-title allowances" do
     pdfs =
       Enum.map(["aa", "bb", "cc"], fn title ->
         assert {:ok, pdf} = HtmlToPdf.render("<p>#{title}</p>", outlines: [{title, 1}])
         pdf
       end)
 
+    assert {:ok, combined} = Merge.merge(pdfs)
+    assert {:ok, items} = Outlines.get(combined)
+    assert Enum.map(items, & &1.title) == ["aa", "bb", "cc"]
     original = Limits.effective()
-    Limits.install(%{original | max_pdf_outline_items: 2})
-
-    assert {:ok, at_item_limit} = Merge.merge(Enum.take(pdfs, 2))
-    assert {:ok, item_limit_outlines} = Outlines.get(at_item_limit)
-    assert Enum.map(item_limit_outlines, & &1.title) == ["aa", "bb"]
-
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{
-               stage: :limits,
-               operation: :merge,
-               module: Merge,
-               message: "outline item count exceeds the limit"
-             }}} = Merge.merge(pdfs)
-
-    Limits.install(%{original | max_pdf_outline_total_title_bytes: 4})
-
-    assert {:ok, at_title_limit} = Merge.merge(Enum.take(pdfs, 2))
-    assert {:ok, title_limit_outlines} = Outlines.get(at_title_limit)
-    assert Enum.map(title_limit_outlines, & &1.title) == ["aa", "bb"]
-
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{
-               stage: :limits,
-               operation: :merge,
-               module: Merge,
-               message: "aggregate outline title bytes exceed the limit"
-             }}} = Merge.merge(pdfs)
+    Limits.install(%{original | max_entries: 2})
+    assert {:ok, _} = OutlineValidator.normalize(Enum.take(items, 2), 3)
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = OutlineValidator.normalize(items, 3)
+    assert diagnostic.message =~ "outline item count"
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Merge.merge(pdfs)
+    assert diagnostic.operation == :merge and diagnostic.module == Merge
+    assert diagnostic.message =~ "merge input count"
+    Limits.install(%{original | max_decoded_bytes: 4})
+    assert {:ok, _} = OutlineValidator.normalize(Enum.take(items, 2), 3)
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = OutlineValidator.normalize(items, 3)
+    assert diagnostic.message =~ "aggregate outline title bytes"
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Merge.merge(pdfs)
+    assert diagnostic.operation == :merge and diagnostic.module == Merge
   end
 
   test "resolves legacy and name-tree destinations" do
@@ -355,26 +357,25 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
              Outlines.automatic("bad")
 
     original = Limits.effective()
-    Limits.install(%{original | max_pdf_outline_items: 1})
+    Limits.install(%{original | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Outlines.put(pdf, [{"One", 1}, {"Two", 2}])
 
-    Limits.install(%{original | max_pdf_outline_title_bytes: 3})
+    Limits.install(%{original | max_decoded_bytes: 3})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Outlines.put(pdf, [{"Long", 1}])
 
     Limits.install(%{
       original
-      | max_pdf_outline_title_bytes: 10,
-        max_pdf_outline_total_title_bytes: 3
+      | max_decoded_bytes: 3
     })
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Outlines.put(pdf, [{"ab", 1, [{"cd", 1}]}])
 
-    Limits.install(%{original | max_pdf_outline_depth: 1})
+    Limits.install(%{original | max_depth: 1})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Outlines.put(pdf, [{"Parent", 1, [{"Child", 1}]}])
@@ -500,13 +501,12 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
         extras: [{10, "<< /Kids [11 0 R] >>"}, {11, "<< /Names [] >>"}]
       })
 
-    Limits.install(%{original | max_pdf_name_tree_nodes: 1})
+    Limits.install(%{original | max_entries: 1})
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Outlines.get(node_limited)
   end
 
   test "limits named destinations across legacy dictionaries and complete name trees" do
     original = Limits.effective()
-    Limits.install(%{original | max_pdf_named_destinations: 2})
 
     at_limit =
       outlined_pdf(%{
@@ -516,6 +516,14 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
       })
 
     assert {:ok, [%{page: 1}]} = Outlines.get(at_limit)
+    assert {:ok, context} = Reader.read_validated(at_limit)
+    Limits.install(%{original | max_entries: 2})
+
+    assert {:ok, destinations} =
+             OutlineValidator.named_destinations(context.document, context.catalog)
+
+    assert map_size(destinations) == 2
+    Limits.install(original)
 
     wide_tree =
       outlined_pdf(%{
@@ -552,10 +560,19 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
       })
 
     for pdf <- [wide_tree, narrow_tree, legacy, combined] do
-      assert {:error,
-              {:resource_limit_exceeded,
-               %{stage: :limits, message: "named destination count exceeds the limit"}}} =
-               Outlines.get(pdf)
+      Limits.install(original)
+      assert {:ok, context} = Reader.read_validated(pdf)
+      Limits.install(%{original | max_entries: 2})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               OutlineValidator.named_destinations(context.document, context.catalog)
+
+      assert diagnostic.stage == :limits
+
+      assert diagnostic.message in [
+               "named destination count exceeds the limit",
+               "destination name tree node count exceeds the limit"
+             ]
     end
   end
 
@@ -569,7 +586,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
         extras: [{7, "<< /Title (Child) /Parent 6 0 R /Dest [3 0 R /Fit] >>"}]
       })
 
-    Limits.install(%{original | max_pdf_outline_depth: 1})
+    Limits.install(%{original | max_depth: 1})
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Outlines.get(nested)
 
     siblings =
@@ -579,13 +596,13 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
         extras: [{7, "<< /Title (Two) /Parent 5 0 R /Prev 6 0 R /Dest [3 0 R /Fit] >>"}]
       })
 
-    Limits.install(%{original | max_pdf_outline_items: 1})
+    Limits.install(%{original | max_entries: 1})
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Outlines.get(siblings)
 
     Limits.install(original)
     assert {:ok, context} = Reader.read_validated(two_page_pdf())
     size = context.document.trailer["Size"]
-    Limits.install(%{original | max_pdf_objects: size - 1})
+    Limits.install(%{original | max_entries: size - 1})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              OutlineValidator.validate_incremental_capacity(context, [
@@ -690,7 +707,7 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
 
   test "merge remapping reserves capacity for generated outline objects" do
     original = Limits.effective()
-    Limits.install(%{original | max_pdf_objects: 4, max_merged_objects: 4})
+    Limits.install(%{original | max_entries: 4})
 
     input = %{
       objects: [],

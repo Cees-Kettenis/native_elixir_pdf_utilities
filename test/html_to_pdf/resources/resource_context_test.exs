@@ -413,30 +413,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
   end
 
   test "inline and file children share cumulative count and depth ceilings", %{root: root} do
-    Limits.install(
-      Map.merge(Limits.effective(), %{max_embedded_documents: 2, max_embedded_document_depth: 1})
-    )
+    Limits.install(Map.merge(Limits.effective(), %{max_entries: 2, max_depth: 1}))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :resource, message: message}}} =
              run(root, fn context ->
-               assert {:ok, child} = EmbeddedResource.load_html("children/child.html", context)
+               assert {:ok, _, child} =
+                        ResourceValidator.authorize_document("children/child.html", context)
 
                assert {:error, {:resource_limit_exceeded, %{message: depth_message}}} =
-                        EmbeddedResource.load_html({:srcdoc, ""}, child.context)
+                        ResourceValidator.authorize_document({:srcdoc, ""}, child)
 
-               assert depth_message =~ "max_embedded_document_depth"
-               assert {:ok, _} = EmbeddedResource.load_html({:srcdoc, ""}, context)
-               EmbeddedResource.load_html("children/child.html", context)
+               assert depth_message =~ "max_depth"
+               assert {:ok, _, _} = ResourceValidator.authorize_document({:srcdoc, ""}, context)
+               ResourceValidator.authorize_document("children/child.html", context)
              end)
 
-    assert message =~ "max_embedded_documents"
-    assert {:ok, _} = run(root, &EmbeddedResource.load_html({:srcdoc, ""}, &1))
+    assert message =~ "max_entries"
+    assert {:ok, _, _} = run(root, &ResourceValidator.authorize_document({:srcdoc, ""}, &1))
   end
 
   test "children charge existing aggregate HTML node and source limits including parent work", %{
     root: root
   } do
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_html_source_bytes, 20))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 20))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :html, message: message}}} =
              HtmlValidator.with_render_budget(fn ->
@@ -444,9 +443,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                run(root, &EmbeddedResource.load_html("children/child.html", &1))
              end)
 
-    assert message =~ "max_aggregate_html_source_bytes"
+    assert message =~ "max_input_bytes"
 
-    Limits.install(Map.put(Limits.defaults(), :max_html_nodes, 12))
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 12))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :html, message: message}}} =
              run(root, fn context ->
@@ -455,9 +454,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                end
              end)
 
-    assert message =~ "max_html_nodes"
+    assert message =~ "max_entries"
 
-    Limits.install(Map.put(Limits.defaults(), :max_html_source_bytes, 5))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 5))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :file}}} =
              run(root, &EmbeddedResource.load_html("children/child.html", &1))
@@ -469,9 +468,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
   test "styles use shared CSS scopes and hit accounting after local authorization", %{root: root} do
     css = "p { color: red }"
 
-    Limits.install(
-      Map.put(Limits.effective(), :max_aggregate_css_source_bytes, byte_size(css) * 2)
-    )
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, byte_size(css) * 2))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :css, message: message}}} =
              run(root, fn context ->
@@ -483,8 +480,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                end
              end)
 
-    assert message =~ "max_aggregate_css_source_bytes"
-    Limits.install(Map.put(Limits.defaults(), :max_css_source_bytes, 5))
+    assert message =~ "max_input_bytes"
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 5))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :file}}} =
              run(root, &AssetLoader.resolve_local("children/style.css", :stylesheet, &1))
@@ -504,7 +501,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
   test "child fonts share parent fingerprints aggregate bytes and occurrence limits", %{
     root: root
   } do
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_font_source_bytes, 10))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 10))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
              FontValidator.with_budget(fn ->
@@ -512,7 +509,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                run(root, &AssetLoader.resolve_local("shared.bin", :font, &1))
              end)
 
-    assert message =~ "max_aggregate_font_source_bytes"
+    assert message =~ "max_input_bytes"
 
     assert :ok =
              run(root, fn context ->
@@ -526,7 +523,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                :ok
              end)
 
-    Limits.install(Map.put(Limits.defaults(), :max_aggregate_font_source_bytes, 6))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 6))
 
     assert :ok =
              run(root, fn context ->
@@ -535,7 +532,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                :ok
              end)
 
-    Limits.install(Map.put(Limits.defaults(), :max_font_candidates, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 1))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :font}}} =
              run(root, fn context ->
@@ -543,7 +540,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                AssetLoader.resolve_local("shared.bin", :font, context)
              end)
 
-    Limits.install(Map.put(Limits.defaults(), :max_font_source_bytes, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :font}}} =
              run(root, &AssetLoader.resolve_local("shared.bin", :font, &1))
@@ -553,7 +550,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
     root: root
   } do
     budget = HtmlValidator.new_image_budget()
-    Limits.install(Map.put(Limits.effective(), :max_image_count, 1))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
     assert :ok = HtmlValidator.reserve_image_source(budget, 1)
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
@@ -561,7 +558,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
                AssetLoader.resolve_local("shared.bin", :image, context)
              end)
 
-    Limits.install(Map.put(Limits.defaults(), :max_aggregate_image_source_bytes, 10))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 10))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :file}}} =
              run(root, fn context ->
@@ -575,7 +572,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
              end)
 
     png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
-    Limits.install(Map.put(Limits.defaults(), :max_aggregate_decoded_image_bytes, 5))
+    Limits.install(Map.put(Limits.defaults(), :max_decoded_bytes, 5))
 
     run(root, fn context ->
       assert {:ok, first} = EmbeddedResource.load_html({:srcdoc, ""}, context)

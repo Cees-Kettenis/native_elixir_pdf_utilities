@@ -155,10 +155,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderTest do
     old = Limits.effective()
     on_exit(fn -> Limits.install(old) end)
     png = PNG.build(2, 2, 6, 16, 1, fn _, _ -> [1, 2, 3, 4] end)
-    Limits.install(%{old | max_png_working_bytes: 1})
+    Limits.install(%{old | max_operation_memory_bytes: 1})
     assert {:error, {:resource_limit_exceeded, %{message: message}}} = decode(png)
     assert message =~ "work buffers"
-    Limits.install(%{old | max_decoded_image_bytes: 31})
+    Limits.install(%{old | max_decoded_bytes: 31})
     assert {:error, {:resource_limit_exceeded, %{message: message}}} = decode(png)
     assert message =~ "decoded image"
   end

@@ -62,5 +62,5 @@ Retained pages can still share resources with removed pages, so deletion is
 not secure redaction. Interactive form behavior is not guaranteed. See [bookmark preservation](pdf-outlines.md#merge-and-transform-behavior).
 
 Failures return [diagnostics](diagnostics.md). Invalid selections, unsupported
-page dependencies, and [split limits](resource-limits.md#merging-and-splitting)
+page dependencies, and [split limits](resource-limits.md#shared-processing-budgets)
 can prevent an operation from completing.

@@ -87,7 +87,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
     source =
       "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='4'><rect width='8' height='4'/></svg>"
 
-    Limits.install(%{Limits.effective() | max_svg_raster_pixels: 8})
+    Limits.install(%{Limits.effective() | max_raster_pixels: 8})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgRasterizer.rasterize(source, [], nil)

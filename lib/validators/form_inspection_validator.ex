@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidator do
   @moduledoc false
 
-  alias NativeElixirPdfUtilities.{Diagnostics, Limits}
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.{FontValidator, PdfValidator}
 
@@ -69,30 +69,32 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidator do
     scope = Process.get(@scope_key)
     used = Map.get(scope.used, limit, 0) + amount
 
-    if used <= Limits.get(limit) do
-      Process.put(@scope_key, %{scope | used: Map.put(scope.used, limit, used)})
-      :ok
-    else
-      Diagnostics.error(
-        :forms,
-        :resource_limit_exceeded,
-        "form inspection exceeds #{limit}; reduce the form's expanded metadata or preparation work",
-        module: __MODULE__,
-        source: source
-      )
+    case NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+           limit,
+           amount,
+           :forms,
+           module: __MODULE__,
+           source: source
+         ) do
+      :ok ->
+        Process.put(@scope_key, %{scope | used: Map.put(scope.used, limit, used)})
+        :ok
+
+      error ->
+        error
     end
   end
 
   @doc false
   @spec decoded_font(map(), term()) :: {:ok, binary()} | {:error, {atom(), map()}}
   def decoded_font(document, source) do
-    with :ok <- reserve(:max_pdf_form_font_uses, 1),
+    with :ok <- reserve(:max_entries, 1),
          {:ok, stream} <- PdfValidator.validate_stream(document, source) do
       scope = Process.get(@scope_key)
 
       case Map.fetch(scope.fonts, stream.ref) do
         {:ok, bytes} ->
-          with :ok <- reserve(:max_pdf_form_font_work_bytes, byte_size(bytes)), do: {:ok, bytes}
+          with :ok <- reserve(:max_work, byte_size(bytes)), do: {:ok, bytes}
 
         :error ->
           # Keep unique font decodes inside the inspection's shared reader budget.
@@ -102,7 +104,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidator do
                    module: Reader
                  ),
                {:ok, bytes} <- Reader.decode_prepared_stream(prepared),
-               :ok <- reserve(:max_pdf_form_font_work_bytes, byte_size(bytes)) do
+               :ok <- reserve(:max_work, byte_size(bytes)) do
             scope = Process.get(@scope_key)
             Process.put(@scope_key, %{scope | fonts: Map.put(scope.fonts, stream.ref, bytes)})
             {:ok, bytes}

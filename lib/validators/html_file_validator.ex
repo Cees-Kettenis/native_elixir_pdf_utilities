@@ -74,7 +74,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFileValidator do
             }
 
             HtmlValidator.reserve_render_resource(
-              :max_rendered_text_bytes,
+              :max_output_bytes,
               byte_size(display.button_text) + byte_size(display.filename),
               :style
             )

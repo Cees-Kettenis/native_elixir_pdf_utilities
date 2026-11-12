@@ -35,7 +35,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
                   )
 
               <<count::16>> = read(data, index, 2)
-              FontValidator.reserve(:max_font_color_work, count)
+              FontValidator.reserve(:max_work, count)
 
               records =
                 for <<first::16, last::16, offset::32,
@@ -258,7 +258,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
         :zlib.close(zlib)
       end
     else
-      FontValidator.check(:max_font_decoded_bytes, byte_size(data))
+      FontValidator.check(:max_decoded_bytes, byte_size(data))
       data
     end
   end
@@ -267,8 +267,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
     {status, output} = :zlib.safeInflate(zlib, data)
     bytes = IO.iodata_length(output)
     size = size + bytes
-    FontValidator.check(:max_font_decoded_bytes, size)
-    FontValidator.reserve(:max_font_color_work, bytes + 1)
+    FontValidator.check(:max_decoded_bytes, size)
+    FontValidator.reserve(:max_work, bytes + 1)
 
     if status == :finished do
       :ok = :zlib.inflateEnd(zlib)

@@ -181,7 +181,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TablePresentationTest do
 
       assert diagnostic.stage == :style and diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.source == attribute <> "=" <> value
-      assert diagnostic.message =~ "max_css_numeric_magnitude"
+      assert diagnostic.message =~ "max_numeric_magnitude"
     end
   end
 end

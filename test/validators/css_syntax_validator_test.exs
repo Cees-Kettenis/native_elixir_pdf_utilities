@@ -120,24 +120,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidatorTest do
   test "component nesting is bounded independently of CSS byte length" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_css_syntax_depth, 2))
+    Limits.install(Map.put(limits, :max_depth, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                CssSyntaxValidator.components("a(b(c()))")
              end)
 
-    assert diagnostic.message =~ "max_css_syntax_depth"
+    assert diagnostic.message =~ "max_depth"
   end
 
   test "source declaration limits retain validator diagnostics before a source context is built" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     assert {:ok, dom} = HtmlParser.parse_document_detailed("<p style='color:red'>Text</p>")
-    Limits.install(Map.put(limits, :max_css_source_bytes, 1))
-    assert {:error, {:invalid_css, diagnostic}} = HtmlCssSourceValidator.prepare(dom)
-    assert diagnostic.message =~ "max_css_source_bytes"
-    assert {:error, {:invalid_css, diagnostic}} = Style.compute_detailed(dom)
-    assert diagnostic.message =~ "max_css_source_bytes"
+    Limits.install(Map.put(limits, :max_input_bytes, 1))
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlCssSourceValidator.prepare(dom)
+    assert diagnostic.message =~ "max_input_bytes"
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Style.compute_detailed(dom)
+    assert diagnostic.message =~ "max_input_bytes"
   end
 end

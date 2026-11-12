@@ -32,7 +32,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_container_entries(non_neg_integer(), [diagnostic_option()], Limits.t()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_container_entries(count, opts, limits) do
-    maximum = limits.max_pdf_container_entries
+    maximum = limits.max_entries
 
     if count <= maximum do
       :ok
@@ -40,7 +40,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       error(
         :limits,
         :resource_limit_exceeded,
-        "PDF container entry count exceeds max_pdf_container_entries (#{maximum})",
+        "PDF container entry count exceeds max_entries (#{maximum})",
         opts
       )
     end
@@ -50,7 +50,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_container(list() | map(), [diagnostic_option()]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_container(value, opts \\ []) do
-    maximum = Limits.get(:max_pdf_container_entries)
+    maximum = Limits.get(:max_entries)
 
     case value do
       dictionary when is_map(dictionary) ->
@@ -71,7 +71,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   def validate_output_containers(body, opts \\ []) do
     # Every entry occupies at least one byte. Small generated bodies therefore
     # cannot exceed the entry ceiling, even when all bytes belong to one array.
-    if IO.iodata_length(body) <= Limits.get(:max_pdf_container_entries) do
+    if IO.iodata_length(body) <= Limits.get(:max_entries) do
       :ok
     else
       with tokens when is_list(tokens) <-
@@ -107,16 +107,16 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       not is_integer(size) or size <= 0 ->
         error(:xref, :invalid_pdf_input, "xref Size is malformed", opts)
 
-      entries > Limits.get(:max_pdf_objects) ->
+      entries > Limits.get(:max_entries) ->
         error(
           :limits,
           :resource_limit_exceeded,
-          "PDF object count including object zero exceeds max_pdf_objects",
+          "PDF object count including object zero exceeds max_entries",
           opts
         )
 
-      size - 1 > Limits.get(:max_pdf_objects) ->
-        error(:limits, :resource_limit_exceeded, "PDF object IDs exceed max_pdf_objects", opts)
+      size - 1 > Limits.get(:max_entries) ->
+        error(:limits, :resource_limit_exceeded, "PDF object IDs exceed max_entries", opts)
 
       true ->
         :ok
@@ -131,7 +131,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       Map.has_key?(seen, offset) ->
         error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle", opts)
 
-      depth >= Limits.get(:max_pdf_xref_revisions) ->
+      depth >= Limits.get(:max_entries) ->
         error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit", opts)
 
       true ->
@@ -146,7 +146,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     if valid_number?(value) do
       {:ok, encoded} = InfoCodec.serialize_value(value)
 
-      case validate_reader_size(IO.iodata_length(encoded), :max_pdf_numeric_token_bytes) do
+      case validate_reader_size(IO.iodata_length(encoded), :max_numeric_token_bytes) do
         :ok ->
           :ok
 
@@ -154,7 +154,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           Diagnostics.error(
             :limits,
             reason,
-            "PDF output number exceeds max_pdf_numeric_token_bytes",
+            "PDF output number exceeds max_numeric_token_bytes",
             module: __MODULE__
           )
       end
@@ -162,7 +162,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       Diagnostics.error(
         :limits,
         :resource_limit_exceeded,
-        "PDF output number exceeds max_pdf_numeric_magnitude",
+        "PDF output number exceeds max_numeric_magnitude",
         module: __MODULE__
       )
     end
@@ -177,7 +177,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec parse_numeric_token(binary()) ::
           {:ok, {:int, integer()} | {:real, float()}} | :error | {:error, {atom(), map()}}
   def parse_numeric_token(word) do
-    with :ok <- validate_reader_size(byte_size(word), :max_pdf_numeric_token_bytes) do
+    with :ok <- validate_reader_size(byte_size(word), :max_numeric_token_bytes) do
       if :binary.match(word, ".") == :nomatch do
         try do
           {:ok, {:int, :erlang.binary_to_integer(word)}}
@@ -210,21 +210,23 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec with_reader_budget((-> result)) :: result | {:error, {atom(), Diagnostics.diagnostic()}}
         when result: var
   def with_reader_budget(fun) do
-    case Process.get(@reader_budget_key) do
-      nil ->
-        Process.put(@reader_budget_key, %{})
+    NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+      case Process.get(@reader_budget_key) do
+        nil ->
+          Process.put(@reader_budget_key, %{})
 
-        try do
+          try do
+            fun.()
+          catch
+            {:pdf_reader_budget, error} -> error
+          after
+            Process.delete(@reader_budget_key)
+          end
+
+        _budget ->
           fun.()
-        catch
-          {:pdf_reader_budget, error} -> error
-        after
-          Process.delete(@reader_budget_key)
-        end
-
-      _budget ->
-        fun.()
-    end
+      end
+    end)
   end
 
   @doc false
@@ -237,8 +239,15 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       budget ->
         total = Map.get(budget, key, 0) + amount
 
-        if total > Limits.get(key) do
-          abort_reader_budget(reader_limit_error(key))
+        case NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+               key,
+               amount,
+               :limits,
+               operation: :read,
+               module: Reader
+             ) do
+          :ok -> :ok
+          error -> abort_reader_budget(error)
         end
 
         Process.put(@reader_budget_key, Map.put(budget, key, total))
@@ -254,16 +263,30 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         :ok
 
       budget ->
-        work = Map.get(budget, :max_pdf_reader_work, 0) + bytes
-        tokens = Map.get(budget, :max_pdf_reader_tokens, 0) + 1
+        work = Map.get(budget, :max_work, 0) + bytes
+        tokens = Map.get(budget, :max_entries, 0) + 1
 
-        with :ok <- validate_reader_size(work, :max_pdf_reader_work),
-             :ok <- validate_reader_size(tokens, :max_pdf_reader_tokens) do
+        with :ok <-
+               NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+                 :max_work,
+                 bytes,
+                 :limits,
+                 operation: :read,
+                 module: Reader
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+                 :max_entries,
+                 1,
+                 :limits,
+                 operation: :read,
+                 module: Reader
+               ) do
           Process.put(
             @reader_budget_key,
             budget
-            |> Map.put(:max_pdf_reader_work, work)
-            |> Map.put(:max_pdf_reader_tokens, tokens)
+            |> Map.put(:max_work, work)
+            |> Map.put(:max_entries, tokens)
           )
 
           :ok
@@ -276,14 +299,13 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @doc false
   @spec remaining_reader_decoded_bytes() :: non_neg_integer()
   def remaining_reader_decoded_bytes do
-    budget = Process.get(@reader_budget_key, %{})
-    Limits.get(:max_pdf_reader_decoded_bytes) - Map.get(budget, :max_pdf_reader_decoded_bytes, 0)
+    NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_decoded_bytes)
   end
 
   @doc false
   @spec charge_stream_work(non_neg_integer(), ref()) :: :ok
   def charge_stream_work(amount, ref) do
-    charge_reader_budget(:max_pdf_reader_work, amount)
+    charge_reader_budget(:max_work, amount)
   catch
     {:pdf_reader_budget, {:error, {reason, diagnostic}}} ->
       abort_reader_budget(
@@ -321,7 +343,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     opts = [operation: :read, module: Reader, source: "object #{elem(ref, 0)} #{elem(ref, 1)}"]
 
     cond do
-      row_bytes > Limits.get(:max_pdf_decoded_stream_bytes) ->
+      row_bytes > Limits.get(:max_decoded_bytes) ->
         error(
           :limits,
           :resource_limit_exceeded,
@@ -337,11 +359,11 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           object: ref
         )
 
-      working_bytes > Limits.get(:max_pdf_predictor_working_bytes) ->
+      working_bytes > Limits.get(:max_operation_memory_bytes) ->
         error(
           :limits,
           :resource_limit_exceeded,
-          "predictor buffers exceed max_pdf_predictor_working_bytes",
+          "predictor buffers exceed max_operation_memory_bytes",
           opts,
           object: ref
         )
@@ -401,8 +423,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_reader_decoded_size(size) do
     cond do
-      size > remaining_reader_decoded_bytes() -> reader_limit_error(:max_pdf_reader_decoded_bytes)
-      true -> validate_reader_size(size, :max_pdf_decoded_stream_bytes)
+      size > remaining_reader_decoded_bytes() -> reader_limit_error(:max_decoded_bytes)
+      true -> validate_reader_size(size, :max_decoded_bytes)
     end
   end
 
@@ -410,7 +432,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec reader_decode_limit(non_neg_integer()) :: non_neg_integer()
   def reader_decode_limit(encoded_size) do
     min(
-      min(Limits.get(:max_pdf_decoded_stream_bytes), remaining_reader_decoded_bytes()),
+      min(Limits.get(:max_decoded_bytes), remaining_reader_decoded_bytes()),
       decompression_allowance(encoded_size)
     )
   end
@@ -436,21 +458,21 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_decoded_stream_size(non_neg_integer(), non_neg_integer()) ::
           :ok | {:error, Diagnostics.detailed_error()}
   def validate_decoded_stream_size(encoded_size, decoded_size) do
-    with :ok <- validate_reader_size(decoded_size, :max_pdf_decoded_stream_bytes) do
+    with :ok <- validate_reader_size(decoded_size, :max_decoded_bytes) do
       if encoded_size > 0 and decoded_size > decompression_allowance(encoded_size),
-        do: reader_limit_error(:max_pdf_decompression_ratio),
+        do: reader_limit_error(:max_decompression_ratio),
         else: :ok
     end
   end
 
   defp decompression_allowance(encoded_size) do
-    max(encoded_size * Limits.get(:max_pdf_decompression_ratio), 1)
+    max(encoded_size * Limits.get(:max_decompression_ratio), 1)
   end
 
   @doc false
   @spec reader_integer(binary()) :: integer()
   def reader_integer(text) do
-    case validate_reader_size(byte_size(text), :max_pdf_numeric_token_bytes) do
+    case validate_reader_size(byte_size(text), :max_numeric_token_bytes) do
       :ok -> String.to_integer(text)
       error -> abort_reader_budget(error)
     end
@@ -561,8 +583,13 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       not is_binary(pdf) ->
         error(:input, :invalid_pdf_input, "PDF input must be a binary", opts)
 
-      byte_size(pdf) > Limits.get(:max_pdf_input_bytes) ->
-        error(:limits, :resource_limit_exceeded, "PDF input exceeds the byte limit", opts)
+      byte_size(pdf) > Limits.get(:max_input_bytes) ->
+        error(
+          :limits,
+          :resource_limit_exceeded,
+          "PDF input exceeds max_input_bytes (the byte limit)",
+          opts
+        )
 
       Regex.match?(~r/\A%PDF-(1\.[0-7]|2\.0)(?:\s|\r|\n)/, pdf) ->
         :ok
@@ -583,7 +610,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   def prepare_object_bodies(objects, opts) do
     case objects do
       objects when is_list(objects) ->
-        with :ok <- validate_reader_size(length(objects), :max_pdf_objects) do
+        with :ok <- validate_reader_size(length(objects), :max_entries) do
           Enum.reduce_while(objects, {:ok, MapSet.new(), 0}, fn entry, {:ok, seen, bytes} ->
             case entry do
               {id, body} when is_integer(id) and id > 0 and is_binary(body) ->
@@ -597,11 +624,11 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                        opts
                      )}
 
-                  id > Limits.get(:max_pdf_objects) ->
-                    {:halt, reader_limit_error(:max_pdf_objects)}
+                  id > Limits.get(:max_entries) ->
+                    {:halt, reader_limit_error(:max_entries)}
 
                   true ->
-                    case validate_reader_size(bytes + byte_size(body), :max_pdf_input_bytes) do
+                    case validate_reader_size(bytes + byte_size(body), :max_input_bytes) do
                       :ok -> {:cont, {:ok, MapSet.put(seen, id), bytes + byte_size(body)}}
                       failure -> {:halt, failure}
                     end
@@ -823,7 +850,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
               object: ref
             )
 
-          count > Limits.get(:max_pdf_object_stream_entries) ->
+          count > Limits.get(:max_entries) ->
             error(
               :limits,
               :resource_limit_exceeded,
@@ -850,7 +877,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_value_depth(term(), [diagnostic_option()]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_value_depth(depth, opts \\ []) do
-    max_value_depth = Limits.get(:max_pdf_value_depth)
+    max_value_depth = Limits.get(:max_depth)
 
     case depth do
       depth when is_integer(depth) and depth >= 0 and depth <= max_value_depth ->
@@ -860,7 +887,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         error(
           :limits,
           :resource_limit_exceeded,
-          "PDF value nesting depth exceeds the #{max_value_depth}-level limit",
+          "PDF value nesting depth exceeds max_depth (#{max_value_depth}-level limit)",
           opts
         )
 
@@ -1117,7 +1144,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @doc false
   @spec valid_number?(term()) :: boolean()
   def valid_number?(value) do
-    is_number(value) and abs(value) <= Limits.get(:max_pdf_numeric_magnitude)
+    is_number(value) and abs(value) <= Limits.get(:max_numeric_magnitude)
   end
 
   @doc false
@@ -1151,7 +1178,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
            Diagnostics.error(
              :geometry,
              :invalid_pdf_input,
-             "PDF geometry must be representable within max_pdf_numeric_magnitude",
+             "PDF geometry must be representable within max_numeric_magnitude",
              module: __MODULE__
            )}
       end
@@ -1353,12 +1380,12 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
             object: ref
           )
 
-        depth >= Limits.get(:max_pdf_page_tree_depth) ->
+        depth >= Limits.get(:max_depth) ->
           error(:limits, :resource_limit_exceeded, "PDF page tree depth exceeds the limit", opts,
             object: ref
           )
 
-        traversal.page_count >= Limits.get(:max_pdf_pages) ->
+        traversal.page_count >= Limits.get(:max_pages) ->
           error(:limits, :resource_limit_exceeded, "PDF page count exceeds the limit", opts)
 
         true ->
@@ -1619,53 +1646,47 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @doc false
   @spec with_reference_resolution(keyword(), (keyword() -> result)) :: result when result: var
   def with_reference_resolution(opts, operation) do
-    case Keyword.fetch(opts, @reference_resolution_option) do
-      {:ok, _resolution} ->
-        operation.(opts)
+    NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+      case Keyword.fetch(opts, @reference_resolution_option) do
+        {:ok, _resolution} ->
+          operation.(opts)
 
-      :error ->
-        cache = :ets.new(__MODULE__, [:set, :private])
-        work = :atomics.new(1, signed: false)
-        resolution = %{cache: cache, work: work}
+        :error ->
+          cache = :ets.new(__MODULE__, [:set, :private])
+          work = :atomics.new(1, signed: false)
+          resolution = %{cache: cache, work: work}
 
-        try do
-          operation.(Keyword.put(opts, @reference_resolution_option, resolution))
-        after
-          :ets.delete(cache)
-        end
-    end
+          try do
+            operation.(Keyword.put(opts, @reference_resolution_option, resolution))
+          after
+            :ets.delete(cache)
+          end
+      end
+    end)
   end
 
   defp reserve_reference_work(ref, opts) do
-    total =
-      case Process.get(@reader_budget_key) do
-        nil ->
-          %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
-          :atomics.add_get(work, 1, 1)
+    case NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+           :max_work,
+           1,
+           :limits,
+           operation: :read,
+           module: Reader
+         ) do
+      :ok ->
+        case Process.get(@reader_budget_key) do
+          nil ->
+            %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
+            :atomics.add_get(work, 1, 1)
 
-        budget ->
-          total = Map.get(budget, :max_pdf_reference_resolution_work, 0) + 1
+          budget ->
+            Process.put(@reader_budget_key, Map.update(budget, :max_work, 1, &(&1 + 1)))
+        end
 
-          Process.put(
-            @reader_budget_key,
-            Map.put(budget, :max_pdf_reference_resolution_work, total)
-          )
-
-          total
-      end
-
-    case total <= Limits.get(:max_pdf_reference_resolution_work) do
-      true ->
         :ok
 
-      false ->
-        error(
-          :limits,
-          :resource_limit_exceeded,
-          "indirect reference resolution work exceeds the limit",
-          opts,
-          object: ref
-        )
+      {:error, {reason, diagnostic}} ->
+        error(:limits, reason, diagnostic.message, opts, object: ref)
     end
   end
 
@@ -1698,7 +1719,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           object: ref
         )
 
-      depth >= Limits.get(:max_pdf_reference_chain_depth) ->
+      depth >= Limits.get(:max_depth) ->
         error(
           :limits,
           :resource_limit_exceeded,
@@ -1711,7 +1732,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         with :ok <- reserve_reference_work(ref, opts) do
           case cached_reference(document, ref, opts) do
             {:ok, value, terminal_ref, chain_depth} ->
-              case depth + chain_depth < Limits.get(:max_pdf_reference_chain_depth) do
+              case depth + chain_depth < Limits.get(:max_depth) do
                 true ->
                   {:ok, value, terminal_ref, chain_depth}
 

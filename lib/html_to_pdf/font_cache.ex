@@ -35,7 +35,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
       FontValidator.memo({:file, cache_key}, fn ->
         absolute_path = Path.expand(path)
 
-        FontValidator.reserve(:max_font_candidates, 1)
+        FontValidator.reserve(:max_entries, 1)
 
         case NativeElixirPdfUtilities.FileReader.read(
                absolute_path,
@@ -81,7 +81,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
           _table ->
             case :ets.lookup(@table, absolute_path) do
               [{^absolute_path, fingerprint, data, result, _sequence}] ->
-                FontValidator.reserve(:max_font_candidates, 1)
+                FontValidator.reserve(:max_entries, 1)
                 FontValidator.reserve_source(data, fingerprint)
                 result
 
@@ -120,13 +120,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
     compressed
   end
 
-  defp fetch_value(key, loader) do
-    case cached(key, nil) do
+  @doc "Caches the bounded default-layout analysis of an admitted physical face."
+  @spec ascii_layout(map()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def ascii_layout(font) do
+    FontValidator.with_budget(fn ->
+      key =
+        {:ascii_layout, font.id, Map.get(font, :normalized_coordinates, []),
+         Map.get(font, :shaping_language, "und"),
+         Map.get(Map.get(font, :feature_plan, %{}), :language, :normal)}
+
+      physical = Map.take(font, [:data, :cmap, :kerning, :latin_ligatures])
+
+      {previous, result} =
+        FontValidator.memo(key, fn ->
+          result =
+            fetch_value(
+              key,
+              fn _ ->
+                NativeElixirPdfUtilities.Validators.OpenTypeAsciiValidator.prepare(font)
+              end,
+              font.data
+            )
+
+          result =
+            case result do
+              {:ok, info} ->
+                compatible? =
+                  info.data == font.data and info.cmap == font.cmap and
+                    info.kerning == Map.get(font, :kerning, %{}) and
+                    info.ligatures == Map.get(font, :latin_ligatures, %{})
+
+                {:ok, info |> Map.take([:flags, :dynamic?]) |> Map.put(:compatible?, compatible?)}
+
+              error ->
+                error
+            end
+
+          {physical, result}
+        end)
+
+      # Font maps can be edited by callers. A changed physical model cannot
+      # reuse a proof derived from the previous cmap or nominal metrics.
+      if previous == physical do
+        result
+      else
+        {:ok, %{compatible?: false, dynamic?: true, flags: %{}}}
+      end
+    end)
+  end
+
+  defp fetch_value(key, loader, fingerprint \\ nil) do
+    case cached(key, fingerprint) do
       {:hit, result} ->
         result
 
       :miss ->
-        load(key, nil, <<>>, loader)
+        load(key, fingerprint, <<>>, loader)
     end
   end
 
@@ -151,7 +200,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
     state.table
     |> :ets.tab2list()
-    |> FontValidator.cache_evictions(state.maximum_entries, :max_font_cache_bytes)
+    |> FontValidator.cache_evictions(state.maximum_entries, :max_cache_bytes)
     |> Enum.each(&:ets.delete(state.table, &1))
 
     {:reply, result, %{state | sequence: sequence}}

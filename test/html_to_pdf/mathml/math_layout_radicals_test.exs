@@ -363,8 +363,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
 
       Limits.install(
         if(kind == :font,
-          do: %{limits | max_font_math_work: 1},
-          else: %{limits | max_layout_boxes: 1}
+          do: %{limits | max_work: 1},
+          else: %{limits | max_entries: 1}
         )
       )
 
@@ -405,7 +405,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
 
     assert {:error, {:invalid_document, diagnostic}} =
              MathRadicalValidator.prepare_stretch(prepared, %{
-               ascent: Limits.get(:max_css_numeric_magnitude),
+               ascent: Limits.get(:max_numeric_magnitude),
                descent: 1
              })
 

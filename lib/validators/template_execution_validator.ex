@@ -84,7 +84,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
             else
               indexed =
                 Enum.reduce(nodes, %{}, fn node, index ->
-                  HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+                  HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
                   key =
                     {node.source.line, node.source.column, node.type, Map.get(node, :tag),
@@ -110,7 +110,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                        fn node, _, context ->
                          if context.status == :resolved do
                            current = Process.get(@key)
-                           HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+                           HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
                            Process.put(@key, %{
                              current
@@ -306,7 +306,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         case Map.get(indexed, key, []) do
           [original | rest] ->
             HtmlValidator.reserve_render_resource(
-              :max_html_tree_work,
+              :max_work,
               byte_size(node.source.text) + 1,
               :html
             )
@@ -436,7 +436,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                )
            ) do
       HtmlValidator.reserve_render_resource(
-        :max_html_tree_work,
+        :max_work,
         map_size(tree.nodes),
         :html
       )
@@ -464,7 +464,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
             {:halt, metadata}
           else
             HtmlValidator.reserve_render_resource(
-              :max_html_tree_work,
+              :max_work,
               byte_size(node.source.text) + 1,
               :html
             )
@@ -662,7 +662,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                          fn source_node, _, context ->
                            if context.status == :resolved do
                              current = Process.get(@key)
-                             HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+                             HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
                              Process.put(@key, %{
                                current
@@ -687,7 +687,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                     Enum.reduce(contexts.source_obligations.declaration_contexts, %{}, fn record,
                                                                                           checked ->
                       HtmlValidator.reserve_render_resource(
-                        :max_css_work,
+                        :max_work,
                         byte_size(record.source.text) + 1,
                         :css
                       )
@@ -705,7 +705,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                   records =
                     Enum.map(current.declaration_contexts, fn record ->
                       HtmlValidator.reserve_render_resource(
-                        :max_css_work,
+                        :max_work,
                         byte_size(record.source.text) + 1,
                         :css
                       )
@@ -729,7 +729,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
                       end
                     end)
 
-                  HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+                  HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
                   Process.put(@key, %{
                     current
@@ -765,7 +765,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
   defp prepare_original_font_sources(source_entries, entries, opts) do
     configured = Enum.filter(entries, &(Map.get(&1, :source_kind) == :configured))
     count = length(configured)
-    HtmlValidator.reserve_render_resource(:max_css_work, count + length(source_entries), :font)
+    HtmlValidator.reserve_render_resource(:max_work, count + length(source_entries), :font)
 
     sources =
       source_entries
@@ -844,7 +844,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
     actual = MapSet.new(authored_nodes(prepared.styled_tree, false), &Map.get(&1, :node_id))
 
     Enum.any?(authored_nodes(dom, false), fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
       style = Map.get(Process.get(@key).source_styles, node.node_id, %{})
       text? = node.type == :text and String.trim(node.text) != ""
 
@@ -887,7 +887,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
           Stream.unfold(node.parent_id, fn id ->
             case Map.get(source_tree.nodes, id) do
               %{parent_id: parent_id} = parent ->
-                HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :font)
+                HtmlValidator.reserve_render_resource(:max_work, 1, :font)
                 {parent, parent_id}
 
               _ ->
@@ -959,7 +959,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
         nil
 
       [node | rest] ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
         children =
           if not fragments? and Map.get(node, :tag) in ~w(style script title),
@@ -1042,7 +1042,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
       |> Map.values()
       |> List.flatten()
       |> Enum.reduce(%{}, fn declaration, checked ->
-        HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
         if is_map(declaration.source) do
           key = {declaration.source, declaration.declaration}
@@ -1065,7 +1065,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
     records =
       Enum.map(frame.declaration_contexts, fn record ->
-        HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :css)
         contexts = Map.get(checked, {record.source, record.declaration}, [])
 
         if contexts != [] do

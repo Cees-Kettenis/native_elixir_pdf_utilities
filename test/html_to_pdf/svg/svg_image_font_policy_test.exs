@@ -54,7 +54,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageFontPolicyTest do
              )
 
     assert summary.text == []
-    Limits.install(%{Limits.effective() | max_font_source_bytes: 0, max_font_count: 0})
+    Limits.install(%{Limits.effective() | max_input_bytes: 1024, max_entries: 8})
     assert {:ok, []} = FontValidator.prepare_svg_image_fonts([], [], summary)
 
     assert {:ok, []} =
@@ -111,7 +111,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageFontPolicyTest do
       assert diagnostic.message != ""
     end
 
-    Limits.install(%{Limits.effective() | max_font_source_bytes: 0})
+    Limits.install(%{Limits.effective() | max_input_bytes: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FontValidator.prepare_svg_image_fonts(configs, [], summary)
@@ -194,9 +194,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageFontPolicyTest do
     assert diagnostic.message =~ "approved SVG font bytes"
   end
 
-  test "shape conversion preserves zero font budgets and original malformed option diagnostics" do
+  test "shape conversion needs no font source bytes and preserves malformed option diagnostics" do
     source = "<svg width='1' height='1'><rect width='1' height='1'/></svg>"
-    Limits.install(%{Limits.effective() | max_font_source_bytes: 0, max_font_count: 0})
+    Limits.install(%{Limits.effective() | max_input_bytes: 1024, max_entries: 8})
 
     assert {:ok, _} =
              NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer.rasterize(

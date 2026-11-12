@@ -212,8 +212,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
         Enum.zip(covered, offsets)
         |> Enum.reduce(%{}, fn {first, offset}, result ->
           <<count::16>> = slice(data, base + offset, 2)
-          FontValidator.reserve(:max_font_math_work, count)
-          FontValidator.reserve(:max_font_kerning_pairs, count)
+          FontValidator.reserve(:max_work, count)
+          FontValidator.reserve(:max_work, count)
 
           records =
             for <<second::16, advance::signed-16 <- slice(data, base + offset + 2, count * 4)>>,
@@ -238,8 +238,8 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
 
         first_classes = pair_classes(data, base + first_offset, glyph_count, first_count)
         second_classes = pair_classes(data, base + second_offset, glyph_count, second_count)
-        FontValidator.reserve(:max_font_math_work, first_count * second_count)
-        FontValidator.reserve(:max_font_kerning_pairs, first_count * second_count)
+        FontValidator.reserve(:max_work, first_count * second_count)
+        FontValidator.reserve(:max_work, first_count * second_count)
         matrix = slice(data, base + 16, first_count * second_count * 2)
 
         Enum.reduce(pairs, %{}, fn {first, second} = pair, result ->
@@ -261,46 +261,17 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
   end
 
   defp pair_classes(data, base, glyph_count, class_count) do
-    <<format::16>> = slice(data, base, 2)
+    context = %{
+      data: data,
+      glyph_count: glyph_count,
+      tag: "GPOS",
+      work_limit: :max_work
+    }
 
-    records =
-      case format do
-        1 ->
-          <<first::16, count::16>> = slice(data, base + 2, 4)
-          FontValidator.reserve(:max_font_math_work, count)
-          classes = for <<class::16 <- slice(data, base + 6, count * 2)>>, do: class
-          classes |> Enum.with_index(first) |> Enum.map(fn {class, glyph} -> {glyph, class} end)
-
-        2 ->
-          <<count::16>> = slice(data, base + 2, 2)
-
-          records =
-            for <<first::16, last::16, class::16 <- slice(data, base + 4, count * 6)>>,
-              do: {first, last, class}
-
-          require_valid(
-            Enum.chunk_every(records, 2, 1, :discard)
-            |> Enum.all?(fn [{_, last, _}, {first, _, _}] -> last < first end),
-            "unordered class ranges"
-          )
-
-          Enum.flat_map(records, fn {first, last, class} ->
-            require_valid(first <= last and last < glyph_count, "invalid class range")
-            FontValidator.reserve(:max_font_math_work, last - first + 1)
-            Enum.map(first..last, &{&1, class})
-          end)
-
-        _ ->
-          throw({:invalid_math_font, "unsupported class definition format"})
-      end
-
-    require_valid(
-      class_count > 0 and
-        Enum.all?(records, fn {glyph, class} -> glyph < glyph_count and class < class_count end),
-      "class outside declared glyph or class counts"
-    )
-
-    Map.new(records)
+    NativeElixirPdfUtilities.Validators.OpenTypeDataValidator.classes(context, base, class_count)
+  catch
+    {:invalid_open_type, {:error, {_reason, diagnostic}}} ->
+      throw({:invalid_math_font, diagnostic.message})
   end
 
   @doc false
@@ -333,7 +304,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
 
         if minor == 1 do
           <<variations::32>> = slice(data, 10, 4)
-          require_valid(variations == 0, "math feature variations are not supported")
+          # Latin ligature metadata is only a legacy fast-path projection.
+          # General shaping admits and selects FeatureVariations using the
+          # instantiated face's normalized coordinates after source loading.
+          require_valid(
+            variations == 0 or policy == :latin,
+            "math feature variations are not supported"
+          )
         end
 
         require_valid(policy in [:math, :latin], "unsupported substitution selection policy")
@@ -785,83 +762,34 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
   end
 
   defp coverage(data, parent, offset, glyph_count) do
-    case offset do
-      0 ->
-        []
+    if offset == 0 do
+      []
+    else
+      context = %{
+        data: data,
+        glyph_count: glyph_count,
+        tag: "MATH",
+        work_limit: :max_work
+      }
 
-      _ ->
-        base = parent + offset
-        <<format::16, count::16>> = slice(data, base, 4)
-
-        case format do
-          1 ->
-            records = slice(data, base + 4, count * 2)
-            glyphs = for <<glyph::16 <- records>>, do: glyph
-            require_valid(ordered?(glyphs, true), "unordered coverage glyphs")
-
-            require_valid(
-              Enum.all?(glyphs, &(&1 < glyph_count)),
-              "coverage glyph outside maxp glyph count"
-            )
-
-            glyphs
-
-          2 ->
-            records = slice(data, base + 4, count * 6)
-
-            {ranges, _last, _index} =
-              Enum.reduce(
-                for(<<a::16, b::16, i::16 <- records>>, do: {a, b, i}),
-                {[], -1, 0},
-                fn {first, last, index}, {ranges, previous, expected} ->
-                  require_valid(
-                    first <= last and first > previous and last < glyph_count,
-                    "invalid coverage range"
-                  )
-
-                  require_valid(index == expected, "nonconsecutive coverage indices")
-                  FontValidator.reserve(:max_font_math_work, last - first + 1)
-                  {[Enum.to_list(first..last) | ranges], last, expected + last - first + 1}
-                end
-              )
-
-            ranges |> Enum.reverse() |> List.flatten()
-
-          _ ->
-            throw({:invalid_math_font, "unsupported coverage format"})
-        end
+      NativeElixirPdfUtilities.Validators.OpenTypeDataValidator.coverage(context, parent + offset)
     end
+  catch
+    {:invalid_open_type, {:error, {_reason, diagnostic}}} ->
+      throw({:invalid_math_font, diagnostic.message})
   end
 
   defp value(data, base, value, offset) do
-    device =
-      case offset do
-        0 ->
-          nil
+    context = %{data: data, tag: "MATH", work_limit: :max_work}
 
-        _ ->
-          <<first::16, last::16, format::16>> = slice(data, base + offset, 6)
-
-          case format do
-            0x8000 ->
-              %{variation_index: {first, last}}
-
-            format when format in [1, 2, 3] ->
-              require_valid(first <= last, "invalid device size range")
-              bits = 1 <<< format
-              count = last - first + 1
-              words = div(count * bits + 15, 16)
-              records = slice(data, base + offset + 6, words * 2)
-              FontValidator.reserve(:max_font_math_work, count)
-              deltas = for <<delta::signed-size(^bits) <- records>>, do: delta
-              %{start_size: first, end_size: last, deltas: Enum.take(deltas, count)}
-
-            _ ->
-              throw({:invalid_math_font, "unsupported device format"})
-          end
-      end
-
-    %{value: value, device: device}
+    %{
+      value: value,
+      device:
+        NativeElixirPdfUtilities.Validators.OpenTypeDataValidator.device(context, base, offset)
+    }
+  catch
+    {:invalid_open_type, {:error, {_reason, diagnostic}}} ->
+      throw({:invalid_math_font, diagnostic.message})
   end
 
   defp ordered?(values, strict \\ false) do
@@ -878,7 +806,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathFontValidator do
       "truncated table or out-of-bounds offset"
     )
 
-    FontValidator.reserve(:max_font_math_work, length)
+    FontValidator.reserve(:max_work, length)
     binary_part(data, offset, length)
   end
 

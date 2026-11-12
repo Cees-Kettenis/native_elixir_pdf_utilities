@@ -70,7 +70,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
           {[nil], 0.0, 12.0},
           {row, :bad, 12.0},
           {row, 0.0, -1.0},
-          {row, Limits.get(:max_pdf_numeric_magnitude) + 1, 12.0}
+          {row, Limits.get(:max_numeric_magnitude) + 1, 12.0}
         ] do
       assert {:error, {:invalid_layout, diagnostic}} =
                HtmlTableValidator.prepare_row_continuation_intent(boxes, delta, bottom)
@@ -133,7 +133,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
                      %{},
                      %{canvas | width: 0.0},
                      %{canvas | height: :invalid},
-                     %{canvas | x: Limits.get(:max_pdf_numeric_magnitude) + 1}
+                     %{canvas | x: Limits.get(:max_numeric_magnitude) + 1}
                    ] do
                  assert {:error, {:invalid_layout, diagnostic}} =
                           HtmlTableValidator.prepare_cell_fields(
@@ -591,7 +591,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
 
                assert is_binary(invalid_context.message)
                original = Limits.effective()
-               Limits.install(%{original | max_pdf_form_fields: 1})
+               Limits.install(%{original | max_entries: 1})
 
                assert {:error, {:resource_limit_exceeded, field_limit}} =
                         HtmlTableValidator.prepare_cell_fields(
@@ -601,7 +601,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
                           :interactive
                         )
 
-               assert field_limit.message =~ "max_pdf_form_fields"
+               assert field_limit.message =~ "max_entries"
                Limits.install(original)
 
                assert {:ok, carriers} =
@@ -688,7 +688,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
                original = Limits.effective()
 
                try do
-                 Limits.install(%{original | max_pdf_numeric_magnitude: 100})
+                 Limits.install(%{original | max_numeric_magnitude: 100})
 
                  group = %{
                    type: :drawing_group,
@@ -711,7 +711,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
                end
              end)
 
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
     assert diagnostic.stage == :pdf
   end
 
@@ -797,7 +797,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
     first =
       Map.put(first, :clip, %{
         x: 0.0,
-        y: Limits.get(:max_pdf_numeric_magnitude) - 10,
+        y: Limits.get(:max_numeric_magnitude) - 10,
         width: 1.0,
         height: 1.0
       })
@@ -967,7 +967,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
 
     assert {:ok, styled} = Style.compute_detailed(dom)
     [table] = styled.children
-    Limits.install(%{Limits.effective() | max_layout_cardinality: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlTableValidator.form(table.children)

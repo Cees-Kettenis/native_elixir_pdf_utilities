@@ -13,7 +13,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedFormValidator do
           {:ok, descriptor()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def issue(context, fields) do
     with :ok <- ResourceValidator.validate_context(context) do
-      HtmlValidator.check_render_resource(:max_pdf_form_fields, length(fields), :forms)
+      HtmlValidator.check_render_resource(:max_entries, length(fields), :forms)
       token = make_ref()
 
       RenderCache.fetch(context.scope, {__MODULE__, token}, fn ->

@@ -148,7 +148,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
     assert diagnostic.stage == :style
     assert Map.get(diagnostic, :source) == "SVG"
     assert diagnostic.message =~ "not authorized"
-    Limits.install(Map.put(Limits.effective(), :max_svg_raster_pixels, 0))
+    Limits.install(Map.put(Limits.effective(), :max_raster_pixels, 0))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgRasterizer.rasterize(
@@ -158,7 +158,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
              )
 
     assert diagnostic.reason == :resource_limit_exceeded
-    Limits.install(Map.put(limits, :max_svg_output_bytes, 1))
+    Limits.install(Map.put(limits, :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(

@@ -3,10 +3,23 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
   import NativeElixirPdfUtilities.HtmlTreeHelpers
 
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  test "prepared numeric geometry normalizes bounded numbers without parsing caller text" do
+    maximum = Limits.get(:max_numeric_magnitude)
+
+    for value <- [0, -0.0, 12, -12, 1.25, maximum, -maximum] do
+      assert HtmlValidator.normalize_geometry_number(value) == {:ok, value * 1.0}
+    end
+
+    for value <- ["12", nil, true, {}, maximum + 1, -maximum - 1, Integer.pow(10, 1000)] do
+      assert HtmlValidator.normalize_geometry_number(value) == :error
+    end
+  end
 
   test "processing instruction syntax and direct tree transport share one validator" do
     marker = %{type: :processing_instruction, target: "marker", data: "name='A&amp;B'"}
@@ -2176,7 +2189,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           {:padding, :bad},
           {:padding, -1},
           {:border_widths, -1},
-          {:margin, NativeElixirPdfUtilities.Limits.get(:max_css_numeric_magnitude) + 1}
+          {:margin, NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) + 1}
         ] do
       edges = %{top: edge, right: 0, bottom: 0, left: 0}
 
@@ -2551,9 +2564,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert {1_000_000_000.0, ""} = HtmlValidator.parse_css_number("1000000000")
 
     for {value, scale} <- [
-          {"1000000001", 1},
+          {"4294967296", 1},
           {"1000000000", 72},
-          {"1", 1_000_000_001},
+          {"1", 4_294_967_296},
           {String.duplicate("9", 400), 1},
           {"invalid", 1},
           {123, 1},
@@ -2592,7 +2605,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       assert :error = HtmlValidator.parse_css_length(value, :nonnegative)
     end
 
-    assert :error = HtmlValidator.parse_css_length(".5em", :margin, 1_000_000_001)
+    assert :error = HtmlValidator.parse_css_length(".5em", :margin, 4_294_967_296)
   end
 
   test "SVG authorization permits literal fragments and rejects entity declarations" do
@@ -2664,9 +2677,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
       assert {:error,
               {:resource_limit_exceeded,
                %{stage: :limits, reason: :resource_limit_exceeded, message: message}}} =
-               HtmlValidator.validate_layout_cardinality(kind, 1_001)
+               HtmlValidator.validate_layout_cardinality(kind, Limits.get(:max_entries) + 1)
 
-      assert message =~ "1000-item limit"
+      assert message =~ "#{Limits.get(:max_entries)}-item limit"
     end
 
     assert :error = HtmlValidator.validate_layout_cardinality(:grid_tracks, 0)
@@ -2677,9 +2690,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert {:error,
             {:resource_limit_exceeded,
              %{stage: :limits, reason: :resource_limit_exceeded, message: tile_message}}} =
-             HtmlValidator.validate_background_image_tile_count(10_001)
+             HtmlValidator.validate_background_image_tile_count(Limits.get(:max_entries) + 1)
 
-    assert tile_message == "background image tile count exceeds the 10000-tile limit"
+    assert tile_message ==
+             "background image tile count exceeds the #{Limits.get(:max_entries)}-tile limit"
+
     assert :error = HtmlValidator.validate_background_image_tile_count(0)
 
     assert :ok =
@@ -2822,7 +2837,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
   test "image resource budgets bound count, source bytes, and retained decoded bytes" do
     count_budget = HtmlValidator.new_image_budget()
 
-    for _image <- 1..1_000 do
+    for _image <- 1..Limits.get(:max_entries) do
       assert :ok = HtmlValidator.reserve_image_source(count_budget, 0)
     end
 
@@ -2845,11 +2860,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert source_diagnostic.message == "aggregate image source bytes exceed the limit"
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
-             HtmlValidator.reserve_image_source(HtmlValidator.new_image_budget(), 10_000_001)
+             HtmlValidator.reserve_image_source(
+               HtmlValidator.new_image_budget(),
+               Limits.get(:max_input_bytes) + 1
+             )
 
     decoded_budget = HtmlValidator.new_image_budget()
 
-    for _image <- 1..20 do
+    for _image <- 1..25 do
       assert :ok = HtmlValidator.reserve_decoded_image(decoded_budget, 1_000, 1_000, 4)
     end
 
@@ -2862,9 +2880,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              HtmlValidator.reserve_decoded_image(
                HtmlValidator.new_image_budget(),
-               10_000,
-               2_000,
-               3
+               Limits.get(:max_decoded_bytes) + 1,
+               1,
+               1
              )
 
     assert {:error, {:invalid_document, %{stage: :style}}} =
@@ -3055,23 +3073,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              HtmlValidator.validate_svg_raster(extreme_intrinsic_svg, [])
 
-    assert {:error,
-            {:resource_limit_exceeded,
-             %{stage: :limits, reason: :resource_limit_exceeded, message: pixel_message}}} =
+    # The shared default pixel allowance admits this surface. Lower pixel ceilings
+    # are exercised with isolated configuration in ImageResourceValidationTest.
+    assert {:ok, [width: 8_192, height: 4_096]} =
              HtmlValidator.validate_svg_raster(svg, width: 8_192, height: 4_096)
-
-    assert pixel_message =~ "16777216-pixel limit"
 
     oversized_source =
       ~s(<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">) <>
-        :binary.copy(" ", 5_000_000) <> "</svg>"
+        :binary.copy(" ", Limits.get(:max_input_bytes)) <> "</svg>"
 
     assert {:error,
             {:resource_limit_exceeded,
              %{stage: :limits, reason: :resource_limit_exceeded, message: source_message}}} =
              HtmlValidator.validate_svg_raster(oversized_source, [])
 
-    assert source_message =~ "5000000-byte limit"
+    assert source_message =~ "#{Limits.get(:max_input_bytes)}-byte limit"
 
     for invalid_svg <- [
           "not SVG",
@@ -3917,17 +3933,22 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
 
                assert diagnostic.stage == :style or diagnostic.stage == :options
                assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
-               checked_work = Process.get({HtmlValidator, :render_budget})
+
+               checked_work =
+                 NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot()
+
                assert :ok = HtmlValidator.release_style_input(changed)
                assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
-               assert Process.get({HtmlValidator, :render_budget}) == checked_work
+
+               assert NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot() ==
+                        checked_work
 
                assert :ok = HtmlValidator.release_style_input(dom)
                assert :ok = HtmlValidator.release_style_input(dom)
                assert {:ok, false} = HtmlValidator.prepare_style_input(dom, [], options)
 
-               assert Process.get({HtmlValidator, :render_budget}).max_html_tree_work >
-                        checked_work.max_html_tree_work
+               assert NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot().max_work >
+                        checked_work.max_work
 
                :ok
              end)

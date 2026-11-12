@@ -24,7 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
         # syntax pass. Charge both passes against the immutable request budget.
         remaining = %{
           limits
-          | max_html_pattern_compile_work: limits.max_html_pattern_compile_work - work
+          | max_work: limits.max_work - work
         }
 
         case prepare_source(source, remaining, true) do
@@ -235,9 +235,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
               if Enum.any?(
                    numbers,
                    &(byte_size(&1) >
-                       NativeElixirPdfUtilities.Limits.get(:max_html_numeric_token_bytes))
+                       NativeElixirPdfUtilities.Limits.get(:max_numeric_token_bytes))
                  ),
-                 do: throw({:pattern_limit, :max_html_numeric_token_bytes})
+                 do: throw({:pattern_limit, :max_numeric_token_bytes})
 
               case numbers do
                 [minimum, maximum] when maximum != "" ->
@@ -756,10 +756,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
   defp charge(work, depth) do
     key = {__MODULE__, :budget}
     {used, limits} = Process.get(key)
-    if depth > limits.max_html_pattern_depth, do: throw({:pattern_limit, :max_html_pattern_depth})
+    if depth > limits.max_depth, do: throw({:pattern_limit, :max_depth})
 
-    if used + work > limits.max_html_pattern_compile_work,
-      do: throw({:pattern_limit, :max_html_pattern_compile_work})
+    if used + work > limits.max_work,
+      do: throw({:pattern_limit, :max_work})
 
     Process.put(key, {used + work, limits})
   end

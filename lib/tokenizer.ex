@@ -144,7 +144,7 @@ defmodule NativeElixirPdfUtilities.Tokenizer do
       {token, state} = success ->
         case token do
           {:eof, nil} ->
-            PdfValidator.charge_reader_budget(:max_pdf_reader_work, state.pos - st.pos)
+            PdfValidator.charge_reader_budget(:max_work, state.pos - st.pos)
 
           _ ->
             PdfValidator.charge_reader_token(state.pos - st.pos)

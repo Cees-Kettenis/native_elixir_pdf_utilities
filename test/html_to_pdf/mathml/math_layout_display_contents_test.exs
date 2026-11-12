@@ -75,12 +75,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutDisplayContentsTest do
   end
 
   test "hidden Math content still consumes the ordinary document structure budget" do
-    Limits.install(%{Limits.effective() | max_html_nodes: 2})
+    Limits.install(%{Limits.effective() | max_entries: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<math style='display:contents'><mn>1</mn><mn>2</mn></math>")
 
     assert is_atom(diagnostic.stage) and is_atom(diagnostic.operation)
-    assert diagnostic.message =~ "max_html_nodes"
+    assert diagnostic.message =~ "max_entries"
   end
 end

@@ -38,7 +38,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyDecorationTest do
       assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
       assert {:ok, layout} = Layout.layout(styled, page_size: {300, 300}, margin: 12)
       lines = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :text_decoration))
-      assert length(lines) == 2
+      base = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Base"))
+      reading = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Reading"))
+      assert Enum.any?(lines, &(&1.x == base.x and &1.width == base.annotation_width))
+
+      assert Enum.any?(
+               lines,
+               &(&1.x >= reading.x and &1.x < reading.x + reading.annotation_width and
+                   &1.y > base.y)
+             )
     end
   end
 
@@ -56,7 +64,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyDecorationTest do
       assert {:ok, layout} = Layout.layout(styled, page_size: {300, 300}, margin: 12)
       reading = Enum.find(layout.boxes, &(Map.get(&1, :text) == "Reading"))
       lines = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :text_decoration))
-      assert Enum.any?(lines, &(&1.x == reading.x and &1.width == reading.annotation_width))
+
+      assert Enum.any?(
+               lines,
+               &(&1.x == reading.x and &1.width > 0 and &1.width <= reading.annotation_width)
+             )
+
+      assert Enum.all?(
+               Enum.filter(lines, &(&1.x >= reading.x)),
+               &(&1.x + &1.width <= reading.x + reading.annotation_width + 0.0001)
+             )
     end
   end
 

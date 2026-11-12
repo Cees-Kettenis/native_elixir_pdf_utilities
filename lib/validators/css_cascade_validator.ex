@@ -7,14 +7,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   @sides ~w(top right bottom left)
   @font_controls NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties()
   @simple ~w(color accent-color appearance content-visibility visibility resize box-sizing border-radius
-    text-transform quotes content counter-reset counter-increment counter-set letter-spacing
-    vertical-align width height min-width max-width min-height max-height orphans widows
-    writing-mode direction position z-index isolation contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
+    text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
+    text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
+    ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
     border-spacing caption-side table-layout flex-direction flex-wrap row-gap column-gap
     justify-content align-items align-self justify-self justify-items align-content order
     flex-grow flex-shrink flex-basis grid-template-columns grid-template-rows grid-auto-columns
     grid-auto-rows grid-column-start grid-column-end grid-row-start grid-row-end
-    white-space word-break overflow-wrap line-break math-style math-shift math-depth)
+    white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break math-style math-shift math-depth) ++
+            NativeElixirPdfUtilities.Validators.CssHyphenationValidator.properties()
   @fields Map.new(@simple, fn name ->
             {name, [[String.to_atom(String.replace(name, "-", "_"))]]}
           end)
@@ -91,6 +92,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             end)
           end)
   @shorthands %{
+                "vertical-align" => ~w(baseline-source alignment-baseline baseline-shift),
+                "text-emphasis" => ~w(text-emphasis-style text-emphasis-color),
+                "white-space" => ~w(white-space-collapse text-wrap-mode white-space-trim),
+                "text-wrap" => ~w(text-wrap-mode text-wrap-style),
                 "overflow" => ~w(overflow-x overflow-y),
                 "line-clamp" => ~w(max-lines block-ellipsis continue),
                 "margin" => Enum.map(@sides, &("margin-" <> &1)),
@@ -131,10 +136,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     "page-break-inside" => "break-inside"
   }
   @inherited ~w(color accent-color font-size font-family font-style font-weight font-width line-height
-    letter-spacing text-align text-transform quotes white-space word-break overflow-wrap line-break
-    orphans widows caption-side border-collapse border-spacing list-style-type list-style-position
-    list-style-image visibility block-ellipsis writing-mode direction math-style math-shift math-depth) ++
-               @font_controls
+    dominant-baseline letter-spacing word-spacing text-indent text-align-last text-justify hanging-punctuation text-align text-transform quotes white-space white-space-collapse text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break
+    text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter-align initial-letter-wrap orphans widows caption-side border-collapse border-spacing list-style-type list-style-position
+    list-style-image visibility block-ellipsis ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction math-style math-shift math-depth) ++
+               @font_controls ++
+               NativeElixirPdfUtilities.Validators.CssHyphenationValidator.properties()
   @inherited_fields @inherited
                     |> Enum.flat_map(fn property ->
                       Enum.map(Map.fetch!(@fields, property), &hd/1)
@@ -201,7 +207,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         orders =
           Enum.reduce(events, orders, fn event, orders ->
             path = qualify.(event.path)
-            HtmlValidator.check_render_resource(:max_css_syntax_depth, length(path), :css)
+            HtmlValidator.check_render_resource(:max_depth, length(path), :css)
 
             Enum.reduce(1..length(path), orders, fn length, orders ->
               path = Enum.take(path, length)
@@ -273,7 +279,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
     cond do
       property == "all" ->
-        (Map.keys(@fields) -- ["direction"]) ++
+        (Map.keys(@fields) -- ["direction", "unicode-bidi"]) ++
           if(Map.get(context, :_svg_element, false),
             do: Map.keys(SvgStyleValidator.presentation_properties()),
             else: []
@@ -297,7 +303,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     RenderCache.fetch_stylesheet(
       {__MODULE__, declarations, Map.get(context, :_svg_element, false),
        Map.get(context, :writing_mode, :horizontal_tb), Map.get(context, :direction, :ltr),
-       keywords},
+       Map.get(context, :text_orientation, :mixed), keywords},
       fn ->
         records =
           Enum.with_index(declarations, fn declaration, index ->
@@ -479,7 +485,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   end
 
   defp resolve_custom_loop(custom, context, ordinary, baseline, raw, budget, started) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :css)
     alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator
 
     with {:ok, values, sanitized} <-
@@ -581,29 +587,44 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   @doc "Copies only a declaration's winning longhands from its once-validated shorthand result."
   @spec project(map(), map(), [String.t()]) :: map()
   def project(context, validated, targets) do
-    Enum.reduce(targets, context, fn property, result ->
-      fields = property_fields(property, context)
+    baselines? =
+      Enum.any?(targets, &(&1 in ~w(baseline-source alignment-baseline baseline-shift)))
 
-      result =
-        case fields do
-          nil ->
-            validated
+    validated =
+      if baselines?,
+        do: NativeElixirPdfUtilities.Validators.CssBaselineValidator.initialize(validated),
+        else: validated
 
-          fields ->
-            Enum.reduce(fields, result, fn path, result -> copy_path(result, validated, path) end)
-        end
+    projected =
+      Enum.reduce(targets, context, fn property, result ->
+        fields = property_fields(property, context)
 
-      if Map.get(context, :_svg_element, false) and
-           Map.has_key?(Map.get(validated, :_svg_specified, %{}), property),
-         do:
-           Map.update(
-             result,
-             :_svg_specified,
-             %{property => validated._svg_specified[property]},
-             &Map.put(&1, property, validated._svg_specified[property])
-           ),
-         else: result
-    end)
+        result =
+          case fields do
+            nil ->
+              validated
+
+            fields ->
+              Enum.reduce(fields, result, fn path, result ->
+                copy_path(result, validated, path)
+              end)
+          end
+
+        if Map.get(context, :_svg_element, false) and
+             Map.has_key?(Map.get(validated, :_svg_specified, %{}), property),
+           do:
+             Map.update(
+               result,
+               :_svg_specified,
+               %{property => validated._svg_specified[property]},
+               &Map.put(&1, property, validated._svg_specified[property])
+             ),
+           else: result
+      end)
+
+    if baselines?,
+      do: NativeElixirPdfUtilities.Validators.CssBaselineValidator.synchronize(projected),
+      else: projected
   end
 
   @doc "Applies CSS-wide defaults using the actual inherited or user-agent context."
@@ -690,6 +711,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         display: :inline,
         writing_mode: :horizontal_tb,
         direction: :ltr,
+        unicode_bidi: :normal,
         text_align: :left,
         _text_align_initial: true,
         text_transform: :none,
@@ -767,6 +789,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         math_shift: :normal,
         math_depth: 0
       }
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssHyphenationValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssWritingModeValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssInitialLetterValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssBaselineValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextShadowValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextEmphasisValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.RubyValidator.defaults())
       |> NativeElixirPdfUtilities.Validators.CssValueValidator.ensure_box_style()
 
     if Map.get(context, :_svg_element, false),

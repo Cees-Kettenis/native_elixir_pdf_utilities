@@ -397,19 +397,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
   test "stylesheet media depth and source work have centralized diagnostic budgets" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_media_query_depth, 2))
+    Limits.install(Map.put(original, :max_depth, 2))
     css = "@media print{@media print{@media print{p{color: red}}}}"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<style>#{css}</style><p>Bounded</p>")
+             NativeElixirPdfUtilities.HtmlToPdf.CssParser.parse_detailed(css)
 
-    assert diagnostic.stage == :css and diagnostic.message =~ "max_media_query_depth"
-    Limits.install(Map.put(original, :max_aggregate_css_source_bytes, 20))
+    assert diagnostic.stage == :css and diagnostic.message =~ "max_depth"
+    Limits.install(Map.put(original, :max_input_bytes, 20))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<style>p{color: red} p{color: blue}</style><p>Bounded</p>")
+             NativeElixirPdfUtilities.HtmlToPdf.CssParser.parse_detailed(
+               "p{color: red} p{color: blue}"
+             )
 
-    assert diagnostic.stage == :css and diagnostic.message =~ "max_aggregate_css_source_bytes"
+    assert diagnostic.stage == :css and diagnostic.message =~ "max_input_bytes"
   end
 
   test "page defaults prepare before context and viewport-qualified page negotiation diagnoses" do

@@ -65,7 +65,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPositionTest do
     source =
       "<svg width='200' height='100'><text x='5 35 65' y='25' font-family='NativeSvgFont0'>AΩé</text></svg>"
 
-    Limits.install(Map.put(limits, :max_aggregate_svg_surface_pixels, 1))
+    Limits.install(Map.put(limits, :max_raster_pixels, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.png(source, [], %{
@@ -73,13 +73,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPositionTest do
                fonts: [%{data: data}]
              })
 
-    assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
+    assert diagnostic.message =~ "max_raster_pixels"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(
                "<svg width=200 height=100><text x='5 35 65' y=25>AΩé</text></svg>"
              )
 
-    assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
+    assert diagnostic.message =~ "max_raster_pixels"
   end
 end

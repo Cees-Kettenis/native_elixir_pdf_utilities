@@ -44,8 +44,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
       when length == byte_size(data) and count > 0 and count <= 4095 and
              flavor in [0x0001_0000, 0x7472_7565, 0x4F54_544F] ->
         # sfnt searchRange is uint16, so at most 4095 tables fit its format.
-        FontValidator.check(:max_font_decoded_bytes, total)
-        FontValidator.reserve(:max_font_container_work, count)
+        FontValidator.check(:max_decoded_bytes, total)
+        FontValidator.reserve(:max_work, count)
 
         records =
           for <<tag::binary-size(4), offset::32, compressed::32, original::32,
@@ -147,7 +147,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
   defp decode_woff_tables(data, records) do
     Enum.reduce_while(records, {:ok, []}, fn {tag, offset, compressed, original, checksum},
                                              {:ok, tables} ->
-      FontValidator.reserve(:max_font_container_work, original + compressed)
+      FontValidator.reserve(:max_work, original + compressed)
       bytes = binary_part(data, offset, compressed)
 
       decoded =
@@ -209,8 +209,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
     case data do
       <<"ttcf", version::32, count::32, rest::binary>>
       when version in [0x0001_0000, 0x0002_0000] and count > 0 and byte_size(rest) >= count * 4 ->
-        FontValidator.check(:max_font_candidates, count)
-        FontValidator.reserve(:max_font_container_work, count)
+        FontValidator.check(:max_entries, count)
+        FontValidator.reserve(:max_work, count)
         header_end = 12 + count * 4 + if(version == 0x0002_0000, do: 12, else: 0)
 
         with true <- index < count and header_end <= byte_size(data),
@@ -286,7 +286,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
   defp collection_tables(data, offset, header_end, directories) do
     <<scaler::32, count::16, _::48>> = binary_part(data, offset, 12)
 
-    FontValidator.reserve(:max_font_container_work, count)
+    FontValidator.reserve(:max_work, count)
     records = binary_part(data, offset + 12, count * 16)
 
     parsed =
@@ -315,7 +315,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
                   )}
 
                true ->
-                 FontValidator.reserve(:max_font_container_work, length)
+                 FontValidator.reserve(:max_work, length)
 
                  {:cont,
                   {:ok, [{tag, binary_part(data, start, length)} | tables], start + length}}
@@ -340,8 +340,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
           end)
         )
 
-    FontValidator.check(:max_font_decoded_bytes, bytes)
-    FontValidator.reserve(:max_font_container_work, bytes)
+    FontValidator.check(:max_decoded_bytes, bytes)
+    FontValidator.reserve(:max_work, bytes)
 
     case List.keyfind(tables, "head", 0) do
       {"head", head} when byte_size(head) >= 12 ->

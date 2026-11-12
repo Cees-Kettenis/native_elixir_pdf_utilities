@@ -65,7 +65,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageViewportTest do
   end
 
   test "cached final viewports charge each occurrence against the actual raster ceiling" do
-    Limits.install(%{Limits.effective() | max_aggregate_svg_raster_pixels: 2500})
+    Limits.install(%{Limits.effective() | max_raster_pixels: 3500})
     budget = HtmlValidator.new_image_budget()
 
     HtmlValidator.with_render_budget(fn ->
@@ -84,13 +84,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageViewportTest do
                  SvgRasterizer.resize_image(image, 12, 12)
 
         assert diagnostic.source == "SVG" and
-                 diagnostic.message =~ "max_aggregate_svg_raster_pixels"
+                 diagnostic.message =~ "max_raster_pixels"
       end)
     end)
   end
 
   test "a failed viewport conversion remains a recoverable scoped result on a repeated request" do
-    Limits.install(%{Limits.effective() | max_svg_raster_pixels: 200})
+    Limits.install(%{Limits.effective() | max_raster_pixels: 400})
     budget = HtmlValidator.new_image_budget()
 
     ResourceContext.run([], budget, fn _ ->

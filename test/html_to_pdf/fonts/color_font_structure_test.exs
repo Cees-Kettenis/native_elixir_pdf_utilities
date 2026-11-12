@@ -107,7 +107,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
       assert {:ok, _} = ColrFontValidator.prepare(changed, glyph, {0, 0, 0, 1})
     end
 
-    Limits.install(%{max_font_color_work: 1})
+    Limits.install(%{max_work: 1})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              ColrFontValidator.prepare(changed, id, {0, 0, 0, 1})
@@ -201,7 +201,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
       {:glyph, font.cmap[?H],
        {:gradient, 6, [0, 0, 0, 100, 100, 100], {0, [{0, {1, 0, 0, 1}}, {1, {0, 0, 1, 1}}]}}}
 
-    Limits.install(Map.put(Limits.effective(), :max_svg_raster_dimension, 1))
+    Limits.install(Map.put(Limits.effective(), :max_raster_dimension, 1))
     result = ColrPaintValidator.prepare(font, %{graph: radial, clip: nil}, 100)
     assert {:error, {_, _}} = result
   end
@@ -215,12 +215,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
 
     changed = %{font | data: FontFixture.rebuild(font.data, %{"SVG " => svg_table(id, payload)})}
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_aggregate_image_source_bytes, 1))
+    Limits.install(Map.put(limits, :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgFontValidator.prepare(changed, id, {0, 0, 0, 1})
 
-    Limits.install(Map.put(limits, :max_css_variable_bytes, 1))
+    Limits.install(Map.put(limits, :max_input_bytes, 1))
 
     payload =
       "<svg xmlns='http://www.w3.org/2000/svg'><g id='glyph#{id}'><rect width='10' height='10' fill='var(--color0)'/></g></svg>"
@@ -229,6 +229,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgFontValidator.prepare(changed, id, {0, 0, 0, 1})
+  end
+
+  test "SVG glyph image and palette expansion retain failures after their source has been admitted",
+       %{font: font} do
+    alias NativeElixirPdfUtilities.Validators.HtmlValidator
+    id = font.cmap[?H]
+    original = Limits.effective()
+
+    image =
+      "<svg xmlns='http://www.w3.org/2000/svg'><g id='glyph#{id}'><image width='1' height='1' href='data:image/png;base64,AAAA'/></g></svg>"
+
+    palette =
+      "<svg xmlns='http://www.w3.org/2000/svg'><g id='glyph#{id}'><rect width='1' height='1' style='--palette:#{String.duplicate("var(--color0) ", 32)};fill:red'/></g></svg>"
+
+    for {payload, key, amount} <- [
+          {image, :max_input_bytes, byte_size(image) + 3},
+          {palette, :max_decoded_bytes, byte_size(palette)}
+        ] do
+      changed = %{
+        font
+        | data: FontFixture.rebuild(font.data, %{"SVG " => svg_table(id, payload)})
+      }
+
+      Limits.install(Map.put(original, key, amount))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlValidator.with_render_budget(fn ->
+                 SvgFontValidator.prepare(changed, id, {0, 0, 0, 1})
+               end)
+
+      assert diagnostic.message =~ Atom.to_string(key)
+      assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
+    end
   end
 
   test "COLR base and clip ranges, missing deltas and no-variation sentinels preserve table ownership" do
@@ -349,7 +382,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
        %{font: font} do
     limits = Limits.effective()
     cpal = <<0::16, 1::16, 1::16, 1::16, 14::32, 0::16, 0, 0, 255, 255>>
-    Limits.install(Map.put(limits, :max_font_color_work, 3))
+    Limits.install(Map.put(limits, :max_work, 3))
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              ColrFontValidator.prepare_palette(cpal, %{
@@ -357,9 +390,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
                overrides: %{0 => {1, 0, 0, 1}, 1 => {0, 1, 0, 1}}
              })
 
-    assert message =~ "max_font_color_work"
+    assert message =~ "max_work"
     segments = Limits.get(:font_color_sweep_segments)
-    Limits.install(Map.put(limits, :max_font_color_work, segments + 10))
+    Limits.install(Map.put(limits, :max_work, segments + 10))
 
     gradient =
       {:glyph, font.cmap[?H],
@@ -368,7 +401,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              ColrPaintValidator.prepare(font, %{graph: gradient, clip: nil})
 
-    assert message =~ "max_font_color_work"
+    assert message =~ "max_work"
   end
 
   defp version_one(id, paint) do

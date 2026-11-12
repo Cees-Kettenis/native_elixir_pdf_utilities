@@ -11,6 +11,68 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     :ok
   end
 
+  @tag :tmp_dir
+  test "an installation missing bundled appearance fonts returns a recoverable diagnostic", %{
+    tmp_dir: directory
+  } do
+    pdf = external_pdf()
+    assert {:ok, _} = Forms.fill(pdf, %{"field" => "Warm font paths"})
+    assert {:ok, dom} = NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse("<p>Warm</p>")
+
+    assert {:ok, _} =
+             NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(dom,
+               system_font_discovery: false
+             )
+
+    # Relocate this VM's application lookup only. No source or bundled asset is
+    # removed, renamed or changed, and all modules remain available in memory.
+    {:ok, modules} = :application.get_key(:native_elixir_pdf_utilities, :modules)
+    for module <- modules, do: assert({:module, ^module} = :code.ensure_loaded(module))
+    original = :code.lib_dir(:native_elixir_pdf_utilities)
+    replacement = Path.join([directory, "native_elixir_pdf_utilities", "ebin"])
+    File.mkdir_p!(replacement)
+
+    assert true =
+             :code.replace_path(:native_elixir_pdf_utilities, String.to_charlist(replacement))
+
+    try do
+      assert {:error, {:unsupported_form, diagnostic}} = Forms.fill(pdf, %{"field" => "Updated"})
+      assert diagnostic.operation == :fill and diagnostic.message =~ "bundled appearance font"
+
+      assert {:error, _} =
+               NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(dom,
+                 system_font_discovery: false
+               )
+    after
+      assert true =
+               :code.replace_path(
+                 :native_elixir_pdf_utilities,
+                 :filename.join(original, ~c"ebin")
+               )
+    end
+
+    assert {:ok, _} = Forms.fill(pdf, %{"field" => "Restored"})
+  end
+
+  test "form field names and replacement text retain their own admitted byte diagnostics" do
+    pdf = external_pdf()
+    assert {:ok, context} = Reader.read_validated(pdf)
+    original = Limits.effective()
+    Limits.install(%{original | max_input_bytes: 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FormValidator.inspect_document(context)
+
+    assert diagnostic.message =~ "field name exceeds max_input_bytes"
+    limit = byte_size(pdf) + 1
+    Limits.install(%{original | max_input_bytes: limit})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Forms.fill(pdf, %{"field" => String.duplicate("x", limit + 1)})
+
+    assert diagnostic.operation == :fill and diagnostic.message =~ "text exceeds max_input_bytes"
+  end
+
   test "malformed form trees and unresolved entries produce diagnostics" do
     for {field, widget, form} <- [
           {%{}, %{}, %{"Fields" => 1}},
@@ -339,19 +401,18 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
   test "form limits and HTML option diagnostics" do
     pdf = external_pdf()
     assert {:ok, source} = Reader.read_validated(pdf)
-    Limits.install(Map.put(Limits.effective(), :max_pdf_objects, 20))
     assert {:ok, filled} = Forms.fill(pdf, %{"field" => "x"})
     assert {:ok, filled_context} = Reader.read_validated(filled)
     assert filled_context.document.trailer["Size"] <= 20
 
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_objects, source.document.trailer["Size"]))
+    Limits.install(Map.put(Limits.defaults(), :max_entries, source.document.trailer["Size"]))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fill(pdf, %{"field" => "x"})
     assert diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.operation == :fill and diagnostic.module == NativeElixirPdfUtilities.Forms
-    assert diagnostic.message =~ "max_pdf_objects"
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_form_fields, 1))
+    assert diagnostic.message =~ "max_entries"
+    Limits.install(Map.put(Limits.defaults(), :max_entries, 1))
     assert {:error, _} = Forms.fields(pdf)
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_form_text_bytes, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              HtmlToPdf.render("<div><input name=\"long\"></div>")
@@ -363,7 +424,7 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
       state
     end)
 
-    Limits.install(Map.put(Limits.defaults(), :max_font_cmap_work, 1))
+    Limits.install(Map.put(Limits.defaults(), :max_work, 1))
     assert {:error, _} = Forms.fill(pdf, %{"field" => "x"})
   end
 
@@ -373,16 +434,19 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     assert {:ok, context} = Reader.read_validated(pdf)
     required = context.document.trailer["Size"]
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_objects: required})
+    Limits.install(%{limits | max_entries: required})
+    assert :ok = FormValidator.capacity(context, 0)
+    Limits.install(limits)
     assert {:ok, ^pdf} = HtmlToPdf.render(html, system_font_discovery: false)
 
-    Limits.install(%{limits | max_pdf_objects: required - 1})
+    Limits.install(%{limits | max_entries: required - 1})
 
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(html, system_font_discovery: false)
-
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = FormValidator.capacity(context, 0)
     assert diagnostic.stage == :forms and diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.message =~ "object count cannot accommodate form appearances"
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             HtmlToPdf.render(html, system_font_discovery: false)
   end
 
   test "button updates preserve artwork and reject unusable states" do
@@ -588,12 +652,20 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     {:ok, deep} =
       IncrementalWriter.write(context, [
         {5, 0, {:value, %{"Fields" => [{:ref, {12, 0}}]}}},
-        {12, 0, {:value, %{"T" => {:string, "root"}, "Kids" => [{:ref, {10, 0}}]}}}
+        {12, 0, {:value, %{"T" => {:string, "root"}, "Kids" => [{:ref, {13, 0}}]}}},
+        {13, 0, {:value, %{"T" => {:string, "branch"}, "Kids" => [{:ref, {14, 0}}]}}},
+        {14, 0, {:value, %{"T" => {:string, "leaf"}, "Kids" => [{:ref, {10, 0}}]}}}
       ])
 
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_form_depth, 1))
+    assert {:ok, prepared} = Reader.read_validated(deep)
+    Limits.install(Map.put(Limits.defaults(), :max_depth, 2))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FormValidator.inspect_document(prepared)
+
+    assert diagnostic.message == "field tree exceeds max_depth"
     assert {:error, {:resource_limit_exceeded, %{message: message}}} = Forms.fields(deep)
-    assert message =~ "max_pdf_form_depth"
+    assert message =~ "max_depth"
   end
 
   test "validates field alignment and applies left, center and right placement" do
@@ -608,7 +680,7 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
 
     assert message =~ "alignment"
     pdf = external_pdf()
-    Limits.install(Map.put(Limits.defaults(), :max_pdf_form_text_bytes, 2))
+    Limits.install(Map.put(Limits.defaults(), :max_input_bytes, 2))
     assert {:error, {:resource_limit_exceeded, _}} = Forms.fields(pdf)
   end
 
@@ -896,16 +968,16 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
              ])
 
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_numeric_token_bytes: 12})
+    Limits.install(%{limits | max_numeric_token_bytes: 12})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.flatten(token_source)
-    assert diagnostic.message =~ "max_pdf_numeric_token_bytes" and diagnostic.source =~ "widget"
+    assert diagnostic.message =~ "max_numeric_token_bytes" and diagnostic.source =~ "widget"
     Limits.install(limits)
     assert {:ok, _} = Forms.flatten(token_source)
 
     narrow = external_pdf(%{}, %{"Rect" => [0, 0, 1.0e-323, 20]})
     assert {:error, {:invalid_form, _}} = Forms.flatten(narrow)
 
-    Limits.install(%{limits | max_pdf_numeric_magnitude: 1.0e308})
+    Limits.install(%{limits | max_numeric_magnitude: 1.0e308})
 
     assert {:ok, context} =
              Reader.read_validated(external_pdf(%{}, %{"Rect" => [0, 0, 1.0e-300, 20]}))
@@ -1074,15 +1146,15 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
       ])
 
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_form_metadata_bytes: 17})
+    Limits.install(%{limits | max_decoded_bytes: 17})
     assert {:ok, [%{name: "root.field", value: "Old"}]} = Forms.fields(pdf)
-    Limits.install(%{limits | max_pdf_form_metadata_bytes: 13})
+    Limits.install(%{limits | max_decoded_bytes: 13})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fields(pdf)
 
     assert diagnostic.stage == :forms and diagnostic.operation == :fields and
              diagnostic.module == Forms
 
-    assert diagnostic.message =~ "max_pdf_form_metadata_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
     assert diagnostic.source == "field"
   end
 
@@ -1097,24 +1169,22 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
 
     limits = Limits.effective()
 
-    Limits.install(%{
-      limits
-      | max_pdf_form_metadata_bytes: 11,
-        max_pdf_form_preparation_entries: 5
-    })
+    assert {:ok, context} = Reader.read_validated(pdf)
+    Limits.install(%{limits | max_decoded_bytes: 11, max_entries: 5})
 
     assert {:ok, [%{choices: [%{value: "a"}, %{value: "b"}], value: ["b", "a"]}]} =
-             Forms.fields(pdf)
+             with({:ok, form} <- FormValidator.inspect_document(context), do: {:ok, form.fields})
 
     for changed <- [
-          %{limits | max_pdf_form_metadata_bytes: 10},
-          %{limits | max_pdf_form_preparation_entries: 4}
+          %{limits | max_decoded_bytes: 10},
+          %{limits | max_entries: 4}
         ] do
       Limits.install(changed)
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fields(pdf)
 
-      assert diagnostic.stage == :forms and diagnostic.operation == :fields and
-               diagnostic.source in ["Opt", "V"]
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FormValidator.inspect_document(context)
+
+      assert diagnostic.stage == :forms and diagnostic.source in ["Opt", "V"]
     end
   end
 

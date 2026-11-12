@@ -282,8 +282,8 @@ defmodule NativeElixirPdfUtilities.Validators.ForeignContentValidator do
               bytes + byte_size(name) + byte_size(value)
             end)
 
-          HtmlValidator.check_render_resource(:max_html_source_bytes, bytes, :html)
-          HtmlValidator.reserve_render_resource(:max_aggregate_html_source_bytes, bytes, :html)
+          HtmlValidator.check_render_resource(:max_input_bytes, bytes, :html)
+          HtmlValidator.reserve_render_resource(:max_input_bytes, bytes, :html)
           tag = String.downcase(tag)
           attributes = Map.new(attributes, fn {name, value} -> {String.downcase(name), value} end)
 

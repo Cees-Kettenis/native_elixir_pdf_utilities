@@ -158,7 +158,7 @@ defmodule ManualWeb.RouterTest do
           {%{
              "svg" => valid,
              "width" =>
-               to_string(NativeElixirPdfUtilities.Limits.get(:max_svg_raster_dimension) + 1)
+               to_string(NativeElixirPdfUtilities.Limits.get(:max_raster_dimension) + 1)
            }, ":resource_limit_exceeded", "limit"}
         ] do
       response = post("/svg-to-png", params)

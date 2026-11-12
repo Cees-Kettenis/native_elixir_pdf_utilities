@@ -275,7 +275,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
           {:error, :user_unit_range} ->
             page_error(
               page_number,
-              "has a UserUnit outside the representable max_pdf_numeric_magnitude range"
+              "has a UserUnit outside the representable max_numeric_magnitude range"
             )
 
           :error ->
@@ -342,10 +342,10 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
               total_bytes = total_bytes + value_bytes
 
               cond do
-                value_bytes > Limits.get(:max_pdf_info_value_bytes) ->
+                value_bytes > Limits.get(:max_decoded_bytes) ->
                   {:halt, limit_error("PDF information field #{field} exceeds the byte limit")}
 
-                total_bytes > Limits.get(:max_pdf_info_total_bytes) ->
+                total_bytes > Limits.get(:max_decoded_bytes) ->
                   {:halt, limit_error("PDF information values exceed the aggregate byte limit")}
 
                 true ->
@@ -393,7 +393,7 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
     case {field, value} do
       {:keywords, values} when is_list(values) ->
         # Even empty keywords require two separator bytes between entries.
-        maximum_count = div(Limits.get(:max_pdf_info_value_bytes), 2) + 1
+        maximum_count = div(Limits.get(:max_decoded_bytes), 2) + 1
 
         case CollectionValidator.bounded_length(values, maximum_count) do
           {:ok, _count} ->

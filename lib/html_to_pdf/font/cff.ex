@@ -33,7 +33,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font.Cff do
     parts = [operand(glyph.width - nominal_width), commands, <<14>>]
 
     NativeElixirPdfUtilities.Validators.FontValidator.check(
-      :max_font_subset_bytes,
+      :max_decoded_bytes,
       IO.iodata_length(parts)
     )
 
@@ -171,7 +171,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font.Cff do
   end
 
   defp program_commands(data, current, commands) do
-    NativeElixirPdfUtilities.Validators.FontValidator.reserve(:max_font_subset_work, 1)
+    NativeElixirPdfUtilities.Validators.FontValidator.reserve(:max_work, 1)
 
     case data do
       <<28, value::binary-size(2), rest::binary>> ->

@@ -15,75 +15,99 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
              "#{@url}|/\\*(?:[^*]|\\*(?!/))*(?:\\*/|\\z)|\"(?:#{@escape}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\n\\r\\f])*(?:\"|(?=[\\n\\r\\f])|\\z)|'(?:#{@escape}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\n\\r\\f])*(?:'|(?=[\\n\\r\\f])|\\z)|<!--|-->|@#{@identifier}|#{@number}(?:#{@identifier}|%)?|#{@identifier}\\(?|#{@escape}|[ \\t\\n\\r\\f]+|.",
              "su"
            )
+  @complete_url Regex.compile!("\\A" <> @url <> "\\z", "u")
 
   @doc "Returns balanced component values with byte spans in the original input."
   @spec components(String.t()) :: [map()]
   def components(source) do
-    HtmlValidator.reserve_render_resource(:max_css_work, byte_size(source), :css)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(source), :css)
 
-    {stack, offset} =
-      @lexical
-      |> Regex.scan(source)
-      |> Enum.reduce({[{nil, []}], 0}, fn [text], {stack, offset} ->
-        token = %{text: text, offset: offset, length: byte_size(text), kind: :token}
+    # An ASCII alphanumeric sequence is one identifier, number or dimension.
+    # Its component span is identical in all three cases; punctuation, escapes
+    # and non-ASCII text still go through the complete CSS tokenizer below.
+    if source != "" and ascii_component?(source) do
+      [%{text: source, offset: 0, length: byte_size(source), kind: :token}]
+    else
+      {stack, offset} =
+        @lexical
+        |> Regex.scan(source)
+        |> Enum.reduce({[{nil, []}], 0}, fn [text], {stack, offset} ->
+          token = %{text: text, offset: offset, length: byte_size(text), kind: :token}
 
-        stack =
-          cond do
-            Regex.match?(~r/\A#{@url}\z/u, text) and
-                not match?({:ok, _, "("}, HtmlValidator.parse_css_identifier(text)) ->
-              {:ok, _, body} = HtmlValidator.parse_css_identifier(text)
-              body = url_body(body)
-              valid = Regex.match?(@url_body, body)
+          stack =
+            cond do
+              String.contains?(text, "(") and Regex.match?(@complete_url, text) and
+                  not match?({:ok, _, "("}, HtmlValidator.parse_css_identifier(text)) ->
+                {:ok, _, body} = HtmlValidator.parse_css_identifier(text)
+                body = url_body(body)
+                valid = Regex.match?(@url_body, body)
 
-              [{open, values} | rest] = stack
-              [{open, [%{token | kind: if(valid, do: :url, else: :bad_url)} | values]} | rest]
+                [{open, values} | rest] = stack
+                [{open, [%{token | kind: if(valid, do: :url, else: :bad_url)} | values]} | rest]
 
-            String.starts_with?(text, "/*") ->
-              [{open, values} | rest] = stack
-              [{open, [%{token | kind: :comment} | values]} | rest]
+              String.starts_with?(text, "/*") ->
+                [{open, values} | rest] = stack
+                [{open, [%{token | kind: :comment} | values]} | rest]
 
-            String.starts_with?(text, ["\"", "'"]) ->
-              closed = byte_size(text) > 1 and :binary.first(text) == :binary.last(text)
+              String.starts_with?(text, ["\"", "'"]) ->
+                closed = byte_size(text) > 1 and :binary.first(text) == :binary.last(text)
 
-              kind =
-                if closed or offset + byte_size(text) == byte_size(source),
-                  do: :string,
-                  else: :bad_string
+                kind =
+                  if closed or offset + byte_size(text) == byte_size(source),
+                    do: :string,
+                    else: :bad_string
 
-              [{open, values} | rest] = stack
-              [{open, [%{token | kind: kind} | values]} | rest]
+                [{open, values} | rest] = stack
+                [{open, [%{token | kind: kind} | values]} | rest]
 
-            text in ["(", "[", "{"] or
-                match?({:ok, _, "("}, HtmlValidator.parse_css_identifier(text)) ->
-              HtmlValidator.check_render_resource(:max_css_syntax_depth, length(stack), :css)
-              [{token, []} | stack]
+              text in ["(", "[", "{"] or
+                  (:binary.last(text) == ?( and
+                     match?({:ok, _, "("}, HtmlValidator.parse_css_identifier(text))) ->
+                HtmlValidator.check_render_resource(:max_depth, length(stack), :css)
+                [{token, []} | stack]
 
-            text in [")", "]", "}"] and length(stack) > 1 ->
-              [{open, values}, {parent, siblings} | rest] = stack
+              text in [")", "]", "}"] and length(stack) > 1 ->
+                [{open, values}, {parent, siblings} | rest] = stack
 
-              expected =
-                case :binary.last(open.text) do
-                  ?( -> ")"
-                  ?[ -> "]"
-                  ?{ -> "}"
+                expected =
+                  case :binary.last(open.text) do
+                    ?( -> ")"
+                    ?[ -> "]"
+                    ?{ -> "}"
+                  end
+
+                if text == expected do
+                  value = block(source, open, values, offset + byte_size(text), true)
+                  [{parent, [value | siblings]} | rest]
+                else
+                  [{open, [token | values]}, {parent, siblings} | rest]
                 end
 
-              if text == expected do
-                value = block(source, open, values, offset + byte_size(text), true)
-                [{parent, [value | siblings]} | rest]
-              else
-                [{open, [token | values]}, {parent, siblings} | rest]
-              end
+              true ->
+                [{open, values} | rest] = stack
+                [{open, [token | values]} | rest]
+            end
 
-            true ->
-              [{open, values} | rest] = stack
-              [{open, [token | values]} | rest]
-          end
+          {stack, offset + byte_size(text)}
+        end)
 
-        {stack, offset + byte_size(text)}
-      end)
+      finish(source, stack, offset)
+    end
+  end
 
-    finish(source, stack, offset)
+  # Scan without allocating a character list proportional to the CSS value.
+  defp ascii_component?(source) do
+    case source do
+      <<byte, rest::binary>>
+      when byte in ?a..?z or byte in ?A..?Z or byte in ?0..?9 or byte == ?_ ->
+        ascii_component?(rest)
+
+      "" ->
+        true
+
+      _ ->
+        false
+    end
   end
 
   defp url_body(tail) do

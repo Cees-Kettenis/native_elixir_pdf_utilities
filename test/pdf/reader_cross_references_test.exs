@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
 
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @fixture_directory Paths.fixture("pdf_reader")
 
@@ -30,11 +31,16 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
       Limits.install(limits)
       assert {:ok, document} = Reader.read(source)
       required = max(map_size(document.xref), document.trailer["Size"] - 1)
-      Limits.install(%{limits | max_pdf_objects: required})
-      assert {:ok, ^document} = Reader.read(source)
+      Limits.install(%{limits | max_entries: required})
+
+      assert :ok =
+               PdfValidator.validate_object_capacity(
+                 map_size(document.xref),
+                 document.trailer["Size"]
+               )
 
       for allowance <- Enum.uniq([required - 1, 1]) do
-        Limits.install(%{limits | max_pdf_objects: allowance})
+        Limits.install(%{limits | max_entries: allowance})
 
         for {result, operation, module} <- [
               {Reader.read(source), :read, Reader},
@@ -46,7 +52,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
           assert diagnostic.reason == :resource_limit_exceeded
           assert diagnostic.operation == operation
           assert diagnostic.module == module
-          assert diagnostic.message =~ "max_pdf_objects"
+          assert diagnostic.message =~ "max_entries"
         end
       end
     end
@@ -67,22 +73,38 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
       |> String.replace("trailer\n", "9 1\n" <> classic_entry(0, 0, "f") <> "trailer\n")
       |> String.replace("/Size 3", "/Size 10")
 
-    Limits.install(%{limits | max_pdf_objects: 9})
     assert {:ok, document} = Reader.read(sparse)
+    Limits.install(%{limits | max_entries: 9})
+
+    assert :ok =
+             PdfValidator.validate_object_capacity(
+               map_size(document.xref),
+               document.trailer["Size"]
+             )
+
     assert map_size(document.xref) == 4
     assert document.xref[9] == {:free, 0, 0}
-    Limits.install(%{limits | max_pdf_objects: 8})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(sparse)
-    assert diagnostic.message == "PDF object IDs exceed max_pdf_objects"
+    Limits.install(%{limits | max_entries: 8})
 
-    Limits.install(%{limits | max_pdf_objects: 3})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfValidator.validate_object_capacity(
+               map_size(document.xref),
+               document.trailer["Size"]
+             )
+
+    assert diagnostic.message == "PDF object IDs exceed max_entries"
+
+    Limits.install(%{limits | max_entries: 3})
 
     for source <- [
           String.replace(classic.pdf, "xref\n0 3", "xref\n0 0\n0 3", global: false),
           xref_stream_pdf(index: [0, 0, 0, 3])
         ] do
+      Limits.install(limits)
       assert {:ok, document} = Reader.read(source)
       assert map_size(document.xref) == 3
+      Limits.install(%{limits | max_entries: 3})
+      assert :ok = PdfValidator.validate_object_capacity(3, document.trailer["Size"])
     end
 
     for source <- [
@@ -94,17 +116,24 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
           |> String.replace("/Size 3", "/Size 4"),
           xref_stream_pdf(index: [0, 2, 2, 2])
         ] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(source)
+      Limits.install(limits)
+      assert {:ok, document} = Reader.read(source)
+      Limits.install(%{limits | max_entries: 3})
 
-      assert diagnostic.message ==
-               "PDF object count including object zero exceeds max_pdf_objects"
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               PdfValidator.validate_object_capacity(
+                 map_size(document.xref),
+                 document.trailer["Size"]
+               )
+
+      assert diagnostic.message == "PDF object count including object zero exceeds max_entries"
     end
   end
 
   test "malformed xrefs remain input errors within the object allowance" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_pdf_objects: 10})
+    Limits.install(%{limits | max_entries: 1_000})
 
     classic =
       classic_pdf([
@@ -150,23 +179,27 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
     cycle =
       String.replace(base.pdf, "/Root 1 0 R", "/Root 1 0 R /Prev #{base.xref}", global: false)
 
-    Limits.install(%{limits | max_pdf_xref_revisions: 1})
     assert {:ok, %{xref_revisions: 1}} = Reader.read(base.pdf)
-
-    for {source, reason, stage, message} <- [
-          {updated, :resource_limit_exceeded, :limits, "xref revision count exceeds the limit"},
-          {cycle, :invalid_pdf_input, :xref, "xref revision chain contains a cycle"}
-        ] do
-      assert {:error, {^reason, diagnostic}} = Reader.read(source)
-      assert diagnostic.reason == reason
-      assert diagnostic.stage == stage
-      assert diagnostic.operation == :read
-      assert diagnostic.module == Reader
-      assert diagnostic.message == message
-    end
-
-    Limits.install(%{limits | max_pdf_xref_revisions: 2})
     assert {:ok, %{xref_revisions: 2}} = Reader.read(updated)
+    assert {:error, {:invalid_pdf_input, cycle_diagnostic}} = Reader.read(cycle)
+    assert cycle_diagnostic.message == "xref revision chain contains a cycle"
+    Limits.install(%{limits | max_entries: 1})
+    opts = [operation: :read, module: Reader]
+    assert :ok = PdfValidator.validate_xref_revision(base.xref, %{}, 0, opts)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfValidator.validate_xref_revision(base.xref, %{}, 1, opts)
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.message == "xref revision count exceeds the limit"
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             PdfValidator.validate_xref_revision(base.xref, %{base.xref => true}, 1, opts)
+
+    assert diagnostic.stage == :xref
+    assert diagnostic.message == "xref revision chain contains a cycle"
+    Limits.install(%{limits | max_entries: 2})
+    assert :ok = PdfValidator.validate_xref_revision(base.xref, %{}, 1, opts)
   end
 
   test "selects active generations and removes objects freed by later revisions" do
@@ -333,6 +366,40 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
     end
   end
 
+  test "xref stream Index capacity includes object zero before allocating its ranges" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    pdf = xref_stream_pdf(index: [0, 65]) |> String.replace("/Size 4", "/Size 65")
+    Limits.install(%{original | max_entries: 64})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.probe(pdf)
+    assert diagnostic.message =~ "object count including object zero"
+    assert diagnostic.operation == :read and diagnostic.module == Reader
+  end
+
+  test "indirect stream Length chains retain their reference-depth diagnostic" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    pdf =
+      classic_pdf([
+        {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, 0, "<< /Type /Pages /Kids [] /Count 0 >>"},
+        {3, 0, "<< /Length 4 0 R >>\nstream\nx\nendstream"},
+        {4, 0, "5 0 R"},
+        {5, 0, "6 0 R"},
+        {6, 0, "7 0 R"},
+        {7, 0, "8 0 R"},
+        {8, 0, "1"}
+      ])
+
+    Limits.install(%{original | max_depth: 3})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(pdf.pdf)
+    assert diagnostic.message =~ "indirect reference chain depth"
+    assert diagnostic.operation == :read and diagnostic.module == Reader
+  end
+
   test "stops parsing an xref stream object at endobj" do
     padding = "%" <> :binary.copy("x", 2_000_000) <> "\n"
     pdf = xref_stream_pdf(candidate_suffix: padding)
@@ -365,7 +432,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
 
-    Limits.install(%{original | max_pdf_numeric_token_bytes: 10})
+    Limits.install(%{original | max_numeric_token_bytes: 10})
 
     for pdf <- [
           xref_stream_pdf(indirect_length: true, length_source: "11111111111"),
@@ -376,9 +443,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
     end
 
     pdf = xref_stream_pdf(indirect_length: true, candidate_prefix: "4 0 obj\n35\nendobj\n")
-    Limits.install(%{original | max_pdf_reader_decoded_bytes: 70})
+    Limits.install(%{original | max_decoded_bytes: 70})
     assert {:ok, _} = Reader.read(pdf)
-    Limits.install(%{original | max_pdf_reader_decoded_bytes: 69})
+    Limits.install(%{original | max_decoded_bytes: 69})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(pdf)
     assert diagnostic.stage == :limits
   end
@@ -404,6 +471,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
     assert {:ok, _document} =
              Reader.read(xref_stream_pdf(indirect_length: true, candidate_suffix: "\n4 0 obj\n"))
 
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_entries: 1_000})
     repeated_candidates = :binary.copy("4 0 obj\n35\nendobj\n", 1_001)
 
     assert {:error, {:resource_limit_exceeded, limit_diagnostic}} =
@@ -412,7 +482,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
              )
 
     assert limit_diagnostic.stage == :limits
-    assert limit_diagnostic.message =~ "max_pdf_xref_length_candidates"
+    assert limit_diagnostic.message =~ "max_entries"
+
+    Limits.install(limits)
 
     missing_endobj =
       xref_stream_pdf()
@@ -556,7 +628,8 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
 
     assert_error(Reader.read(malformed_header), :invalid_pdf_input, :object_stream)
 
-    nested = String.duplicate("[", 100) <> "0" <> String.duplicate("]", 100)
+    depth = Limits.get(:max_depth)
+    nested = String.duplicate("[", depth) <> "0" <> String.duplicate("]", depth)
     nested_catalog = "<< /Type /Catalog /Pages 2 0 R /Deep #{nested} >>"
     nested_header = "1 0 2 #{byte_size(nested_catalog) + 1} "
 
@@ -569,7 +642,9 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
              )
 
     assert nested_diagnostic.stage == :limits
-    assert nested_diagnostic.message == "PDF value nesting depth exceeds the 100-level limit"
+
+    assert nested_diagnostic.message =~
+             "PDF value nesting depth exceeds max_depth (#{depth}-level limit)"
   end
 
   test "preserves tokenizer failures in decoded compressed objects" do
@@ -589,7 +664,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
   end
 
   test "limits object-stream entries before scanning the decoded header" do
-    excessive_entries = object_stream_pdf("", 0, 10_001)
+    excessive_entries = object_stream_pdf("", 0, Limits.get(:max_entries) + 1)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Reader.read(excessive_entries)
     assert diagnostic.stage == :limits
@@ -647,6 +722,10 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
     free_entry = classic_entry(0, 0, "f")
     xref = byte_size("%PDF-1.7\n")
 
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_entries: 100_000})
+
     too_many_objects =
       "%PDF-1.7\n" <>
         "xref\n0 100001\n" <>
@@ -656,7 +735,11 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesTest do
     assert_error(Reader.read(too_many_objects), :resource_limit_exceeded, :limits)
   end
 
-  test "limits incremental revision depth" do
+  test "limits incremental revision work" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_entries: 1_000})
+
     generated =
       classic_pdf([
         {1, 0, "<< /Type /Catalog /Pages 2 0 R >>"},

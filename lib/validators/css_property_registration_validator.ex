@@ -361,7 +361,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
 
           Enum.each(refs, fn reference ->
             Enum.each(reference.dependencies, fn dependency ->
-              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
               if Map.has_key?(properties, dependency),
                 do: :digraph.add_edge(graph, name, dependency)
@@ -737,7 +737,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
           source_metrics: %{ex: 1.0, ch: 1.0, cap: 1.0, ic: 1.0, lh: 1.0},
           root_metrics: %{ex: 1.0, ch: 1.0, cap: 1.0, ic: 1.0, lh: 1.0},
           type_check: true,
-          _depth_limit: :max_css_calculation_depth
+          _depth_limit: :max_depth
         }
 
       not is_nil(Map.get(context, :font_face)) and is_number(Map.get(context, :font_size)) and
@@ -770,7 +770,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator d
                 do: context._root_line_height / 0.75
               )
           },
-          _depth_limit: :max_css_calculation_depth
+          _depth_limit: :max_depth
         }
     end
   end

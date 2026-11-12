@@ -42,7 +42,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrPaintValidator do
                 "</g></svg>"
               ])
 
-            FontValidator.check(:max_font_decoded_bytes, byte_size(source))
+            FontValidator.check(:max_decoded_bytes, byte_size(source))
             {:ok, source, bounds, %{mode: :inline, resources: state.resources}}
           end
         end
@@ -110,7 +110,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrPaintValidator do
   end
 
   defp svg(graph, box, state) do
-    FontValidator.reserve(:max_font_color_work, 1)
+    FontValidator.reserve(:max_work, 1)
     {a, b, c, d} = box
 
     case graph do
@@ -389,7 +389,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColrPaintValidator do
           start = (start + 1) * :math.pi()
           finish = (finish + 1) * :math.pi()
           segments = Limits.get(:font_color_sweep_segments)
-          FontValidator.reserve(:max_font_color_work, segments * (length(stops) + 1))
+          FontValidator.reserve(:max_work, segments * (length(stops) + 1))
 
           radius =
             Enum.max(

@@ -65,7 +65,7 @@ defmodule NativeElixirPdfUtilities.Validators.TransformValidator do
     admission =
       NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
         selection,
-        NativeElixirPdfUtilities.Limits.get(:max_pdf_pages)
+        NativeElixirPdfUtilities.Limits.get(:max_pages)
       )
 
     case admission do
@@ -76,7 +76,7 @@ defmodule NativeElixirPdfUtilities.Validators.TransformValidator do
         end
 
       :limit_exceeded ->
-        error(:page_selection, :resource_limit_exceeded, "page selection exceeds max_pdf_pages")
+        error(:page_selection, :resource_limit_exceeded, "page selection exceeds max_pages")
 
       _ ->
         selection_error("page selection must be a list of page numbers or ascending ranges")

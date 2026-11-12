@@ -182,7 +182,7 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
   @doc "Parses srcset with the HTML URL/descriptor tokenizer, preserving data URL commas."
   @spec parse_srcset(String.t()) :: [candidate()]
   def parse_srcset(value) do
-    HtmlValidator.check_render_resource(:max_html_source_bytes, byte_size(value), :html)
+    HtmlValidator.check_render_resource(:max_input_bytes, byte_size(value), :html)
     parse_candidates(value, [], 0)
   end
 
@@ -438,7 +438,7 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
         Diagnostics.error(
           :style,
           :resource_limit_exceeded,
-          "selected image natural dimensions exceed max_css_numeric_magnitude after density correction",
+          "selected image natural dimensions exceed max_numeric_magnitude after density correction",
           module: __MODULE__,
           source: selected.url
         )
@@ -450,7 +450,7 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
 
     case Regex.run(~r/\A([^ \t\n\f\r]+)(.*)\z/s, input) do
       [_, url, rest] ->
-        HtmlValidator.check_render_resource(:max_responsive_image_candidates, count + 1, :html)
+        HtmlValidator.check_render_resource(:max_entries, count + 1, :html)
 
         {url, descriptors, rest} =
           if String.ends_with?(url, ",") do
@@ -513,7 +513,7 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
       Enum.reduce_while(descriptors, %{width: nil, density: nil, height: nil}, fn descriptor,
                                                                                   acc ->
         HtmlValidator.check_render_resource(
-          :max_html_numeric_token_bytes,
+          :max_numeric_token_bytes,
           byte_size(descriptor),
           :html
         )

@@ -63,7 +63,7 @@ defmodule NativeElixirPdfUtilities.AttachmentsTest do
     assert {:error, _} =
              Attachments.embed(pdf, [%{filename: "a", bytes: "a"}, %{filename: "a", bytes: "a"}])
 
-    Limits.install(Map.put(Limits.effective(), :max_pdf_attachment_bytes, 1))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Attachments.embed(pdf, [%{filename: "a", bytes: "ab"}])

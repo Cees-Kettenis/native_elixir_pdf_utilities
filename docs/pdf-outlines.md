@@ -92,4 +92,4 @@ Unsupported bookmark actions are read as destinationless titles.
 
 Invalid input returns `:invalid_outlines`; malformed source bookmarks return
 `:invalid_pdf_input`. See [Diagnostics](diagnostics.md) and
-[bookmark limits](resource-limits.md#metadata-and-bookmarks).
+[bookmark limits](resource-limits.md#shared-processing-budgets).

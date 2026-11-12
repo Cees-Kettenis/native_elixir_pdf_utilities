@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.StampTest do
       assert diagnostic.message =~ "representable number"
     end
 
-    Limits.install(%{Limits.effective() | max_pdf_numeric_magnitude: huge})
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: huge})
     assert {:error, {:invalid_options, %{stage: :options}}} = Stamp.text(pdf, "Test", size: huge)
   end
 
@@ -191,10 +191,18 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert {:ok, context} = Reader.read_validated(stamped)
     maximum_objects = map_size(context.document.xref)
     original = Limits.effective()
-    Limits.install(%{original | max_pdf_objects: maximum_objects})
+    Limits.install(%{original | max_entries: maximum_objects})
+
+    assert :ok =
+             NativeElixirPdfUtilities.Validators.PdfValidator.validate_object_capacity(
+               maximum_objects,
+               context.document.trailer["Size"]
+             )
+
+    Limits.install(original)
     assert {:ok, bounded} = Stamp.text(target, "Mark")
     assert {:ok, _} = Reader.read_validated(bounded)
-    Limits.install(%{original | max_pdf_objects: maximum_objects - 1})
+    Limits.install(%{original | max_entries: maximum_objects - 1})
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Stamp.text(target, "Mark")
   end
 
@@ -334,12 +342,12 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert diagnostic.message =~ "placement geometry"
 
     assert {:ok, source_context} = Reader.read_validated(source_for.([0, 0, 3, 100]))
-    Limits.install(%{Limits.effective() | max_pdf_numeric_token_bytes: 12})
+    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 12})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              StampValidator.prepare_overlay(context, source_context, fit: :stretch)
 
-    assert diagnostic.stage == :geometry and diagnostic.message =~ "max_pdf_numeric_token_bytes"
+    assert diagnostic.stage == :geometry and diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "normalization inverses retain representable extreme units at every right-angle rotation" do
@@ -347,7 +355,7 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert {:ok, context} = Reader.read_validated(source)
     [page] = context.pages
     {id, generation} = page.ref
-    Limits.install(%{Limits.effective() | max_pdf_numeric_magnitude: 1.0e308})
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 1.0e308})
 
     for unit <- [1.0e-200, 1.0e200], rotation <- [0, 90, 180, 270] do
       dictionary = page.dictionary |> Map.put("UserUnit", unit) |> Map.put("Rotate", rotation)
@@ -373,13 +381,13 @@ defmodule NativeElixirPdfUtilities.StampTest do
 
     assert {:ok, normalized_context} = Reader.read_validated(normalized)
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_numeric_token_bytes: 5})
+    Limits.install(%{limits | max_numeric_token_bytes: 5})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              StampValidator.prepare_overlay(normalized_context, context, [])
 
     assert diagnostic.stage == :geometry and diagnostic.source == "page 1"
-    assert diagnostic.message =~ "max_pdf_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
     Limits.install(limits)
 
     dictionary =
@@ -393,7 +401,7 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert {:error, {:invalid_pdf_input, diagnostic}} = Stamp.overlay(underflow, source)
     assert diagnostic.source == "page 1" and diagnostic.message =~ "unrepresentable"
 
-    Limits.install(%{limits | max_pdf_numeric_magnitude: 1.0e308})
+    Limits.install(%{limits | max_numeric_magnitude: 1.0e308})
 
     assert {:ok, overflow} =
              IncrementalWriter.write(context, [
@@ -603,35 +611,56 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert diagnostic.stage == :overlay
   end
 
+  test "prepared stamps check source and expanded text bytes independently of PDF admission" do
+    pdf = three_page_pdf(List.duplicate("x", 10), {300, 200})
+    assert {:ok, context} = Reader.read_validated(pdf)
+    Limits.install(%{Limits.effective() | max_input_bytes: 8})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             StampValidator.prepare_text(context, "too long!", [], :text)
+
+    assert diagnostic.stage == :limits and diagnostic.operation == :stamp
+    assert diagnostic.message == "stamp text exceeds the byte limit"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             StampValidator.prepare_page_numbers(context, format: "{{page}}")
+
+    assert diagnostic.stage == :limits and diagnostic.operation == :stamp
+    assert diagnostic.message == "stamp text exceeds the byte limit"
+  end
+
   test "enforces text, decoded-content, and object capacity limits" do
     pdf = one_page_pdf("Source", {300, 200})
     original = Limits.effective()
 
-    Limits.install(%{original | max_stamp_text_bytes: 8})
+    Limits.install(%{original | max_input_bytes: 8})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Stamp.text(pdf, "too long!")
 
+    Limits.install(original)
     ten_page_pdf = three_page_pdf(List.duplicate("x", 10), {300, 200})
+    overlay = one_page_pdf("Overlay", {300, 200})
+    small_overlay = one_page_pdf("O", {300, 200})
+    Limits.install(%{original | max_input_bytes: 8})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Stamp.page_numbers(ten_page_pdf, format: "{{page}}")
 
-    Limits.install(%{original | max_stamp_decoded_content_bytes: 3})
-    overlay = one_page_pdf("Overlay", {300, 200})
+    Limits.install(%{original | max_decoded_bytes: 3})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              Stamp.overlay(pdf, overlay)
 
-    Limits.install(%{original | max_pdf_objects: 12})
+    Limits.install(%{original | max_entries: 12})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
-             Stamp.overlay(pdf, one_page_pdf("O", {300, 200}))
+             Stamp.overlay(pdf, small_overlay)
   end
 
   test "stops overlay decoding at the aggregate budget before reading later streams" do
     target = one_page_pdf("Target", {300, 200})
-    Limits.install(%{Limits.effective() | max_stamp_decoded_content_bytes: 6})
+    Limits.install(%{Limits.effective() | max_decoded_bytes: 6})
 
     for {entries, data} <- [{"", "q Q"}, {"/Filter /FlateDecode", :zlib.compress("q Q")}] do
       overlay =
@@ -666,13 +695,13 @@ defmodule NativeElixirPdfUtilities.StampTest do
         ])
 
       page_bytes = 2 * byte_size(content) + 1
-      Limits.install(%{Limits.effective() | max_stamp_decoded_content_bytes: page_bytes})
+      Limits.install(%{Limits.effective() | max_decoded_bytes: page_bytes})
       assert {:ok, _stamped} = Stamp.overlay(target, overlay)
 
       assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
                Stamp.overlay(target, overlay, overlay_pages: :match)
 
-      Limits.install(%{Limits.effective() | max_stamp_decoded_content_bytes: 2 * page_bytes})
+      Limits.install(%{Limits.effective() | max_decoded_bytes: 2 * page_bytes})
       assert {:ok, _stamped} = Stamp.overlay(target, overlay, overlay_pages: :match)
     end
   end
@@ -696,7 +725,7 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert {:ok, target_context} = Reader.read_validated(target)
     assert {:ok, overlay_context} = Reader.read_validated(overlay)
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_reader_work: 500})
+    Limits.install(%{limits | max_work: 500})
     assert {:ok, plan} = StampValidator.prepare_overlay(target_context, overlay_context, [])
     assert length(plan.placements) == 20 and length(plan.copied_objects) == 1
 
@@ -705,7 +734,7 @@ defmodule NativeElixirPdfUtilities.StampTest do
                overlay_pages: :match
              )
 
-    assert diagnostic.stage == :limits and diagnostic.message =~ "max_pdf_reader_work"
+    assert diagnostic.stage == :limits and diagnostic.message =~ "max_work"
     Limits.install(limits)
     assert {:ok, _} = Stamp.overlay(target, overlay, overlay_pages: :match)
   end
@@ -725,9 +754,20 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert {:ok, target_context} = Reader.read_validated(target)
     assert {:ok, overlay_context} = Reader.read_validated(overlay)
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_reference_resolution_work: 1})
+
+    assert {{:ok, %{copied_objects: [{{4, 0}, _}]}}, work} =
+             NativeElixirPdfUtilities.TestSupport.ResourceBudget.measure(:max_work, fn ->
+               StampValidator.prepare_overlay(target_context, overlay_context, [])
+             end)
+
+    Limits.install(%{limits | max_work: work})
 
     assert {:ok, %{copied_objects: [{{4, 0}, _}]}} =
+             StampValidator.prepare_overlay(target_context, overlay_context, [])
+
+    Limits.install(%{limits | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
              StampValidator.prepare_overlay(target_context, overlay_context, [])
 
     Limits.install(limits)

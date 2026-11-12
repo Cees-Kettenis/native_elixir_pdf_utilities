@@ -63,7 +63,7 @@ defmodule NativeElixirPdfUtilities.Validators.MimeValidator do
   def validate(value) do
     case value do
       value when is_binary(value) ->
-        if byte_size(value) <= Limits.get(:max_pdf_info_value_bytes) and
+        if byte_size(value) <= Limits.get(:max_decoded_bytes) and
              Regex.match?(~r/\A[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+\z/, value) do
           value = String.downcase(value)
           {:ok, Map.get(@aliases, value, value)}
@@ -168,11 +168,11 @@ defmodule NativeElixirPdfUtilities.Validators.MimeValidator do
 
       :zip ->
         # Inspect only bounded archive metadata. Never extract or inflate entries.
-        if byte_size(bytes) > Limits.get(:max_mime_container_bytes) do
+        if byte_size(bytes) > Limits.get(:max_input_bytes) do
           Diagnostics.error(
             :limits,
             :resource_limit_exceeded,
-            "ZIP MIME inspection exceeds max_mime_container_bytes"
+            "ZIP MIME inspection exceeds max_input_bytes"
           )
         else
           with {:ok, names} <- zip_names(bytes) do
@@ -230,11 +230,11 @@ defmodule NativeElixirPdfUtilities.Validators.MimeValidator do
     case record do
       {0, 0, entries, entries, size, offset, ending}
       when entries < 65_535 and offset + size == ending ->
-        if entries > Limits.get(:max_mime_container_entries) do
+        if entries > Limits.get(:max_entries) do
           Diagnostics.error(
             :limits,
             :resource_limit_exceeded,
-            "ZIP MIME inspection exceeds max_mime_container_entries"
+            "ZIP MIME inspection exceeds max_entries"
           )
         else
           zip_directory(binary_part(bytes, offset, size), entries, %{})

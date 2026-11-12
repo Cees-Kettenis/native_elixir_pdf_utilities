@@ -25,7 +25,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTemporalValidator do
   @spec parse(String.t(), term()) :: {:ok, map()} | :error
   def parse(kind, source) do
     if is_binary(source) do
-      HtmlValidator.check_render_resource(:max_html_numeric_token_bytes, byte_size(source), :html)
+      HtmlValidator.check_render_resource(:max_numeric_token_bytes, byte_size(source), :html)
 
       case kind do
         kind when kind in ["date", "month"] ->

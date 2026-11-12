@@ -31,6 +31,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
      wire: widget.dictionary["NEPUSourceEditor"]}
   end
 
+  test "list-box projection returns an appearance serialization failure" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<select name='pick' size='2'><option value='one' selected>One</option><option value='two'>Two</option></select>",
+               system_font_discovery: false
+             )
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, %{fields: [field]}} = FormValidator.inspect_document(context)
+    [widget] = field.widgets
+    [left, bottom, right, top] = widget.rect
+
+    projected =
+      FormAppearanceValidator.project_field(
+        Map.put(field, :source_editor, widget.source_editor),
+        {1, 0, 0, 1, 0, 0},
+        [[{left, bottom}, {right, bottom}, {right, top}, {left, top}]],
+        {left, bottom, right, top}
+      )
+
+    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FormAppearanceValidator.appearance(projected, projected.source_editor, field.value)
+
+    assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.stage)
+  end
+
   test "persisted templates reject malformed fonts, unknown instructions and invalid styles", %{
     document: document,
     wire: wire
@@ -85,7 +113,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
              FormAppearanceValidator.prepare(document, put_in(wire, ["Clip", "Radius"], 2))
 
     assert rounded.clip.border_radius == 2
-    assert :ok = Limits.install(%{Limits.effective() | max_pdf_form_depth: 0})
+    assert :ok = Limits.install(%{Limits.effective() | max_depth: 0})
 
     assert {:error, {:unsupported_form, diagnostic}} =
              FormAppearanceValidator.prepare(document, Map.put(wire, "Projections", [projection]))
@@ -134,14 +162,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
 
     wire = Map.put(wire, "Projections", [projection])
     limits = Limits.effective()
-    Limits.install(%{limits | max_pdf_form_preparation_entries: 7})
+
+    assert {{:ok, _}, entries} =
+             NativeElixirPdfUtilities.TestSupport.ResourceBudget.measure(:max_entries, fn ->
+               FormAppearanceValidator.prepare(document, wire)
+             end)
+
+    Limits.install(%{limits | max_entries: entries})
     assert {:ok, _} = FormAppearanceValidator.prepare(document, wire)
-    Limits.install(%{limits | max_pdf_form_preparation_entries: 3})
+    Limits.install(%{limits | max_entries: entries - 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FormAppearanceValidator.prepare(document, wire)
 
-    assert diagnostic.stage == :forms and diagnostic.source == "Polygons"
+    assert diagnostic.stage == :forms and diagnostic.source == "Polygons", inspect(diagnostic)
   end
 
   test "resolved scalar painter denies foreign nodes and malformed geometry", %{editor: editor} do
@@ -263,15 +297,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
     editor: editor,
     field: field
   } do
-    assert :ok = Limits.install(%{Limits.effective() | max_layout_text_work: 0})
+    assert :ok = Limits.install(%{Limits.effective() | max_work: 0})
 
     HtmlValidator.with_render_budget(fn ->
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                FormAppearanceValidator.appearance(field, editor, "Updated")
 
       assert diagnostic.source == "editor"
-      assert diagnostic.operation == :prepare_form_appearance
-      assert diagnostic.message =~ "max_layout_text_work"
+      assert diagnostic.operation == :load_registry
+      assert diagnostic.message =~ "max_work"
     end)
   end
 end

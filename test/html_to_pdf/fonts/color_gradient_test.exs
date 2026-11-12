@@ -140,7 +140,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorGradientTest do
 
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
     assert {:ok, "H"} = Text.extract(pdf, layout: false)
-    Limits.install(Map.put(Limits.effective(), :max_font_color_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, _}} =
              ColrGradientValidator.prepare_radial(

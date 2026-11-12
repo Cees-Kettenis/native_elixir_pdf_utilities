@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><style>@page{size:600pt 150pt;margin:0}html,body{margin:0;padding:0}
+#baseline_controls_geometry .sample{position:absolute;top:8pt;width:180pt;padding:3pt;border:0.75pt solid #445566;box-sizing:border-box}
+#baseline_controls_geometry .sample:nth-child(1){left:9pt}#baseline_controls_geometry .sample:nth-child(2){left:207pt}#baseline_controls_geometry .sample:nth-child(3){left:405pt}
+#baseline_controls_geometry .label{font:8pt/12pt 'DejaVu Sans';margin:0 0 9pt}
+#baseline_controls_geometry .text{font:12pt/20pt 'DejaVu Sans';margin:0;color:#336699}
+</style></head><body>
+<section id="baseline_controls_geometry" style="position:absolute;left:0pt;top:0pt;width:600pt;height:150pt;box-sizing:border-box">
+<section class="sample"><p class="label">Line-height percent / nested shift</p><p class="text">X<span data-baseline-reference="percent" style="baseline-shift:25%">A</span><span style="vertical-align:-10%">B</span>Y</p><p class="text">X<span data-baseline-reference="super" style="baseline-shift:super">A<span data-baseline-reference="sub" style="baseline-shift:sub">B</span></span>Y</p></section>
+<section class="sample"><p class="label">First / last inline-block source</p><p class="text">X<span data-baseline-reference="first" style="display:inline-block;baseline-source:first">A<br>B</span>Y</p><p class="text">X<span style="display:inline-block;baseline-source:last">A<br>B</span>Y</p></section>
+<section class="sample"><p class="label">Text edges / hanging baseline</p><p class="text" style="font-size:20pt;line-height:30pt">X<span style="font-size:10pt;vertical-align:text-top">A</span><span style="font-size:10pt;vertical-align:text-bottom">B</span>Y</p><p class="text" data-baseline-reference="hanging" style="font-size:20pt;line-height:30pt;dominant-baseline:hanging">X<span data-baseline-reference="hang-child" style="font-size:10pt">A</span>Y</p></section>
+</section></body></html>

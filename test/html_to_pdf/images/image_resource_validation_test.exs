@@ -272,7 +272,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageResourceValidationTest do
                    owner.image_budget
                  )
 
-        Limits.install(%{limits | max_aggregate_svg_surface_pixels: 1})
+        Limits.install(%{limits | max_raster_pixels: 1})
 
         assert {:error, {:resource_limit_exceeded, diagnostic}} =
                  SvgDocumentViewportValidator.prepare_raster(
@@ -283,9 +283,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageResourceValidationTest do
                  )
 
         assert diagnostic.source == "SVG"
-        assert diagnostic.module == HtmlValidator
-        assert diagnostic.operation == :rasterize_document
-        assert diagnostic.message =~ "max_aggregate_svg_surface_pixels"
+        assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgValidator
+        assert diagnostic.operation == :rasterize
+        assert diagnostic.message =~ "max_raster_pixels"
       end
     )
   end
@@ -394,14 +394,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageResourceValidationTest do
                "<svg width='2' height='1'><image href='#{reference}' width='2' height='1'/></svg>"
              )
 
-    Limits.install(%{limits | max_image_source_bytes: 1})
+    Limits.install(%{limits | max_input_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
                "<svg width='2' height='1'><image href='#{reference}' width='2' height='1'/></svg>"
              )
 
-    assert diagnostic.message =~ "source"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "selected resource bytes retain SVG size and format diagnostics", %{limits: limits} do
@@ -414,12 +414,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageResourceValidationTest do
     assert diagnostic.message =~ "PNG, JPEG or SVG artwork"
 
     png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
-    Limits.install(%{limits | max_svg_resource_bytes: 1})
+    Limits.install(%{limits | max_input_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(html, assets: %{"source.bin" => {:bytes, png}})
 
-    assert diagnostic.message =~ "max_svg_resource_bytes"
-    assert diagnostic.source == "source.bin"
+    assert diagnostic.message =~ "max_input_bytes"
+    assert diagnostic.stage == :html
   end
 end

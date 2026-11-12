@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page{size:600pt 120pt;margin:0}html,body{margin:0;padding:0}
+body{font-family:'DejaVu Sans';font-size:8pt;line-height:12pt}
+.sample{position:absolute;top:8pt;width:140pt;border:0.75pt solid #445566;padding:3pt;box-sizing:border-box}
+.label{margin:0 0 3pt}
+.text{margin:0;font-size:12pt;line-height:16pt;width:40pt;hyphens:auto}
+#unlimited{left:8pt}#limited{left:156pt}#last{left:304pt}#zone{left:452pt}
+</style></head><body>
+<section class="sample" id="unlimited"><p class="label">Automatic</p><p class="text" lang="en" data-hyphen-reference="hy&amp;shy;phen&amp;shy;ation">hyphenation</p></section>
+<section class="sample" id="limited"><p class="label">One successive line</p><p class="text" lang="en" style="hyphenate-limit-lines:1" data-hyphen-reference="hy&amp;shy;phenation">hyphenation</p></section>
+<section class="sample" id="last"><p class="label">Last full line</p><p class="text" lang="en" style="hyphenate-limit-last:always" data-hyphen-reference="hyphenation">hyphenation</p></section>
+<section class="sample" id="zone"><p class="label">Zone</p><p class="text" lang="en" style="hyphenate-limit-zone:40pt" data-hyphen-reference="hyphenation">hyphenation</p></section>
+</body></html>

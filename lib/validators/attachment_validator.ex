@@ -11,7 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
     count =
       NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
         attachments,
-        Limits.get(:max_pdf_attachments)
+        Limits.get(:max_entries)
       )
 
     cond do
@@ -22,7 +22,7 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
         error("attachments must be a list of maps")
 
       count == :limit_exceeded ->
-        limit("attachment count exceeds max_pdf_attachments")
+        limit("attachment count exceeds max_entries")
 
       true ->
         Enum.reduce_while(attachments, {:ok, [], MapSet.new(), 0}, fn attachment,
@@ -54,7 +54,7 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
          {:ok, names} <- PdfValidator.dictionary(document, names_value),
          {:ok, entries, _seen} <-
            name_tree(document, Map.get(names, "EmbeddedFiles"), MapSet.new(), 0),
-         true <- length(entries) <= Limits.get(:max_pdf_attachments),
+         true <- length(entries) <= Limits.get(:max_entries),
          true <- length(Enum.uniq_by(entries, &elem(&1, 0))) == length(entries) do
       Enum.reduce_while(entries, {:ok, [], 0}, fn {name, value}, {:ok, files, total} ->
         with {:ok, spec} <- PdfValidator.dictionary(document, value),
@@ -101,7 +101,7 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
           failure
       end
     else
-      false -> error("embedded file names must be unique and within max_pdf_attachments")
+      false -> error("embedded file names must be unique and within max_entries")
       {:error, _} = failure -> failure
     end
   end
@@ -120,10 +120,10 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
         Enum.any?(attachments, &MapSet.member?(existing_names, &1.filename)) ->
           error("an attachment with this filename already exists")
 
-        length(existing.files) + length(attachments) > Limits.get(:max_pdf_attachments) ->
-          limit("attachment count exceeds max_pdf_attachments")
+        length(existing.files) + length(attachments) > Limits.get(:max_entries) ->
+          limit("attachment count exceeds max_entries")
 
-        context.document.trailer["Size"] + 2 * length(attachments) > Limits.get(:max_pdf_objects) ->
+        context.document.trailer["Size"] + 2 * length(attachments) > Limits.get(:max_entries) ->
           limit("PDF object count cannot accommodate attachments")
 
         true ->
@@ -148,11 +148,11 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
           not is_binary(description) or not String.valid?(description) ->
             error("description must be valid UTF-8")
 
-          byte_size(filename) + byte_size(description) > Limits.get(:max_pdf_info_value_bytes) ->
-            limit("attachment metadata exceeds max_pdf_info_value_bytes")
+          byte_size(filename) + byte_size(description) > Limits.get(:max_decoded_bytes) ->
+            limit("attachment metadata exceeds max_decoded_bytes")
 
-          byte_size(bytes) > Limits.get(:max_pdf_attachment_bytes) ->
-            limit("attachment exceeds max_pdf_attachment_bytes")
+          byte_size(bytes) > Limits.get(:max_input_bytes) ->
+            limit("attachment exceeds max_input_bytes")
 
           true ->
             with {:ok, mime} <- MimeValidator.prepare(bytes, filename, Map.get(input, :mime_type)) do
@@ -171,8 +171,8 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
       is_nil(value) ->
         {:ok, [], seen}
 
-      depth > Limits.get(:max_pdf_value_depth) or
-          MapSet.size(seen) >= Limits.get(:max_pdf_name_tree_nodes) ->
+      depth > Limits.get(:max_depth) or
+          MapSet.size(seen) >= Limits.get(:max_entries) ->
         limit("embedded file name tree exceeds traversal limits")
 
       MapSet.member?(seen, value) ->
@@ -186,7 +186,7 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
              {:ok, kids} <- PdfValidator.resolve(document, Map.get(node, "Kids", [])),
              true <- is_list(pairs) and rem(length(pairs), 2) == 0 and is_list(kids),
              true <- pairs == [] or kids == [],
-             true <- div(length(pairs), 2) <= Limits.get(:max_pdf_attachments) do
+             true <- div(length(pairs), 2) <= Limits.get(:max_entries) do
           Enum.chunk_every(pairs, 2)
           |> Enum.reduce_while({:ok, []}, fn [key, ref], {:ok, entries} ->
             case text(key) do
@@ -200,9 +200,9 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
                                                                              {:ok, acc, visited} ->
                 case name_tree(document, child, visited, depth + 1) do
                   {:ok, more, visited} ->
-                    if length(acc) + length(more) <= Limits.get(:max_pdf_attachments),
+                    if length(acc) + length(more) <= Limits.get(:max_entries),
                       do: {:cont, {:ok, acc ++ more, visited}},
-                      else: {:halt, limit("attachment count exceeds max_pdf_attachments")}
+                      else: {:halt, limit("attachment count exceeds max_entries")}
 
                   failure ->
                     {:halt, failure}
@@ -244,9 +244,9 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   end
 
   defp byte_budget(total) do
-    if total <= Limits.get(:max_pdf_attachment_total_bytes),
+    if total <= Limits.get(:max_input_bytes),
       do: :ok,
-      else: limit("attachments exceed max_pdf_attachment_total_bytes")
+      else: limit("attachments exceed max_input_bytes")
   end
 
   defp error(message), do: Diagnostics.error(:attachments, :invalid_attachment, message)

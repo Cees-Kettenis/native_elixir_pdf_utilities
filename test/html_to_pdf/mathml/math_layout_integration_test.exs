@@ -151,14 +151,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
     assert diagnostic.source == "math"
     assert diagnostic.message =~ "atomic MathML equation"
 
-    Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
                "<math><mtext><span>Before<math><mn>23</mn></math></span></mtext></math>"
              )
 
-    assert diagnostic.message =~ "max_font_math_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "context boundaries depend on original namespaces and token integration" do

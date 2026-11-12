@@ -168,7 +168,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterResourcesTest do
 
   test("filter input decoded image work is charged before backend allocation", %{limits: limits}) do
     png = PngFixture.build(8, 8, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
-    Limits.install(Map.put(limits, :max_aggregate_decoded_image_bytes, 100))
+    Limits.install(Map.put(limits, :max_decoded_bytes, 100))
 
     html =
       "<svg width='80' height='40'><defs><filter id='f'><feImage href='paint.png'/></filter></defs><rect width='80' height='40' filter='url(#f)'/></svg>"
@@ -183,7 +183,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterResourcesTest do
     png: png,
     limits: limits
   }) do
-    Limits.install(Map.put(limits, :max_aggregate_decoded_image_bytes, 44))
+    Limits.install(Map.put(limits, :max_decoded_bytes, 44))
 
     html =
       "<svg width='100' height='50'><defs><filter id='f'><feImage href='paint.png'/></filter></defs><rect width='20' height='10' filter='url(#f)'/><rect x='30' width='20' height='10' filter='url(#f)'/><rect x='60' width='20' height='10' filter='url(#f)'/></svg>"
@@ -191,7 +191,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterResourcesTest do
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              HtmlToPdf.render(html, assets: %{"paint.png" => {:bytes, png}})
 
-    assert message =~ "decoded image"
+    assert message =~ "max_decoded_bytes"
   end
 
   test("nested filter image inputs retain resource root and ancestor cycle diagnostics", %{

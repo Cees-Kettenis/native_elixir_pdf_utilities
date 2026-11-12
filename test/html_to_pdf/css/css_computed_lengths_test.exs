@@ -422,7 +422,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssComputedLengthsTest do
     alias NativeElixirPdfUtilities.Validators.CssPositionValidator
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_html_numeric_token_bytes, 3))
+    Limits.install(Map.put(original, :max_numeric_token_bytes, 3))
     assert {:error, {:resource_limit_exceeded, _}} = CssPositionValidator.prepare_math("123pt")
 
     assert {:error, {:resource_limit_exceeded, _}} =

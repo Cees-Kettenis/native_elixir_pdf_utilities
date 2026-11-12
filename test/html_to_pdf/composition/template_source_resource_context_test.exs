@@ -185,9 +185,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceResourceContextTest d
     assert {:ok, _} = HtmlToPdf.render(html, opts)
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_image_count, 1))
+    Limits.install(Map.put(limits, :max_entries, 1))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, opts)
-    assert diagnostic.stage == :limits and diagnostic.message =~ "image count"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
     assert Process.get({TemplateExecutionValidator, :execution}) == nil
   end
 end

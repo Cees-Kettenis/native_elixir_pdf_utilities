@@ -95,8 +95,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
       invocation = Process.get({__MODULE__, :invocation})
 
       HtmlValidator.reserve_render_resource(
-        :max_html_tree_work,
-        map_size(tree.nodes) * (Limits.get(:max_html_depth) + 1) +
+        :max_work,
+        map_size(tree.nodes) * (Limits.get(:max_depth) + 1) +
           byte_size(tree.nodes[tree.root].source.text),
         :html
       )
@@ -151,7 +151,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
           context: context,
           consumed: false,
           limits: Limits.effective(),
-          counters: Process.get({HtmlValidator, :render_budget})
+          counters: NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot()
         }
 
         current = Process.get({__MODULE__, :invocation})
@@ -272,7 +272,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
           entry.context.insertion.ancestors
           |> tl()
           |> Enum.map(fn id ->
-            HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :html)
             node = tree.nodes[id]
             if node.type == :element, do: Map.get(node, :tag), else: :fragment_tree
           end)
@@ -323,7 +323,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
           context: context,
           consumed: false,
           limits: Limits.effective(),
-          counters: Process.get({HtmlValidator, :render_budget})
+          counters: NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot()
         }
 
         Process.put(key, %{current | handles: Map.put(current.handles, candidate_handle, entry)})
@@ -488,7 +488,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
             font_budget: Process.get({FontValidator, :budget}),
             image_counters:
               for(index <- 1..3, do: :atomics.get(resource_context.image_budget, index)),
-            counters: Process.get({HtmlValidator, :render_budget})
+            counters: NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot()
           }
 
           Process.put(key, %{
@@ -610,20 +610,20 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
 
   defp live_entry(handle, tree) do
     HtmlValidator.reserve_render_resource(
-      :max_html_tree_work,
-      map_size(tree.nodes) * (Limits.get(:max_html_depth) + 1) +
+      :max_work,
+      map_size(tree.nodes) * (Limits.get(:max_depth) + 1) +
         byte_size(tree.nodes[tree.root].source.text),
       :html
     )
 
     invocation = Process.get({__MODULE__, :invocation})
     entry = if invocation && is_reference(handle), do: Map.get(invocation.handles, handle)
-    budget = Process.get({HtmlValidator, :render_budget})
+    budget = NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot()
 
     counters_valid? =
       is_map(budget) and is_map(entry) and
         Enum.all?(entry.counters, fn {limit, used} ->
-          limit == :max_html_depth or Map.get(budget, limit, 0) >= used
+          limit == :max_depth or Map.get(budget, limit, 0) >= used
         end)
 
     if entry && entry.invocation == invocation.id && entry.tree == tree && counters_valid? &&
@@ -665,7 +665,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   end
 
   defp ancestor_ids(tree, id, ancestors) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
     node = tree.nodes[id]
     ancestors = [id | ancestors]
 
@@ -675,7 +675,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   end
 
   defp style_ids(tree, id) do
-    HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :html)
     node = tree.nodes[id]
 
     own =

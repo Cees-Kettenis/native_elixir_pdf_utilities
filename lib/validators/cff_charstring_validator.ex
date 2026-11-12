@@ -111,7 +111,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
             |> Tuple.to_list()
             |> Enum.with_index()
             |> Enum.map(fn {glyph, index} ->
-              FontValidator.reserve(:max_font_cff_work, length(glyph.commands))
+              FontValidator.reserve(:max_work, length(glyph.commands))
 
               commands =
                 NativeElixirPdfUtilities.HtmlToPdf.Font.Outline.cff_design_commands(
@@ -135,7 +135,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
   end
 
   defp execute(program, frames, state, font, globals) do
-    FontValidator.reserve(:max_font_cff_work, 1)
+    FontValidator.reserve(:max_work, 1)
 
     case program do
       <<>> ->
@@ -268,7 +268,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
             unless byte_size(rest) >= bytes,
               do: invalid("Type 2 hint mask is truncated", state.source)
 
-            FontValidator.reserve(:max_font_cff_work, bytes)
+            FontValidator.reserve(:max_work, bytes)
             binary_part(rest, bytes, byte_size(rest) - bytes)
           else
             rest
@@ -293,7 +293,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
         state = close_path(state)
         x = state.x + dx
         y = state.y + dy
-        FontValidator.check(:max_font_outline_coordinate, ceil(max(abs(x), abs(y))))
+        FontValidator.check(:max_numeric_magnitude, ceil(max(abs(x), abs(y))))
         state = %{state | open?: true, x: x, y: y}
         state = %{state | commands: [{:move, x, y} | state.commands]}
         execute(rest, frames, state, font, globals)
@@ -332,7 +332,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
       {width, args} =
         if width?, do: {font.nominal_width + hd(args), tl(args)}, else: {font.default_width, args}
 
-      FontValidator.check(:max_font_numeric_magnitude, ceil(abs(width)))
+      FontValidator.check(:max_numeric_magnitude, ceil(abs(width)))
       {args, %{state | stack: [], width: width}}
     else
       {args, %{state | stack: []}}
@@ -604,7 +604,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
   end
 
   defp push(state, value) do
-    FontValidator.check(:max_font_numeric_magnitude, ceil(abs(value)))
+    FontValidator.check(:max_numeric_magnitude, ceil(abs(value)))
 
     maximum = if state.version == 2, do: 513, else: 48
 
@@ -642,7 +642,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
   end
 
   defp point(state, x, y) do
-    FontValidator.check(:max_font_outline_coordinate, ceil(max(abs(x), abs(y))))
+    FontValidator.check(:max_numeric_magnitude, ceil(max(abs(x), abs(y))))
 
     bbox =
       case state.bbox do
@@ -671,7 +671,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
     y3 = y2 + dy3
 
     FontValidator.check(
-      :max_font_outline_coordinate,
+      :max_numeric_magnitude,
       ceil(Enum.max(Enum.map([x1, y1, x2, y2, x3, y3], &abs/1)))
     )
 
@@ -745,12 +745,12 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
   end
 
   defp resolve_components(glyph, glyphs, cache, depth, source) do
-    FontValidator.check(:max_font_glyph_depth, depth + 1)
-    FontValidator.reserve(:max_font_cff_work, 1)
+    FontValidator.check(:max_depth, depth + 1)
+    FontValidator.reserve(:max_work, 1)
 
     case Map.fetch(cache, glyph) do
       {:ok, value} ->
-        FontValidator.check(:max_font_glyph_depth, depth + value.component_depth)
+        FontValidator.check(:max_depth, depth + value.component_depth)
         {value, cache}
 
       :error ->
@@ -772,7 +772,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
                 resolve_components(accent, glyphs, cache, depth + 1, source)
 
               FontValidator.reserve(
-                :max_font_cff_work,
+                :max_work,
                 length(base.commands) + length(accent.commands)
               )
 
@@ -805,7 +805,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
                }, cache}
           end
 
-        FontValidator.check(:max_font_glyph_depth, depth + value.component_depth)
+        FontValidator.check(:max_depth, depth + value.component_depth)
         {value, Map.put(cache, glyph, value)}
     end
   end
@@ -818,7 +818,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
           state
 
         {:move, x, y} ->
-          FontValidator.check(:max_font_outline_coordinate, ceil(max(abs(x), abs(y))))
+          FontValidator.check(:max_numeric_magnitude, ceil(max(abs(x), abs(y))))
           %{state | x: x, y: y}
 
         {:line, x, y} ->
@@ -836,7 +836,7 @@ defmodule NativeElixirPdfUtilities.Validators.CffCharstringValidator do
   def prepare_command_bounds(commands, source) do
     FontValidator.with_budget(fn ->
       try do
-        FontValidator.reserve(:max_font_cff_work, length(commands))
+        FontValidator.reserve(:max_work, length(commands))
         {:ok, command_bounds(commands, source)}
       rescue
         ArithmeticError ->

@@ -300,12 +300,12 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                    Map.keys(style),
                    &(&1 in Enum.map(Map.keys(@styles), fn key -> Atom.to_string(key) end))
                  ) and
-                 length(fonts) <= Limits.get(:max_font_count) and
-                 length(projections) <= Limits.get(:max_pdf_form_depth),
+                 length(fonts) <= Limits.get(:max_entries) and
+                 length(projections) <= Limits.get(:max_depth),
              {:ok, listbox} <- ListBoxAppearanceValidator.decode(Map.get(value, "ListBox")),
              :ok <-
                FormInspectionValidator.reserve(
-                 :max_pdf_form_preparation_entries,
+                 :max_entries,
                  length(fonts) + length(projections),
                  "NEPUSourceEditor"
                ),
@@ -327,7 +327,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                           true <- is_binary(family),
                           :ok <-
                             FormInspectionValidator.reserve(
-                              :max_pdf_form_metadata_bytes,
+                              :max_decoded_bytes,
                               byte_size(family),
                               "Fonts"
                             ),
@@ -383,21 +383,21 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                               Map.keys(projection),
                               &(&1 in ["Matrix", "Bounds", "Polygons"])
                             ),
-                          true <- length(polygons) <= Limits.get(:max_layout_boxes),
+                          true <- length(polygons) <= Limits.get(:max_entries),
                           :ok <-
                             FormInspectionValidator.reserve(
-                              :max_pdf_form_preparation_entries,
+                              :max_entries,
                               length(polygons),
                               "Projections"
                             ),
                           {:ok, polygons} <-
                             collect(polygons, fn polygon ->
                               if is_list(polygon) and length(polygon) >= 6 and
-                                   length(polygon) <= 2 * Limits.get(:max_layout_boxes) and
+                                   length(polygon) <= 2 * Limits.get(:max_entries) and
                                    rem(length(polygon), 2) == 0 do
                                 with :ok <-
                                        FormInspectionValidator.reserve(
-                                         :max_pdf_form_preparation_entries,
+                                         :max_entries,
                                          div(length(polygon), 2),
                                          "Polygons"
                                        ) do
@@ -537,7 +537,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                  ],
                  []
                ),
-             true <- length(projections) <= Limits.get(:max_pdf_form_depth),
+             true <- length(projections) <= Limits.get(:max_depth),
              :ok <-
                Enum.reduce_while(projections, :ok, fn projection, :ok ->
                  result =
@@ -548,11 +548,11 @@ defmodule NativeElixirPdfUtilities.Validators.FormAppearanceValidator do
                             :ok <- WriterValidator.validate_pdf_geometry([l, b, r, t, l, b, r, t]),
                             true <- r > l and t > b,
                             true <-
-                              polygons != [] and length(polygons) <= Limits.get(:max_layout_boxes),
+                              polygons != [] and length(polygons) <= Limits.get(:max_entries),
                             true <-
                               Enum.all?(polygons, fn polygon ->
                                 is_list(polygon) and length(polygon) >= 3 and
-                                  length(polygon) <= Limits.get(:max_layout_boxes) and
+                                  length(polygon) <= Limits.get(:max_entries) and
                                   Enum.all?(polygon, fn point ->
                                     case point do
                                       {x, y} ->

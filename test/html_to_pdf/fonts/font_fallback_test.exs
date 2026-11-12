@@ -4,6 +4,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback
 
+  test "a fully covered source run retains every scalar owner without splitting font nodes" do
+    node = %{type: :text, node_id: make_ref(), text: "ffi A  B", style: text_style()}
+    owned = NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator.prepare_tree(node)
+
+    assert {:ok, %{children: [resolved]}} =
+             FontFallback.resolve(%{type: :document, children: [owned]}, :error)
+
+    assert resolved.text == node.text and resolved.node_id == node.node_id
+    assert resolved.style.font_face == node.style.font_face
+    fragments = Enum.flat_map(resolved.style._source_glyph_characters, & &1.fragments)
+    assert Enum.map_join(fragments, & &1.text) == node.text
+    assert Enum.map(fragments, & &1.offset) == Enum.to_list(0..7)
+    assert Enum.all?(fragments, &(&1.owner.node_id == node.node_id))
+  end
+
   test "list markers receive font coverage and fallback without changing content" do
     style = text_style()
     marker = %{type: :text, text: "◦", style: style}

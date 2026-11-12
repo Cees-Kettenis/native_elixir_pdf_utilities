@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorDimensionsTest do
   end
 
   test "color-component exponents beyond float range clamp to the shared numeric magnitude" do
-    limit = Limits.get(:max_css_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     assert {:ok, value, %{}} = CssMathValidator.evaluate_color_component("1e999")
     assert value == limit

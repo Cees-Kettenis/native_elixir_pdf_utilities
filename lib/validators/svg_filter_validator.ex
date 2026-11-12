@@ -24,7 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
 
         case parsed do
           {number, ""} when number >= 0 ->
-            maximum = Limits.get(:max_svg_turbulence_octaves)
+            maximum = Limits.get(:max_entries)
 
             if number <= maximum do
               :ok
@@ -32,7 +32,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterValidator do
               Diagnostics.error(
                 :limits,
                 :resource_limit_exceeded,
-                "feTurbulence numOctaves #{inspect(value)} exceeds max_svg_turbulence_octaves (#{maximum}); reduce numOctaves or raise the configured limit",
+                "feTurbulence numOctaves #{inspect(value)} exceeds max_entries (#{maximum}); reduce numOctaves or raise the configured limit",
                 module: __MODULE__,
                 operation: :prepare,
                 source: "feTurbulence"

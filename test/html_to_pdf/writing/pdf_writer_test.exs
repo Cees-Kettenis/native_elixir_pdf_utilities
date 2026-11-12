@@ -8,6 +8,102 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Validators.WriterValidator
+
+  test "paint baseline offsets share bounded admission for text and images" do
+    text = %{
+      type: :text,
+      text: "x",
+      x: 10,
+      y: 80,
+      font: "Helvetica",
+      font_size: 12,
+      color: {0, 0, 0},
+      snap_to_css_pixel_grid: true
+    }
+
+    image = %{
+      type: :image,
+      x: 10,
+      y: 20,
+      width: 1,
+      height: 1,
+      image: %{
+        format: :png,
+        data: <<0, 0, 0>>,
+        width_px: 1,
+        height_px: 1,
+        color_space: :device_rgb,
+        bits_per_component: 8
+      }
+    }
+
+    for box <- [text, image] do
+      for offset <- [-0.3, 0.0, 0.3] do
+        assert {:ok, _} =
+                 PdfWriter.render([
+                   %{size: {100, 100}, boxes: [Map.put(box, :text_baseline_offset, offset)]}
+                 ])
+      end
+
+      for offset <- [:invalid, NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) + 1] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} =
+                 PdfWriter.render([
+                   %{size: {100, 100}, boxes: [Map.put(box, :text_baseline_offset, offset)]}
+                 ])
+
+        assert diagnostic.stage == :pdf and diagnostic.message =~ "text_baseline_offset"
+      end
+    end
+  end
+
+  test "prepared ActualText pairs are reusable and malformed or unbalanced markers return diagnostics" do
+    alias NativeElixirPdfUtilities.{Limits, Text}
+    alias NativeElixirPdfUtilities.Validators.WriterValidator
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    start = %{type: :actual_text_start, text: "logical", break_join?: true}
+    finish = %{type: :actual_text_end}
+    assert :ok = WriterValidator.validate_native_boxes([start, finish])
+
+    anchor = %{
+      type: :text,
+      text: "painted",
+      x: 10,
+      y: 80,
+      font: "Helvetica",
+      font_size: 12,
+      color: {0, 0, 0}
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [start, anchor, finish]}])
+    assert {:ok, "logical"} = Text.extract(pdf, layout: false)
+
+    for boxes <- [
+          [finish],
+          [start],
+          [%{start | text: <<255>>}, finish],
+          [Map.put(start, :break_join?, :invalid), finish],
+          [Map.put(start, :extra, true), finish],
+          [start, Map.put(finish, :extra, true)]
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               WriterValidator.validate_native_boxes(boxes)
+
+      assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+      assert is_binary(diagnostic.message)
+
+      assert {:error, {:invalid_pdf_input, _}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: boxes}])
+    end
+
+    Limits.install(%{original | max_depth: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             WriterValidator.validate_native_boxes([start, start, finish, finish])
+
+    assert diagnostic.stage == :writer and diagnostic.message =~ "max_depth"
+  end
 
   test "integer paint coordinates retain precision beyond binary64's exact integer range" do
     alias NativeElixirPdfUtilities.Limits
@@ -17,7 +113,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     on_exit(fn -> Limits.install(original) end)
 
     assert {:ok, limits} =
-             LimitsValidator.validate(max_pdf_numeric_magnitude: 18_014_398_509_481_984)
+             LimitsValidator.validate(max_numeric_magnitude: 18_014_398_509_481_984)
 
     Limits.install(limits)
 
@@ -37,6 +133,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
              PdfWriter.render([%{size: {100, 100}, boxes: [box]}], compress_streams: false)
 
     assert pdf =~ "9007199254740993 0 1 1 re"
+  end
+
+  test "wave rectangles validate their stroke contract and bound repeated curves with shared limits" do
+    box = %{
+      type: :rect,
+      shape: :wave,
+      x: 10,
+      y: 20,
+      width: 80,
+      height: 5.25,
+      fill_color: nil,
+      stroke_color: {0, 0, 1},
+      stroke_width: 0.75,
+      border_radius: 0
+    }
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box]}], compress_streams: false)
+
+    assert pdf =~ " re W n"
+    assert pdf =~ " c "
+
+    for changes <- [
+          %{stroke_width: 0},
+          %{fill_color: {0, 0, 0}},
+          %{border_radius: 1},
+          %{wave_offset: :invalid},
+          %{border_styles: %{top: :solid}}
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [Map.merge(box, changes)]}])
+
+      assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+    end
+
+    wide = %{box | width: NativeElixirPdfUtilities.Limits.get(:max_entries) * 20.0}
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [wide]}])
+
+    assert diagnostic.stage == :writer and diagnostic.message =~ "max_entries"
   end
 
   test "rejects malformed vector form image bytes through the writer diagnostic contract" do
@@ -305,7 +442,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       | link_rect: %{
           x: 0,
           y: 0,
-          width: NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude),
+          width: NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude),
           height: 1
         }
     }
@@ -445,33 +582,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     }
 
     page = %{size: {100, 100}, boxes: [group]}
-    Limits.install(%{original | max_layout_boxes: 6, max_drawing_group_depth: 2})
-    assert {:ok, _} = PdfWriter.render([page, page])
-    assert {:ok, _} = PdfWriter.render([%{page | boxes: [%{group | boxes: [group]}]}])
+    Limits.install(%{original | max_entries: 6, max_depth: 2})
+    assert {:ok, _} = WriterValidator.prepare([page, page], [])
+    assert {:ok, _} = WriterValidator.prepare([%{page | boxes: [%{group | boxes: [group]}]}], [])
 
     for pages <- [
           [page, page, page],
           [%{page | boxes: [group, group, group]}],
           [%{page | boxes: [%{group | boxes: [group, group]}]}]
         ] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
-      assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = WriterValidator.prepare(pages, [])
+      assert diagnostic.stage == :writer and diagnostic.message =~ "max_entries"
     end
 
-    Limits.install(%{original | max_drawing_group_depth: 2})
+    Limits.install(%{original | max_depth: 2})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
-             PdfWriter.render([%{page | boxes: [%{group | boxes: [%{group | boxes: [group]}]}]}])
+             WriterValidator.prepare(
+               [
+                 %{page | boxes: [%{group | boxes: [%{group | boxes: [group]}]}]}
+               ],
+               []
+             )
 
-    assert message =~ "max_drawing_group_depth"
-    assert {:ok, _} = PdfWriter.render([page])
+    assert message =~ "max_depth"
+    assert {:ok, _} = WriterValidator.prepare([page], [])
 
-    Limits.install(%{original | max_layout_boxes: 5})
+    Limits.install(%{original | max_entries: 5})
     glyphs = %{type: :glyph_group, actual_text: "x", boxes: [text]}
-    assert {:ok, _} = PdfWriter.render([%{page | boxes: [%{group | boxes: [glyphs]}]}])
+    assert {:ok, _} = WriterValidator.prepare([%{page | boxes: [%{group | boxes: [glyphs]}]}], [])
 
     assert {:error, {:resource_limit_exceeded, _}} =
-             PdfWriter.render([%{page | boxes: [%{group | boxes: [glyphs, text]}]}])
+             WriterValidator.prepare([%{page | boxes: [%{group | boxes: [glyphs, text]}]}], [])
   end
 
   test "unclipped drawing groups isolate siblings and use local viewport pixel snapping" do
@@ -607,9 +749,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     Limits.install(%{
       original
-      | max_rendered_pages: 1,
-        max_pdf_pages: 1,
-        max_appearance_widgets: 2
+      | max_pages: 1,
+        max_entries: 100
     })
 
     assert {:ok, _, [_, _], _} = PdfWriter.appearance_objects([page, page], 1)
@@ -617,34 +758,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              PdfWriter.render([page, page])
 
-    assert message =~ "max_rendered_pages"
-    Limits.install(%{original | max_pdf_pages: 1})
+    assert message =~ "max_pages"
+    Limits.install(%{original | max_pages: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              PdfWriter.render([page, page])
 
-    assert message =~ "max_pdf_pages"
-    Limits.install(%{original | max_appearance_widgets: 1})
+    assert message =~ "max_pages"
+    Limits.install(%{original | max_entries: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              PdfWriter.appearance_objects([page, page], 1)
 
-    assert message =~ "max_appearance_widgets"
-    Limits.install(%{original | max_pdf_objects: 1})
+    assert message =~ "max_entries"
+    Limits.install(%{original | max_entries: 1})
 
     for id <- [2, 1] do
       assert {:error, {:resource_limit_exceeded, %{message: message}}} =
                PdfWriter.appearance_objects([page], id)
 
-      assert message =~ "max_pdf_objects"
+      assert message =~ "max_entries"
     end
 
-    Limits.install(%{original | max_rendered_pdf_bytes: 1})
+    Limits.install(%{original | max_input_bytes: 1})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              PdfWriter.appearance_objects([page], 1)
 
-    assert message =~ "max_rendered_pdf_bytes"
+    assert message =~ "max_input_bytes"
     Limits.install(original)
 
     for {pages, id} <- [{[], 1}, {[page], 0}, {[page], nil}, {[%{size: {0, 0}, boxes: []}], 1}] do
@@ -688,14 +829,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     alias NativeElixirPdfUtilities.Limits
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_layout_boxes: 1})
+    Limits.install(%{original | max_entries: 1})
     marker = %{type: :flow_marker, x: 10, y: 20, width: 0, height: 12}
     page = %{size: {100, 100}, boxes: [marker]}
-    assert {:ok, _} = PdfWriter.render([page])
+    assert {:ok, _} = WriterValidator.prepare([page], [])
 
     for pages <- [[%{page | boxes: [marker, marker]}], [page, page]] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
-      assert diagnostic.stage == :writer and diagnostic.message =~ "max_layout_boxes"
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = WriterValidator.prepare(pages, [])
+      assert diagnostic.stage == if(length(pages) == 1, do: :writer, else: :limits)
+      assert diagnostic.message =~ "max_entries"
     end
   end
 
@@ -879,7 +1021,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     assert pdf =~ "EMC"
   end
 
-  test "glyph group validation rejects malformed strings, nested groups and raw markers" do
+  test "glyph group validation rejects malformed strings and unbalanced raw markers" do
     box = %{
       type: :text,
       text: "x",
@@ -892,10 +1034,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
     group = %{type: :glyph_group, actual_text: "x", boxes: [box]}
 
+    assert {:ok, nested_pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [%{group | boxes: [group]}]}])
+
+    assert {:ok, "x"} = Text.extract(nested_pdf, layout: false)
+
     for invalid <- [
           %{group | actual_text: <<255>>},
           %{group | actual_text: 1},
-          %{group | boxes: [group]},
           %{group | boxes: [1]},
           %{group | boxes: :invalid},
           %{group | boxes: [%{box | type: :image}]},
@@ -910,7 +1056,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       assert diagnostic.reason == :invalid_pdf_input
       assert diagnostic.operation == :write_pdf
       assert diagnostic.module == PdfWriter
-      assert diagnostic.message =~ "glyph_group"
+      assert diagnostic.message =~ "glyph_group" or diagnostic.message =~ "ActualText"
     end
   end
 
@@ -918,7 +1064,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     alias NativeElixirPdfUtilities.Limits
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_rendered_text_bytes: 3, max_layout_boxes: 6})
+    Limits.install(%{original | max_output_bytes: 3, max_entries: 6})
 
     box = %{
       type: :text,
@@ -931,24 +1077,58 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     }
 
     group = %{type: :glyph_group, actual_text: "ab", boxes: [box]}
-    assert {:ok, _pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [group]}])
+    assert {:ok, _pdf} = WriterValidator.prepare([%{size: {100, 100}, boxes: [group]}], [])
 
     assert {:error, {:resource_limit_exceeded, %{stage: :writer, message: message}}} =
-             PdfWriter.render([%{size: {100, 100}, boxes: [group, group]}])
+             WriterValidator.prepare([%{size: {100, 100}, boxes: [group, group]}], [])
 
-    assert message =~ "max_rendered_text_bytes"
-    Limits.install(%{original | max_layout_boxes: 3})
+    assert message =~ "max_output_bytes"
+    Limits.install(%{original | max_entries: 3})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
-             PdfWriter.render([%{size: {100, 100}, boxes: [box, %{group | boxes: [box, box]}]}])
+             WriterValidator.prepare(
+               [
+                 %{size: {100, 100}, boxes: [box, %{group | boxes: [box, box]}]}
+               ],
+               []
+             )
 
-    assert message =~ "max_layout_boxes"
+    assert message =~ "max_entries"
 
     assert {:error, {:resource_limit_exceeded, _}} =
-             PdfWriter.render([
-               %{size: {100, 100}, boxes: [group]},
-               %{size: {100, 100}, boxes: [group]}
+             WriterValidator.prepare(
+               [
+                 %{size: {100, 100}, boxes: [group]},
+                 %{size: {100, 100}, boxes: [group]}
+               ],
+               []
+             )
+  end
+
+  test "an explicit glyph below CSS paint precision emits no text operators" do
+    assert {:ok, [font]} =
+             Font.load_configured_faces([
+               %{family: "Tiny paint", path: Paths.project("priv/fonts/dejavu/DejaVuSans.ttf")}
              ])
+
+    box = %{
+      type: :text,
+      text: "A",
+      x: 10,
+      y: 20,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 0.001,
+      glyph_ids: [font.cmap[?A]],
+      snap_to_css_pixel_grid: true,
+      color: {0, 0, 0}
+    }
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box]}], compress_streams: false)
+
+    refute pdf =~ " <0001> Tj"
+    assert {:error, {:no_extractable_text, _}} = Text.extract(pdf)
   end
 
   test "zero-size text paints no operators or extractable text" do
@@ -1093,7 +1273,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
         assert byte_size(decoded) <=
                  byte_size(object.stream) *
-                   NativeElixirPdfUtilities.Limits.get(:max_pdf_decompression_ratio)
+                   NativeElixirPdfUtilities.Limits.get(:max_decompression_ratio)
 
         {object.value["ColorSpace"], decoded}
       end
@@ -1145,7 +1325,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     }
 
     assert {:error,
-            {:invalid_document, %{stage: :font, reason: :invalid_document, message: message}}} =
+            {:invalid_font,
+             %{
+               stage: :font,
+               reason: :invalid_font,
+               operation: :prepare_table_directory,
+               source: "TrueType table directory",
+               message: message
+             }}} =
              PdfWriter.render([%{size: {100, 100}, boxes: [box]}], subset_fonts: true)
 
     assert message =~ "TrueType"
@@ -1222,9 +1409,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       assert pdf =~ "] TJ"
     end
 
-    Limits.install(%{limits | max_font_kerning_pairs: 1})
+    Limits.install(%{limits | max_work: 1})
     invalid = %{box | font_face: Map.put(font, :kerning, %{{1, 1} => 0, {1, 2} => 0})}
-    assert_invalid_pdf_input(PdfWriter.render([%{size: {100, 100}, boxes: [invalid]}], []))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [invalid]}], [])
+
+    assert diagnostic.stage == :font and diagnostic.operation == :write_pdf
+    assert diagnostic.module == PdfWriter and diagnostic.message =~ "max_work"
   end
 
   test "writer rejects malformed pixel snapping flags for every drawing kind" do
@@ -2337,6 +2529,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       {:ok, font: font, limits: limits}
     end
 
+    test "small glyph basis coefficients survive both text coordinate systems", %{font: font} do
+      box = Map.put(glyph_text_box(font, "x"), :glyph_basis, {0, 0.000001, -1, 0})
+
+      for css? <- [false, true] do
+        box = if css?, do: Map.put(box, :snap_to_css_pixel_grid, true), else: box
+
+        assert {:ok, pdf} =
+                 PdfWriter.render([%{size: {200, 100}, boxes: [box]}], compress_streams: false)
+
+        assert Regex.match?(~r/0 -?0\.0000010* -1 -?0(?:\.0+)? /, pdf),
+               inspect(Regex.scan(~r/[-.0-9 ]+ Tm/, pdf))
+
+        assert {:ok, "x"} = Text.extract(pdf, layout: false)
+      end
+
+      for basis <- [{0, 0, 0, 0}, {1, 0, 0, :invalid}, {1, 0, 0}, :invalid, nil] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} =
+                 PdfWriter.render([
+                   %{size: {200, 100}, boxes: [Map.put(box, :glyph_basis, basis)]}
+                 ])
+
+        assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+        assert is_binary(diagnostic.message)
+      end
+    end
+
+    test "explicit point advances survive serialization and reject malformed plans", %{font: font} do
+      box =
+        glyph_text_box(font, "xyz")
+        |> Map.put(:glyph_ids, [font.cmap[?x], font.cmap[?y], font.cmap[?z]])
+        |> Map.put(:glyph_advances, [3.25, 4.75, 0])
+
+      assert {:ok, pdf} = PdfWriter.render([%{size: {200, 100}, boxes: [box]}])
+      assert {:ok, %{pages: [%{spans: [first, second, third]}]}} = Text.extract_spans(pdf)
+      assert first.text <> second.text <> third.text == "xyz"
+      assert_in_delta second.x - first.x, 3.25, 0.0001
+      assert_in_delta third.x - first.x, 8, 0.0001
+
+      for advances <- [nil, [1], [1, 2, 3, 4], [1, :bad, 3], [1, "2", 3]] do
+        assert {:error, {:invalid_pdf_input, diagnostic}} =
+                 PdfWriter.render([
+                   %{size: {200, 100}, boxes: [Map.put(box, :glyph_advances, advances)]}
+                 ])
+
+        assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+        assert diagnostic.message =~ "glyph_advances"
+      end
+
+      for invalid <- [
+            Map.delete(box, :glyph_ids),
+            %{box | font_size: 0},
+            %{
+              box
+              | font: "Helvetica",
+                font_face: %{type: :built_in, pdf_name: "Helvetica", family: "Helvetica"}
+            }
+          ] do
+        assert {:error, {:invalid_pdf_input, _}} =
+                 PdfWriter.render([%{size: {200, 100}, boxes: [invalid]}])
+      end
+
+      assert {:ok, _} =
+               PdfWriter.render([
+                 %{size: {200, 100}, boxes: [%{box | font_size: 0, glyph_advances: [0, 0, 0]}]}
+               ])
+    end
+
     test "normal, script, and scriptscript forms retain original supplementary Unicode", %{
       font: font
     } do
@@ -2518,29 +2777,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
 
       NativeElixirPdfUtilities.Limits.install(%{
         NativeElixirPdfUtilities.Limits.effective()
-        | max_font_math_work: 1
+        | max_work: 1
       })
 
       assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [explicit]}])
 
-      assert message =~ "max_font_math_work"
-      NativeElixirPdfUtilities.Limits.install(%{limits | max_font_source_bytes: 1})
+      assert message =~ "max_work"
+      NativeElixirPdfUtilities.Limits.install(%{limits | max_input_bytes: 1})
 
       assert {:error,
               {:resource_limit_exceeded, %{stage: :font, operation: :write_pdf, message: message}}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [explicit]}])
 
-      assert message =~ "max_font_source_bytes"
+      assert message =~ "max_input_bytes"
     end
 
     test "the fixed CID ceiling includes multiple glyph forms of the same Unicode character", %{
       font: font
     } do
-      unicode = Enum.to_list(0x10000..0x1FFFE)
+      # Use visible Han scalars, so default-ignorable controls do not disappear
+      # before the emitted CID cardinality is checked.
+      unicode = Enum.to_list(0x20000..0x2F7FF) ++ Enum.to_list(0x30000..0x307FE)
       face = %{font | cmap: Map.new(unicode, &{&1, font.cmap[?x]})}
       normal = glyph_text_box(face, List.to_string(unicode))
-      alternate = glyph_text_box(face, <<0x10000::utf8>>) |> Map.put(:glyph_ids, [font.cmap[?y]])
+      alternate = glyph_text_box(face, <<0x20000::utf8>>) |> Map.put(:glyph_ids, [font.cmap[?y]])
 
       assert {:error, {:invalid_pdf_input, diagnostic}} =
                PdfWriter.render([%{size: {100, 100}, boxes: [normal, alternate]}])
@@ -2574,7 +2835,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
       assert pdf =~ "4 Tc"
       assert pdf =~ ~r/<[0-9A-F]{4}> <0066>/
       assert pdf =~ ~r/<[0-9A-F]{4}> <0069>/
-      assert pdf =~ ~r/<[0-9A-F]{4}> <006600660069>/
+      # General positioning of an edited metrics map retains the source through
+      # ActualText; the nominal Latin path expands the ligature in ToUnicode.
+      assert pdf =~ ~r/<[0-9A-F]{4}> <006600660069>/ or
+               pdf =~ "/ActualText (ffi)"
+
       assert {:ok, "ffi ffi"} = Text.extract(pdf, layout: false)
     end
   end
@@ -2660,7 +2925,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterTest do
     codepoints =
       font.cmap
       |> Map.keys()
-      |> Enum.filter(&(&1 in 0x20..0xD7FF or &1 in 0xE000..0xFFFF))
+      |> Enum.filter(
+        &((&1 in 0x20..0xD7FF or &1 in 0xE000..0xFFFF) and
+            not NativeElixirPdfUtilities.Validators.TextShapingValidator.ignorable?(&1))
+      )
       |> Enum.sort()
       |> Enum.take(120)
 

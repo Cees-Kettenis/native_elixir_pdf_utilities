@@ -98,7 +98,7 @@ defmodule NativeElixirPdfUtilities.Pdf.StreamOperationLimitsTest do
   test "nested decodes retain aggregate reader charges and standalone failures leave no budget",
        %{limits: limits} do
     {document, reference, alias_reference} = stream_document("abc", nil)
-    Limits.install(%{limits | max_pdf_reader_decoded_bytes: 5})
+    Limits.install(%{limits | max_decoded_bytes: 5})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Operation.run(__MODULE__, :aggregate_decode, fn ->
@@ -109,11 +109,11 @@ defmodule NativeElixirPdfUtilities.Pdf.StreamOperationLimitsTest do
              end)
 
     assert diagnostic.stage == :limits
-    assert diagnostic.message =~ "max_pdf_reader_decoded_bytes"
+    assert diagnostic.message =~ "max_decoded_bytes"
     assert {:ok, "abc"} = Reader.decoded_stream(document, reference)
     assert {:ok, "abc"} = Reader.decoded_stream(document, alias_reference)
 
-    Limits.install(%{limits | max_pdf_reader_decoded_bytes: 2})
+    Limits.install(%{limits | max_decoded_bytes: 2})
     assert {:error, {:resource_limit_exceeded, _}} = Reader.decoded_stream(document, reference)
     Limits.install(limits)
     assert {:ok, "abc"} = Reader.decoded_stream(document, reference)

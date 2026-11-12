@@ -5,6 +5,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
 
   # CSS Values 5 editor draft 2da1cb17a43306d3ef80d09d328883c71cdb54b2, attr().
   # CSS Environment Variables 1, 23 September 2025, env() and safe-area variables.
+  test "attribute variable expansion failures survive custom-property preparation" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_decoded_bytes, 1))
+
+    context = %{
+      _css_attributes: %{"value" => "var(--text)"},
+      _custom_properties: %{"--text" => "ABCDE"}
+    }
+
+    for operation <- [
+          fn -> CssSubstitutionValidator.resolve("attr(value type(*))", context) end,
+          fn ->
+            CssSubstitutionValidator.prepare_properties(
+              %{"--result" => "attr(value type(*))", "--text" => "ABCDE"},
+              context,
+              HtmlValidator.new_css_budget()
+            )
+          end
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ "max_decoded_bytes"
+    end
+  end
+
   test "typed attributes, raw strings and fallbacks use the originating element" do
     styles =
       CssStyles.by_id(
@@ -167,7 +194,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
     alias NativeElixirPdfUtilities.Limits
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_css_variable_depth, 0))
+    Limits.install(Map.put(original, :max_depth, 0))
     context = %{_css_attributes: %{"n" => "1pt"}}
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -179,15 +206,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
                )
              end)
 
-    assert diagnostic.message =~ "max_css_variable_depth"
-    Limits.install(Map.put(original, :max_css_variable_bytes, 4))
+    assert diagnostic.message =~ "max_depth"
+    Limits.install(Map.put(original, :max_input_bytes, 4))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                CssSubstitutionValidator.resolve("attr(n)", context)
              end)
 
-    assert diagnostic.message =~ "max_css_variable_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "unused attribute and environment fallbacks retain custom-property cycles" do
@@ -215,7 +242,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
     alias NativeElixirPdfUtilities.Limits
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_css_variable_work, 0))
+    Limits.install(Map.put(original, :max_work, 0))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -229,7 +256,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
                )
              end)
 
-    assert diagnostic.message =~ "max_css_variable_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "unapplied substitutions validate grammar without borrowing an element's attributes" do

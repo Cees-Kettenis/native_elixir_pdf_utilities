@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssOverflowValidator do
             _ ->
               case CssMathValidator.scalar(source, :integer) do
                 {:ok, number} when number >= 1 ->
-                  HtmlValidator.check_render_resource(:max_css_numeric_magnitude, number, :css)
+                  HtmlValidator.check_render_resource(:max_numeric_magnitude, number, :css)
                   {:ok, %{max_lines: trunc(number)}}
 
                 _ ->
@@ -237,7 +237,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssOverflowValidator do
             {box, length}
             when box in [:content_box, :padding_box, :border_box] and is_number(length) and
                    length >= 0 ->
-              HtmlValidator.check_render_resource(:max_css_numeric_magnitude, length, :layout)
+              HtmlValidator.check_render_resource(:max_numeric_magnitude, length, :layout)
               match?({:ok, _}, HtmlValidator.normalize_geometry_number(length))
 
             _ ->
@@ -248,8 +248,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssOverflowValidator do
         valid_maximum = maximum == :none or (is_integer(maximum) and maximum >= 1)
 
         if is_integer(maximum),
-          do:
-            HtmlValidator.check_render_resource(:max_css_numeric_magnitude, abs(maximum), :layout)
+          do: HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(maximum), :layout)
 
         valid_axes =
           x in [:visible, :hidden, :clip, :auto, :scroll] and

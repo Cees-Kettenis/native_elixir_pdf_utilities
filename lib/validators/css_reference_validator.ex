@@ -28,7 +28,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssReferenceValidator do
                    source: "source_mapper"
                  )
              ) do
-        HtmlValidator.reserve_render_resource(:max_css_work, 4 * byte_size(source), :css)
+        HtmlValidator.reserve_render_resource(:max_work, 4 * byte_size(source), :css)
 
         {units, _finish} =
           source

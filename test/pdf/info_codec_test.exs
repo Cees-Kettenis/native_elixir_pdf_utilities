@@ -107,7 +107,11 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodecTest do
     assert InfoCodec.serialize_value(%{1 => "invalid key"}) == :error
     assert InfoCodec.serialize_value([self()]) == :error
 
-    deeply_nested = Enum.reduce(1..101, 0, fn _index, nested -> [nested] end)
+    deeply_nested =
+      Enum.reduce(1..(NativeElixirPdfUtilities.Limits.get(:max_depth) + 1), 0, fn _index,
+                                                                                  nested ->
+        [nested]
+      end)
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              InfoCodec.serialize_value(deeply_nested)

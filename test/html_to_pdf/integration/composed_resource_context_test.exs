@@ -138,7 +138,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedResourceContextTest do
 
     assert rounded_pdf =~ "/Annots"
 
-    corrupt = put_in(text.clip.inner_clip.x, 1_000_000_000)
+    corrupt = put_in(text.clip.inner_clip.x, 4_294_967_295)
 
     assert {:error, {:invalid_pdf_input, diagnostic}} =
              PdfWriter.render([%{size: {200, 200}, boxes: [%{group | boxes: [corrupt]}]}])

@@ -160,7 +160,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
   @spec required?([map()]) :: boolean()
   def required?(nodes) do
     Enum.any?(nodes, fn node ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
       Map.get(node, :tag) == "selectedcontent" or required?(Map.get(node, :children, []))
     end)
   end
@@ -171,10 +171,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
     # Parsed sources have already charged these nodes. Direct tree composition
     # must account for them before adding clones under the same global limit.
     budget = Process.get({HtmlValidator, :render_budget}, %{})
-    used = Map.get(budget, :max_html_nodes, 0)
+    used = Map.get(budget, :max_entries, 0)
 
     HtmlValidator.reserve_render_resource(
-      :max_html_nodes,
+      :max_entries,
       max(map_size(index) - 1 - used, 0),
       :html
     )
@@ -190,7 +190,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
 
   defp index_nodes(nodes, index, content?) do
     Enum.reduce(nodes, index, fn node, index ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
       key = Map.get_lazy(node, :node_id, fn -> Map.get_lazy(node, :_selector_id, &make_ref/0) end)
       index = Map.put(index, key, node)
       index = index_nodes(Map.get(node, :children, []), index, content?)
@@ -243,7 +243,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectedContentValidator do
         Enum.reverse(ancestors)
 
       node ->
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :html)
         logical_ancestors(Map.get(node, :parent_id), index, [node | ancestors])
     end
   end

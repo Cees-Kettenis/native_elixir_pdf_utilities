@@ -17,9 +17,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableWidthWorkTest do
         String.duplicate("<td colspan=8 style='width:40pt'></td>", 3) <> "</tr></table>"
 
     assert {:ok, _} = HtmlToPdf.render(html, system_font_discovery: false)
-    Limits.install(%{Limits.effective() | max_table_grid_work: 75})
+    Limits.install(%{Limits.effective() | max_work: 75})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 
   test "spanning width updates avoid repeated linked-list prefix copies" do

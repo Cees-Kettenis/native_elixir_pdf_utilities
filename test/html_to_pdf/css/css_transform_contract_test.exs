@@ -236,8 +236,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
   } do
     assert {:ok, limits} =
              NativeElixirPdfUtilities.Validators.LimitsValidator.validate(
-               max_css_numeric_magnitude: 9_223_372_036_854_775_807,
-               max_pdf_numeric_magnitude: 9_223_372_036_854_775_807
+               max_numeric_magnitude: 9_223_372_036_854_775_807
              )
 
     Limits.install(limits)
@@ -248,7 +247,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssTransformValidator.resolve(prepared, %{x: 0, top: 30, width: 20, height: 20})
 
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
     assert diagnostic.stage == :layout
     source = %{type: :rect, x: 0, y: 0, width: 20, height: 20, css_transform_scopes: [nil]}
 
@@ -267,7 +266,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
                HtmlToPdf.render("<p>#{content}</p>", system_font_discovery: false)
 
       assert diagnostic.stage == :layout
-      assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+      assert diagnostic.message =~ "max_numeric_magnitude"
     end
   end
 
@@ -352,7 +351,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
   end
 
   test "transformed paint obeys the clip arrangement allocation ceiling" do
-    Limits.install(%{Limits.effective() | max_clip_projection_work: 0})
+    Limits.install(%{Limits.effective() | max_work: 0})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -361,8 +360,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
                margin: 0
              )
 
-    assert diagnostic.message =~ "max_clip_projection_work"
+    assert diagnostic.message =~ "max_work"
+    assert diagnostic.stage == :html
+  end
+
+  test "print slicing retains a late projected-polygon geometry failure", %{style: style} do
+    assert {:ok, transformed} = CssTransformValidator.apply(style, "transform", "translateX(3px)")
+
+    assert {:ok, scope} =
+             CssTransformValidator.prepare_scope(transformed, %{
+               x: 0,
+               top: 30,
+               width: 50,
+               height: 30
+             })
+
+    source = %{
+      type: :rect,
+      x: 95,
+      y: 10,
+      width: 10,
+      height: 10,
+      fill_color: {1, 0, 0},
+      css_transform_scopes: [scope]
+    }
+
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 100})
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               CssTransformValidator.materialize(
+                 [%{size: {120, 90}, boxes: [source]}],
+                 css_fragmentation_margins: %{left: 0, right: 0, top: 0, bottom: 0}
+               )
+             end)
+
     assert diagnostic.stage == :layout
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.ClipGeometryValidator
+    assert diagnostic.message =~ "finite convex corners"
   end
 
   test "scoped control preparation diagnoses invalid context and field capacity before issuance" do
@@ -383,12 +418,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
                         CssTransformValidator.materialize(pages, [], :invalid)
 
                assert diagnostic.message =~ "scoped context"
-               Limits.install(%{Limits.effective() | max_pdf_form_fields: 0})
+               Limits.install(%{Limits.effective() | max_entries: 0})
 
                assert {:error, {:resource_limit_exceeded, diagnostic}} =
                         CssTransformValidator.materialize(pages, [], context)
 
-               assert diagnostic.message =~ "max_pdf_form_fields"
+               assert diagnostic.message =~ "max_entries"
              end)
   end
 
@@ -429,7 +464,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
   test "painted empty source capacity obeys page limits and rejects orphan descendant owners" do
     alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Pagination, Style}
     limits = Limits.effective()
-    Limits.install(%{limits | max_rendered_pages: 1})
+    Limits.install(%{limits | max_pages: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(
@@ -438,7 +473,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
                margin: 10
              )
 
-    assert diagnostic.message =~ "max_rendered_pages"
+    assert diagnostic.message =~ "max_pages"
     assert diagnostic.stage == :pagination
     Limits.install(limits)
 

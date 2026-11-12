@@ -96,14 +96,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceGlyphAndCalculationLimitsTest
     limits = NativeElixirPdfUtilities.Limits.effective()
 
     try do
-      NativeElixirPdfUtilities.Limits.install(Map.put(limits, :max_css_calculation_depth, 2))
+      NativeElixirPdfUtilities.Limits.install(Map.put(limits, :max_depth, 2))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render("<p style='width:calc(min(max(1pt,2pt),3pt))'>Bounded</p>")
 
       assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.stage == :style
-      assert diagnostic.message =~ "max_css_calculation_depth"
+      assert diagnostic.stage == :html
+      assert diagnostic.message =~ "max_depth"
       assert diagnostic.module == HtmlValidator
     after
       NativeElixirPdfUtilities.Limits.install(limits)

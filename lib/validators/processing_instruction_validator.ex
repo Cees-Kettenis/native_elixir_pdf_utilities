@@ -27,8 +27,8 @@ defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator do
     HtmlValidator.with_render_budget(fn ->
       # Bound transport string checks before calling the shared PI validator.
       for key <- [:target, :data], is_map(node), value = Map.get(node, key), is_binary(value) do
-        HtmlValidator.check_render_resource(:max_html_source_bytes, byte_size(value), :html)
-        HtmlValidator.reserve_render_resource(:max_html_tree_work, 3 * byte_size(value), :html)
+        HtmlValidator.check_render_resource(:max_input_bytes, byte_size(value), :html)
+        HtmlValidator.reserve_render_resource(:max_work, 3 * byte_size(value), :html)
       end
 
       with {:ok, node} <- HtmlValidator.validate_html_processing_instruction(node) do
@@ -36,7 +36,7 @@ defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator do
         # splitting, numeric conversion, name hashing and output copying. Reserve
         # the linear traversal allowance even when the complete data is malformed.
         HtmlValidator.reserve_render_resource(
-          :max_html_tree_work,
+          :max_work,
           10 * byte_size(node.data),
           :html
         )
@@ -70,8 +70,8 @@ defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator do
       valid_name? =
         case name do
           name when is_binary(name) ->
-            HtmlValidator.check_render_resource(:max_html_source_bytes, byte_size(name), :html)
-            HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(name), :html)
+            HtmlValidator.check_render_resource(:max_input_bytes, byte_size(name), :html)
+            HtmlValidator.reserve_render_resource(:max_work, byte_size(name), :html)
             String.valid?(name)
 
           _ ->

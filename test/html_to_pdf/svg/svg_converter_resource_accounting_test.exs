@@ -40,7 +40,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
 
   test "viewport re-encoding remains inside the cumulative source budget", %{limits: limits} do
     source = "<svg width='10' height='20'><rect width='10' height='20'/></svg>"
-    Limits.install(%{limits | max_aggregate_svg_source_bytes: byte_size(source) * 2})
+    Limits.install(%{limits | max_input_bytes: byte_size(source) * 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              SvgRasterizer.rasterize(source, [width: 20, height: 10], nil)
@@ -48,7 +48,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
     assert diagnostic.stage == :style
     assert diagnostic.source == "SVG"
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_aggregate_svg_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "arc rotation requires a separator before its first flag" do
@@ -86,7 +86,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
     limits: limits,
     context: context
   } do
-    Limits.install(Map.put(limits, :max_decoded_image_bytes, 1))
+    Limits.install(Map.put(limits, :max_decoded_bytes, 1))
 
     source =
       "<svg width='1' height='1'><image href='svg-resource:logo' width='1' height='1'/></svg>"
@@ -107,8 +107,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
       "<svg width='1' height='1'><defs><image id='asset' href='svg-resource:logo' width='1' height='1'/></defs><use href='#asset'/><use href='#asset'/></svg>"
 
     for {limit, ceiling, message} <- [
-          {:max_aggregate_svg_raster_pixels, 5, "max_aggregate_svg_raster_pixels"},
-          {:max_aggregate_decoded_image_bytes, 20, "decoded image bytes"}
+          {:max_raster_pixels, 5, "max_raster_pixels"},
+          {:max_decoded_bytes, 20, "max_decoded_bytes"}
         ] do
       Limits.install(Map.put(limits, limit, ceiling))
 
@@ -132,9 +132,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
       "<svg width='1' height='1'><defs><image id='asset' href='svg-resource:logo' width='1' height='1'/></defs><use href='#asset'/><use href='#asset'/></svg>"
 
     for {limit, ceiling, message} <- [
-          {:max_decoded_image_bytes, 1, "decoded image"},
-          {:max_aggregate_svg_raster_pixels, 5, "max_aggregate_svg_raster_pixels"},
-          {:max_aggregate_decoded_image_bytes, 20, "decoded image bytes"}
+          {:max_decoded_bytes, 1, "decoded image"},
+          {:max_raster_pixels, 5, "max_raster_pixels"},
+          {:max_decoded_bytes, 20, "max_decoded_bytes"}
         ] do
       Limits.install(Map.put(limits, limit, ceiling))
 

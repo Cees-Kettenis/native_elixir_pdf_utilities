@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+@page { size:600pt 180pt; margin:0 }
+html,body { margin:0; padding:0 }
+body { font-family:'DejaVu Sans'; font-size:18pt; line-height:24pt }
+p { margin:0 }
+.sample { position:absolute; width:270pt; border:0.75pt solid #445566; padding:3pt; box-sizing:border-box }
+#rtl { left:12pt; top:12pt }
+#override { left:312pt; top:12pt }
+#isolate { left:12pt; top:84pt }
+#arabic { left:312pt; top:84pt }
+</style></head><body>
+<div class="sample" id="rtl"><p dir="rtl">אב abc גד</p><p dir="rtl">12 אב 34</p></div>
+<div class="sample" id="override"><p>start <bdo dir="rtl">ABC12</bdo> end</p><p><bdo dir="ltr">אב</bdo> left</p></div>
+<div class="sample" id="isolate"><p>left <bdi dir="auto">אב 12</bdi> right</p><p dir="auto">אב : abc 12</p></div>
+<div class="sample" id="arabic"><p>بِسْمِ سلام</p><p dir="rtl">سلام abc</p></div>
+</body></html>

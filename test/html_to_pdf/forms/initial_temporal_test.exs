@@ -374,7 +374,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
   test "existing numeric token budget rejects hostile temporal strings before calendar conversion" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_html_numeric_token_bytes, 12))
+    Limits.install(Map.put(previous, :max_numeric_token_bytes, 12))
 
     for {kind, attr, value} <- [
           {"date", "value", "12345678-01-01"},
@@ -387,7 +387,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
                HtmlToPdf.render("<input type=#{kind} #{attr}=#{value} style=display:none>")
 
       assert diagnostic.stage == :html and diagnostic.operation == :render and
-               diagnostic.message =~ "max_html_numeric_token_bytes"
+               diagnostic.message =~ "max_numeric_token_bytes"
     end
   end
 

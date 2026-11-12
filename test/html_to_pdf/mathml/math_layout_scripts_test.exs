@@ -417,7 +417,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
 
   test "composed intrinsic and final script bounds propagate validator failures through consumers",
        c do
-    maximum = Limits.get(:max_css_numeric_magnitude)
+    maximum = Limits.get(:max_numeric_magnitude)
     space = element("mspace", [], c.style, %{"width" => "#{maximum}pt"})
     wide_row = element("mrow", [space, space], c.style)
 
@@ -543,7 +543,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
       assert diagnostic.message =~ "script placement"
     end
 
-    maximum = Limits.get(:max_css_numeric_magnitude)
+    maximum = Limits.get(:max_numeric_magnitude)
     glyphs = [%{hd(upper.glyphs) | font_size: 1.0e308}]
 
     assert {:error, {:invalid_document, diagnostic}} =
@@ -600,13 +600,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
              )
 
     assert diagnostic.message =~ "atomic MathML"
-    Limits.install(Map.put(Limits.effective(), :max_font_math_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render("<math><msup><mn>1</mn><mn>2</mn></msup></math>",
                system_font_discovery: false
              )
 
-    assert diagnostic.stage == :font and diagnostic.message =~ "max_font_math_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 end

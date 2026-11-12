@@ -57,16 +57,16 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             %{font_face: font, font_size: size}
             when is_map(font) and is_number(size) and size >= 0 ->
               bounded? =
-                size <= Limits.get(:max_css_numeric_magnitude) and
+                size <= Limits.get(:max_numeric_magnitude) and
                   Enum.all?(padding, fn {_edge, value} ->
                     case value do
                       {unit, ratio} when unit in [:math_cell_ex, :math_cell_em] ->
                         is_number(ratio) and ratio >= 0 and
-                          ratio <= Limits.get(:max_css_numeric_magnitude)
+                          ratio <= Limits.get(:max_numeric_magnitude)
 
                       number ->
                         is_number(number) and number >= 0 and
-                          number <= Limits.get(:max_css_numeric_magnitude)
+                          number <= Limits.get(:max_numeric_magnitude)
                     end
                   end)
 
@@ -85,7 +85,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                     end)
 
                   if Enum.all?(padding, fn {_edge, value} ->
-                       value <= Limits.get(:max_css_numeric_magnitude)
+                       value <= Limits.get(:max_numeric_magnitude)
                      end),
                      do: {:ok, Map.put(style, :padding, padding)},
                      else:
@@ -190,7 +190,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
                {:ok, metrics} <- Font.math_metrics(font),
                {:ok, {axis, pixels}} <-
                  MathLayoutValidator.prepare_value(metrics.constants.axis_height, size) do
-            FontValidator.reserve(:max_font_math_work, 1)
+            FontValidator.reserve(:max_work, 1)
             axis = axis * size / metrics.units_per_em + pixels
 
             {:ok,
@@ -473,7 +473,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
   # Preparation already guarantees the supported proper subtree. The extra
   # walk identifies real ordinary HTML layout rather than changing its rules.
   defp native_flow_content?(content) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :layout)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
     case content do
       %{kind: :native_flow} ->
@@ -556,17 +556,17 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
   # Each actual prepared subtree contributes to the same depth and work bounds,
   # including nested matrices and content hidden by phantom.
   defp validate_spaced_content(content, depth \\ 0) do
-    if depth > Limits.get(:max_html_depth) do
+    if depth > Limits.get(:max_depth) do
       Diagnostics.error(
         :layout,
         :resource_limit_exceeded,
-        "spaced matrix prepared content exceeds max_html_depth",
+        "spaced matrix prepared content exceeds max_depth",
         operation: :measure_math,
         module: __MODULE__,
         source: "mtd"
       )
     else
-      HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
       case content do
         %{kind: kind} when kind in [:glyph, :operator, :space] ->
@@ -579,7 +579,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         %{kind: :native_flow, children: [_ | _] = children} ->
           with :ok <- reserve_input_collection(children, :cells) do
             Enum.reduce_while(children, :ok, fn child, :ok ->
-              HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
               case child do
                 %{boxes: boxes} ->
@@ -641,7 +641,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       case spacing do
         {horizontal, vertical} ->
           Enum.all?([horizontal, vertical], fn length ->
-            is_number(length) and length >= 0 and length <= Limits.get(:max_css_numeric_magnitude)
+            is_number(length) and length >= 0 and length <= Limits.get(:max_numeric_magnitude)
           end)
 
         _ ->
@@ -657,7 +657,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         is_map(edges) and
           Enum.all?([:top, :right, :bottom, :left], fn edge ->
             value = Map.get(edges, edge)
-            is_number(value) and value >= 0 and value <= Limits.get(:max_css_numeric_magnitude)
+            is_number(value) and value >= 0 and value <= Limits.get(:max_numeric_magnitude)
           end)
       end)
 
@@ -666,7 +666,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
     zero_margins? =
       is_map(margin) and Enum.all?([:top, :right, :bottom, :left], &(Map.get(margin, &1) == 0))
 
-    if not is_number(size) or size < 0 or size > Limits.get(:max_css_numeric_magnitude) or
+    if not is_number(size) or size < 0 or size > Limits.get(:max_numeric_magnitude) or
          not bounded_spacing? or not bounded_edges? or not zero_margins? or
          Map.get(style, :border_collapse, :separate) not in [:separate, :collapse] or
          Map.get(style, :table_layout, :auto) not in [:auto, :fixed] do
@@ -688,7 +688,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       is_map(padding) and
         Enum.all?([:top, :right, :bottom, :left], fn edge ->
           value = Map.get(padding, edge)
-          is_number(value) and value >= 0 and value <= Limits.get(:max_css_numeric_magnitude)
+          is_number(value) and value >= 0 and value <= Limits.get(:max_numeric_magnitude)
         end)
 
     border = Map.get(style, :border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0})
@@ -698,7 +698,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         Enum.all?([:top, :right, :bottom, :left], fn edge ->
           value = Map.get(border, edge)
 
-          is_number(value) and value >= 0 and value <= Limits.get(:max_css_numeric_magnitude)
+          is_number(value) and value >= 0 and value <= Limits.get(:max_numeric_magnitude)
         end)
 
     margin = Map.get(style, :margin, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0})
@@ -753,7 +753,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             match?({:error, _}, reserved) ->
               reserved
 
-            same_shape? and abs(axis) <= Limits.get(:max_css_numeric_magnitude) ->
+            same_shape? and abs(axis) <= Limits.get(:max_numeric_magnitude) ->
               columns_valid? =
                 Enum.all?(rows, fn row ->
                   columns = Enum.map(row, &if(is_map(&1), do: Map.get(&1, :column), else: nil))
@@ -925,7 +925,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         :ok
 
       [value | rest] ->
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
         with :ok <- if(kind == :rows, do: reserve_input_collection(value, :cells), else: :ok) do
           reserve_input_collection(rest, kind)
@@ -964,7 +964,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       end)
 
     HtmlValidator.reserve_render_resource(
-      :max_table_grid_work,
+      :max_work,
       length(cells) * 8 + length(rows) + column_count,
       :layout
     )
@@ -987,7 +987,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         )
 
       HtmlValidator.reserve_render_resource(
-        :max_table_grid_work,
+        :max_work,
         sorting + redistribution + slices,
         :layout
       )
@@ -1045,7 +1045,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       |> Enum.sort_by(&Map.get(&1.prepared, :colspan))
       |> Enum.reduce(columns, fn cell, columns ->
         span = cell.prepared.colspan
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, span, :layout)
+        HtmlValidator.reserve_render_resource(:max_work, span, :layout)
         edges = cell_edges(cell.prepared.style)
 
         Enum.reduce([:min_content_width, :max_content_width], columns, fn field, columns ->
@@ -1366,13 +1366,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
     row_backgrounds =
       Enum.flat_map(Enum.with_index(row_boxes), fn {row_box, index} ->
-        HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+        HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
 
         if Map.get(row_box.style, :background_color) not in [nil, :transparent] or
              Map.get(row_box.style, :background_image) != nil do
           covered =
             if Enum.any?(cells, &(Map.get(&1.prepared, :rowspan, 1) > 1)) do
-              HtmlValidator.reserve_render_resource(:max_table_grid_work, length(cells), :layout)
+              HtmlValidator.reserve_render_resource(:max_work, length(cells), :layout)
 
               Enum.filter(
                 cells,
@@ -1383,7 +1383,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             end
 
           Enum.map(covered, fn cell ->
-            HtmlValidator.reserve_render_resource(:max_table_grid_work, 1, :layout)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
             column_index = cell.prepared.column
             row = elem(row_metrics, index)
 
@@ -1529,7 +1529,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
           )
         end)
 
-    if Enum.all?(numeric ++ owner_bounds, &(abs(&1) <= Limits.get(:max_css_numeric_magnitude))),
+    if Enum.all?(numeric ++ owner_bounds, &(abs(&1) <= Limits.get(:max_numeric_magnitude))),
       do: {:ok, result},
       else:
         failure(

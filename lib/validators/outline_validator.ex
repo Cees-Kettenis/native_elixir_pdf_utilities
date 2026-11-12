@@ -132,7 +132,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
     count =
       NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
         items,
-        max(Limits.get(:max_pdf_outline_items) - budget.items, 0)
+        max(Limits.get(:max_entries) - budget.items, 0)
       )
 
     cond do
@@ -142,7 +142,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
       count == :limit_exceeded ->
         limit_error("outline item count exceeds the limit")
 
-      items != [] and depth > Limits.get(:max_pdf_outline_depth) ->
+      items != [] and depth > Limits.get(:max_depth) ->
         limit_error("outline nesting depth exceeds the limit")
 
       true ->
@@ -208,13 +208,13 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
         total_bytes = budget.title_bytes + bytes
 
         cond do
-          item_count > Limits.get(:max_pdf_outline_items) ->
+          item_count > Limits.get(:max_entries) ->
             limit_error("outline item count exceeds the limit")
 
-          bytes > Limits.get(:max_pdf_outline_title_bytes) ->
+          bytes > Limits.get(:max_decoded_bytes) ->
             limit_error("outline title exceeds the byte limit")
 
-          total_bytes > Limits.get(:max_pdf_outline_total_title_bytes) ->
+          total_bytes > Limits.get(:max_decoded_bytes) ->
             limit_error("aggregate outline title bytes exceed the limit")
 
           true ->
@@ -331,7 +331,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
             error(:invalid_pdf_input, "outline Last entry does not match its sibling chain")
         end
 
-      depth > Limits.get(:max_pdf_outline_depth) ->
+      depth > Limits.get(:max_depth) ->
         limit_error("outline nesting depth exceeds the limit")
 
       true ->
@@ -341,7 +341,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
           Map.has_key?(budget.seen, current_ref) ->
             error(:invalid_pdf_input, "outline hierarchy contains a cycle or repeated item")
 
-          budget.items >= Limits.get(:max_pdf_outline_items) ->
+          budget.items >= Limits.get(:max_entries) ->
             limit_error("outline item count exceeds the limit")
 
           true ->
@@ -500,7 +500,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
           {:ok, destinations} ->
             count = map_size(destinations)
 
-            case count <= Limits.get(:max_pdf_named_destinations) do
+            case count <= Limits.get(:max_entries) do
               true ->
                 {:ok,
                  Map.new(destinations, fn {name, destination} ->
@@ -553,7 +553,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
           not is_nil(ref) and Map.has_key?(state.seen, ref) ->
             error(:invalid_pdf_input, "destination name tree contains a cycle")
 
-          state.nodes >= Limits.get(:max_pdf_name_tree_nodes) ->
+          state.nodes >= Limits.get(:max_entries) ->
             limit_error("destination name tree node count exceeds the limit")
 
           true ->
@@ -599,7 +599,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
                   "destination name tree Names entry must resolve to pairs"
                 )
 
-              div(entry_length, 2) > Limits.get(:max_pdf_named_destinations) - count ->
+              div(entry_length, 2) > Limits.get(:max_entries) - count ->
                 limit_error("named destination count exceeds the limit")
 
               true ->

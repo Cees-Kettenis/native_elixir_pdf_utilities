@@ -52,8 +52,8 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
           do: ["*"],
           else: value |> String.replace(~r/,\z/u, "") |> String.split(",", trim: false)
 
-      if length(tokens) > Limits.get(:max_frameset_tracks) do
-        limit("frameset tracks exceed max_frameset_tracks")
+      if length(tokens) > Limits.get(:max_entries) do
+        limit("frameset tracks exceed max_entries")
       else
         Enum.reduce_while(tokens, {:ok, []}, fn token, {:ok, result} ->
           case dimension(token) do
@@ -73,8 +73,8 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
 
   # This grammar implements HTML list-of-dimensions recovery, rather than CSS lengths.
   defp dimension(token) do
-    if byte_size(token) > Limits.get(:max_html_numeric_token_bytes) do
-      limit("frameset dimension token exceeds max_html_numeric_token_bytes")
+    if byte_size(token) > Limits.get(:max_numeric_token_bytes) do
+      limit("frameset dimension token exceeds max_numeric_token_bytes")
     else
       token = HtmlValidator.trim_ascii_whitespace(token)
 
@@ -245,13 +245,13 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
              is_list(children) ->
         with :ok <- cells_limit(rows, columns),
              :ok <-
-               HtmlValidator.check_render_resource(:max_html_nodes, length(children), :layout) do
+               HtmlValidator.check_render_resource(:max_entries, length(children), :layout) do
           row_count = length(rows)
           column_count = length(columns)
           cells = row_count * column_count
 
           HtmlValidator.reserve_render_resource(
-            :max_html_tree_work,
+            :max_work,
             min(length(children), cells) + row_count + column_count + 2,
             :layout
           )
@@ -439,7 +439,7 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
                    false
                end) do
           HtmlValidator.reserve_render_resource(
-            :max_html_tree_work,
+            :max_work,
             # Charge the bounded allocation/indexing passes as well as cells.
             length(rows) * length(columns) + 24 * (length(rows) + length(columns)),
             :layout
@@ -471,11 +471,11 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
       %{type: :element, tag: "frameset", style: %{_frameset: plan} = style, children: children}
       when is_list(children) and is_integer(depth) and depth > 0 ->
         cond do
-          depth > Limits.get(:max_html_depth) ->
-            limit("frameset nesting exceeds max_html_depth")
+          depth > Limits.get(:max_depth) ->
+            limit("frameset nesting exceeds max_depth")
 
-          length(children) > Limits.get(:max_html_nodes) ->
-            limit("frameset children exceed max_html_nodes")
+          length(children) > Limits.get(:max_entries) ->
+            limit("frameset children exceed max_entries")
 
           true ->
             with :ok <- validate_style(style),
@@ -540,7 +540,7 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
          is_tuple(horizontal) and tuple_size(horizontal) == row_count + 1 and
          Enum.all?(Tuple.to_list(vertical) ++ Tuple.to_list(horizontal), &is_boolean/1) do
       count = min(child_count, row_count * column_count)
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, count, :layout)
+      HtmlValidator.reserve_render_resource(:max_work, count, :layout)
 
       if count == 0 or grid.gap == 0 or width == 0 or height == 0 do
         {:ok, []}
@@ -592,7 +592,7 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
     thickness = if(orientation == :vertical, do: width, else: height)
 
     HtmlValidator.reserve_render_resource(
-      :max_html_tree_work,
+      :max_work,
       if(thickness >= 2.25, do: 3, else: 1),
       :layout
     )
@@ -622,10 +622,10 @@ defmodule NativeElixirPdfUtilities.Validators.FramesetValidator do
   end
 
   defp cells_limit(rows, columns) do
-    if length(rows) > Limits.get(:max_frameset_tracks) or
-         length(columns) > Limits.get(:max_frameset_tracks) or
-         length(rows) * length(columns) > Limits.get(:max_frameset_cells),
-       do: limit("frameset grid exceeds max_frameset_tracks or max_frameset_cells"),
+    if length(rows) > Limits.get(:max_entries) or
+         length(columns) > Limits.get(:max_entries) or
+         length(rows) * length(columns) > Limits.get(:max_entries),
+       do: limit("frameset grid exceeds max_entries"),
        else: :ok
   end
 

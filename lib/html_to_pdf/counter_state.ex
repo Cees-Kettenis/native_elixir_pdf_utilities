@@ -23,7 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
           parent.scope
         else
           HtmlValidator.reserve_render_resource(
-            :max_css_work,
+            :max_work,
             map_size(sibling.scope) + map_size(parent.scope),
             :style
           )
@@ -43,7 +43,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
         # Keep values for visible instances and enclosing scopes only. A child
         # scope that has ended must not retain every reset it ever performed.
         HtmlValidator.reserve_render_resource(
-          :max_css_work,
+          :max_work,
           map_size(parent.values) + if(sibling == nil, do: 0, else: map_size(sibling.values)) +
             map_size(scope),
           :style
@@ -180,7 +180,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
     if additions == %{} do
       counters
     else
-      HtmlValidator.reserve_render_resource(:max_css_work, map_size(additions), :style)
+      HtmlValidator.reserve_render_resource(:max_work, map_size(additions), :style)
       %{counters | scope: Map.merge(counters.scope, additions)}
     end
   end
@@ -196,7 +196,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
   def quote_depth(counters, depth), do: put(counters, :_quote_depth, :document, depth)
 
   defp put(counters, name, creator, value) do
-    HtmlValidator.reserve_render_resource(:max_css_work, 1, :style)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :style)
 
     %{
       scope: Map.put(counters.scope, name, creator),

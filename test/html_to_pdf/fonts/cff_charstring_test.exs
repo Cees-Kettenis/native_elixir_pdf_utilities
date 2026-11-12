@@ -215,13 +215,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringTest do
 
     assert message =~ "ten-level"
     data = CffFixture.face_fixture(glyph_count: 1, charstrings: [numbers([100, 0]) <> <<21, 14>>])
-    Limits.install(%{Limits.effective() | max_font_outline_coordinate: 10})
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 10})
 
     assert {:error, {:resource_limit_exceeded, %{message: message}}} =
              CffCharstringValidator.prepare(data, 1)
 
-    assert message =~ "max_font_outline_coordinate"
-    Limits.install(%{Limits.defaults() | max_font_cff_work: 1})
+    assert message =~ "max_numeric_magnitude"
+    Limits.install(%{Limits.defaults() | max_work: 1})
     assert {:error, {:resource_limit_exceeded, _}} = CffCharstringValidator.prepare(data, 1)
   end
 
@@ -242,7 +242,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringTest do
     assert elem(face.glyphs, 3).bbox == {0, 0, 25, 35}
     assert elem(face.glyphs, 3).component_depth == 2
     assert {:move, 20, 30} in elem(face.glyphs, 3).commands
-    Limits.install(%{Limits.effective() | max_font_glyph_depth: 1})
+    Limits.install(%{Limits.effective() | max_depth: 1})
     assert {:error, {:resource_limit_exceeded, _}} = CffCharstringValidator.prepare(data, 4)
     Limits.install(Limits.defaults())
 
@@ -336,8 +336,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringTest do
   test "numeric overflow and affine overflow remain recoverable even with enlarged configured allowances" do
     Limits.install(%{
       Limits.effective()
-      | max_font_numeric_magnitude: round(1.0e308),
-        max_font_outline_coordinate: round(1.0e308)
+      | max_numeric_magnitude: round(1.0e308)
     })
 
     program =
@@ -379,7 +378,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringTest do
 
     assert {:ok, face} = CffCharstringValidator.prepare(data, 4)
     assert {:curve, 20, 30, 50, 70, 100, 130} in elem(face.glyphs, 3).commands
-    Limits.install(%{Limits.effective() | max_font_cff_work: 500})
+    Limits.install(%{Limits.effective() | max_work: 500})
     program = :binary.copy(<<12, 0>>, 500) <> <<14>>
 
     assert {:error, {:resource_limit_exceeded, _}} =

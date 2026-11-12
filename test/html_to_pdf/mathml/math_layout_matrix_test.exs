@@ -196,7 +196,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
     assert diagnostic.source == "אב" and diagnostic.message =~ "bidi"
     assert diagnostic.operation == :measure_math and diagnostic.stage == :layout
 
-    Limits.install(Map.put(Limits.effective(), :max_table_grid_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathLayout.measure(matrix([[ordinary]], style))
@@ -237,7 +237,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
       assert is_binary(diagnostic.message) and diagnostic.operation == :measure_math
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 30))
 
     large = %{
       prepared
@@ -407,7 +407,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
 
     assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
     assert {:ok, child} = MathLayout.measure(token("1", style))
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 30))
 
     boxed = %{
       prepared
@@ -541,7 +541,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
       assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
     end
 
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 30))
     border = %{top: 20.0, right: 20.0, bottom: 20.0, left: 20.0}
 
     assert {:error, {_, diagnostic}} =
@@ -750,7 +750,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
 
     assert {:ok, prepared} = MathLayoutValidator.prepare_element(natural, %{})
     assert {:ok, child} = MathLayout.measure(token("1", style))
-    Limits.install(Map.put(Limits.effective(), :max_css_numeric_magnitude, 30))
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 30))
     wide = %{prepared | style: Map.put(prepared.style, :border_spacing, {15.0, 0.0})}
 
     assert {:error, {:unsupported_html, diagnostic}} =
@@ -818,18 +818,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMatrixTest do
     assert {:ok, child} = MathLayout.measure(token("1", style))
     spaced = %{prepared | style: Map.put(prepared.style, :border_spacing, {3.0, 1.5})}
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_html_depth, 1))
+    Limits.install(Map.put(limits, :max_depth, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathTableValidator.prepare_geometry(spaced, [[child]])
 
-    assert diagnostic.source == "mtd" and diagnostic.message =~ "max_html_depth"
+    assert diagnostic.source == "mtd" and diagnostic.message =~ "max_depth"
     assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
-    Limits.install(Map.put(limits, :max_table_grid_work, 3))
+    Limits.install(Map.put(limits, :max_work, 3))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              MathTableValidator.prepare_geometry(spaced, [[child]])
 
-    assert diagnostic.message =~ "max_table_grid_work" and diagnostic.operation == :measure_math
+    assert diagnostic.message =~ "max_work" and diagnostic.operation == :measure_math
   end
 end

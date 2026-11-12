@@ -7,7 +7,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgParserWorkValidator do
   @spec validate(binary()) :: :ok | {:error, {atom(), map()}}
   def validate(source) do
     HtmlValidator.with_render_budget(fn ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, byte_size(source), :style)
+      HtmlValidator.reserve_render_resource(:max_work, byte_size(source), :style)
       # The implicit XML namespace is a protocol constant, not a resource ceiling.
       namespace = %{
         count: 1,
@@ -71,7 +71,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgParserWorkValidator do
             else
               namespace = hd(state.scopes)
               cost = byte_size(name) + namespace.bytes
-              HtmlValidator.reserve_render_resource(:max_html_tree_work, cost, :style)
+              HtmlValidator.reserve_render_resource(:max_work, cost, :style)
               attributes(rest, state, namespace, 0, 0, byte_size(name), cost)
             end
         end
@@ -138,7 +138,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgParserWorkValidator do
                         # The native parser also inserts bindings into a document-wide
                         # sorted namespace vector, including declarations on siblings.
                         HtmlValidator.reserve_render_resource(
-                          :max_html_tree_work,
+                          :max_work,
                           global_bytes,
                           :style
                         )
@@ -184,7 +184,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgParserWorkValidator do
                         qualified * (qualified + 1) * namespace.uri + merge_work
 
                     HtmlValidator.reserve_render_resource(
-                      :max_html_tree_work,
+                      :max_work,
                       cost - charged,
                       :style
                     )

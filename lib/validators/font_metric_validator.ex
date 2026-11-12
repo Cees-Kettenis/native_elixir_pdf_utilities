@@ -72,7 +72,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
             case prepare_descriptor(property, value) do
               {:ok, field} ->
                 Enum.each(field, fn {_key, value} ->
-                  if is_number(value), do: FontValidator.check(:max_font_numeric_magnitude, value)
+                  if is_number(value), do: FontValidator.check(:max_numeric_magnitude, value)
                 end)
 
                 {:cont, {:ok, Map.merge(prepared, field)}}
@@ -244,7 +244,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
   end
 
   defp bounded_size(scale, size) do
-    limit = NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude)
+    limit = NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude)
     magnitude = abs(scale)
 
     value =
@@ -252,7 +252,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
         do: limit + 1,
         else: abs(size) * magnitude
 
-    HtmlValidator.check_render_resource(:max_pdf_numeric_magnitude, value, :writer)
+    HtmlValidator.check_render_resource(:max_numeric_magnitude, value, :writer)
     size * scale
   end
 
@@ -273,11 +273,11 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
            ) and metrics.units_per_em > 0 and metrics.ascent >= 0 and metrics.descent <= 0)
 
     if is_number(scale) and scale >= 0 and
-         scale <= NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude) and
+         scale <= NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) and
          valid_metrics and is_number(glyph_scale) and glyph_scale >= 0 and
-         glyph_scale <= NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude) and
+         glyph_scale <= NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) and
          is_number(shift) and
-         abs(shift) <= NativeElixirPdfUtilities.Limits.get(:max_pdf_numeric_magnitude) do
+         abs(shift) <= NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) do
       :ok
     else
       NativeElixirPdfUtilities.Diagnostics.error(

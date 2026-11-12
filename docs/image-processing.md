@@ -40,7 +40,7 @@ DTD/entity declarations and escaped CSS resource syntax are rejected.
 a diagnostic. Use a same-document path reference for supported text paths.
 
 Morphology and convolution filters have a configurable
-[work budget](resource-limits.md#html-images-and-layout). Expensive filters and filter
+[work budget](resource-limits.md#raster-resources-and-precision). Expensive filters and filter
 combinations whose work cannot be bounded return `:resource_limit_exceeded`
 before conversion. Reduce raster dimensions, filter radius, kernel size or reuse.
 

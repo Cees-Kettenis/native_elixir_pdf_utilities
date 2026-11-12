@@ -32,8 +32,8 @@ and unrelated catalog name trees are preserved. Empty input returns the
 original PDF. Writes are incremental and reject signed documents.
 
 The complete output, including the original PDF and attachment metadata, must
-fit both `max_pdf_input_bytes` and `max_rendered_pdf_bytes`. See
-[incremental output limits](resource-limits.md#appearance-expansion-and-incremental-output).
+fit both `max_output_bytes` and `max_input_bytes`. See
+[shared processing budgets](resource-limits.md#shared-processing-budgets).
 
 `list/1` returns maps containing `:filename`, `:description`, `:mime_type`,
 and `:size`. Size is the declared uncompressed size and can be `nil` for an
@@ -74,7 +74,7 @@ or caller inference rather than being labeled MP4.
 ## Caller responsibilities
 
 Arbitrary binary payloads are supported within
-[resource limits](resource-limits.md#forms-and-attachments). The library
+[resource limits](resource-limits.md#shared-processing-budgets). The library
 preserves bytes exactly and does not fetch remote files or create automatic
 launch actions. The caller reads local files and decides what to embed.
 

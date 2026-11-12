@@ -47,10 +47,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
   # Attachment precedes flat projection. Unassigned light descendants still
   # have real shadow roots and logical form/ID associations of their own.
   defp collect_initial_roots(nodes, state, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     Enum.reduce(nodes, state, fn node, state ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       case node do
         %{type: :element, tag: "template"} ->
@@ -91,10 +91,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
   def compose_generated_roots(nodes, state), do: compose_nodes(nodes, state, nil, 0, :generated)
 
   defp compose_nodes(nodes, state, parent, depth, mode \\ :authored) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     Enum.reduce_while(nodes, {:ok, [], state}, fn node, {:ok, output, state} ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
       node = Map.put(node, :composed_parent_id, parent)
 
       result =
@@ -193,10 +193,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
   end
 
   defp distribute(nodes, light, assignment, state, claimed, scope, host, depth) do
-    HtmlValidator.check_render_resource(:max_html_depth, depth, :html)
+    HtmlValidator.check_render_resource(:max_depth, depth, :html)
 
     Enum.reduce(nodes, {[], state, claimed}, fn node, {output, state, claimed} ->
-      HtmlValidator.reserve_render_resource(:max_html_tree_work, 1, :html)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
 
       {node, state, claimed} =
         case {HtmlCompositionValidator.slot_element?(node), node} do
@@ -207,7 +207,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlComposition do
 
             assigned =
               if assignment == :named and first? do
-                HtmlValidator.reserve_render_resource(:max_html_tree_work, length(light), :html)
+                HtmlValidator.reserve_render_resource(:max_work, length(light), :html)
 
                 Enum.filter(light, fn child ->
                   case child do

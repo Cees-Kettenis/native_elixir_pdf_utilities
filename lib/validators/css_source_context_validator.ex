@@ -34,7 +34,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
         |> Enum.map_reduce([], fn {entry, index}, collected ->
           {authored, records} =
             Enum.map_reduce(entry.prepared.authored_rules, [], fn rule, records ->
-              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :css)
 
               reason =
                 cond do
@@ -54,7 +54,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
 
           rules =
             Enum.map(entry.prepared.rules, fn rule ->
-              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :css)
               %{rule | source_declarations: Map.fetch!(by_source, rule.source)}
             end)
 
@@ -84,7 +84,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
       select = fn declaration, _node, _pseudo ->
         case declaration do
           %{context_id: id} ->
-            HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :css)
             Process.put(selection_key, MapSet.put(Process.get(selection_key), id))
 
           _ ->
@@ -97,7 +97,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
       observe = fn declaration, node, pseudo ->
         case declaration do
           %{context_id: id} ->
-            HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+            HtmlValidator.reserve_render_resource(:max_work, 1, :css)
             owner = Map.take(node, [:node_id, :document_id, :tree_scope_id, :parent_id])
 
             context = %{
@@ -133,9 +133,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
           obligations =
             List.flatten(Enum.reverse(stylesheet_records) ++ Enum.reverse(inline_records))
             |> Enum.reduce_while({:ok, []}, fn record, {:ok, records} ->
-              HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+              HtmlValidator.reserve_render_resource(:max_work, 1, :css)
               matches = Map.get(checked, record.context_id, %{})
-              HtmlValidator.reserve_render_resource(:max_css_work, map_size(matches), :css)
+              HtmlValidator.reserve_render_resource(:max_work, map_size(matches), :css)
               contexts = Map.values(matches)
               original = Map.drop(record, [:context_id, :reason])
 
@@ -217,7 +217,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceContextValidator do
 
   defp prepare_records(records, origin, reason) do
     Enum.map_reduce(records, [], fn record, obligations ->
-      HtmlValidator.reserve_render_resource(:max_css_work, 1, :css)
+      HtmlValidator.reserve_render_resource(:max_work, 1, :css)
       id = make_ref()
       prepared = Map.put(record, :context_id, id)
 

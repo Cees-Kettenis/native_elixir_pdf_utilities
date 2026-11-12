@@ -483,15 +483,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistTest do
   test "semantic descendant work uses the shared cumulative tree budget" do
     previous = Limits.effective()
     on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_html_tree_work: 20})
-    assert Limits.get(:max_html_tree_work) == 20
+    Limits.install(%{previous | max_work: 20})
+    assert Limits.get(:max_work) == 20
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                HtmlValidator.descendant_text_content([%{type: :text, text: "abcdefghij"}])
              end)
 
-    assert diagnostic.stage == :style and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :style and diagnostic.message =~ "max_work"
   end
 
   defp initial_nodes(html) do

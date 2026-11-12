@@ -1,6 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 Code.require_file(Paths.support("browser_fixture_sheets.ex"))
+Code.require_file(Paths.support("open_type_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   use ExUnit.Case, async: true
@@ -309,7 +310,70 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
        {"leading_decimal_lengths.html", {0, 180, 300, 180}},
        {"whitespace_nowrap.html", {300, 180, 300, 180}},
        {"ligature_letter_spacing.html", {0, 360, 240, 180}},
-       {"quoted_variables.html", {300, 360, 300, 160}}
+       {"quoted_variables.html", {300, 360, 300, 160}},
+       # Bidi shares this existing capture; the original six regions remain
+       # at their original coordinates and thresholds above the new row.
+       {"bidi_inline_geometry.html", {0, 540, 600, 180}},
+       # The same capture also exercises the in-memory authored Indic face.
+       {"indic_inline_geometry.html", {0, 720, 600, 120}},
+       # Syllable signs use an unused panel of this existing row. Original
+       # samples, capture size and all previous thresholds remain unchanged.
+       {"Indic reph and syllable signs", {322, 729, 90, 40}},
+       {"unicode_wrap_geometry.html", {0, 840, 600, 120}},
+       # Authored manual opportunities reference the caller's tiny dictionary
+       # in the existing capture, adding no browser launch.
+       {"automatic_hyphenation.html", {0, 960, 600, 120}},
+       # Whitespace and tab geometry reuse this capture across block, table,
+       # flex and grid contexts. Existing regions keep their original inputs.
+       {"whitespace_tab_geometry.html", {0, 1080, 600, 120}},
+       # Spacing and alignment extend the same sheet. Hanging punctuation has
+       # a CSS Text 3 geometry reference because Chromium does not paint it.
+       {"spacing_geometry.html", {0, 1200, 600, 120}},
+       # Writing modes use the existing shared capture and an in-memory font.
+       {"writing_mode_geometry.html", {0, 1320, 600, 180}},
+       # Ruby controls share the capture and existing CJK outlines. Explicit
+       # group and em-box references cover Chromium's missing Ruby 1 controls.
+       # New ruby sample origins use whole CSS pixels so glyph comparisons
+       # exercise ruby placement independently of fractional positioned offsets.
+       {"ruby_controls_geometry.html", {0, 1500, 600, 120}},
+       # CSS Inline 3, 18 December 2024, sections 7.5 and 7.6. Chromium
+       # paints native initial-letter sizing here; no reference adapter or capture.
+       {"initial_letter_geometry.html", {0, 1620, 600, 240}},
+       # CSS Text Decoration 3, 5 May 2022, section 2.2. Double lines
+       # share the existing capture, fonts and unchanged scenario thresholds.
+       {"text_decoration_geometry.html", {0, 1860, 600, 120}},
+       # Emphasis shares the existing fonts and capture; marks also cross ligatures and bidi owners.
+       {"text_emphasis_geometry.html", {0, 1980, 600, 150}},
+       # CSS Inline 3 (2026-10-14), section 4. The reference uses authored
+       # CSS2-equivalent shifts where Chromium lacks the new HTML longhands.
+       # First/last baselines differ by exactly the two-line box's 20pt stride.
+       {"baseline_controls_geometry.html", {0, 2130, 600, 150}},
+       # Ruby no-wrap and prohibited column boundaries reuse this capture.
+       # The original typography regions keep their coordinates and tolerances.
+       {"ruby_fragmentation_geometry.html", {0, 2280, 600, 150}},
+       # Writing Modes 4, section 5.1.2 permits upright nominal Tr forms.
+       # These samples reuse existing fonts.
+       {"vertical_fallback_geometry.html", {0, 2430, 600, 150}},
+       # A new row shares this capture and authored font. Its own regions keep
+       # the original writing-mode canvas and thresholds unchanged. The row
+       # adds 72,000 native/Chromium raster pixels and no browser launch.
+       {"orthogonal_intrinsic_geometry.html", {0, 2580, 600, 60}},
+       # Physical emphasis sides and upright asymmetric marks extend the same
+       # capture using the existing authored face, with no additional launch.
+       {"vertical_emphasis_geometry.html", {0, 2640, 600, 120}},
+       {"vertical emphasis RL right", {0, 2640, 150, 120}},
+       {"vertical emphasis RL left", {150, 2640, 150, 120}},
+       {"vertical emphasis LR right", {300, 2640, 150, 120}},
+       {"vertical emphasis LR left", {450, 2640, 150, 120}},
+       # Synthesized metrics and contextual alternates extend this capture.
+       # Existing regions retain their coordinates, inputs and thresholds.
+       {"vertical_synthesized_metrics.html", {0, 2760, 600, 120}},
+       {"synthesized vertical metrics", {0, 2760, 300, 120}},
+       {"contextual vertical alternate", {300, 2760, 300, 120}},
+       {"orthogonal minimum grid", {0, 2580, 150, 60}},
+       {"orthogonal maximum flex", {150, 2580, 150, 60}},
+       {"orthogonal fit grid", {300, 2580, 150, 60}},
+       {"orthogonal calculated flex", {450, 2580, 150, 60}}
      ],
      [
        "Visible paragraph",
@@ -318,7 +382,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
        "Decimal sizes",
        "explicit break remains",
        "office file",
-       "var(--missing)"
+       "var(--missing)",
+       "אב abc גד",
+       "start ABC12 end",
+       "بِسْمِ سلام",
+       "कि क्षि र्कि",
+       "क्नि क्रि र्का",
+       "ܒܐ ܗܐ ܕܐ",
+       "hyphenation",
+       "Block stops",
+       "Table stops",
+       "京都東京",
+       "Flex stops",
+       "Grid wrap"
      ], ["Hidden", "hidden inline"]},
     {"compact_layout.html",
      [
@@ -333,7 +409,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
        {"visibility and hidden controls", {470, 310, 120, 50}},
        {"shaped ellipsis and line clamping", {250, 370, 110, 60}},
        {"opposing insets and isolated stacking", {370, 370, 100, 60}},
-       {"independent overflow axes and clip margin", {480, 370, 110, 60}}
+       {"independent overflow axes and clip margin", {480, 370, 110, 60}},
+       # Keep waves on this existing short sheet: Chromium rasterizes their
+       # shader at the whole-page bounds and downsamples tall-page records.
+       # Native strokes remain vectors; original inputs and captures are shared.
+       {"text_wave_geometry.html", {0, 440, 600, 120}},
+       # Text shadows reuse the selected-font capture, including blur and hidden descendants.
+       {"text_shadow_geometry.html", {0, 560, 600, 120}}
      ], ["@media print {BOGUS}", "First line", "Second …"], ["Hidden", "Third line"]}
   ]
 
@@ -5077,19 +5159,105 @@ for group <- 0..7 do
       @compact_absent absent
       @tag :compact_browser_fixtures
       test "matches Chromium for combined samples in #{@compact_fixture}" do
+        render_opts =
+          if @compact_fixture == "compact_typography.html" do
+            path = Paths.project("tmp/test_fonts/indic-shaping.ttf")
+            File.mkdir_p!(Path.dirname(path))
+            File.write!(path, NativeElixirPdfUtilities.TestSupport.OpenTypeFixture.indic_font())
+            syriac_path = Paths.project("tmp/test_fonts/syriac-shaping.ttf")
+
+            File.write!(
+              syriac_path,
+              NativeElixirPdfUtilities.TestSupport.OpenTypeFixture.syriac_font()
+            )
+
+            vertical_path = Paths.project("tmp/test_fonts/vertical-shaping.ttf")
+
+            File.write!(
+              vertical_path,
+              NativeElixirPdfUtilities.TestSupport.OpenTypeFixture.vertical_font()
+            )
+
+            contextual_path = Paths.project("tmp/test_fonts/contextual-vertical-shaping.ttf")
+
+            File.write!(
+              contextual_path,
+              NativeElixirPdfUtilities.TestSupport.OpenTypeFixture.contextual_vertical_font()
+            )
+
+            PdfVisualCompare.render_options_with_fonts(
+              Path.join(@fixtures_dir, @compact_fixture),
+              [
+                %{family: "Authored Vertical", path: vertical_path},
+                %{family: "Authored Contextual Vertical", path: contextual_path},
+                %{family: "Authored Indic", path: path},
+                %{family: "Authored Syriac", path: syriac_path},
+                %{
+                  family: "CJK Ruby Fixture",
+                  path: Paths.fixture("html_to_pdf/browser_parity/assets/cjk-ruby-fixture.ttf")
+                }
+              ]
+            )
+            |> Keyword.put(:hyphenation_dictionaries, %{
+              "en" => %{
+                exceptions: ["hy-phen-ation"],
+                provenance: %{source: "Authored browser hyphenation word"}
+              }
+            })
+          else
+            []
+          end
+
+        # Only this new wave sample compares native vectors with Chromium's
+        # rasterized whole-page tile shader. At 72dpi its repeated alpha edges
+        # differ by 1.12% of this region. Allow 1.25%, while preserving every
+        # pre-existing sample's 1% threshold. The colored-ink checks below also
+        # require each curve independently, so omitted strokes cannot pass.
+        region_thresholds =
+          if @compact_fixture == "compact_layout.html",
+            do: %{"text_wave_geometry.html" => %{max_changed_ratio: 0.0125}},
+            else: %{}
+
         stats =
           PdfVisualCompare.assert_browser_match!(Path.join(@fixtures_dir, @compact_fixture),
+            render_opts: render_opts,
             regions: @compact_regions,
+            region_thresholds: region_thresholds,
             chromium_transform:
-              if(@compact_fixture == "compact_layout.html",
-                do: &PdfVisualCompare.box_geometry_reference/1
-              ),
+              case @compact_fixture do
+                "compact_layout.html" -> &PdfVisualCompare.box_geometry_reference/1
+                "compact_typography.html" -> &PdfVisualCompare.typography_reference/1
+                _ -> nil
+              end,
             max_changed_ratio: 0.01,
             max_average_delta: 0.01
           )
 
         assert stats.page_count == 1
         assert length(hd(stats.pages).regions) == length(@compact_regions)
+
+        if @compact_fixture == "compact_layout.html" do
+          page = PdfVisualCompare.read_ppm!(Path.join(stats.artifact_dir, "native-1.ppm"))
+
+          for {name, {left, top, width, height}, minimum} <- [
+                {:underline, {12, 487, 75, 9}, 20},
+                {:rtl_underline, {143, 519, 43, 9}, 12},
+                {:overline, {210, 466, 75, 9}, 20},
+                {:strike, {408, 479, 75, 9}, 15}
+              ] do
+            count =
+              Enum.reduce(top..(top + height - 1), 0, fn y, count ->
+                row = binary_part(page.pixels, (y * page.width + left) * 3, width * 3)
+
+                count +
+                  for <<r, g, b <- row>>, reduce: 0 do
+                    ink -> if b - g > 20 and g - r > 20, do: ink + 1, else: ink
+                  end
+              end)
+
+            assert count >= minimum, "missing #{name} wave ink: #{count} colored pixels"
+          end
+        end
 
         assert {:ok, text} =
                  NativeElixirPdfUtilities.Text.extract(

@@ -34,7 +34,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
   end
 
   defp curve(points, precision) do
-    HtmlValidator.reserve_render_resource(:max_clip_projection_work, 1, :layout)
+    HtmlValidator.reserve_render_resource(:max_work, 1, :layout)
     {ax, ay} = hd(points)
     {bx, by} = List.last(points)
     squared = (bx - ax) * (bx - ax) + (by - ay) * (by - ay)
@@ -119,7 +119,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
     ys = Enum.flat_map(edges, fn {{_, y}, {_, b}} -> [y, b] end)
 
     HtmlValidator.reserve_render_resource(
-      :max_clip_projection_work,
+      :max_work,
       length(edges) * ceil(:math.log2(max(length(edges), 1))),
       :layout
     )
@@ -132,14 +132,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
       |> Enum.sort_by(fn {{{_, y}, {_, b}}, _} -> min(y, b) end)
       |> Enum.reduce({[], []}, fn {{{_, y}, {_, b}} = edge, index}, {active, ys} ->
         HtmlValidator.reserve_render_resource(
-          :max_clip_projection_work,
+          :max_work,
           length(active) + 1,
           :layout
         )
 
         low = min(y, b)
         active = Enum.filter(active, fn {{{_, a}, {_, b}}, _} -> max(a, b) >= low end)
-        HtmlValidator.reserve_render_resource(:max_clip_projection_work, length(active), :layout)
+        HtmlValidator.reserve_render_resource(:max_work, length(active), :layout)
 
         ys =
           Enum.reduce(active, ys, fn {other, previous}, ys ->
@@ -153,7 +153,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
     ys = ys ++ intersections
 
     HtmlValidator.reserve_render_resource(
-      :max_clip_projection_work,
+      :max_work,
       length(ys) * (1 + ceil(:math.log2(max(length(ys), 1)))),
       :layout
     )
@@ -163,7 +163,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
     {indexed, _count, contours} = scan_paths(expression, 0)
 
     HtmlValidator.reserve_render_resource(
-      :max_clip_projection_work,
+      :max_work,
       (length(contours) + length(edges)) *
         (1 + ceil(:math.log2(max(length(contours) + length(edges), 1)))),
       :layout
@@ -194,7 +194,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
         {_, active_boundaries} = boundaries
 
         HtmlValidator.reserve_render_resource(
-          :max_clip_projection_work,
+          :max_work,
           map_size(active_contours) + map_size(active_boundaries),
           :layout
         )
@@ -208,7 +208,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
         {scan, scan_work} = scan_expression(indexed, crossings)
 
         HtmlValidator.reserve_render_resource(
-          :max_clip_projection_work,
+          :max_work,
           map_size(active_boundaries) * ceil(:math.log2(max(map_size(active_boundaries), 1))),
           :layout
         )
@@ -219,7 +219,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
           |> Enum.sort_by(&elem(&1, 0))
           |> Enum.chunk_every(2, 1, :discard)
           |> Enum.flat_map(fn [{left, a}, {right, b}] ->
-            HtmlValidator.reserve_render_resource(:max_clip_projection_work, scan_work, :layout)
+            HtmlValidator.reserve_render_resource(:max_work, scan_work, :layout)
 
             if right > left and contains?(scan, (left + right) / 2) do
               [al, ar, bl, br] = [x_at(a, top), x_at(b, top), x_at(a, bottom), x_at(b, bottom)]
@@ -259,7 +259,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
       Enum.split_while(pending, fn {_, {_, {{_, a}, {_, b}}}} -> min(a, b) <= y end)
 
     HtmlValidator.reserve_render_resource(
-      :max_clip_projection_work,
+      :max_work,
       2 * (map_size(active) + length(new)) + 1,
       :layout
     )
@@ -339,7 +339,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
     case expression do
       {:contour, edges} ->
         HtmlValidator.reserve_render_resource(
-          :max_clip_projection_work,
+          :max_work,
           length(edges) + 1,
           :pagination
         )
@@ -356,7 +356,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
           {indexed, _count, contours} = scan_paths(expression, 0)
 
           HtmlValidator.reserve_render_resource(
-            :max_clip_projection_work,
+            :max_work,
             length(contours) * 2,
             :pagination
           )
@@ -372,7 +372,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
             end)
 
           {scan, work} = scan_expression(indexed, crossings)
-          HtmlValidator.reserve_render_resource(:max_clip_projection_work, work, :pagination)
+          HtmlValidator.reserve_render_resource(:max_work, work, :pagination)
           contains?(scan, x)
         end
 

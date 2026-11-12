@@ -109,7 +109,7 @@ defmodule NativeElixirPdfUtilities.Validators.SourceSizeValidator do
       }
 
       Enum.each(metrics, fn {_unit, value} ->
-        HtmlValidator.check_render_resource(:max_css_numeric_magnitude, value, :style)
+        HtmlValidator.check_render_resource(:max_numeric_magnitude, value, :style)
       end)
 
       {:ok, metrics}

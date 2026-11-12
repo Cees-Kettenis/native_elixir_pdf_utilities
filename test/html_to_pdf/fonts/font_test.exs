@@ -30,7 +30,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     width = Font.text_width("abc", font, 12)
     assert is_number(width) and width > 0
     limits = Limits.effective()
-    Limits.install(%{limits | max_layout_text_work: 1})
+    Limits.install(%{limits | max_work: 1})
 
     for {operation, run} <- [
           {:text_width, fn -> Font.text_width("abc", font, 12) end},
@@ -39,7 +39,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
         ] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} = run.()
       assert diagnostic.module == Font and diagnostic.operation == operation
-      assert diagnostic.message =~ "max_layout_text_work" and diagnostic.source == font.family
+      assert diagnostic.message =~ "max_work" and diagnostic.source == font.family
     end
 
     Limits.install(limits)
@@ -60,14 +60,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
         state
       end)
 
-      Limits.install(%{Limits.effective() | max_font_math_work: 1})
+      Limits.install(%{Limits.effective() | max_work: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                Font.resolve(family, 400, :normal, registry)
 
-      assert diagnostic.stage == :font
+      assert diagnostic.stage == :limits
       assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.message =~ "max_font_math_work"
+      assert diagnostic.message =~ "max_work"
     end
   end
 
@@ -85,16 +85,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       names = <<0::16, count::16, storage::16, records::binary, text::binary>>
       data = valid_tables() |> Map.put("name", names) |> ttf_fixture()
       limits = Limits.effective()
-      Limits.install(Map.put(limits, :max_font_name_bytes, byte_size(text) * 2))
+      Limits.install(Map.put(limits, :max_decoded_bytes, byte_size(text) * 2))
       assert {:ok, family} = FontValidator.prepare_font_family_name(data)
       assert family == :binary.copy(<<0x0800::utf8>>, 128)
 
-      Limits.install(Map.put(limits, :max_font_name_bytes, byte_size(text) * 2 - 1))
+      Limits.install(Map.put(limits, :max_decoded_bytes, byte_size(text) * 2 - 1))
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                FontValidator.prepare_font_family_name(data)
 
-      assert diagnostic.stage == :font and diagnostic.message =~ "max_font_name_bytes"
+      assert diagnostic.stage == :font and diagnostic.message =~ "max_decoded_bytes"
 
       # Invalid candidates share one range too. The valid fallback has distinct
       # bytes and must consume the remaining allowance before being decoded.
@@ -108,25 +108,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       expected_work = count + 1 + byte_size(bad) + byte_size(text)
 
       Limits.install(
-        %{limits | max_font_math_work: expected_work}
-        |> Map.put(:max_font_name_bytes, 4 * byte_size(text))
+        %{limits | max_work: expected_work}
+        |> Map.put(:max_decoded_bytes, 4 * byte_size(text))
       )
 
       assert {:ok, ^family} = FontValidator.prepare_font_family_name(fallback_data)
 
-      Limits.install(Map.put(Limits.effective(), :max_font_name_bytes, 4 * byte_size(text) - 1))
+      Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 4 * byte_size(text) - 1))
 
       assert {:error, {:resource_limit_exceeded, %{message: message}}} =
                FontValidator.prepare_font_family_name(fallback_data)
 
-      assert message =~ "max_font_name_bytes"
+      assert message =~ "max_decoded_bytes"
 
-      Limits.install(%{limits | max_font_math_work: expected_work - 1})
+      Limits.install(%{limits | max_work: expected_work - 1})
 
       assert {:error, {:resource_limit_exceeded, %{message: message}}} =
                FontValidator.prepare_font_family_name(fallback_data)
 
-      assert message =~ "max_font_math_work"
+      assert message =~ "max_work"
     end
 
     test "family lookup skips unused long records after selecting the preferred name" do
@@ -145,8 +145,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       Limits.install(
         Limits.effective()
-        |> Map.put(:max_font_name_bytes, 2 * byte_size(unicode))
-        |> Map.put(:max_font_math_work, 2 + byte_size(unicode))
+        |> Map.put(:max_decoded_bytes, 2 * byte_size(unicode))
+        |> Map.put(:max_work, 2 + byte_size(unicode))
       )
 
       assert {:ok, "Chosen"} = FontValidator.prepare_font_family_name(data)
@@ -192,7 +192,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       assert :error = Font.normalize_configs([%{family: "Valid", data: bytes} | :bad_tail])
 
-      Limits.install(%{Limits.effective() | max_font_count: 1})
+      Limits.install(%{Limits.effective() | max_entries: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlToPdf.render("<p>Hello</p>",
@@ -203,7 +203,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
                )
 
       assert diagnostic.operation == :render and diagnostic.module == HtmlToPdf
-      assert diagnostic.message =~ "max_font_count"
+      assert diagnostic.message =~ "max_entries"
     end
 
     test "independent text image defaults resolve the permitted serif bytes" do
@@ -214,7 +214,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert {:ok, family} = FontValidator.prepare_font_family_name(face.data)
       assert is_binary(family) and family != ""
 
-      Limits.install(%{Limits.effective() | max_font_source_bytes: 0, max_font_count: 0})
+      Limits.install(%{Limits.effective() | max_input_bytes: 0, max_entries: 0})
       assert {:ok, []} = FontValidator.prepare_svg_image_fonts([])
       assert {:ok, []} = FontValidator.prepare_svg_image_fonts([], system_font_discovery: false)
 
@@ -281,7 +281,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert face.source == :configured
       assert {:ok, "DejaVu Sans"} = FontValidator.prepare_font_family_name(face.data)
 
-      Limits.install(%{Limits.effective() | max_font_source_bytes: 0, max_font_count: 0})
+      Limits.install(%{Limits.effective() | max_input_bytes: 0, max_entries: 0})
       assert {:ok, []} = Font.load_configured_faces([])
     end
 
@@ -388,13 +388,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       end
 
       data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
-      Limits.install(%{Limits.effective() | max_font_math_work: 0})
+      Limits.install(%{Limits.effective() | max_work: 0})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                FontValidator.prepare_font_family_name(data)
 
-      assert diagnostic.stage == :font
-      assert diagnostic.message =~ "font"
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ "max_work"
     end
   end
 
@@ -420,14 +420,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
     assert spaced_right > right
 
-    limit = Limits.get(:max_pdf_numeric_magnitude)
+    limit = Limits.get(:max_numeric_magnitude)
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              FontValidator.prepare_text_ink_rectangle(%{box | x: limit})
 
     assert diagnostic.operation == :measure_child
     assert diagnostic.source == "A"
-    assert diagnostic.message =~ "max_pdf_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
 
     for invalid <- [Map.put(box, :glyph_ids, [0]), %{box | text: <<255>>}, %{box | x: "invalid"}] do
       assert {:error, {reason, diagnostic}} = FontValidator.prepare_text_ink_rectangle(invalid)
@@ -516,7 +516,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       {:ok, font: font}
     end
 
-    test "math token pairs use selected-font GPOS without changing ordinary text measurement", %{
+    test "math token pairs and ordinary text measurement share selected-font GPOS", %{
       font: font
     } do
       pairs = [
@@ -527,7 +527,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       assert {:ok, result} = FontValidator.prepare_math_kerning(font, pairs, "latn")
       assert Map.values(result) |> Enum.sort() == [-10, -10, -5]
-      assert Font.text_width("word", font, 20) == 43.64
+      # Independent HarfBuzz: advances 744 + 514 + 370 + 539 = 2167 units.
+      assert Font.text_width("word", font, 20) == 43.34
 
       FontValidator.with_budget(fn ->
         assert {:ok, ^result} = FontValidator.prepare_math_kerning(font, pairs, "latn")
@@ -1112,7 +1113,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       assert diagnostic.message =~ "class ranges"
 
-      Limits.install(%{Limits.effective() | max_font_math_work: 1})
+      Limits.install(%{Limits.effective() | max_work: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                MathFontValidator.prepare_pair_adjustments(
@@ -1122,7 +1123,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
                  "latn"
                )
 
-      assert diagnostic.message =~ "max_font_math_work"
+      assert diagnostic.message =~ "max_work"
     end
 
     test "canonical math preparation rejects malformed callers and preserves spaces and extents",
@@ -1367,11 +1368,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
         refute changed_glyph.width == glyph.width
       end)
 
-      Limits.install(%{Limits.effective() | max_layout_text_work: 1})
+      Limits.install(%{Limits.effective() | max_work: 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = MathLayout.glyph("𝑥", font, 20)
-      assert diagnostic.stage == :layout
+      assert diagnostic.stage == :font
       assert diagnostic.operation == :measure_math
-      assert diagnostic.message =~ "max_layout_text_work"
+      assert diagnostic.message =~ "max_work"
     end
 
     test "row baselines and italic correction follow the pinned placement algorithm", %{
@@ -1471,7 +1472,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
                  MathLayout.row(children)
       end
 
-      Limits.install(%{Limits.effective() | max_font_math_work: 1})
+      Limits.install(%{Limits.effective() | max_work: 1})
 
       assert {:error, {:resource_limit_exceeded, %{operation: :measure_math}}} =
                MathLayout.glyph("x", font, 10)
@@ -1730,7 +1731,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       assert diagnostic.stage == :font
       assert diagnostic.operation == :measure_math
-      assert diagnostic.message =~ "max_font_math_work"
+      assert diagnostic.message =~ "max_work"
 
       assert {:error, {:unsupported_glyph, diagnostic}} =
                MathLayout.stretch("x", font, 12, :vertical, 0)
@@ -1739,20 +1740,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert diagnostic.message =~ "no vertical stretch construction"
 
       limits = Limits.effective()
-      Limits.install(%{limits | max_layout_boxes: 3})
+      Limits.install(%{limits | max_entries: 3})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                MathLayout.stretch("(", font, 12, :vertical, 80)
 
-      assert diagnostic.message =~ "max_layout_boxes"
+      assert diagnostic.message =~ "max_entries"
       assert diagnostic.operation == :measure_math
 
-      Limits.install(%{limits | max_layout_boxes: 100})
+      Limits.install(%{limits | max_entries: 100})
 
       assert {:error, {:resource_limit_exceeded, _}} =
                MathLayout.stretch("(", font, 0.000001, :vertical, 100_000)
 
-      Limits.install(%{limits | max_layout_boxes: 13})
+      Limits.install(%{limits | max_entries: 13})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                MathLayout.with_context(fn ->
@@ -1760,7 +1761,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
                  MathLayout.stretch("(", font, 12, :vertical, 80)
                end)
 
-      assert diagnostic.message =~ "max_layout_boxes"
+      assert diagnostic.message =~ "max_entries"
     end
   end
 
@@ -1948,7 +1949,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
     test "decoded byte and expanded entry work uses the cumulative shared limit" do
       data = math_table()
-      Limits.install(%{Limits.effective() | max_font_math_work: byte_size(data)})
+      Limits.install(%{Limits.effective() | max_work: byte_size(data)})
       assert {:ok, _} = MathFontValidator.prepare(data, 8)
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -1959,9 +1960,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
       assert diagnostic.stage == :font
       assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.message =~ "max_font_math_work"
+      assert diagnostic.message =~ "max_work"
 
-      Limits.install(%{Limits.effective() | max_font_math_work: 241})
+      Limits.install(%{Limits.effective() | max_work: 241})
       assert {:error, {:resource_limit_exceeded, _}} = MathFontValidator.prepare(data, 8)
     end
 
@@ -1985,7 +1986,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       {xmin, ymin, xmax, ymax} = elem(bounds, font.cmap[?√])
       assert xmin < xmax
       assert ymin < ymax
-      Limits.install(%{Limits.effective() | max_font_math_work: 1})
+      Limits.install(%{Limits.effective() | max_work: 1})
       assert {:ok, _} = Font.load_registry(system_font_discovery: false)
       assert {:error, {:resource_limit_exceeded, _}} = Font.math_metrics(font)
     end
@@ -1993,12 +1994,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     test "direct selected-font metrics enforce font source limits before parsing" do
       assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
       assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
-      Limits.install(%{Limits.effective() | max_font_source_bytes: 1})
+      Limits.install(%{Limits.effective() | max_input_bytes: 1})
 
       assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
                Font.math_metrics(font)
 
-      assert message =~ "max_font_source_bytes"
+      assert message =~ "max_input_bytes"
     end
   end
 
@@ -2221,15 +2222,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert {:error, {:invalid_document, %{source: "selected font GSUB table"}}} =
                Font.math_metrics(invalid)
 
-      Limits.install(%{Limits.effective() | max_font_math_work: 1})
+      Limits.install(%{Limits.effective() | max_work: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                MathFontValidator.prepare_substitutions(gsub, 2)
 
       assert diagnostic.stage == :font
-      assert diagnostic.message =~ "max_font_math_work"
+      assert diagnostic.message =~ "max_work"
 
-      Limits.install(%{Limits.effective() | max_font_math_work: 68})
+      Limits.install(%{Limits.effective() | max_work: 68})
       assert {:ok, _} = MathFontValidator.prepare_substitutions(gsub, 2)
 
       assert {:error, {:resource_limit_exceeded, _}} =
@@ -2336,21 +2337,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
   test "format-12 preparation shares the existing cumulative work budget" do
     full = cmap_format12_table([{0x1D465, 0x1D467, 1}])
     cmap = <<0::16, 2::16, 0::16, 4::16, 20::32, 3::16, 10::16, 20::32, full::binary>>
-    Limits.install(%{Limits.effective() | max_font_cmap_work: 6})
+    Limits.install(%{Limits.effective() | max_work: 6})
     assert {:ok, [[{0x1D465, 0x1D467, 0, {:sequential, 1}}]]} = FontValidator.prepare_cmap(cmap)
 
     for budget <- [1, 2, 5] do
-      Limits.install(%{Limits.effective() | max_font_cmap_work: budget})
+      Limits.install(%{Limits.effective() | max_work: budget})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = FontValidator.prepare_cmap(cmap)
       assert diagnostic.stage == :limits
       assert diagnostic.message =~ "character-map work"
     end
 
-    Limits.install(%{Limits.effective() | max_font_cmap_work: 3})
+    Limits.install(%{Limits.effective() | max_work: 3})
     data = valid_tables() |> Map.put("cmap", cmap) |> ttf_fixture()
 
     assert {:error, {:resource_limit_exceeded, %{module: Font, operation: :load_registry}}} =
-             HtmlToPdf.render("<p>𝑥</p>", fonts: [%{family: "Bounded Unicode", data: data}])
+             Font.load_registry(fonts: [%{family: "Bounded Unicode", data: data}])
   end
 
   test "bundled STIX Two Math is pinned, lazy, and accepts caller overrides" do
@@ -3061,7 +3062,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert after_work - before_work < 200_000
 
     limits = Limits.effective()
-    Limits.install(%{limits | max_layout_text_work: 70_000})
+    Limits.install(%{limits | max_work: 70_000})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.Validators.HtmlValidator.with_render_budget(fn ->
@@ -3070,7 +3071,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              end)
 
     assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_layout_text_work"
+    assert diagnostic.message =~ "max_work"
     assert Font.text_width("", font, 10) == 0.0
   end
 
@@ -3129,7 +3130,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       default_width: 600
     }
 
-    Limits.install(%{Limits.effective() | max_layout_text_work: 3})
+    Limits.install(%{Limits.effective() | max_work: 3})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -3140,13 +3141,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              end)
 
     assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_layout_text_work"
+    assert diagnostic.message =~ "max_work"
 
     Limits.install(%{
       Limits.effective()
-      | max_layout_text_work: 20,
-        max_layout_measurement_cache_bytes: 1,
-        max_layout_measurement_cache_entries: 1
+      | max_work: 20,
+        max_cache_bytes: 1,
+        max_entries: 1
     })
 
     assert Font.with_measurement_cache(fn ->
@@ -3168,7 +3169,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       default_width: 700
     }
 
-    Limits.install(%{Limits.effective() | max_layout_text_work: 70_000})
+    Limits.install(%{Limits.effective() | max_work: 70_000})
 
     assert HtmlValidator.with_render_budget(fn ->
              Font.with_measurement_cache(fn ->
@@ -3208,14 +3209,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              end)
     end
 
-    Limits.install(%{Limits.effective() | max_layout_measurement_cache_entries: 1})
+    Limits.install(%{Limits.effective() | max_entries: 1})
 
     assert Font.with_measurement_cache(fn ->
              assert Font.text_width("A", font, 10) == 6.0
              assert Font.text_width("A", %{font | widths: [0, 900, 700]}, 10) == 9.0
            end)
 
-    Limits.install(%{Limits.defaults() | max_layout_text_work: 100_000})
+    Limits.install(%{Limits.defaults() | max_work: 100_000})
     high = %{font | cmap: %{?A => 65_535}, widths: [0, 600, 700]}
 
     assert HtmlValidator.with_render_budget(fn ->
@@ -3271,7 +3272,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     unsupported = <<0::16, 6::16, 1::8, 1::8>>
     assert {:ok, %{}} = FontValidator.prepare_kerning(<<0::16, 1::16, unsupported::binary>>, 3)
 
-    Limits.install(%{Limits.effective() | max_font_kerning_pairs: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
     for data <- [kern, <<0::16, 2::16>>] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
@@ -3284,7 +3285,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert diagnostic.message =~ "kerning"
     end
 
-    Limits.install(%{Limits.effective() | max_font_kerning_pairs: 2})
+    Limits.install(%{Limits.effective() | max_work: 2})
 
     assert {:error, {:resource_limit_exceeded, _}} =
              FontValidator.prepare_kerning(
@@ -3573,10 +3574,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert {:ok, registry} = Font.load_registry([])
     assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
 
-    without_ligatures = %{
-      font
-      | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
-    }
+    # GSUB can form ligatures even without Unicode presentation cmap entries.
+    # Disable them explicitly for the comparison with nonzero tracking.
+    without_ligatures =
+      %{
+        font
+        | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
+      }
+      |> Map.put(:feature_plan, %{features: %{"liga" => 0, "clig" => 0}})
 
     for spacing <- [4, -1] do
       assert Font.shape_ligatures("ffi file", font, spacing) == "ffi file"
@@ -3786,11 +3791,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     format4 = cmap_format4_table(65, 65, 1, 0)
     duplicated = <<0::16, 2::16, 0::16, 0::16, 20::32, 1::16, 0::16, 20::32, format4::binary>>
 
-    Limits.install(%{Limits.effective() | max_font_cmap_work: 4})
+    Limits.install(%{Limits.effective() | max_work: 4})
     assert {:ok, [[{65, 65, 1, nil}]]} = FontValidator.prepare_cmap(duplicated)
 
     for budget <- [1, 2, 3] do
-      Limits.install(%{Limits.effective() | max_font_cmap_work: budget})
+      Limits.install(%{Limits.effective() | max_work: budget})
 
       assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
                FontValidator.prepare_cmap(duplicated)
@@ -3807,12 +3812,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       <<0::16, 2::16, 3::16, 10::16, 20::32, 3::16, 1::16, 44::32, malformed::binary,
         format4::binary>>
 
-    Limits.install(%{Limits.effective() | max_font_cmap_work: 4})
+    Limits.install(%{Limits.effective() | max_work: 4})
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              FontValidator.prepare_cmap(alternatives)
 
-    Limits.install(%{Limits.effective() | max_font_cmap_work: 6})
+    Limits.install(%{Limits.effective() | max_work: 6})
     assert {:ok, [[{65, 65, 1, nil}]]} = FontValidator.prepare_cmap(alternatives)
   end
 
@@ -3824,7 +3829,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
 
     File.write!(path, data)
     on_exit(fn -> File.rm(path) end)
-    Limits.install(%{Limits.effective() | max_font_cmap_work: 1})
+    Limits.install(%{Limits.effective() | max_work: 1})
 
     for source <- [%{data: data}, %{path: path}] do
       fonts = [Map.put(source, :family, "Bounded Font")]
@@ -3833,9 +3838,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert diagnostic.stage == :limits
       assert diagnostic.module == Font
       assert diagnostic.operation == :load_registry
-      assert diagnostic.message =~ "character-map work"
+      assert diagnostic.message =~ "max_work"
 
-      assert {:error, {:resource_limit_exceeded, %{module: Font, operation: :load_registry}}} =
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{module: HtmlValidator, operation: :render, stage: :html}}} =
                HtmlToPdf.render("<p>A</p>", fonts: fonts)
     end
   end

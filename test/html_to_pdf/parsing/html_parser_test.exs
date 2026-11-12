@@ -209,33 +209,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     html = "<template><?marker><?end></template>"
-    Limits.install(%{limits | max_html_tree_work: 3 * byte_size(html)})
+    Limits.install(%{limits | max_work: 3 * byte_size(html)})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
 
-    Limits.install(%{limits | max_html_nodes: 2})
+    Limits.install(%{limits | max_entries: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlParser.parse_detailed("<?marker><?end><?marker>")
 
-    assert diagnostic.message =~ "max_html_nodes"
+    assert diagnostic.message =~ "max_entries"
 
-    Limits.install(%{limits | max_html_source_bytes: 8})
+    Limits.install(%{limits | max_input_bytes: 8})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlParser.parse_detailed("<?marker>")
 
-    assert diagnostic.message =~ "max_html_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
 
-    Limits.install(%{limits | max_aggregate_html_source_bytes: 8})
+    Limits.install(%{limits | max_input_bytes: 8})
     assert {:error, {:resource_limit_exceeded, _}} = HtmlParser.parse_detailed("<?marker>")
 
-    Limits.install(%{limits | max_html_depth: 1})
+    Limits.install(%{limits | max_depth: 1})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlParser.parse_detailed("<template><div><?marker></div></template>")
 
-    assert diagnostic.message =~ "max_html_depth"
+    assert diagnostic.message =~ "max_depth"
   end
 
   test "legacy raw text preserves markup, entities and initial newlines after preprocessing" do
@@ -438,32 +438,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       html = "<#{tag}>é\r\n" <> String.duplicate("<img src=denied.png>&amp;", 20)
       html = if tag == "plaintext", do: html, else: html <> "</#{tag}>"
 
-      Limits.install(%{limits | max_html_source_bytes: byte_size(html) - 1})
+      Limits.install(%{limits | max_input_bytes: byte_size(html) - 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-      assert diagnostic.stage == :html and diagnostic.message =~ "max_html_source_bytes"
+      assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
 
-      Limits.install(%{limits | max_aggregate_html_source_bytes: byte_size(html) - 1})
+      Limits.install(%{limits | max_input_bytes: byte_size(html) - 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-      assert diagnostic.stage == :html and diagnostic.message =~ "max_aggregate_html_source_bytes"
+      assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
 
-      Limits.install(%{limits | max_html_nodes: if(tag == "plaintext", do: 2, else: 3)})
+      Limits.install(%{limits | max_entries: if(tag == "plaintext", do: 2, else: 3)})
       assert {:ok, %{children: [%{children: [%{type: :text}]}]}} = HtmlParser.parse_detailed(html)
 
-      Limits.install(%{limits | max_html_nodes: 1})
+      Limits.install(%{limits | max_entries: 1})
       assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
 
       assert diagnostic.stage == :html and
                diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
 
-      assert diagnostic.message =~ "max_html_nodes"
+      assert diagnostic.message =~ "max_entries"
 
       assert {:ok, _} = HtmlParser.parse_fragment(html, tag)
-      Limits.install(%{limits | max_html_depth: 1})
+      Limits.install(%{limits | max_depth: 1})
 
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                HtmlParser.parse_detailed("<div>" <> html <> "</div>")
 
-      assert diagnostic.stage == :html and diagnostic.message =~ "max_html_depth"
+      assert diagnostic.stage == :html and diagnostic.message =~ "max_depth"
     end
   end
 
@@ -645,17 +645,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     on_exit(fn -> Limits.install(limits) end)
     html = "<p>A\r\nB</p>"
     bytes = byte_size(html)
-    Limits.install(%{limits | max_html_source_bytes: bytes - 1})
+    Limits.install(%{limits | max_input_bytes: bytes - 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_html_source_bytes"
-    Limits.install(%{limits | max_aggregate_html_source_bytes: bytes - 1})
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
+    Limits.install(%{limits | max_input_bytes: bytes - 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_aggregate_html_source_bytes"
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
 
     Limits.install(%{
       limits
-      | max_html_source_bytes: bytes,
-        max_aggregate_html_source_bytes: bytes
+      | max_input_bytes: bytes
     })
 
     assert {:ok, _} = HtmlParser.parse_detailed(html)
@@ -1493,13 +1492,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       alias NativeElixirPdfUtilities.Limits
       limits = Limits.effective()
       on_exit(fn -> Limits.install(limits) end)
-      Limits.install(%{limits | max_html_depth: 2})
+      Limits.install(%{limits | max_depth: 2})
 
       assert {:error, {:resource_limit_exceeded, %{stage: :html, message: message}}} =
                HtmlParser.parse_detailed("<math><mrow><mi>x</mi></mrow></math>")
 
-      assert message =~ "max_html_depth"
-      Limits.install(%{limits | max_aggregate_html_source_bytes: 18})
+      assert message =~ "max_depth"
+      Limits.install(%{limits | max_input_bytes: 18})
 
       assert {:error, {:resource_limit_exceeded, %{stage: :html}}} =
                HtmlParser.parse_fragment("<span>text</span>", %{

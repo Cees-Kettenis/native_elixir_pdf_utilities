@@ -46,6 +46,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
     {:ok, fields: fields, context: context}
   end
 
+  test "affine source appearances retain late serialization failures in an active render scope",
+       %{fields: fields} do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      assert {:ok, descriptor} = EmbeddedFormValidator.issue(context, fields)
+      Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               EmbeddedFormValidator.compose_affine(
+                 descriptor,
+                 {1, 0, 0, 1, 0, 0},
+                 {0, 0, 200, 120},
+                 nil
+               )
+
+      assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.stage)
+    end)
+  end
+
+  test "text appearance projection preserves nested output exhaustion", %{fields: fields} do
+    field = Enum.find(fields, &(&1.type == :text))
+    [left, bottom, right, top] = field.rect
+
+    projected =
+      FormAppearanceValidator.project_field(
+        field,
+        {1, 0, 0, 1, 0, 0},
+        [[{left, bottom}, {right, bottom}, {right, top}, {left, top}]],
+        {left, bottom, right, top}
+      )
+
+    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
+
+    assert :checked =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        FormAppearanceValidator.appearance(
+                          projected,
+                          projected.source_editor,
+                          "Changed"
+                        )
+
+               assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.operation)
+               :checked
+             end)
+  end
+
   test "unscoped prepared text uses a local frame for portable original-font filling", %{
     fields: fields,
     context: context
@@ -190,13 +236,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
                 {:value, Map.delete(widget.dictionary, "NEPUSourceEditor")}}
              ])
 
-    assert :ok = Limits.install(%{Limits.effective() | max_rendered_text_bytes: 2})
+    assert :ok = Limits.install(%{Limits.effective() | max_output_bytes: 2})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Forms.fill(external, %{"editor" => "Changed"})
 
     assert diagnostic.source == "editor" and diagnostic.operation == :fill
-    assert diagnostic.message =~ "password display exceeds max_rendered_text_bytes"
+    assert diagnostic.message =~ "aggregate text or widget count limit"
   end
 
   test "grouped native glyph button states extract their selected characters", %{

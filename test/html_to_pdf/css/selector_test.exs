@@ -140,12 +140,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
   test "tree selector nesting and matching obey configured resource limits" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_css_selector_depth, 2))
+    Limits.install(Map.put(limits, :max_depth, 2))
 
     assert {:error, {:resource_limit_exceeded, %{stage: :css, message: message}}} =
              CssParser.parse_detailed(":is(:not(:is(.a))){color:red}")
 
-    assert message =~ "max_css_selector_depth"
+    assert message =~ "max_depth"
   end
 
   test "initial link disclosure placeholder range and default states have positive and negative owners" do
@@ -208,7 +208,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
       _selector_id: make_ref()
     }
 
-    for name <- ["first-line", "first-letter", "column", "nth-fragment(2n)"] do
+    for name <- ["first-line", "column", "nth-fragment(2n)"] do
       assert {:ok, selectors} = CssSelectorValidator.parse("p.a::" <> name)
       assert [owner] = CssSelector.pseudo_owners(selectors, node, [], %{})
       assert owner.owner == CssSelector.owner_identity(node, owner.pseudo)

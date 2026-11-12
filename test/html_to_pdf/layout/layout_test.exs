@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   use ExUnit.Case
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Limits
@@ -113,7 +114,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
     original_limits = Limits.effective()
     on_exit(fn -> Limits.install(original_limits) end)
-    Limits.install(%{original_limits | max_css_numeric_magnitude: 10})
+    Limits.install(%{original_limits | max_numeric_magnitude: 10})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              Layout.layout(styled, page_size: "9pt 9pt", margin: 0)
@@ -121,7 +122,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert diagnostic.stage == :layout and diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.operation == :prepare_scrollbar
     assert diagnostic.source == "scrollbar geometry"
-    assert diagnostic.message =~ "max_css_numeric_magnitude"
+    assert diagnostic.message =~ "max_numeric_magnitude"
     assert diagnostic.message =~ "reduce the viewport dimensions"
   end
 
@@ -1482,7 +1483,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, layout} = Layout.layout(styled, page_size: {140, 100}, margin: 0)
     text = Enum.filter(layout.boxes, &(&1.type == :text))
     decorations = Enum.filter(layout.boxes, &(Map.get(&1, :role) == :text_decoration))
-    assert length(decorations) == 3 * length(text)
+    # Ink skipping can divide an underline around a descender; every text
+    # fragment still owns its overline, strike and remaining underline pieces.
+    assert length(decorations) >= 3 * length(text)
+
+    for box <- text do
+      assert Enum.count(decorations, &(&1.fragment_id == box.fragment_id)) >= 3
+    end
+
     assert length(Enum.uniq_by(text, & &1.y)) > 1
     assert Enum.all?(decorations, &Map.has_key?(&1, :fragment_id))
 
@@ -1519,7 +1527,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     end
 
     assert Enum.all?(decorations, fn decoration ->
-             Enum.any?(text, &(abs(&1.annotation_width - decoration.width) < 0.001))
+             Enum.any?(
+               text,
+               &(&1.fragment_id == decoration.fragment_id and decoration.x >= &1.x - 0.001 and
+                   decoration.x + decoration.width <= &1.x + &1.annotation_width + 0.001)
+             )
            end)
 
     for css <- ["text-decoration-color:transparent", "font-size:0"] do
@@ -1613,10 +1625,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
     assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
 
-    assert [%{text: "AB", annotation_width: width}] =
-             Enum.filter(layout.boxes, &(&1.type == :text))
+    assert [%{type: :glyph_group, actual_text: "A\tB", boxes: children, width: group_width}] =
+             layout.boxes
 
-    assert width == 0
+    assert group_width == 0
+    assert Enum.map(children, & &1.text) == ["A", " ", "B"]
+    assert Enum.all?(children, &(&1.annotation_width == 0 and &1.x == 0))
 
     assert {:ok, _pdf} =
              NativeElixirPdfUtilities.HtmlToPdf.render("<pre style='font-size:0'>A\tB</pre>")
@@ -1643,13 +1657,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
 
     assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
     assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
-    [first, second, third] = Enum.filter(layout.boxes, &(&1.type == :text))
-    assert first.text == "  A     B  "
-    assert first.annotation_width > 30
+    [first, following] = layout.boxes
+    assert first.type == :glyph_group and first.actual_text == "  A\tB  \n"
+    assert first.width > 30
+    assert Enum.map(first.boxes, & &1.text) == ["  A", " ", "B  "]
+    [prefix, tab, suffix] = first.boxes
+    space = Font.css_text_width(" ", prefix.font_face, 10)
+    assert_in_delta suffix.x - prefix.x, 8 * space, 0.03
+    assert_in_delta tab.annotation_width, 5 * space, 0.03
+    assert following.type == :glyph_group and following.actual_text == " C  D"
+    [second, third] = following.boxes
     assert second.text == " C"
     assert third.text == "  D"
     assert second.y == third.y
-    assert_in_delta first.y - second.y, 14, 0.001
+    assert_in_delta prefix.y - second.y, 14, 0.001
 
     for mode <- ["pre-wrap", "break-spaces"] do
       assert {:ok, dom} =
@@ -2865,7 +2886,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
       # Each layout issues fresh decoration identities. Compare the complete
       # source geometry and flow while retaining the separate identity coverage.
       normalize = fn boxes ->
-        Enum.map(boxes, &Map.drop(&1, [:fieldset_paint_id, :fieldset_ancestors]))
+        normalize = fn normalize, boxes ->
+          Enum.map(boxes, fn box ->
+            box = Map.drop(box, [:fieldset_paint_id, :fieldset_ancestors, :_text_line])
+
+            if Map.has_key?(box, :boxes),
+              do: %{box | boxes: normalize.(normalize, box.boxes)},
+              else: box
+          end)
+        end
+
+        normalize.(normalize, boxes)
       end
 
       assert %{raw_layout | boxes: normalize.(raw_layout.boxes)} ==
@@ -4638,7 +4669,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
   test "layout returns an error when background repetition exceeds its resource limit" do
     original_limits = Limits.effective()
     on_exit(fn -> Limits.install(original_limits) end)
-    Limits.install(Map.put(original_limits, :max_background_image_tiles, 1))
+    Limits.install(Map.put(original_limits, :max_entries, 1))
 
     style =
       block_style()
@@ -4660,9 +4691,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
                margin: 0
              )
 
-    assert diagnostic.stage == :limits
+    assert diagnostic.stage == :layout
     assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message == "background image tile count exceeds the 1-tile limit"
+    assert diagnostic.message =~ "max_entries"
+
+    Limits.install(original_limits)
 
     assert {:error, :invalid_layout} =
              Layout.layout(

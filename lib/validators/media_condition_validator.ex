@@ -13,7 +13,7 @@ defmodule NativeElixirPdfUtilities.Validators.MediaConditionValidator do
   end
 
   defp parse(query, depth, query?) do
-    HtmlValidator.check_render_resource(:max_media_query_depth, depth, :style)
+    HtmlValidator.check_render_resource(:max_depth, depth, :style)
     source = HtmlValidator.trim_css_whitespace(query)
 
     tokens = NativeElixirPdfUtilities.Validators.CssMathValidator.component_tokens(source, false)

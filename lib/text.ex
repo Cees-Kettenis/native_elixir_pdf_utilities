@@ -267,7 +267,7 @@ defmodule NativeElixirPdfUtilities.Text do
   defp extract_file_with(path, opts, operation, extractor) do
     case TextValidator.validate_path(path, operation) do
       {:ok, path} ->
-        case NativeElixirPdfUtilities.FileReader.read(path, Limits.get(:max_pdf_input_bytes)) do
+        case NativeElixirPdfUtilities.FileReader.read(path, Limits.get(:max_input_bytes)) do
           {:ok, pdf_binary} ->
             case extractor.(pdf_binary, opts) do
               {:ok, result} ->

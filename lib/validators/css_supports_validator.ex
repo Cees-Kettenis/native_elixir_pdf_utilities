@@ -19,7 +19,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSupportsValidator do
   end
 
   defp condition(values, depth) do
-    HtmlValidator.check_render_resource(:max_css_syntax_depth, depth, :css)
+    HtmlValidator.check_render_resource(:max_depth, depth, :css)
 
     case values do
       [%{kind: :token, text: keyword}, term] ->

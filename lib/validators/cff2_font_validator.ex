@@ -207,7 +207,7 @@ defmodule NativeElixirPdfUtilities.Validators.Cff2FontValidator do
       when is_number(a) and is_number(b) and is_number(c) and is_number(d) and is_number(e) and
              is_number(f) ->
         unless a * d - b * c != 0, do: invalid("CFF2 FontMatrix is singular")
-        Enum.each(items, &FontValidator.check(:max_font_numeric_magnitude, ceil(abs(&1))))
+        Enum.each(items, &FontValidator.check(:max_numeric_magnitude, ceil(abs(&1))))
         items
 
       _ ->
@@ -230,7 +230,7 @@ defmodule NativeElixirPdfUtilities.Validators.Cff2FontValidator do
   end
 
   defp read(data, offset, size) do
-    FontValidator.reserve(:max_font_cff_work, max(size, 1))
+    FontValidator.reserve(:max_work, max(size, 1))
 
     # Header fields and DICT admission already guarantee nonnegative offsets
     # and sizes. The large-store remainder follows its admitted length field.

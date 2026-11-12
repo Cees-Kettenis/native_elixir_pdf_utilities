@@ -113,6 +113,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.NativeTextProvenanceTest do
            end) == field.value
   end
 
+  test "combining and contextual clusters cross identical inline styles without losing either owner" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{Style, FontFallback, Layout, Pagination}
+    alias NativeElixirPdfUtilities.Validators.WriterValidator
+
+    for {html, logical, compound} <- [
+          {"<p>a<span>́</span></p>", "á", "á"},
+          {"<p style='font-feature-settings:\"dlig\" 1'>s<span>t</span></p>", "st", "st"},
+          {"<p>س<span>لام</span></p>", "سلام", "لا"}
+        ] do
+      HtmlValidator.with_render_budget(fn ->
+        assert {:ok, dom} = HtmlParser.parse(html)
+        assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+        sourced = NativeGlyphSourceValidator.prepare_tree(styled)
+        assert {:ok, resolved} = FontFallback.resolve(sourced)
+        assert {:ok, layout} = Layout.layout(resolved)
+        assert {:ok, pages} = Pagination.paginate(layout)
+        assert {:ok, context} = WriterValidator.prepare(pages, [])
+
+        glyphs =
+          context.pages
+          |> Enum.flat_map(& &1.boxes)
+          |> Enum.flat_map(&Map.get(&1, :native_glyph_runs, []))
+
+        assert Enum.any?(glyphs, fn glyph ->
+                 Enum.map_join(glyph.source_fragments, & &1.text) == compound
+               end)
+
+        fragments = Enum.flat_map(glyphs, & &1.source_fragments)
+        owners = fragments |> Enum.map(& &1.owner.node_id) |> Enum.uniq()
+        assert length(owners) == 2
+        assert length(fragments) == length(String.codepoints(logical))
+        assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render(pages)
+        assert {:ok, ^logical} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+      end)
+    end
+  end
+
   test "discretionary breaks select the font hyphen while omitted source markers remain unpainted" do
     assert {:ok, document} = HtmlParser.parse_document_detailed("<p>co&#xAD;</p>")
     tree = HtmlTree.from_document(document)

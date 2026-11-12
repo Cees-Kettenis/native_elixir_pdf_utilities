@@ -107,8 +107,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AnonymousTableTest do
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                HtmlValidator.reserve_render_resource(
-                 :max_table_grid_work,
-                 NativeElixirPdfUtilities.Limits.get(:max_table_grid_work),
+                 :max_work,
+                 NativeElixirPdfUtilities.Limits.get(:max_work),
                  :layout
                )
 
@@ -116,6 +116,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AnonymousTableTest do
              end)
 
     assert diagnostic.stage == :layout and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_table_grid_work"
+    assert diagnostic.message =~ "max_work"
   end
 end

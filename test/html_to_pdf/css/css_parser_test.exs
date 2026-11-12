@@ -294,12 +294,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
       assert {:ok, []} = CssParser.parse_detailed("p:nth-child(" <> expression <> "){color:red}")
     end
 
-    for expression <- ["1000000001n", "-1000000001", "n+1000000001"] do
+    for expression <- ["4294967296n", "-4294967296", "n+4294967296"] do
       assert {:error, {:resource_limit_exceeded, diagnostic}} =
                CssParser.parse_detailed("p:nth-of-type(" <> expression <> "){color:red}")
 
       assert diagnostic.stage == :css
-      assert diagnostic.message =~ "max_css_numeric_magnitude"
+      assert diagnostic.message =~ "max_numeric_magnitude"
       assert diagnostic.source == expression
       assert diagnostic.operation == :parse
     end
@@ -307,13 +307,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     alias NativeElixirPdfUtilities.Limits
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_html_numeric_token_bytes: 3})
+    Limits.install(%{limits | max_numeric_token_bytes: 3})
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssParser.parse_detailed("p:nth-last-child(1234){color:red}")
 
     assert diagnostic.stage == :css
-    assert diagnostic.message =~ "max_html_numeric_token_bytes"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
     assert diagnostic.source == "1234"
     assert diagnostic.operation == :parse
   end

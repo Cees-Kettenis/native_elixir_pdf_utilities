@@ -163,7 +163,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgSceneValidator do
       case Map.get(node.attributes, "d", "") do
         value when is_binary(value) ->
           HtmlValidator.with_render_budget(fn ->
-            HtmlValidator.check_render_resource(:max_svg_path_bytes, byte_size(value), :layout)
+            HtmlValidator.check_render_resource(:max_input_bytes, byte_size(value), :layout)
             source = HtmlValidator.trim_ascii_whitespace(value)
 
             result =

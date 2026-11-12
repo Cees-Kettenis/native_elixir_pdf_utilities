@@ -1222,6 +1222,38 @@ font_bytes = File.read!(font_path)
 
 See [Fonts and text](html-to-pdf-compatibility.md#fonts-and-text) for fallback and embedding requirements. Font subsetting and PDF stream compression are enabled by default.
 
+## Automatic hyphenation and tabs
+
+Supply a language dictionary when enabling automatic hyphenation. A small
+exception list can cover document-specific words without a dictionary file:
+
+```elixir
+html = """
+<p lang="en" style="width:40pt;hyphens:auto;hyphenate-limit-lines:2">
+  hyphenation
+</p>
+<pre style="tab-size:4">Code\tQuantity\tPrice</pre>
+"""
+
+{:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html,
+  hyphenation_dictionaries: %{
+    "en" => %{
+      exceptions: ["hy-phen-ation"],
+      provenance: %{source: "Document-owned word list"}
+    }
+  }
+)
+```
+
+Dictionary keys use language tags. Matching falls back through parent tags;
+without a matching dictionary, automatic hyphenation adds no breaks. Dictionaries
+may also supply Liang `patterns`. Keep their source information in `provenance`.
+
+Tabs are preserved by `pre`, `pre-wrap` and `break-spaces`. Use `tab-size:20pt`
+for fixed length stops or `tab-size:2.5` for fractional space-based stops. The
+containing block supplies the space width even when a nested span changes fonts.
+
+
 ## Document features
 
 ### Variable fonts and controls
@@ -1900,7 +1932,7 @@ end)
 ```
 
 Field counts, appearances and document pages have separate
-[resource limits](resource-limits.md#forms-and-attachments).
+[resource limits](resource-limits.md#shared-processing-budgets).
 
 ### Language selectors
 
@@ -1998,7 +2030,7 @@ Summary typography, list markers and display follow supported author CSS.
 A `pattern` must match the whole initial value. For example,
 `pattern="[[a-z]&&[^aeiou]]+"` accepts `bcdf` and rejects `bade`. Invalid pattern
 syntax is ignored. Constraint violations still render; `:valid` and `:invalid`
-can style them. Pattern and URL checks have [resource limits](resource-limits.md#initial-html-form-values).
+can style them. Pattern and URL checks have [resource limits](resource-limits.md#shared-processing-budgets).
 
 ## MathML equations
 

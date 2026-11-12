@@ -31,18 +31,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
 
         state = flatten(source, context, state)
         state = Map.new(state, fn {key, values} -> {key, Enum.reverse(values)} end)
-        HtmlValidator.reserve_render_resource(:max_css_rules, length(state.rules), :css)
+        HtmlValidator.reserve_render_resource(:max_entries, length(state.rules), :css)
         {:ok, state}
       end,
       fn {:ok, state} ->
-        HtmlValidator.reserve_render_resource(:max_css_rules, length(state.rules), :css)
+        HtmlValidator.reserve_render_resource(:max_entries, length(state.rules), :css)
         :ok
       end
     )
   end
 
   defp flatten(source, context, state) do
-    HtmlValidator.check_render_resource(:max_css_syntax_depth, context.depth, :css)
+    HtmlValidator.check_render_resource(:max_depth, context.depth, :css)
     items = CssSyntaxValidator.block_items(source, context.depth == 0)
 
     {state, pending} =

@@ -307,17 +307,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert {:ok, _, _} = collect(dom, [], budget)
     used = :atomics.get(budget, 1)
     assert used == 9
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, used + 1))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, used + 1))
     assert {:error, {:resource_limit_exceeded, diagnostic}} = collect(dom, [], budget)
-    assert diagnostic.message =~ "max_css_variable_total_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
 
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, 10_000_000))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 10_000_000))
     source = "p{color:red}"
 
     Limits.install(
       Map.put(
         Limits.effective(),
-        :max_aggregate_css_source_bytes,
+        :max_input_bytes,
         byte_size(source) + byte_size("color:red")
       )
     )
@@ -328,10 +328,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
                collect(%{type: :document, children: []}, [source])
              end)
 
-    assert diagnostic.message =~ "max_aggregate_css_source_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
 
-    Limits.install(Map.put(Limits.effective(), :max_aggregate_css_source_bytes, 20_000_000))
-    Limits.install(Map.put(Limits.effective(), :max_html_nodes, 2))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 20_000_000))
+    Limits.install(Map.put(Limits.effective(), :max_entries, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
@@ -340,7 +340,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
                HtmlParser.parse_detailed("<p>Later</p>")
              end)
 
-    assert diagnostic.message =~ "max_html_nodes"
+    assert diagnostic.message =~ "max_entries"
   end
 
   test "legacy roots still traverse hidden synthetic body contexts without minting originals" do
@@ -746,14 +746,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert {:ok, dom} = HtmlParser.parse_document_detailed("<p style='width:bananas'>Bad</p>")
     assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
     descriptor = provenance.inline |> Map.values() |> hd()
-    Limits.install(Map.put(Limits.effective(), :max_html_tree_work, 1))
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlValidator.with_render_budget(fn ->
                HtmlCssSourceValidator.map_span(descriptor, 0, 13)
              end)
 
-    assert diagnostic.message =~ "max_html_tree_work"
+    assert diagnostic.message =~ "max_work"
     assert {:error, {:resource_limit_exceeded, _}} = collect(dom)
 
     scans = [{String, :split, 3}, {String, :length, 1}, {String, :valid?, 1}]
@@ -878,12 +878,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert literal.status == :checked_without_element_context
     used = :atomics.get(budget, 1)
     assert used == byte_size("3px")
-    Limits.install(Map.put(Limits.effective(), :max_css_variable_total_bytes, used))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, used))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              collect(dom, [".absent{width:3px}"], budget)
 
-    assert diagnostic.message =~ "max_css_variable_total_bytes"
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "each authored declaration retains the original contexts that completed shared validation" do
@@ -1088,7 +1088,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     provenance = %{records: %{id => [record]}, insertion_contexts: %{}}
     node = %{tag: "p", node_id: id, source: %{text: "<p>"}}
     limits = Limits.effective()
-    Limits.install(Map.put(limits, :max_css_work, 2))
+    Limits.install(Map.put(limits, :max_work, 2))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              CssSourceContextValidator.with_context_obligations([], provenance, fn _,
@@ -1100,9 +1100,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
              end)
 
     assert diagnostic.stage == :css and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_css_work"
+    assert diagnostic.message =~ "max_work"
 
-    Limits.install(Map.put(limits, :max_css_work, 4))
+    Limits.install(Map.put(limits, :max_work, 4))
 
     assert {:ok, :done, [obligation]} =
              HtmlValidator.with_render_budget(fn ->

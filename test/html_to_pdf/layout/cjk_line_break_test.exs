@@ -18,6 +18,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CjkLineBreakTest do
   @font Paths.fixture("html_to_pdf/browser_parity/assets/cjk-ruby-fixture.ttf")
   @fonts [%{family: "CJK Ruby Fixture", path: @font}]
 
+  test "CSS language and strictness tailor CJK boundaries while word breaking retains complete clusters" do
+    # CSS Text 3, 14 August 2026, section 5.1/5.2. These expectations describe
+    # the specified boundary distinctions independently of line fitting.
+    for {text, policy, expected} <- [
+          {"きゃき", %{line_break: :normal}, ["きゃ", "き"]},
+          {"きゃき", %{line_break: :loose}, ["き", "ゃ", "き"]},
+          {"漢〜漢", %{line_break: :strict, _text_language: "ja"}, ["漢〜", "漢"]},
+          {"漢〜漢", %{line_break: :normal, _text_language: "ja-JP"}, ["漢", "〜", "漢"]},
+          {"漢〜漢", %{line_break: :normal, _text_language: "en"}, ["漢〜", "漢"]},
+          {"漢‐漢", %{line_break: :loose}, ["漢", "‐", "漢"]},
+          {"漢‐漢", %{line_break: :strict}, ["漢‐", "漢"]},
+          {"漢・漢", %{line_break: :loose, _text_language: "zh-Hant"}, ["漢", "・", "漢"]},
+          {"漢€漢", %{line_break: :loose, _text_language: "ja"}, ["漢", "€", "漢"]},
+          {"漢％漢", %{line_break: :loose, _text_language: "ja"}, ["漢", "％", "漢"]},
+          {"……", %{line_break: :loose}, ["…", "…"]},
+          {"漢Alpha漢", %{word_break: :keep_all}, ["漢Alpha漢"]},
+          {"ÁBC", %{word_break: :break_all}, ["Á", "B", "C"]},
+          {"क्षि", %{word_break: :break_all}, ["क्षि"]},
+          {"👩‍💻", %{word_break: :break_all}, ["👩‍💻"]},
+          {"A/B", %{word_break: :break_all}, ["A/", "B"]},
+          {"A\u00A0B", %{line_break: :anywhere}, ["A", "\u00A0", "B"]}
+        ] do
+      assert {:ok, segments} = HtmlLineBreakValidator.segments(text, "", policy)
+      assert segments == expected, inspect({text, policy})
+    end
+
+    for policy <- [%{word_break: :invalid}, %{line_break: false}, %{overflow_wrap: :loose}] do
+      assert {:error, {:invalid_layout, diagnostic}} =
+               HtmlLineBreakValidator.prepare_policy(policy)
+
+      assert diagnostic.operation == :line_break and diagnostic.stage == :layout
+    end
+
+    assert {:error, {:invalid_document, _}} =
+             HtmlLineBreakValidator.prepare_policy(%{_text_language: false})
+  end
+
   test "Unicode opportunities preserve CJK punctuation, NBSP, Latin words and emoji clusters" do
     for {text, expected} <- [
           {"東京（京都）、大阪", ["東", "京", "（京", "都）、", "大", "阪"]},
@@ -60,13 +97,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CjkLineBreakTest do
 
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_layout_text_work, 1))
+    Limits.install(Map.put(limits, :max_work, 1))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlLineBreakValidator.opportunities("東京")
 
     assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_layout_text_work"
+    assert diagnostic.message =~ "max_work"
   end
 
   test "the configured CJK subset contains supported outlines and fullwidth advances" do
@@ -130,18 +167,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CjkLineBreakTest do
 
     # Initial Ruby measurement fits this budget. Measuring the proportional
     # fragment candidates exhausts the same cumulative layout work scope.
-    Limits.install(Map.put(limits, :max_layout_text_work, 1_500))
+    Limits.install(Map.put(limits, :max_work, 1_500))
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(html, options)
 
-    assert diagnostic.stage == :layout
+    assert diagnostic.stage == :html
     assert diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.operation == :render
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
 
     assert diagnostic.message ==
-             "rendering exceeds max_layout_text_work (configured limit 1500)"
+             "operation exceeds max_work (configured limit 1500)"
 
     Limits.install(limits)
     assert {:ok, recovered} = NativeElixirPdfUtilities.HtmlToPdf.render(html, options)

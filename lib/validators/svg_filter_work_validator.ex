@@ -243,7 +243,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterWorkValidator do
               end
 
             HtmlValidator.reserve_render_resource(
-              :max_svg_filter_work,
+              :max_raster_work,
               width * height * columns * rows * multiplicity,
               :limits
             )
@@ -257,7 +257,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterWorkValidator do
                   else: 1
 
               HtmlValidator.reserve_render_resource(
-                :max_svg_filter_work,
+                :max_raster_work,
                 width * height * columns * rows * wrap * multiplicity,
                 :limits
               )
@@ -329,7 +329,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterWorkValidator do
           {:ok, gain} ->
             scaled = scale * gain * gain
 
-            if scaled <= Limits.get(:max_svg_filter_work),
+            if scaled <= Limits.get(:max_raster_work),
               do: {:cont, scaled},
               else: {:halt, :unknown}
 
@@ -350,7 +350,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterWorkValidator do
     if source in ["", "none"] do
       {:ok, 1.0}
     else
-      HtmlValidator.check_render_resource(:max_css_transform_operations, count + 1, :limits)
+      HtmlValidator.check_render_resource(:max_entries, count + 1, :limits)
       pattern = ~r/\A\s*(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^()]*)\)\s*,?\s*/
 
       case Regex.run(pattern, source) do
@@ -486,7 +486,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterWorkValidator do
     Diagnostics.error(
       :limits,
       :resource_limit_exceeded,
-      "SVG work cannot be bounded within max_svg_filter_work (#{Limits.get(:max_svg_filter_work)}): #{context}; simplify the filter region or reused artwork",
+      "SVG work cannot be bounded within max_raster_work (#{Limits.get(:max_raster_work)}): #{context}; simplify the filter region or reused artwork",
       module: __MODULE__,
       operation: :prepare,
       source: "SVG"

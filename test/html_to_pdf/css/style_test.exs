@@ -3344,7 +3344,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     ]
 
     for style <- invalid_styles do
-      assert style_for("div", style) == {:error, :invalid_document}
+      assert style_for("div", style) == {:error, :invalid_document}, style
     end
   end
 
@@ -6168,7 +6168,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "grid-template-columns: bad",
       "grid-column: 1 / 2 / 3",
       "grid-area: 1 / 2 / 3",
-      "text-align: justify",
+      "text-align: stretch",
       "font-weight: 1001",
       "font-weight: heavy",
       "font-style: oblique 100deg",
@@ -6207,8 +6207,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
           assert {:ok, computed} = style_for("div", style)
           assert computed.width == 2 * computed.font_size
 
+        "line-break: strict" ->
+          assert {:ok, computed} = style_for("div", style)
+          assert computed.line_break == :strict
+
         _ ->
-          assert style_for("div", style) == {:error, :invalid_document}
+          assert style_for("div", style) == {:error, :invalid_document}, style
       end
     end)
 

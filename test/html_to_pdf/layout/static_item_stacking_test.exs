@@ -97,7 +97,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StaticItemStackingTest do
     assert {:ok, dom} = HtmlParser.parse("<div></div>")
     assert {:ok, %{children: [child]} = styled} = Style.compute(dom)
 
-    for contexts <- [:bad, [:bad], [{:bad, 0}], [{[0], :auto}], List.duplicate({[0], 0}, 129)] do
+    for contexts <- [
+          :bad,
+          [:bad],
+          [{:bad, 0}],
+          [{[0], :auto}],
+          List.duplicate({[0], 0}, NativeElixirPdfUtilities.Limits.get(:max_depth) + 1)
+        ] do
       bad_child = put_in(child.style[:_stacking_contexts], contexts)
 
       assert {:error, {:invalid_layout, diagnostic}} =
