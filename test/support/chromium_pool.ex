@@ -101,6 +101,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
     {:ok,
      %{
        port: port,
+       exit_status: nil,
        owner_monitor: owner_monitor,
        clock: Keyword.get(opts, :clock, fn -> System.monotonic_time(:millisecond) end),
        timeout: Keyword.get(opts, :timeout, ExUnit.configuration()[:timeout]),
@@ -143,6 +144,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         else: "file://" <> URI.encode(Path.expand(fixture))
 
     try do
+      if state.exit_status != nil,
+        do: raise("Chrome pipe exited with status #{state.exit_status}")
+
       {context, state} =
         Telemetry.measure(:browser_context, %{}, fn ->
           command(state, "Target.createBrowserContext")
@@ -274,8 +278,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
       {port, {:data, data}} when port == state.port ->
         {:noreply, %{state | buffer: state.buffer <> data}}
 
-      {port, {:exit_status, _status}} when port == state.port ->
-        {:stop, :normal, state}
+      {port, {:exit_status, status}} when port == state.port ->
+        # The executable may exit before its owner's print call reaches this
+        # mailbox. Keep the worker alive to return the same failure diagnostic
+        # as an exit observed while a request is executing.
+        {:noreply, %{state | exit_status: status}}
     end
   end
 
