@@ -17,7 +17,8 @@ defmodule NativeElixirPdfUtilities.Limits do
           max_raster_dimension: 16_284
         ]
 
-  Configuration is validated when the library application starts. Values are
+  Configuration is validated when the library application starts. Unknown settings
+  are ignored with a warning and do not override the shared defaults. Values are
   application-wide, and changing them requires restarting the application.
   Document operations default to a five-minute deadline and a 1 GiB observed
   BEAM worker-memory allowance. Native allocations are outside that allowance;

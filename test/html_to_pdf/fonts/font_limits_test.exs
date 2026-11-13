@@ -3,6 +3,8 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontLimitsTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias NativeElixirPdfUtilities.{FileReader, HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{AssetLoader, Font, FontCache, SystemFontCache}
   alias NativeElixirPdfUtilities.Validators.{FileValidator, FontValidator, LimitsValidator}
@@ -398,12 +400,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontLimitsTest do
   test "font sources use the shared input ceiling without paired feature settings" do
     assert {:ok, %{max_input_bytes: 9}} = LimitsValidator.validate(max_input_bytes: 9)
 
-    assert {:error, message} =
-             LimitsValidator.validate(
-               max_font_source_bytes: 10,
-               max_aggregate_font_source_bytes: 9
-             )
+    log =
+      capture_log(fn ->
+        assert {:ok, limits} =
+                 LimitsValidator.validate(
+                   max_font_source_bytes: 10,
+                   max_aggregate_font_source_bytes: 9
+                 )
 
-    assert message =~ "unknown resource limit keys"
+        assert limits == Limits.defaults()
+      end)
+
+    assert log =~ ":max_font_source_bytes"
+    assert log =~ ":max_aggregate_font_source_bytes"
+    assert log =~ "have no effect"
   end
 end

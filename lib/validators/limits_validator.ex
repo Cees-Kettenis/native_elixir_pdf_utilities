@@ -1,6 +1,8 @@
 defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
   @moduledoc false
 
+  require Logger
+
   alias NativeElixirPdfUtilities.Limits
 
   @max_configured_integer 9_223_372_036_854_775_807
@@ -10,19 +12,26 @@ defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
   def validate(config) do
     case Keyword.keyword?(config) do
       true ->
-        keys = Keyword.keys(config)
         known_keys = Limits.keys()
-        unknown_keys = Enum.reject(keys, &(&1 in known_keys))
+        {overrides, ignored} = Enum.split_with(config, fn {key, _value} -> key in known_keys end)
+
+        if ignored != [] do
+          Logger.warning(fn ->
+            keys = ignored |> Keyword.keys() |> Enum.uniq()
+
+            "Ignoring unknown resource limit settings #{inspect(keys)}; these settings have no effect. " <>
+              "See NativeElixirPdfUtilities.Limits.defaults/0 for supported settings."
+          end)
+        end
+
+        keys = Keyword.keys(overrides)
 
         cond do
-          unknown_keys != [] ->
-            {:error, "unknown resource limit keys: #{inspect(Enum.uniq(unknown_keys))}"}
-
           length(keys) != length(Enum.uniq(keys)) ->
             {:error, "resource limit keys must not be repeated"}
 
           true ->
-            limits = Map.merge(Limits.defaults(), Map.new(config))
+            limits = Map.merge(Limits.defaults(), Map.new(overrides))
 
             case Enum.find(limits, fn {_key, value} ->
                    not is_integer(value) or value <= 0 or value > @max_configured_integer

@@ -20,8 +20,10 @@ config :native_elixir_pdf_utilities,
 ```
 
 Settings apply across the application and cannot be overridden per call.
-Unknown, repeated or invalid settings prevent startup. Values must be positive
-integers. Timeouts and the memory-check interval cannot exceed 4,294,967,295
+Unknown settings produce a warning and are ignored. Recognized settings still
+apply; the remaining settings keep their defaults. Repeated recognized settings
+or invalid recognized values prevent startup. Values must be positive integers.
+Timeouts and the memory-check interval cannot exceed 4,294,967,295
 milliseconds, the BEAM runtime's fixed maximum.
 
 ## Operation allowance
@@ -121,8 +123,10 @@ native allocations or rendering work.
 
 ## Migrating feature-specific settings
 
-Earlier feature-specific keys have been removed. Replace them with the shared
-setting for the resource they controlled. Font, table, grid, CSS-variable and
+Earlier feature-specific keys have been removed. They produce a warning and are
+ignored, so existing configuration does not prevent startup. They are not
+automatically translated into overrides of the shared settings. Replace them
+with the shared setting for the resource they controlled. Font, table, grid, CSS-variable and
 line-processing work use `max_work`; their collection counts use `max_entries`.
 All nesting controls use `max_depth`. Font/discovery/cache byte ceilings use
 `max_cache_bytes`; input and decoded byte ceilings use their corresponding shared

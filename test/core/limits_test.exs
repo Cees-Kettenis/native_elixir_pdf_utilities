@@ -1,6 +1,8 @@
 defmodule NativeElixirPdfUtilities.LimitsTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias NativeElixirPdfUtilities.Application, as: LibraryApplication
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
@@ -180,12 +182,38 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
              NativeElixirPdfUtilities.HtmlToPdf.render("<ol><li value='1234'>A</li></ol>")
   end
 
-  test "rejects malformed, unknown, repeated, and unsafe limit configuration" do
+  test "unknown settings are ignored with one actionable warning without logging their values" do
+    log =
+      capture_log(fn ->
+        assert {:ok, limits} =
+                 LimitsValidator.validate(
+                   max_typo_bytes: "private-config-value",
+                   max_typo_bytes: 0,
+                   max_pdf_value_depth: :invalid,
+                   max_input_bytes: 123
+                 )
+
+        assert limits == Map.put(Limits.defaults(), :max_input_bytes, 123)
+      end)
+
+    assert log =~
+             "Ignoring unknown resource limit settings [:max_typo_bytes, :max_pdf_value_depth]"
+
+    assert log =~ "have no effect"
+    assert log =~ "Limits.defaults/0"
+    refute log =~ "private-config-value"
+  end
+
+  test "unknown-only configuration keeps all defaults" do
+    assert capture_log(fn ->
+             assert {:ok, limits} = LimitsValidator.validate(max_typo_bytes: :invalid)
+             assert limits == Limits.defaults()
+           end) =~ ":max_typo_bytes"
+  end
+
+  test "rejects malformed, repeated recognized, and unsafe limit configuration" do
     assert {:error, "resource limits must be configured as a keyword list"} =
              LimitsValidator.validate(%{})
-
-    assert {:error, unknown_message} = LimitsValidator.validate(max_typo_bytes: 1)
-    assert unknown_message =~ ":max_typo_bytes"
 
     assert {:error, "resource limit keys must not be repeated"} =
              LimitsValidator.validate(max_input_bytes: 1, max_input_bytes: 2)
@@ -196,6 +224,23 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     end
   end
 
+  test "ignored settings do not bypass recognized value and duplicate validation" do
+    log =
+      capture_log(fn ->
+        assert {:error, message} = LimitsValidator.validate(max_typo_bytes: 1, max_input_bytes: 0)
+        assert message =~ ":max_input_bytes"
+
+        assert {:error, "resource limit keys must not be repeated"} =
+                 LimitsValidator.validate(
+                   max_typo_bytes: 1,
+                   max_input_bytes: 1,
+                   max_input_bytes: 2
+                 )
+      end)
+
+    assert log =~ ":max_typo_bytes"
+  end
+
   test "shared budgets require no paired per-feature settings or configurable format bounds" do
     for key <- [:max_input_bytes, :max_decoded_bytes, :max_entries] do
       assert {:ok, limits} = LimitsValidator.validate([{key, 2}])
@@ -204,8 +249,11 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
 
     # PDF CID bounds belong to the format and remain fixed independently of this collection allowance.
     assert {:ok, %{max_entries: 100_000}} = LimitsValidator.validate(max_entries: 100_000)
-    assert {:error, message} = LimitsValidator.validate(max_cid_width_entries: 65_537)
-    assert message =~ "unknown resource limit keys"
+
+    assert capture_log(fn ->
+             assert {:ok, limits} = LimitsValidator.validate(max_cid_width_entries: 65_537)
+             assert limits == Limits.defaults()
+           end) =~ ":max_cid_width_entries"
   end
 
   test "all receive timeout settings share the runtime's inclusive range" do
@@ -286,5 +334,32 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
              LibraryApplication.start(:normal, [])
 
     assert message =~ ":max_input_bytes"
+  end
+
+  test "application startup warns about removed settings and installs recognized overrides" do
+    original_config = Application.get_env(:native_elixir_pdf_utilities, :limits, [])
+
+    on_exit(fn ->
+      Application.put_env(:native_elixir_pdf_utilities, :limits, original_config)
+      {:ok, _} = Application.ensure_all_started(:native_elixir_pdf_utilities)
+    end)
+
+    log =
+      capture_log(fn ->
+        assert :ok = Application.stop(:native_elixir_pdf_utilities)
+
+        Application.put_env(:native_elixir_pdf_utilities, :limits,
+          max_pdf_value_depth: 100,
+          max_input_bytes: 123
+        )
+
+        assert {:ok, [:native_elixir_pdf_utilities]} =
+                 Application.ensure_all_started(:native_elixir_pdf_utilities)
+
+        assert Limits.effective() == Map.put(Limits.defaults(), :max_input_bytes, 123)
+      end)
+
+    assert log =~ ":max_pdf_value_depth"
+    assert log =~ "have no effect"
   end
 end
