@@ -86,8 +86,9 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
       "--user-data-dir=#{profile}"
     ]
 
-    # Chrome's pipe uses descriptors 3 and 4. The shell only connects those
-    # descriptors to the Erlang port; every executable argument stays quoted.
+    # Only Chrome's control descriptors 3 and 4 use the Erlang pipe. Redirect
+    # ordinary stdio so helpers cannot retain that pipe after the browser exits.
+    # Every executable argument stays quoted.
     port =
       Telemetry.measure(:browser_launch, %{browser: binary, profile: profile}, fn ->
         Port.open({:spawn_executable, System.find_executable("sh")}, [
@@ -95,7 +96,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
           :exit_status,
           args: [
             "-c",
-            "browser_log=$1; shift; exec \"$@\" 3<&0 4>&1 2>\"$browser_log\"",
+            "browser_log=$1; shift; exec \"$@\" 3<&0 4>&1 </dev/null >/dev/null 2>\"$browser_log\"",
             "browser-pipe",
             log,
             binary | args ++ Keyword.get(opts, :browser_args, [])
@@ -301,7 +302,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         port = state.port
 
         receive do
-          {^port, {:exit_status, _status}} -> :ok
+          {^port, {:exit_status, status}} ->
+            Telemetry.annotate(%{browser_exit_status: status})
         after
           ExUnit.configuration()[:timeout] -> raise("Chrome did not exit; log: #{state.log}")
         end

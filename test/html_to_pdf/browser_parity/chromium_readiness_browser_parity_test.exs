@@ -15,11 +15,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
     directory = Paths.project("tmp/browser_parity/chromium_readiness/isolation")
     File.mkdir_p!(directory)
     browser = System.get_env("CHROMIUM_BIN") || System.find_executable("chromium")
+    wrapper = Path.join(directory, "browser-stdio-#{System.unique_integer([:positive])}.sh")
+    quoted_browser = "'" <> String.replace(browser, "'", "'\"'\"'") <> "'"
+
+    # Reuse the first capture to prove ordinary browser output cannot corrupt
+    # the control pipe. Both captures still run the same browser and source.
+    File.write!(
+      wrapper,
+      "#!/bin/sh\nprintf '%s\\n' 'ordinary browser output'\nexec #{quoted_browser} \"$@\"\n"
+    )
+
+    File.chmod!(wrapper, 0o700)
+    on_exit(fn -> File.rm(wrapper) end)
 
     profiles =
-      for index <- 1..2 do
+      for {executable, index} <- [{wrapper, 1}, {browser, 2}] do
         output = Path.join(directory, "capture-#{index}.pdf")
-        assert :ok = ChromiumPool.print_pdf!(browser, url, output)
+        assert :ok = ChromiumPool.print_pdf!(executable, url, output)
         metadata = output |> Kernel.<>(".browser.json") |> File.read!() |> :json.decode()
         refute File.exists?(metadata["profile"])
         assert {text, 0} = System.cmd("pdftotext", [output, "-"])
@@ -415,14 +427,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ChromiumReadinessBrowserParityTest 
                 spawn_link(fn ->
                   receive do
                     {:socket, socket} ->
-                      {:ok, request} = :gen_tcp.recv(socket, 0, 5_000)
-                      [_, path | _] = String.split(request, " ")
-                      {status, type, body} = response.(path)
+                      case :gen_tcp.recv(socket, 0, 5_000) do
+                        {:ok, request} ->
+                          [_, path | _] = String.split(request, " ")
+                          {status, type, body} = response.(path)
 
-                      :gen_tcp.send(socket, [
-                        "HTTP/1.1 #{status} Response\r\nContent-Type: #{type}\r\nContent-Length: #{byte_size(body)}\r\nConnection: close\r\n\r\n",
-                        body
-                      ])
+                          :gen_tcp.send(socket, [
+                            "HTTP/1.1 #{status} Response\r\nContent-Type: #{type}\r\nContent-Length: #{byte_size(body)}\r\nConnection: close\r\n\r\n",
+                            body
+                          ])
+
+                        {:error, :closed} ->
+                          :ok
+                      end
 
                       :gen_tcp.close(socket)
                   end
