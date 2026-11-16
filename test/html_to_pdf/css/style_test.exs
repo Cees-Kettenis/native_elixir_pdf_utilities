@@ -3340,7 +3340,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "width: min(100%, nope)",
       "width: min()",
       "width: min",
-      "background: linear-gradient(red, blue)"
+      "background: linear-gradient(red)"
     ]
 
     for style <- invalid_styles do
@@ -5561,7 +5561,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  %{
                    type: :element,
                    tag: "p",
-                   attributes: %{"style" => "background: linear-gradient(red, blue)"},
+                   attributes: %{"style" => "background: linear-gradient(red)"},
                    children: [%{type: :text, text: "Hello"}]
                  }
                ]
@@ -5578,7 +5578,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                    tag: "style",
                    attributes: %{},
                    children: [
-                     %{type: :text, text: "p { background: linear-gradient(red, blue); }"}
+                     %{type: :text, text: "p { background: linear-gradient(red); }"}
                    ]
                  },
                  %{
@@ -6414,7 +6414,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     for invalid <- [
           "background-image: gradient(red, blue)",
           "background-size: auto auto auto",
-          "background-repeat: space",
+          "background-repeat: space invalid",
           "position: floating",
           "z-index: front",
           "object-fit: invalid",

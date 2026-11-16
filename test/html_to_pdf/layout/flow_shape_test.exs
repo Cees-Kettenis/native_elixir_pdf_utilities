@@ -265,6 +265,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowShapeTest do
     end
   end
 
+  test "TIFF orientations transform alpha-mask axes without adding fixture assets" do
+    image = %{
+      width_px: 3,
+      height_px: 2,
+      bits_per_component: 8,
+      alpha_data: <<255, 0, 0, 0, 0, 0>>
+    }
+
+    # Exif 1..8 map the original top-left sample to these independent grid cells.
+    for {orientation, column, row, columns, rows} <- [
+          {1, 0, 0, 3, 2},
+          {2, 2, 0, 3, 2},
+          {3, 2, 1, 3, 2},
+          {4, 0, 1, 3, 2},
+          {5, 0, 0, 2, 3},
+          {6, 1, 0, 2, 3},
+          {7, 1, 2, 2, 3},
+          {8, 0, 2, 2, 3}
+        ] do
+      prepared =
+        FlowShape.prepare_float(
+          float(%{
+            shape_outside: :image,
+            shape_image: Map.put(image, :image_orientation, orientation),
+            shape_image_threshold: 0.5
+          }),
+          100
+        )
+
+      top = 100 - row * 40 / rows - 0.1
+      bottom = top - 40 / rows + 0.2
+      {left, right} = FlowShape.interval(prepared, top, bottom)
+      assert_in_delta left, column * 40 / columns, 0.000001
+      assert_in_delta right, (column + 1) * 40 / columns, 0.000001
+    end
+  end
+
   test "inside polygon fitting and asymmetric reference-box radii retain exact edges" do
     {:ok, fields} =
       CssShapeValidator.prepare("shape-inside", "polygon(20pt 0,40pt 20pt,20pt 40pt,0 20pt)")

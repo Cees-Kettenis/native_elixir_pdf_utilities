@@ -1480,6 +1480,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
        max_average_delta: 0.03
      ]},
     {"generated_content_counters.html", [max_changed_ratio: 0.01, max_average_delta: 0.035]},
+    # Root canvas propagation and final-page fixed attachment require their
+    # own document and fragmentainers. One capture adds one browser launch and
+    # six page rasters across the three native/reference pages.
+    {"painting_canvas_fragments.html", [max_changed_ratio: 0.01, max_average_delta: 0.02]},
+    # Chromium's PDF shading drops explicit gradient interpolation spaces. The
+    # independently authored color-mix reference requires a distinct browser
+    # transform, so this sheet cannot join the unchanged box/color page group.
+    # One independent capture adds one browser launch and two 216-dpi page
+    # rasters. Curves, shadows and stroked text need sub-point samples while
+    # retaining the suite's 1% changed-pixel ceiling.
+    {"static_painting_values.html",
+     [
+       dpi: 216,
+       max_changed_ratio: 0.01,
+       max_average_delta: 0.01,
+       chromium_transform: &__MODULE__.static_painting_reference/1
+     ]},
     {"css_color_and_box_values.html", [max_changed_ratio: 0.01, max_average_delta: 0.04]},
     {"display_lists_and_inline_block.html", [max_changed_ratio: 0.01, max_average_delta: 0.035]},
     {"fonts_and_print_media.html", [max_changed_ratio: 0.01, max_average_delta: 0.035]},
@@ -1599,6 +1616,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
      max_changed_ratio: 0.01,
      max_average_delta: 0.05}
   ]
+
+  @doc "Samples the Oklab path with browser color-mix for Chromium's sRGB-only PDF gradient shading."
+  @spec static_painting_reference(String.t()) :: String.t()
+  def static_painting_reference(html) do
+    # CSS Color 4 CRD 2026-11-12, interpolation in Oklab. Each independently
+    # computed browser color is sampled at a fixed 5% interval. The 21 stops
+    # approximate the continuous path below one 8-bit channel at this size.
+    stops =
+      Enum.map_join(0..20, ",", fn index ->
+        percent = index * 5
+        "color-mix(in oklab,red #{100 - percent}%,blue #{percent}%) #{percent}%"
+      end)
+
+    String.replace(
+      html,
+      "linear-gradient(to right in oklab,red,blue)",
+      "linear-gradient(to right,#{stops})"
+    )
+  end
 
   @doc "Prepares responsive sources for an initial print environment in Chromium's screen-first headless pipeline."
   @spec responsive_print_reference(String.t()) :: String.t()
@@ -2548,6 +2584,83 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
          else: thresholds
 
     thresholds =
+      if fixture_name == "static_painting_values.html" do
+        names = [
+          "Relative RGB",
+          "Lab mix",
+          "Hue path",
+          "Missing channel",
+          "Dark system",
+          "Linear stops",
+          "Repeat linear",
+          "Radial ellipse",
+          "Repeat radial",
+          "Conic",
+          "Repeat conic",
+          "Premultiplied",
+          "Color hint",
+          "Oklab gradient",
+          "Layer order",
+          "Origin clip",
+          "Round repeat",
+          "Space repeat",
+          "Image set",
+          "Object fit",
+          "Ellipse corners",
+          "Logical corners",
+          "Border image",
+          "Border round",
+          "Outline",
+          "Outer shadow",
+          "Inset shadow",
+          "Text stroke",
+          "Print palette",
+          "Aliases",
+          "SVG geometry",
+          "SVG markers",
+          "Modern gamut",
+          "Relative LCH",
+          "Light scheme",
+          "Dark field",
+          "Dark button",
+          "Rounded image",
+          "Inline paint",
+          "Oriented image"
+        ]
+
+        regions =
+          Enum.with_index(names, fn name, index ->
+            # This vector-PDF comparison uses three raster pixels per PDF point.
+            {name, {60 + rem(index, 5) * 348, 60 + div(index, 5) * 270, 300, 195}}
+          end)
+
+        region_thresholds =
+          Map.new(names, fn name ->
+            # Hard-stop raster boundaries and curved glyph/box edges use different
+            # antialiasing in the PDF backends. Flat conversion regions stay strict.
+            if name in [
+                 "Relative RGB",
+                 "Lab mix",
+                 "Hue path",
+                 "Missing channel",
+                 "Dark system",
+                 "Print palette",
+                 "Modern gamut",
+                 "Relative LCH",
+                 "Light scheme"
+               ],
+               do: {name, %{max_changed_ratio: 0.02, max_average_delta: 0.005}},
+               else: {name, %{max_changed_ratio: 0.18, max_average_delta: 0.05}}
+          end)
+
+        thresholds
+        |> Keyword.put(:regions, regions)
+        |> Keyword.put(:region_thresholds, region_thresholds)
+      else
+        thresholds
+      end
+
+    thresholds =
       if fixture_name == "fonts_and_print_media.html",
         do:
           Keyword.put(thresholds, :regions, [
@@ -2577,11 +2690,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
              artifact_dir: artifact_dir
            } = stats
 
-    assert dpi ==
-             if(Keyword.get(thresholds, :svg_reference) == :png,
-               do: 96 * NativeElixirPdfUtilities.Limits.get(:svg_raster_scale),
-               else: 72
-             )
+    if fixture_name == "static_painting_values.html" do
+      assert dpi == 216
+    else
+      assert dpi ==
+               if(Keyword.get(thresholds, :svg_reference) == :png,
+                 do: 96 * NativeElixirPdfUtilities.Limits.get(:svg_raster_scale),
+                 else: 72
+               )
+    end
 
     if fixture_name in ~w(html_css_affine_boxes.html html_css_affine_nested.html html_css_affine_fragments.html html_css_affine_fragment_origins.html html_css_affine_table.html html_css_affine_widget_slices.html html_css_affine_descendant_sheets.html html_css_affine_clipped_descendants.html html_css_affine_rotated_widget_slices.html) do
       assert page_count ==
@@ -5340,6 +5457,9 @@ for group <- 0..7 do
     end
 
     for {fixture_name, thresholds} <- @fixture_thresholds do
+      if fixture_name in ["static_painting_values.html", "painting_canvas_fragments.html"],
+        do: @tag(:static_painting)
+
       if fixture_name == "fonts_and_print_media.html", do: @tag(:css_print_values)
 
       if fixture_name in [

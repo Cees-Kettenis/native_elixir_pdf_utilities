@@ -99,7 +99,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
                            %{mode: :image}
                          ),
                        {:ok, resized} <- PngDecoder.decode(png, request.budget, false) do
-                    {:ok, %{resized | width: width, height: height}}
+                    {:ok,
+                     resized
+                     |> Map.merge(Map.take(image, [:interpolate]))
+                     |> Map.merge(%{width: width, height: height})}
                   end
                 end,
                 fn

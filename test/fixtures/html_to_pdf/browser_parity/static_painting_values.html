@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@page {size:612pt 792pt;margin:0}
+html,body{margin:0;padding:0;font-family:"DejaVu Sans";font-size:8pt;line-height:10pt;color:black}
+section{position:absolute;width:100pt;height:70pt}p{margin:0 0 8pt}.paint{width:90pt;height:35pt;box-sizing:border-box}
+</style></head><body>
+<!-- CSS Color 4 CRD 2026-11-12; Images 3 CRD 2023-12-18; Images 4 WD 2025-09-30; Backgrounds 3 CRD 2024-03-11. PNGs are authored 4x4, 8x8 and Exif-oriented 4x8 quadrant samples, with no external assets. -->
+<section style="left:20pt;top:20pt"><p>Relative RGB</p><div class="paint" style="background:rgb(from #3060c0 calc(r + 20) g b)"></div></section>
+<section style="left:136pt;top:20pt"><p>Lab mix</p><div class="paint" style="background:color-mix(in oklab, red 35%, blue)"></div></section>
+<section style="left:252pt;top:20pt"><p>Hue path</p><div class="paint" style="background:color-mix(in hsl longer hue, red, blue)"></div></section>
+<section style="left:368pt;top:20pt"><p>Missing channel</p><div class="paint" style="background:color-mix(in srgb, rgb(none 120 80), rgb(200 80 40))"></div></section>
+<section style="left:484pt;top:20pt"><p>Dark system</p><div class="paint" style="color-scheme:dark;background:Canvas;color:CanvasText">Canvas</div></section>
+<section style="left:20pt;top:110pt"><p>Linear stops</p><div class="paint" style="background:linear-gradient(35deg,red 15%,gold 40% 60%,blue)"></div></section>
+<section style="left:136pt;top:110pt"><p>Repeat linear</p><div class="paint" style="background:repeating-linear-gradient(90deg,red 0 8px,blue 8px 16px)"></div></section>
+<section style="left:252pt;top:110pt"><p>Radial ellipse</p><div class="paint" style="background:radial-gradient(ellipse at 35% 65%,gold,blue)"></div></section>
+<section style="left:368pt;top:110pt"><p>Repeat radial</p><div class="paint" style="background:repeating-radial-gradient(circle at center,red 0 5px,blue 5px 10px)"></div></section>
+<section style="left:484pt;top:110pt"><p>Conic</p><div class="paint" style="background:conic-gradient(from 45deg at 35% 50%,red,gold,blue,red)"></div></section>
+<section style="left:20pt;top:200pt"><p>Repeat conic</p><div class="paint" style="background:repeating-conic-gradient(red 0deg 30deg,blue 30deg 60deg)"></div></section>
+<section style="left:136pt;top:200pt"><p>Premultiplied</p><div class="paint" style="background:linear-gradient(to right,rgba(255,0,0,0),blue)"></div></section>
+<section style="left:252pt;top:200pt"><p>Color hint</p><div class="paint" style="background:linear-gradient(to right,red,25%,blue)"></div></section>
+<section style="left:368pt;top:200pt"><p>Oklab gradient</p><div class="paint" style="background:linear-gradient(to right in oklab,red,blue)"></div></section>
+<section style="left:484pt;top:200pt"><p>Layer order</p><div class="paint" style="background:linear-gradient(90deg,rgba(255,0,0,.5),transparent),linear-gradient(blue,blue) 10pt 5pt/50pt 20pt no-repeat gold"></div></section>
+<section style="left:20pt;top:290pt"><p>Origin clip</p><div class="paint" style="border:4px solid transparent;padding:4px;background:linear-gradient(red,blue) content-box padding-box"></div></section>
+<section style="left:136pt;top:290pt"><p>Round repeat</p><div class="paint" style="background:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR4nGP4z8AARGDiPwMqB4ygFDIHAAZKF+m5Ub0kAAAAAElFTkSuQmCC) 0 0/20pt 15pt round no-repeat"></div></section>
+<section style="left:252pt;top:290pt"><p>Space repeat</p><div class="paint" style="background:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR4nGP4z8AARGDiPwMqB4ygFDIHAAZKF+m5Ub0kAAAAAElFTkSuQmCC) 0 0/20pt 15pt space no-repeat;image-rendering:pixelated"></div></section>
+<section style="left:368pt;top:290pt"><p>Image set</p><div class="paint" style="background-image:image-set(url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR4nGP4z8AARGDiPwMqB4ygFDIHAAZKF+m5Ub0kAAAAAElFTkSuQmCC) 1x,url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAGklEQVR4nGP4z8AAR0jM/wzUlEBCKBzqSQAAI1lfoZe+tesAAAAASUVORK5CYII=) 2x);background-repeat:no-repeat;background-size:32pt 24pt;image-rendering:pixelated"></div></section>
+<section style="left:484pt;top:290pt"><p>Object fit</p><div class="paint" style=""><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR4nGP4z8AARGDiPwMqB4ygFDIHAAZKF+m5Ub0kAAAAAElFTkSuQmCC" style="width:90pt;height:35pt;object-fit:contain;object-position:right bottom;image-rendering:pixelated"></div></section>
+<section style="left:20pt;top:380pt"><p>Ellipse corners</p><div class="paint" style="border:3px solid #123;background:#5df;border-radius:20px 5px 12px 2px / 5px 12px 6px 10px"></div></section>
+<section style="left:136pt;top:380pt"><p>Logical corners</p><div class="paint" style="direction:rtl;background:#d60;border-radius:4px;border-start-start-radius:20px 8px"></div></section>
+<section style="left:252pt;top:380pt"><p>Border image</p><div class="paint" style="border:8px solid transparent;border-image:linear-gradient(45deg,red,blue) 20 fill / 8px / 0 stretch"></div></section>
+<section style="left:368pt;top:380pt"><p>Border round</p><div class="paint" style="border:8px solid transparent;border-image:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR4nGP4z8AARGDiPwMqB4ygFDIHAAZKF+m5Ub0kAAAAAElFTkSuQmCC) 1 / 8px / 0 round;image-rendering:pixelated"></div></section>
+<section style="left:484pt;top:380pt"><p>Outline</p><div class="paint" style="background:#ddf;outline:2px dashed #347;outline-offset:2px;border-radius:8px / 4px"></div></section>
+<section style="left:20pt;top:470pt"><p>Outer shadow</p><div class="paint" style="background:white;border-radius:8px;box-shadow:3px 3px 3px 1px rgba(0,0,255,.6)"></div></section>
+<section style="left:136pt;top:470pt"><p>Inset shadow</p><div class="paint" style="background:#def;border-radius:8px;box-shadow:inset 3px 2px 3px 1px rgba(0,0,255,.6)"></div></section>
+<section style="left:252pt;top:470pt"><p>Text stroke</p><div class="paint" style="color:red;-webkit-text-fill-color:#ff0;-webkit-text-stroke:1px #00f;font-size:17pt;line-height:30pt">Stroke</div></section>
+<section style="left:368pt;top:470pt"><p>Print palette</p><div class="paint" style="color-scheme:dark;background:light-dark(white,#246);color:CanvasText;print-color-adjust:exact">Dark</div></section>
+<section style="left:484pt;top:470pt"><p>Aliases</p><div class="paint" style="-webkit-border-radius:15px 2px / 5px 12px;-webkit-box-shadow:2px 2px 0 #137;background:#fc0"></div></section>
+<section style="left:20pt;top:560pt"><p>SVG geometry</p><div class="paint" style=""><svg width="120" height="46" viewBox="0 0 120 46"><rect style="x:2px;y:2px;width:40px;height:30px;rx:8px;ry:3px;fill:#fd3;stroke:blue;stroke-width:3px"/><circle style="cx:80px;cy:20px;r:15px;fill:color-mix(in srgb,red,blue);stroke:black;stroke-dasharray:3 2"/></svg></div></section>
+<section style="left:136pt;top:560pt"><p>SVG markers</p><div class="paint" style=""><svg width="120" height="46"><defs><marker id="paint_arrow" markerWidth="5" markerHeight="5" refX="3" refY="2.5" orient="auto"><path d="M0 0L5 2.5L0 5Z" fill="blue"/></marker></defs><path d="M10 30L50 10L90 30" style="fill:none;stroke:blue;stroke-width:2;marker-end:url(#paint_arrow);stroke-linejoin:round;shape-rendering:geometricPrecision"/></svg></div></section>
+<section style="left:252pt;top:560pt"><p>Modern gamut</p><div class="paint" style="background:color(display-p3 1 .2 .05)"></div></section>
+<section style="left:368pt;top:560pt"><p>Relative LCH</p><div class="paint" style="background:lch(from rebeccapurple l calc(c * .8) calc(h + 40))"></div></section>
+<section style="left:484pt;top:560pt"><p>Light scheme</p><div class="paint" style="color-scheme:light dark;background:Canvas;color:CanvasText">Light</div></section>
+<section style="left:20pt;top:650pt"><p>Dark field</p><div class="paint"><input value="Dark field" style="width:90pt;height:24pt;box-sizing:border-box;font-family:DejaVu Sans;font-size:8pt;color-scheme:dark;print-color-adjust:exact"></div></section>
+<section style="left:136pt;top:650pt"><p>Dark button</p><div class="paint"><button style="width:90pt;height:24pt;box-sizing:border-box;font-family:DejaVu Sans;font-size:8pt;color-scheme:dark;print-color-adjust:exact">Dark button</button></div></section>
+<section style="left:252pt;top:650pt"><p>Rounded image</p><div class="paint"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAGElEQVR4nGP4z8AARGDiPwMqB4ygFDIHAAZKF+m5Ub0kAAAAAElFTkSuQmCC" style="display:block;width:90pt;height:35pt;object-fit:cover;object-position:right bottom;border-radius:18px 4px / 8px 15px;image-rendering:pixelated"></div></section>
+<section style="left:368pt;top:650pt"><p>Inline paint</p><div class="paint" style="line-height:16pt"><span style="background:linear-gradient(to right,#fd8,#8df);border-radius:4px / 2px;box-shadow:1px 1px 0 #456;outline:1px solid #345">Sliced paint across lines</span></div></section>
+<section style="left:484pt;top:650pt"><p>Oriented image</p><div class="paint"><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAAICAIAAABRUclSAAAAGmVYSWZJSSoACAAAAAEAEgEDAAEAAAAGAAAAAAAAALdIESkAAAAbSURBVHicY/jPwABEDP+REEEOhP7/H4iJ5QAAOZEn2YZVwtcAAAAASUVORK5CYII=" style="display:block;width:90pt;height:35pt;object-fit:contain;image-rendering:pixelated"></div></section>
+</body></html>

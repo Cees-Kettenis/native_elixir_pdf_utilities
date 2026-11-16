@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.JpegValidator do
           frame: nil,
           mode: nil,
           adobe: nil,
+          image_metadata: %{},
           quantization: %{},
           huffman: MapSet.new(),
           coefficients: %{},
@@ -27,7 +28,11 @@ defmodule NativeElixirPdfUtilities.Validators.JpegValidator do
         case state.frame do
           %{components: components} ->
             if Enum.all?(components, &Map.has_key?(state.coefficients, {elem(&1, 0), 0})),
-              do: color_metadata(state.frame, state.adobe),
+              do:
+                with(
+                  {:ok, metadata} <- color_metadata(state.frame, state.adobe),
+                  do: {:ok, Map.merge(metadata, state.image_metadata)}
+                ),
               else: :error
 
           nil ->
@@ -99,6 +104,14 @@ defmodule NativeElixirPdfUtilities.Validators.JpegValidator do
 
       {238, <<"Adobe", _::binary>>} ->
         :error
+
+      {225, <<"Exif", 0, 0, tiff::binary>>} ->
+        metadata = NativeElixirPdfUtilities.Validators.ImageMetadataValidator.tiff(tiff)
+        {:ok, %{state | image_metadata: Map.merge(state.image_metadata, metadata)}}
+
+      {224, <<"JFIF", _::binary>>} ->
+        metadata = NativeElixirPdfUtilities.Validators.ImageMetadataValidator.jfif(bytes)
+        {:ok, %{state | image_metadata: Map.merge(metadata, state.image_metadata)}}
 
       {marker, _} when marker in 224..239 or marker == 254 ->
         {:ok, state}

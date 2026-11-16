@@ -82,6 +82,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   ]
 
   @inherited_css_fields NativeElixirPdfUtilities.Validators.CssCascadeValidator.inherited_fields()
+  @paint_inherited_fields Enum.filter(
+                            @inherited_css_fields,
+                            &(&1 in ~w(text_fill_color text_stroke_width text_stroke_color image_orientation image_resolution image_rendering color_scheme print_color_adjust forced_color_adjust)a)
+                          )
+  @inherited_css_fields @inherited_css_fields -- @paint_inherited_fields
   @medium_border_width 2.25
   # Fixed style values share literal edge maps across the styled document.
   @zero_edges CssValueValidator.edges(0.0)
@@ -3509,6 +3514,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             do: Map.put(style, :_select_inherited_style, inherited_style),
             else: style
 
+        style =
+          case node do
+            %{_initial_form_state: %{disabled: true}} -> Map.put(style, :_control_disabled, true)
+            _ -> style
+          end
+
         style = HtmlValidator.prepare_html_list_counter(tag, attributes, style)
 
         authored =
@@ -3838,32 +3849,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp finalize_image_style(style, image_budget, opts) do
-    case {:maps.get(:display, style, nil), :maps.get(:image, style, nil),
-          :maps.get(:svg_image, style, nil)} do
-      {:image, nil, svg} when is_binary(svg) ->
-        with {:ok, image} <-
-               rasterize_svg_image(
-                 svg,
-                 svg_raster_options(style),
-                 image_budget,
-                 opts,
-                 Limits.get(:svg_raster_scale)
-               ),
-             {:ok, image} <-
-               NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.correct_natural_dimensions(
-                 image,
-                 Map.fetch!(style, :_image_selection)
-               ) do
-          {:ok, style |> Map.put(:image, image) |> Map.delete(:svg_image)}
-        else
-          {:error, {reason, diagnostic}} ->
-            {:error,
-             {reason, Diagnostics.with_context(diagnostic, source: style._image_selection.url)}}
-        end
+    result =
+      case {:maps.get(:display, style, nil), :maps.get(:image, style, nil),
+            :maps.get(:svg_image, style, nil)} do
+        {:image, nil, svg} when is_binary(svg) ->
+          with {:ok, image} <-
+                 rasterize_svg_image(
+                   svg,
+                   svg_raster_options(style),
+                   image_budget,
+                   opts,
+                   Limits.get(:svg_raster_scale)
+                 ),
+               {:ok, image} <-
+                 NativeElixirPdfUtilities.Validators.ResponsiveImageValidator.correct_natural_dimensions(
+                   image,
+                   Map.fetch!(style, :_image_selection)
+                 ) do
+            {:ok, style |> Map.put(:image, image) |> Map.delete(:svg_image)}
+          else
+            {:error, {reason, diagnostic}} ->
+              {:error,
+               {reason, Diagnostics.with_context(diagnostic, source: style._image_selection.url)}}
+          end
 
-      _ ->
-        {:ok, Map.delete(style, :svg_image)}
-    end
+        _ ->
+          {:ok, Map.delete(style, :svg_image)}
+      end
+
+    with {:ok, style} <- result,
+         do: NativeElixirPdfUtilities.Validators.CssImageValueValidator.apply_style(style, opts)
   end
 
   defp finalize_background_image_style(style, opts, image_budget) do
@@ -3885,60 +3900,144 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     case style do
       style
-      when (not is_map_key(style, :background_image_source) or
-              :erlang.map_get(:background_image_source, style) == nil) and
-             (not is_map_key(style, :list_style_image_source) or
-                :erlang.map_get(:list_style_image_source, style) == nil) and
-             (not is_map_key(style, :shape_image_source) or
-                :erlang.map_get(:shape_image_source, style) == nil) ->
+      when not is_map_key(style, :background_image_source) and
+             not is_map_key(style, :list_style_image_source) and
+             not is_map_key(style, :shape_image_source) and
+             not is_map_key(style, :background_images) and
+             not is_map_key(style, :border_image_source) and
+             not is_map_key(style, :image_orientation) and
+             not is_map_key(style, :image_resolution) and
+             not is_map_key(style, :image_rendering) ->
         {:ok, style}
 
       _ ->
-        Enum.reduce_while(
-          [
-            {:background_image, :background_image_source},
-            {:list_style_image, :list_style_image_source},
-            {:shape_image, :shape_image_source}
-          ],
-          {:ok, style},
-          fn {property, source_property}, {:ok, style} ->
-            case Map.get(style, source_property) do
-              nil ->
-                {:cont, {:ok, style}}
+        result =
+          case style do
+            style
+            when (not is_map_key(style, :background_image_source) or
+                    :erlang.map_get(:background_image_source, style) == nil) and
+                   (not is_map_key(style, :list_style_image_source) or
+                      :erlang.map_get(:list_style_image_source, style) == nil) and
+                   (not is_map_key(style, :shape_image_source) or
+                      :erlang.map_get(:shape_image_source, style) == nil) ->
+              {:ok, style}
 
-              source ->
-                kind =
-                  if property in [:list_style_image, :shape_image], do: :image, else: property
+            _ ->
+              Enum.reduce_while(
+                [
+                  {:background_image, :background_image_source},
+                  {:list_style_image, :list_style_image_source},
+                  {:shape_image, :shape_image_source}
+                ],
+                {:ok, style},
+                fn {property, source_property}, {:ok, style} ->
+                  case Map.get(style, source_property) do
+                    nil ->
+                      {:cont, {:ok, style}}
 
-                result =
-                  case load_image_style(source, opts, kind) do
-                    {:ok, %{image: image}} ->
-                      {:ok, image}
+                    source ->
+                      kind =
+                        if property in [:list_style_image, :shape_image],
+                          do: :image,
+                          else: property
 
-                    {:ok, %{svg_image: svg}} ->
-                      rasterize_svg_image(
-                        svg,
-                        [],
-                        image_budget,
-                        opts,
-                        Limits.get(:svg_raster_scale)
-                      )
+                      result = load_paint_image(source, opts, kind, image_budget)
 
-                    {:error, _} = error ->
+                      case result do
+                        {:ok, image} ->
+                          {:cont,
+                           {:ok, style |> Map.put(property, image) |> Map.delete(source_property)}}
+
+                        {:error, _} = error ->
+                          {:halt, error}
+                      end
+                  end
+                end
+              )
+          end
+
+        result =
+          with {:ok, style} <- result do
+            case style do
+              %{background_images: images} ->
+                if Map.get(style, :display) == :none do
+                  {:ok, Map.put(style, :background_images, List.duplicate(nil, length(images)))}
+                else
+                  Enum.reduce_while(images, {:ok, []}, fn value, {:ok, loaded} ->
+                    case NativeElixirPdfUtilities.HtmlToPdf.CssImageValue.load(
+                           value,
+                           opts,
+                           fn source ->
+                             load_paint_image(source, opts, :background_image, image_budget)
+                           end
+                         ) do
+                      {:ok, value} -> {:cont, {:ok, [value | loaded]}}
+                      error -> {:halt, error}
+                    end
+                  end)
+                  |> case do
+                    {:ok, images} ->
+                      {:ok, Map.put(style, :background_images, Enum.reverse(images))}
+
+                    error ->
                       error
                   end
-
-                case result do
-                  {:ok, image} ->
-                    {:cont,
-                     {:ok, style |> Map.put(property, image) |> Map.delete(source_property)}}
-
-                  {:error, _} = error ->
-                    {:halt, error}
                 end
+
+              _ ->
+                {:ok, style}
             end
           end
+
+        result =
+          with {:ok, style} <- result do
+            case Map.get(style, :border_image_source) do
+              nil ->
+                {:ok, style}
+
+              source ->
+                with {:ok, image} <-
+                       if(Map.get(style, :display) == :none,
+                         do: {:ok, nil},
+                         else:
+                           NativeElixirPdfUtilities.HtmlToPdf.CssImageValue.load(
+                             source,
+                             opts,
+                             fn reference ->
+                               load_paint_image(reference, opts, :background_image, image_budget)
+                             end
+                           )
+                       ),
+                     do: {:ok, Map.put(style, :border_image_source, image)}
+            end
+          end
+
+        with {:ok, style} <- result,
+             do:
+               NativeElixirPdfUtilities.Validators.CssImageValueValidator.apply_style(style, opts)
+    end
+  end
+
+  defp load_paint_image(source, opts, kind, image_budget) do
+    case load_image_style(source, opts, kind) do
+      {:ok, %{image: image}} ->
+        {:ok, image}
+
+      {:ok, %{svg_image: svg}} ->
+        rasterize_svg_image(svg, [], image_budget, opts, Limits.get(:svg_raster_scale))
+
+      :error ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "CSS paint image could not be decoded; supply a supported PNG, JPEG or static SVG",
+          module: __MODULE__,
+          operation: :load_paint_image,
+          source: source
         )
+
+      error ->
+        error
     end
   end
 
@@ -4021,6 +4120,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         ] ++ @inherited_css_fields,
         style
       )
+
+    # Avoid scanning absent optional paint fields for each ordinary text node.
+    # The cascade registry still supplies the inherited field policy above.
+    inherited =
+      case style do
+        style
+        when not is_map_key(style, :text_fill_color) and
+               not is_map_key(style, :text_stroke_width) and
+               not is_map_key(style, :text_stroke_color) and
+               not is_map_key(style, :image_orientation) and
+               not is_map_key(style, :image_resolution) and
+               not is_map_key(style, :image_rendering) and
+               not is_map_key(style, :color_scheme) and
+               not is_map_key(style, :print_color_adjust) and
+               not is_map_key(style, :forced_color_adjust) ->
+          inherited
+
+        _ ->
+          Map.merge(inherited, Map.take(style, @paint_inherited_fields))
+      end
 
     inherited =
       if :maps.get(:display, style, nil) in [:table_row_group, :table_row],

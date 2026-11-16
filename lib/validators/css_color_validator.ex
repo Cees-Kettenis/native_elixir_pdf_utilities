@@ -211,59 +211,70 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
 
   @doc false
   @spec parse_initial_input_color(String.t()) :: {:ok, term()} | :error
-  def parse_initial_input_color(source), do: parse_color(source, nil, true)
+  def parse_initial_input_color(source) do
+    HtmlValidator.check_render_resource(:max_input_bytes, byte_size(source), :style)
+
+    normalized =
+      source
+      |> HtmlValidator.normalize_css_comments(:value)
+      |> String.trim()
+      |> String.downcase(:ascii)
+
+    # HTML's initial color-input sanitizer retains its independently pinned
+    # browser grammar, including rejection of CSS mixing and relative colors.
+    if Regex.match?(~r/\A(?:(?:color-mix|light-dark)\(|[a-z]+\(\s*from\b)/, normalized),
+      do: :error,
+      else: parse_color(normalized, nil, true)
+  end
 
   @doc false
   @spec parse_function_color(String.t(), term()) :: {:ok, term()} | :error
   def parse_function_color(source, current_color), do: parse_color(source, current_color, false)
 
+  @doc "Prepares a color without discarding its space, missing components or out-of-gamut channels."
+  @spec prepare(String.t(), term()) :: {:ok, map()} | :error
+  def prepare(source, current_color), do: parse_value(source, current_color, 0)
+
+  @doc "Checks a prepared color's channel representation before it reaches interpolation or conversion."
+  @spec valid_prepared?(term()) :: boolean()
+  def valid_prepared?(value) do
+    case value do
+      %{space: space, channels: [a, b, c], alpha: alpha} when map_size(value) == 3 ->
+        space in ~w(rgb rgba srgb hsl hsla hwb lab lch oklab oklch srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 xyz xyz-d50 xyz-d65) and
+          Enum.all?([a, b, c], fn n ->
+            n == :none or
+              (is_number(n) and
+                 (abs(n) <= NativeElixirPdfUtilities.Limits.get(:max_numeric_magnitude) or
+                    abs(n) == 1.0e30))
+          end) and
+          (alpha == :none or (is_number(alpha) and alpha >= 0 and alpha <= 1))
+
+      _ ->
+        false
+    end
+  end
+
   defp parse_color(source, current_color, initial_input) do
-    HtmlValidator.check_render_resource(:max_input_bytes, byte_size(source), :style)
-    HtmlValidator.reserve_render_resource(:max_work, byte_size(source), :style)
+    with {:ok, value} <- parse_value(source, current_color, 0) do
+      channels = Enum.map(value.channels, fn n -> if n == :none, do: 0.0, else: n end)
 
-    source =
-      source
-      |> HtmlValidator.normalize_css_comments(:value)
-      |> HtmlValidator.trim_css_whitespace()
-      |> String.downcase(:ascii)
-
-    cond do
-      source == "currentcolor" ->
-        if is_nil(current_color), do: :error, else: {:ok, current_color}
-
-      source == "transparent" ->
-        {:ok, if(initial_input, do: {0.0, 0.0, 0.0, 0.0}, else: :transparent)}
-
-      Map.has_key?(@named_colors, source) ->
-        {:ok, Map.fetch!(@named_colors, source)}
-
-      initial_input and Map.has_key?(@input_palette, source) ->
-        value = Map.fetch!(@input_palette, source)
-        {:ok, {div(value, 65536) / 255, rem(div(value, 256), 256) / 255, rem(value, 256) / 255}}
-
-      Regex.match?(~r/\A\#[0-9a-f]{3,4}(?:[0-9a-f]{2}){0,2}\z/, source) and
-          byte_size(source) in [4, 5, 7, 9] ->
-        hex = binary_part(source, 1, byte_size(source) - 1)
-        hex = if byte_size(hex) < 5, do: for(<<c <- hex>>, into: "", do: <<c, c>>), else: hex
-        channels = for <<pair::binary-size(2) <- hex>>, do: String.to_integer(pair, 16) / 255
-
-        channels =
-          if length(channels) == 4 and List.last(channels) == 1.0,
-            do: Enum.take(channels, 3),
-            else: channels
-
-        {:ok, List.to_tuple(channels)}
-
-      true ->
-        with [_, function, body] <- Regex.run(~r/\A([a-z]+)\((.*)\)\z/s, source),
-             true <- function in ~w(rgb rgba hsl hsla hwb lab lch oklab oklch color),
-             {:ok, tokens, legacy?} <- color_arguments(body),
-             {:ok, space, channels, alpha} <- color_channels(function, tokens, legacy?) do
-          [red, green, blue] = CssColor.to_srgb(space, channels)
-          {:ok, if(alpha == 1.0, do: {red, green, blue}, else: {red, green, blue, alpha})}
+      channels =
+        if initial_input and value.space == "a98-rgb" do
+          # Chromium's pinned HTML input serialization uses the Adobe gamma
+          # 2.2 profile. CSS conversions use the Color 4 exponent 563/256.
+          Enum.map(channels, fn n ->
+            :math.pow(abs(n), 2.2 / (563 / 256)) * if(n < 0, do: -1, else: 1)
+          end)
         else
-          _ -> :error
+          channels
         end
+
+      [red, green, blue] = CssColor.to_srgb(value.space, channels)
+      alpha = if value.alpha == :none, do: 0.0, else: value.alpha
+
+      if source |> String.trim() |> String.downcase(:ascii) == "transparent" and not initial_input,
+        do: {:ok, :transparent},
+        else: {:ok, if(alpha == 1.0, do: {red, green, blue}, else: {red, green, blue, alpha})}
     end
   catch
     {:render_resource_limit, {:error, {reason, diagnostic}}} ->
@@ -275,6 +286,265 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
              source: if(initial_input, do: "input/color", else: "CSS color")
            )}}}
       )
+  end
+
+  defp parse_value(source, current_color, depth) do
+    HtmlValidator.check_render_resource(:max_depth, depth, :style)
+    HtmlValidator.check_render_resource(:max_input_bytes, byte_size(source), :style)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(source), :style)
+
+    source =
+      source
+      |> HtmlValidator.normalize_css_comments(:value)
+      |> HtmlValidator.trim_css_whitespace()
+      |> String.downcase(:ascii)
+
+    cond do
+      source == "currentcolor" ->
+        case if(is_map(current_color), do: Map.get(current_color, :color), else: current_color) do
+          {r, g, b} -> {:ok, %{space: "srgb", channels: [r, g, b], alpha: 1.0}}
+          {r, g, b, a} -> {:ok, %{space: "srgb", channels: [r, g, b], alpha: a}}
+          :transparent -> {:ok, %{space: "srgb", channels: [0.0, 0.0, 0.0], alpha: 0.0}}
+          _ -> :error
+        end
+
+      source == "transparent" ->
+        {:ok, %{space: "srgb", channels: [0.0, 0.0, 0.0], alpha: 0.0}}
+
+      Map.has_key?(@named_colors, source) ->
+        {:ok,
+         %{space: "srgb", channels: Tuple.to_list(Map.fetch!(@named_colors, source)), alpha: 1.0}}
+
+      Map.has_key?(@input_palette, source) ->
+        palette =
+          if is_map(current_color) and Map.get(current_color, :color_scheme) == :dark do
+            Map.merge(@input_palette, %{
+              "canvas" => 0x121212,
+              "canvastext" => 0xFFFFFF,
+              "field" => 0x3B3B3B,
+              "fieldtext" => 0xFFFFFF,
+              "buttonface" => 0x6B6B6B,
+              "buttontext" => 0xFFFFFF,
+              "graytext" => 0xAAAAAA,
+              "linktext" => 0x9E9EFF,
+              "visitedtext" => 0xD0ADF0
+            })
+          else
+            @input_palette
+          end
+
+        value = Map.fetch!(palette, source)
+
+        {:ok,
+         %{
+           space: "srgb",
+           channels:
+             Enum.map(
+               [div(value, 65536), rem(div(value, 256), 256), rem(value, 256)],
+               fn channel ->
+                 if channel in [0, 255], do: div(channel, 255), else: channel / 255
+               end
+             ),
+           alpha: 1.0
+         }}
+
+      Regex.match?(~r/\A\#[0-9a-f]{3,4}(?:[0-9a-f]{2}){0,2}\z/, source) and
+          byte_size(source) in [4, 5, 7, 9] ->
+        hex = binary_part(source, 1, byte_size(source) - 1)
+        hex = if byte_size(hex) < 5, do: for(<<c <- hex>>, into: "", do: <<c, c>>), else: hex
+        channels = for <<pair::binary-size(2) <- hex>>, do: String.to_integer(pair, 16) / 255
+
+        {:ok,
+         %{space: "srgb", channels: Enum.take(channels, 3), alpha: Enum.at(channels, 3, 1.0)}}
+
+      true ->
+        case Regex.run(~r/\A([a-z-]+)\((.*)\)\z/s, source) do
+          [_, "light-dark", body] ->
+            case HtmlValidator.split_css_comma(body, true) do
+              [light, dark] ->
+                parse_value(
+                  if(is_map(current_color) and Map.get(current_color, :color_scheme) == :dark,
+                    do: dark,
+                    else: light
+                  ),
+                  current_color,
+                  depth + 1
+                )
+
+              _ ->
+                :error
+            end
+
+          [_, "color-mix", body] ->
+            mix(body, current_color, depth + 1)
+
+          [_, function, body]
+          when function in ~w(rgb rgba hsl hsla hwb lab lch oklab oklch color) ->
+            case HtmlValidator.split_css_tokens(body) do
+              ["from", origin | rest] ->
+                relative(function, origin, rest, current_color, depth + 1)
+
+              _ ->
+                with {:ok, tokens, legacy?} <- color_arguments(body),
+                     {:ok, space, channels, alpha} <- color_channels(function, tokens, legacy?),
+                     do: {:ok, %{space: space, channels: channels, alpha: alpha}}
+            end
+
+          _ ->
+            :error
+        end
+    end
+  end
+
+  defp relative(function, origin, tokens, current_color, depth) do
+    {space, tokens} =
+      case {function, tokens} do
+        {"color", [space | rest]} -> {space, rest}
+        _ -> {function, tokens}
+      end
+
+    names =
+      case space do
+        s
+        when s in ~w(rgb rgba srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020) ->
+          ~w(r g b)
+
+        s when s in ~w(xyz xyz-d50 xyz-d65) ->
+          ~w(x y z)
+
+        s when s in ~w(hsl hsla) ->
+          ~w(h s l)
+
+        "hwb" ->
+          ~w(h w b)
+
+        s when s in ~w(lab oklab) ->
+          ~w(l a b)
+
+        s when s in ~w(lch oklch) ->
+          ~w(l c h)
+
+        _ ->
+          []
+      end
+
+    with true <- names != [], {:ok, original} <- parse_value(origin, current_color, depth) do
+      channels =
+        CssColor.convert(
+          original.space,
+          Enum.map(original.channels, fn n -> if n == :none, do: 0.0, else: n end),
+          space
+        )
+
+      channels =
+        cond do
+          space in ~w(rgb rgba) ->
+            Enum.map(channels, &(&1 * 255))
+
+          space in ~w(hsl hsla hwb) ->
+            Enum.with_index(channels)
+            |> Enum.map(fn {n, i} -> if i == 0, do: n, else: n * 100 end)
+
+          true ->
+            channels
+        end
+
+      environment =
+        Map.new(Enum.zip(names, channels))
+        |> Map.put("alpha", if(original.alpha == :none, do: 0.0, else: original.alpha))
+
+      {components, alpha} =
+        case tokens do
+          [a, b, c] -> {[a, b, c], Map.fetch!(environment, "alpha") |> Float.to_string()}
+          [a, b, c, "/", alpha] -> {[a, b, c], alpha}
+          _ -> {[], ""}
+        end
+
+      substitute = fn token ->
+        Regex.replace(~r/[a-z][a-z0-9-]*/, token, fn name ->
+          case Map.fetch(environment, name) do
+            {:ok, value} -> "(" <> :erlang.float_to_binary(value * 1.0, [:short]) <> ")"
+            :error -> name
+          end
+        end)
+        |> then(fn value ->
+          if String.starts_with?(value, "("), do: "calc" <> value, else: value
+        end)
+      end
+
+      with true <- length(components) == 3,
+           {:ok, channels} <- prepare_channels(space, Enum.map(components, substitute), false),
+           {:ok, alpha} <- component(substitute.(alpha), :alpha),
+           do:
+             {:ok,
+              %{
+                space: space,
+                channels: channels,
+                alpha: if(alpha == :none, do: :none, else: min(max(alpha, 0.0), 1.0))
+              }},
+           else: (_ -> :error)
+    else
+      _ -> :error
+    end
+  end
+
+  defp mix(body, current_color, depth) do
+    with [method, first, last] <- HtmlValidator.split_css_comma(body, true),
+         ["in", space | modifiers] <- HtmlValidator.split_css_tokens(method),
+         true <-
+           space in ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 xyz xyz-d50 xyz-d65 lab lch oklab oklch hsl hwb),
+         {:ok, hue} <- interpolation_method(space, modifiers),
+         {:ok, first, p} <- mix_operand(first, current_color, depth),
+         {:ok, last, q} <- mix_operand(last, current_color, depth) do
+      {p, q} =
+        case {p, q} do
+          {nil, nil} -> {0.5, 0.5}
+          {nil, q} -> {1 - q, q}
+          {p, nil} -> {p, 1 - p}
+          pair -> pair
+        end
+
+      if p + q > 0 do
+        value = CssColor.interpolate(first, last, q / (p + q), space, hue)
+        {:ok, %{value | alpha: value.alpha * min(p + q, 1.0)}}
+      else
+        :error
+      end
+    else
+      _ -> :error
+    end
+  end
+
+  @doc "Checks an interpolation hue modifier for a prepared color space."
+  @spec interpolation_method(String.t(), [String.t()]) :: {:ok, atom()} | :error
+  def interpolation_method(space, tokens) do
+    case tokens do
+      [] ->
+        {:ok, :shorter}
+
+      [method, "hue"]
+      when space in ~w(hsl hwb lch oklch) and method in ~w(shorter longer increasing decreasing) ->
+        {:ok, String.to_existing_atom(method)}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp mix_operand(source, current_color, depth) do
+    case HtmlValidator.split_css_tokens(source) do
+      [color] ->
+        with {:ok, color} <- parse_value(color, current_color, depth), do: {:ok, color, nil}
+
+      [color, percentage] ->
+        with {p, "%"} when p >= 0 and p <= 100 <- HtmlValidator.parse_css_number(percentage),
+             {:ok, color} <- parse_value(color, current_color, depth),
+             do: {:ok, color, p / 100},
+             else: (_ -> :error)
+
+      _ ->
+        :error
+    end
   end
 
   # Preserve nested calculation tokens; only outer commas/slashes delimit channels.
@@ -345,7 +615,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
          true <- not legacy? or Enum.all?(colors ++ [alpha], &(&1 != "none")),
          {:ok, alpha_value} <- component(alpha, :alpha),
          {:ok, channels} <- prepare_channels(space, colors, legacy?) do
-      {:ok, space, channels, alpha_value |> max(0.0) |> min(1.0)}
+      {:ok, space, channels,
+       if(alpha_value == :none, do: :none, else: alpha_value |> max(0.0) |> min(1.0))}
     else
       _ -> :error
     end
@@ -412,11 +683,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
 
     parsed =
       if source == "none",
-        do: {:ok, 0.0, %{}},
+        do: {:ok, :none, %{}},
         else: CssMathValidator.evaluate_color_component(source)
 
     case parsed do
       {:ok, value, type} when type == %{} or type == %{percentage: 1} or type == %{angle: 1} ->
+        if is_number(value),
+          do: HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(value), :style)
+
         value =
           case value do
             :nan -> 0.0
@@ -426,6 +700,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
           end
 
         cond do
+          value == :none ->
+            {:ok, :none}
+
           kind == :hue and type == %{angle: 1} ->
             {:ok, value * 180 / :math.pi()}
 

@@ -128,7 +128,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
     )
   end
 
-  defp compute_position(position, style) do
+  @doc "Freezes a prepared position at its declaring style while retaining percentage dependencies."
+  @spec compute_position(term(), map()) :: {:ok, term()} | :error | {:error, term()}
+  def compute_position(position, style) do
     case position do
       {:css_position_math, source} when is_binary(source) ->
         case CssMathValidator.length_dependencies(source) do

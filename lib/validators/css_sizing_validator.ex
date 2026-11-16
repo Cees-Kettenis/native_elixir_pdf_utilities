@@ -133,7 +133,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
     end
   end
 
-  defp compute_dimension(value, style) do
+  @doc "Freezes a prepared dimension at its declaring style before inheritance or used-size resolution."
+  @spec compute_dimension(term(), map()) :: {:ok, term()} | :error | {:error, term()}
+  def compute_dimension(value, style) do
     case value do
       {:css_size_math, {source, percentage?}} when is_binary(source) ->
         with {:ok, calculation} <- CssMathValidator.compute_length(source, style),

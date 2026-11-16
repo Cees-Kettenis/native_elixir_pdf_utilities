@@ -221,8 +221,68 @@ therefore wrap differently or extend farther beyond the page.
 | --- | --- |
 | Formats | PNG, JPEG and rasterized SVG; [image restrictions](image-processing.md) |
 | SVG text and links | Text becomes pixels; internal links are inactive |
-| Image styling | `object-fit`, `object-position` |
-| Backgrounds | Sizing, positioning and repetition |
+| Image styling | `object-fit`, `object-position`, `image-orientation`, `image-resolution` and `image-rendering` |
+| CSS images | URLs, linear/radial/conic gradients and their repeating forms, `image-set()` and static `image()` sources with color fallback |
+| Backgrounds | Ordered layers, shorthand resets, independent sizes/positions/repetition, origin/clip boxes and fixed page attachment |
+
+`image-set()` uses `:image_selection_density`, shared with responsive HTML images.
+Only the selected supported source is loaded. Static `image()` supports direction
+and a color fallback for an unavailable or undecodable image. Permission denials
+and resource-limit failures retain their diagnostics rather than using a fallback.
+Asset permissions and resolver behavior are the same as for ordinary images.
+
+Raster orientation uses Exif metadata by default. `image-orientation:none` retains
+the encoded orientation. `image-resolution:from-image` opts into Exif/JFIF or PNG
+resolution metadata; an explicit resolution and optional `snap` are also supported.
+Malformed optional metadata is ignored. SVG keeps its own viewport sizing.
+Rendering quality maps to the PDF image interpolation hint: `smooth` and
+`high-quality` enable interpolation, while `crisp-edges` and `pixelated` disable
+it. The PDF viewer controls the final sampling.
+
+Background layers cycle shorter longhand lists independently. `round` and `space`
+work on each axis. `scroll` and `local` share the unscrolled static geometry;
+`fixed` uses the final PDF page viewport and retains each fragment's clip.
+Explicit background sizes avoid differences between browser print viewports and
+implicit gradient canvases. Root/body canvas propagation is separate from
+fragmented element painting. Generated images and repeated tiles use the existing
+shared image, raster, work and entry budgets.
+
+### Colors and box painting
+
+| Feature | Support |
+| --- | --- |
+| Color spaces | sRGB, linear sRGB, Display P3, A98 RGB, ProPhoto RGB, Rec. 2020, XYZ D50/D65, Lab/LCH, Oklab/Oklch, HSL and HWB |
+| Color functions | Relative colors, missing components, `color-mix()`, `light-dark()` and deterministic system colors |
+| Interpolation | Premultiplied alpha, selected color spaces, hue paths, gradient stop fixup, double positions and transition hints |
+| Corners | Physical and logical corner longhands, elliptical pairs, percentages and proportional overlap reduction |
+| Borders | Border images with independent slices, widths, outsets, edge repetition and optional center fill |
+| Additional paint | Outlines and offsets, ordered outer/inset box shadows, inherited `-webkit-text-fill-color` and text stroke |
+
+Conversions and mixing retain extended channels until the paint boundary. Output
+uses component-clipped sRGB in PDF DeviceRGB; this is not an ICC workflow or a
+PDF-wide conformance claim. Gradients use the legacy sRGB default unless an
+interpolation space is specified with `in`.
+
+The print environment prefers light when both color schemes are offered.
+`color-scheme:dark` selects the dark system/control palette. Authored colors take
+precedence over control defaults. Forced colors are inactive, and both `economy`
+and `exact` print adjustment retain authored paint in generated PDFs.
+
+Border images stretch their admitted source slices without changing layout
+dimensions. SVG sources remain converter-backed images; percentage slices avoid
+dependence on their raster sampling density. HTML text fill/stroke keeps PDF text
+operators and logical extraction. SVG text retains the converter's existing
+image/text ownership rules.
+
+Selected static `-webkit-` background, corner, shadow, box-sizing, flex, column,
+appearance, transform, print-adjustment and text spellings share their standard
+validators and cascade targets. Legacy box orient/align/pack/flex/order spellings
+map to the corresponding flex properties. Animation and interaction aliases are
+not included.
+
+SVG geometry, fills, strokes, dash patterns, markers, paint order and rendering
+hints pass through the existing SVG converter. SVG-only presentation properties
+do not become HTML box properties.
 
 ### Assets and local files
 

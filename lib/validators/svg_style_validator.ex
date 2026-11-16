@@ -22,6 +22,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     svg_stroke_dasharray: :none,
     svg_stroke_dashoffset: {:user, 0.0},
     svg_shape_rendering: "auto",
+    svg_image_rendering: "auto",
+    svg_text_rendering: "auto",
+    svg_color_rendering: "auto",
     svg_paint_order: "normal",
     svg_marker_start: :none,
     svg_marker_mid: :none,
@@ -59,6 +62,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     "stroke-dasharray" => :svg_stroke_dasharray,
     "stroke-dashoffset" => :svg_stroke_dashoffset,
     "shape-rendering" => :svg_shape_rendering,
+    "image-rendering" => :svg_image_rendering,
+    "text-rendering" => :svg_text_rendering,
+    "color-rendering" => :svg_color_rendering,
     "paint-order" => :svg_paint_order,
     "marker-start" => :svg_marker_start,
     "marker-mid" => :svg_marker_mid,
@@ -254,7 +260,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
                )}
 
             _ ->
-              parse(property, normalized)
+              if property in ~w(fill stroke stop-color flood-color lighting-color) and
+                   String.downcase(normalized, :ascii) not in ~w(none currentcolor context-fill context-stroke) and
+                   not String.starts_with?(normalized, "url(") do
+                case HtmlValidator.parse_css_color(normalized, style) do
+                  {:ok, color} -> {:ok, {:color, color}}
+                  _ -> :error
+                end
+              else
+                parse(property, normalized)
+              end
           end
 
         case parsed do
@@ -330,6 +345,19 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
 
       {"stroke-linejoin", value} ->
         if value in ~w(miter round bevel), do: {:ok, value}, else: :error
+
+      {"image-rendering", value} ->
+        if value in ~w(auto optimizeQuality optimizeSpeed smooth high-quality crisp-edges pixelated),
+          do: {:ok, value},
+          else: :error
+
+      {"text-rendering", value} ->
+        if value in ~w(auto optimizeSpeed optimizeLegibility geometricPrecision),
+          do: {:ok, value},
+          else: :error
+
+      {"color-rendering", value} ->
+        if value in ~w(auto optimizeSpeed optimizeQuality), do: {:ok, value}, else: :error
 
       {"shape-rendering", value} ->
         if value in ~w(auto optimizeSpeed crispEdges geometricPrecision),

@@ -332,6 +332,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowShape do
           end
       end
 
+    {width, height, rows} =
+      case Map.get(image, :image_orientation, 1) do
+        1 ->
+          {width, height, rows}
+
+        orientation when orientation in [2, 3, 4] ->
+          rows =
+            Enum.map(rows, fn {y, left, right} ->
+              y = if orientation in [3, 4], do: height - 1 - y, else: y
+
+              if orientation in [2, 3],
+                do: {y, width - right, width - left},
+                else: {y, left, right}
+            end)
+
+          {width, height, rows}
+
+        orientation ->
+          # A quarter turn exchanges mask axes. Preserve the same per-row
+          # conservative bounds as the original alpha-mask model.
+          HtmlValidator.reserve_render_resource(:max_work, width * height, :layout)
+
+          rows =
+            Enum.reduce(rows, %{}, fn {y, left, right}, out ->
+              Enum.reduce(left..(right - 1), out, fn x, out ->
+                row = if orientation in [5, 6], do: x, else: width - 1 - x
+                column = if orientation in [5, 8], do: y, else: height - 1 - y
+
+                Map.update(out, row, {column, column + 1}, fn {left, right} ->
+                  {min(left, column), max(right, column + 1)}
+                end)
+              end)
+            end)
+            |> Enum.map(fn {row, {left, right}} -> {row, left, right} end)
+
+          {height, width, rows}
+      end
+
     {:image, box, width, height, rows}
   end
 

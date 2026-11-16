@@ -1010,6 +1010,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
             _ -> %{weight: false, shear: 0}
           end
 
+        {stroke_width, stroke_color, stroked?, {stroke_red, stroke_green, stroke_blue}} =
+          case box do
+            %{text_stroke_width: width, text_stroke_color: color} when width > 0 ->
+              {width, color, true, color_channels(color)}
+
+            _ ->
+              {0.0, box.color, synthesis.weight, {red, green, blue}}
+          end
+
         text =
           case paint do
             nil ->
@@ -1018,8 +1027,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
               [
                 "BT",
-                if(synthesis.weight,
-                  do: [" 2 Tr ", format_number(font_size / 32), " w"],
+                if(stroked?,
+                  do: [
+                    " 2 Tr ",
+                    format_number(if(stroke_width > 0, do: stroke_width, else: font_size / 32)),
+                    if(stroke_width > 0, do: " w 1 j", else: " w")
+                  ],
                   else: []
                 ),
                 " /",
@@ -1070,8 +1083,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                 " 0 0 ",
                 format_number(paint.css_scale),
                 " 0 0 cm BT ",
-                if(synthesis.weight,
-                  do: ["2 Tr ", format_number(paint.size / 32), " w "],
+                if(stroked?,
+                  do: [
+                    "2 Tr ",
+                    format_number(
+                      if(stroke_width > 0,
+                        do: stroke_width * coordinate_scale,
+                        else: paint.size / 32
+                      )
+                    ),
+                    if(stroke_width > 0, do: " w 1 j ", else: " w ")
+                  ],
                   else: []
                 ),
                 "/",
@@ -1097,19 +1119,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           end
 
         text =
-          if synthesis.weight or synthesis.shear != 0 do
+          if stroked? or synthesis.shear != 0 do
             stroke =
-              if synthesis.weight do
+              if stroked? do
                 parts = [
-                  format_number(red),
+                  format_number(stroke_red),
                   " ",
-                  format_number(green),
+                  format_number(stroke_green),
                   " ",
-                  format_number(blue),
+                  format_number(stroke_blue),
                   " RG "
                 ]
 
-                case opacity_resource(box.color, :stroke, graphics_state_resources) do
+                case opacity_resource(stroke_color, :stroke, graphics_state_resources) do
                   nil -> parts
                   resource -> [parts, "/", resource.name, " gs "]
                 end
@@ -1574,7 +1596,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
     border_style = uniform_border_style(box)
 
-    case side_specific_border?(box) or
+    case Map.has_key?(box, :border_radii) or side_specific_border?(box) or
            (border_style in [:dotted, :dashed] and box.border_radius == 0) or
            (Map.get(box, :role) in [:table_border, :table_outline] and
               Map.has_key?(box, :border_widths) and box.border_radius == 0) do
@@ -1638,7 +1660,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
                         if (Map.get(box, :role) == :css_menu and
                               is_map(get_in(box, [:initial_select_opacity, :clip]))) or
                              Map.has_key?(box, :css_border_surface),
-                           do: %{fill_box | border_radius: 0.0},
+                           do: Map.delete(%{fill_box | border_radius: 0.0}, :border_radii),
                            else: fill_box
 
                       fill_box =
@@ -1877,7 +1899,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           1
 
     uniform? = uniform? and uniform_border_style(box) not in [:inset, :outset, :groove, :ridge]
-    sides = if uniform?, do: [:top], else: [:top, :right, :bottom, :left]
+
+    sides =
+      if uniform?,
+        do: List.wrap(Enum.find([:top, :right, :bottom, :left], &(geometry.widths[&1] > 0))),
+        else: [:top, :right, :bottom, :left]
 
     strokes =
       Enum.flat_map(sides, fn side ->
@@ -2215,11 +2241,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           ]
       end
 
+    orientation = Map.get(box.image, :image_orientation, 1)
+
+    orientation =
+      if orientation == 1,
+        do: [],
+        else: [
+          NativeElixirPdfUtilities.HtmlToPdf.CssImageValue.orientation_matrix(orientation)
+          |> Enum.map_join(" ", &format_number/1),
+          " cm "
+        ]
+
     [
       "q ",
       clip,
       matrix,
-      " cm /",
+      " cm ",
+      orientation,
+      "/",
       image_resource.name,
       " Do Q"
     ]
@@ -2313,18 +2352,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         )
 
       shape when shape in [:rectangle, :wave] ->
-        radius = min(box.border_radius, min(box.width, box.height) / 2)
+        case Map.get(box, :border_radii) do
+          nil ->
+            radius = min(box.border_radius, min(box.width, box.height) / 2)
 
-        if radius > 0,
-          do: rounded_rect_path(box.x, box.y, box.width, box.height, radius),
-          else:
-            "#{format_number(box.x)} #{format_number(box.y)} #{format_number(box.width)} #{format_number(box.height)} re"
+            if radius > 0,
+              do: rounded_rect_path(box.x, box.y, box.width, box.height, radius),
+              else:
+                "#{format_number(box.x)} #{format_number(box.y)} #{format_number(box.width)} #{format_number(box.height)} re"
+
+          radii ->
+            DrawingGeometry.elliptical_rect_commands(
+              box.x,
+              box.y,
+              box.width,
+              box.height,
+              radii,
+              4
+            )
+            |> path_commands()
+        end
     end
   end
 
   defp rounded_rect_path(x, y, width, height, radius) do
     DrawingGeometry.rounded_rect_commands(x, y, width, height, radius)
-    |> Enum.map_join(" ", fn {operation, coordinates} ->
+    |> path_commands()
+  end
+
+  defp path_commands(commands) do
+    Enum.map_join(commands, " ", fn {operation, coordinates} ->
       case operation do
         4 ->
           "h"
@@ -2387,7 +2444,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           |> put_fill_color(box.fill_color)
           |> Kernel.++([
             rect_path(
-              if Map.has_key?(box, :css_border_surface), do: %{box | border_radius: 0}, else: box
+              if Map.has_key?(box, :css_border_surface),
+                do: Map.delete(%{box | border_radius: 0}, :border_radii),
+                else: box
             ),
             "f",
             "Q"
@@ -2395,12 +2454,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       end
 
     stroke_parts =
-      if (Map.get(box, :role) in [:temporal_host, :css_control_host] and box.border_radius > 0 and
-            (length(Enum.uniq(Map.values(box.border_widths))) > 1 or
-               Enum.any?(
-                 Map.values(box.border_styles),
-                 &(&1 not in [:solid, :inset, :outset, :none, :hidden])
-               ))) or
+      if Map.has_key?(box, :border_radii) or
+           (Map.get(box, :role) in [:temporal_host, :css_control_host] and box.border_radius > 0 and
+              (length(Enum.uniq(Map.values(box.border_widths))) > 1 or
+                 Enum.any?(
+                   Map.values(box.border_styles),
+                   &(&1 not in [:solid, :inset, :outset, :none, :hidden])
+                 ))) or
            (box.border_radius > 0 and
               Enum.all?(
                 Enum.map([:top, :right, :bottom, :left], &border_side_style(box, &1)),
@@ -2843,6 +2903,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
       case box.type do
         :text ->
           opacity_resource_keys(box.color, :fill) ++
+            case box do
+              %{text_stroke_color: color} -> opacity_resource_keys(color, :stroke)
+              _ -> []
+            end ++
             case Map.get(box, :font_face) do
               %{type: :embedded, synthesis: %{weight: true}} ->
                 opacity_resource_keys(box.color, :stroke)

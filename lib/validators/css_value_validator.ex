@@ -11,6 +11,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
   alias NativeElixirPdfUtilities.Validators.SvgStyleValidator
 
+  @border_image_fields Map.keys(
+                         NativeElixirPdfUtilities.Validators.CssBorderImageValidator.defaults()
+                       )
   @border_styles [
     :none,
     :hidden,
@@ -33,7 +36,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @text_shadow_properties NativeElixirPdfUtilities.Validators.CssTextShadowValidator.properties()
   @underline_properties NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.properties()
   @source_wide_keywords ~w(inherit initial unset revert revert-layer)
-  @source_layout_properties ~w(width height min-width max-width min-height max-height
+  @source_layout_properties NativeElixirPdfUtilities.Validators.CssBorderImageValidator.properties() ++
+                              NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.properties() ++
+                              ~w(border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius image-orientation image-resolution image-rendering background-origin background-clip background-attachment color-scheme print-color-adjust forced-color-adjust flex-flow width height min-width max-width min-height max-height
           margin padding border-width border-style border-radius border-spacing
           text-align text-transform unicode-bidi white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style text-wrap tab-size word-break word-wrap overflow-wrap line-break
           break-before page-break-before break-after page-break-after break-inside page-break-inside
@@ -367,7 +372,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                   error
               end
 
-            property in ~w(margin padding border-radius) ->
+            property in ~w(border-radius border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius) ->
+              with {:ok, fields} <-
+                     NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.prepare(
+                       %{},
+                       property,
+                       value
+                     ),
+                   do: {:ok, Map.merge(tokens, %{kind: :border_radii, properties: fields})}
+
+            property in ~w(margin padding) ->
               context = if property == "margin", do: :margin, else: :nonnegative
 
               with {:ok, edges} <- HtmlValidator.parse_css_box_lengths(value, {:source, context}),
@@ -548,6 +562,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               with {:ok, offset} <- parse_position_offset(value),
                    do: {:ok, Map.merge(tokens, %{kind: :position_offset, offset: offset})}
 
+            (property == "background" and
+               (String.contains?(value, ["(", ",", "/"]) or
+                  length(HtmlValidator.split_css_tokens(value)) > 1)) or
+                (property in ~w(background-position background-size background-repeat) and
+                   String.contains?(value, ",")) ->
+              :requires_element_context
+
             property in @source_color_properties ->
               parsed =
                 if property == "background" do
@@ -632,6 +653,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
          {:ok, style} <- NativeElixirPdfUtilities.Validators.CssGridValidator.compute_style(style),
          {:ok, style} <-
            NativeElixirPdfUtilities.Validators.CssColumnsValidator.compute_style(style),
+         {:ok, style} <-
+           (case style do
+              style
+              when not is_map_key(style, :background_images) and
+                     not is_map_key(style, :background_positions) and
+                     not is_map_key(style, :background_sizes) and
+                     not is_map_key(style, :border_radii) ->
+                {:ok, style}
+
+              _ ->
+                with {:ok, style} <-
+                       NativeElixirPdfUtilities.Validators.CssBackgroundValidator.compute_style(
+                         style
+                       ),
+                     do:
+                       NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.compute_style(
+                         style
+                       )
+            end),
          {:ok, style} <- CssPositionValidator.compute_style(style),
          do: NativeElixirPdfUtilities.Validators.CssOverflowValidator.compute_style(style)
   end
@@ -774,7 +814,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           Enum.filter(declarations, fn declaration ->
             case declaration_pair(declaration) do
               {property, _} ->
-                property in ["writing-mode", "text-orientation", "direction", "all"]
+                CssCascadeValidator.canonical_property(property) in [
+                  "writing-mode",
+                  "text-orientation",
+                  "direction",
+                  "color-scheme",
+                  "all"
+                ]
 
               _ ->
                 false
@@ -787,7 +833,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           Enum.filter(declarations, fn declaration ->
             case declaration_pair(declaration) do
               {property, _} ->
-                property in ["writing-mode", "text-orientation", "direction", "all"] or
+                CssCascadeValidator.canonical_property(property) in [
+                  "writing-mode",
+                  "text-orientation",
+                  "direction",
+                  "color-scheme",
+                  "all"
+                ] or
                   String.starts_with?(property, "--")
 
               _ ->
@@ -805,12 +857,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                ),
              do:
                {:ok,
-                Map.merge(style, Map.take(axes, [:writing_mode, :text_orientation, :direction]))}
+                Map.merge(
+                  style,
+                  Map.take(axes, [:writing_mode, :text_orientation, :direction, :color_scheme])
+                )}
       else
         {:ok, style}
       end
 
     with {:ok, style} <- result,
+         style =
+           (case style do
+              %{color_scheme: :dark} ->
+                NativeElixirPdfUtilities.Validators.CssColorAdjustmentValidator.control_defaults(
+                  style
+                )
+
+              _ ->
+                style
+            end),
          {:ok, style} <-
            validate_computed_cascade_steps(style, declarations, budget, consumer, failure),
          do:
@@ -1249,6 +1314,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @spec validate_resolved(map(), String.t(), String.t()) ::
           {:ok, map()} | :error | {:error, atom() | {atom(), Diagnostics.diagnostic()}}
   def validate_resolved(style, property, value) do
+    {property, value} =
+      case property do
+        "-webkit-" <> _ -> CssCascadeValidator.normalize_declaration(property, value)
+        "display" -> CssCascadeValidator.normalize_declaration(property, value)
+        _ -> {property, value}
+      end
+
     alias NativeElixirPdfUtilities.Validators.CssLogicalValidator
     logical = CssLogicalValidator.expand(property, value, style)
 
@@ -1330,11 +1402,33 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                    NativeElixirPdfUtilities.Validators.TextBidiValidator.prepare_css(value),
                  do: {:ok, Map.put(style, :unicode_bidi, value)}
 
+          property
+          when property in ["image-orientation", "image-resolution", "image-rendering"] ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssImageValueValidator.prepare_policy(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
+          property
+          when property in ["color-scheme", "print-color-adjust", "forced-color-adjust"] ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssColorAdjustmentValidator.prepare(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
           "color" ->
             with {:ok, color} <-
                    HtmlValidator.parse_css_color_declaration(
                      value,
-                     Map.get(style, :_inherited_color, Map.fetch!(style, :color))
+                     Map.put(
+                       style,
+                       :color,
+                       Map.get(style, :_inherited_color, Map.fetch!(style, :color))
+                     )
                    ) do
               case color do
                 :transparent -> {:ok, Map.put(style, :color, {0, 0, 0, 0.0})}
@@ -1343,7 +1437,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             end
 
           "accent-color" ->
-            case HtmlValidator.parse_css_accent_color(value, style.color) do
+            case HtmlValidator.parse_css_accent_color(value, style) do
               {:ok, :auto} -> {:ok, Map.delete(style, :accent_color)}
               {:ok, color} -> {:ok, Map.put(style, :accent_color, color)}
               :error -> {:error, :invalid_document}
@@ -1372,24 +1466,74 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               else: :error
 
           "background-color" ->
-            with {:ok, color} <- HtmlValidator.parse_css_color(value, Map.fetch!(style, :color)) do
+            with {:ok, color} <- HtmlValidator.parse_css_color(value, style) do
               {:ok, Map.put(style, :background_color, transparent_color_to_nil(color))}
             end
 
-          "background" ->
-            put_background(style, value)
+          property
+          when property in [
+                 "background",
+                 "background-image",
+                 "background-position",
+                 "background-size",
+                 "background-repeat",
+                 "background-origin",
+                 "background-clip",
+                 "background-attachment"
+               ] ->
+            NativeElixirPdfUtilities.Validators.CssBackgroundValidator.prepare(
+              style,
+              property,
+              value
+            )
 
-          "background-image" ->
-            put_background_image(style, value)
+          property
+          when property in ~w(border-image border-image-source border-image-slice border-image-width border-image-outset border-image-repeat) ->
+            NativeElixirPdfUtilities.Validators.CssBorderImageValidator.prepare(
+              style,
+              property,
+              value
+            )
 
-          "background-size" ->
-            put_background_size(style, value)
+          property
+          when property in ~w(outline outline-width outline-style outline-color outline-offset box-shadow -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width -webkit-text-stroke) ->
+            NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.prepare(
+              style,
+              property,
+              value
+            )
 
-          "background-position" ->
-            put_two_axis_position(style, :background_position, value)
+          "flex-flow" ->
+            tokens = HtmlValidator.split_css_tokens(value)
 
-          "background-repeat" ->
-            put_background_repeat(style, value)
+            if length(tokens) in [1, 2] do
+              Enum.reduce_while(
+                tokens,
+                {:ok, Map.merge(style, %{flex_direction: :row, flex_wrap: :nowrap}),
+                 MapSet.new()},
+                fn token, {:ok, acc, seen} ->
+                  owner =
+                    if token in ~w(row row-reverse column column-reverse),
+                      do: "flex-direction",
+                      else: "flex-wrap"
+
+                  if MapSet.member?(seen, owner) do
+                    {:halt, :error}
+                  else
+                    case validate_resolved(acc, owner, token) do
+                      {:ok, acc} -> {:cont, {:ok, acc, MapSet.put(seen, owner)}}
+                      _ -> {:halt, :error}
+                    end
+                  end
+                end
+              )
+              |> case do
+                {:ok, acc, _} -> {:ok, acc}
+                error -> error
+              end
+            else
+              :error
+            end
 
           "box-sizing" ->
             put_box_sizing(style, value)
@@ -1422,7 +1566,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           "border-color" ->
             with {:ok, border_colors} <-
-                   parse_border_colors(value, Map.fetch!(style, :color)) do
+                   parse_border_colors(value, style) do
               border_color = border_colors.top
 
               {:ok,
@@ -1434,7 +1578,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           property
           when property in ["border-top", "border-right", "border-bottom", "border-left"] ->
             with {:ok, width, color, border_style} <-
-                   parse_border_edge(value, Map.fetch!(style, :color)) do
+                   parse_border_edge(value, style) do
               {:ok,
                style
                |> put_border_edge_width(property, width)
@@ -1460,7 +1604,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                  "border-bottom-color",
                  "border-left-color"
                ] ->
-            with {:ok, color} <- HtmlValidator.parse_css_color(value, Map.fetch!(style, :color)) do
+            with {:ok, color} <- HtmlValidator.parse_css_color(value, style) do
               {:ok,
                put_border_edge_color(
                  style,
@@ -1479,9 +1623,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                ] ->
             put_border_style(style, property, value)
 
-          "border-radius" ->
-            with {:ok, length} <- parse_length(value),
-                 do: {:ok, Map.put(style, :border_radius, length)}
+          property
+          when property in [
+                 "border-radius",
+                 "border-top-left-radius",
+                 "border-top-right-radius",
+                 "border-bottom-right-radius",
+                 "border-bottom-left-radius"
+               ] ->
+            NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.prepare(
+              style,
+              property,
+              value
+            )
 
           "text-align" ->
             put_text_align(style, value)
@@ -1645,9 +1799,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           "border" ->
             with {:ok, border_widths, border_color, border_styles} <-
-                   parse_border(value, Map.fetch!(style, :color)) do
+                   parse_border(value, style) do
               style =
                 style
+                |> Map.drop(@border_image_fields)
                 |> Map.put(:border_widths, border_widths)
                 |> Map.put(:border_color, border_color)
                 |> Map.put(:border_colors, edges(border_color))
@@ -1814,7 +1969,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             put_object_fit(style, value)
 
           "object-position" ->
-            put_two_axis_position(style, :object_position, value)
+            with {:ok, position} <- parse_two_axis_position(value, style.font_size, false),
+                 do: {:ok, Map.put(style, :object_position, position)}
 
           property when property in ["isolation", "contain"] ->
             with {:ok, key, value} <-
@@ -2313,41 +2469,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
          do: {:ok, Map.put(style, property, size)}
   end
 
-  defp put_background(style, value) do
-    style =
-      style
-      |> Map.put(:background_color, nil)
-      |> Map.put(:background_image, nil)
-      |> Map.delete(:background_image_source)
-      |> Map.put(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
-      |> Map.put(:background_repeat, :repeat)
-      |> Map.put(:background_size, {:auto, :auto})
-
-    with {:ok, color} <-
-           HtmlValidator.parse_css_background_color(value, Map.fetch!(style, :color)) do
-      {:ok, Map.put(style, :background_color, transparent_color_to_nil(color))}
-    end
-  end
-
-  defp put_background_image(style, value) do
-    case HtmlValidator.parse_background_image_reference(value) do
-      {:ok, nil} ->
-        {:ok, style |> Map.put(:background_image, nil) |> Map.delete(:background_image_source)}
-
-      {:ok, source} ->
-        {:ok, Map.put(style, :background_image_source, source)}
-
-      error ->
-        error
-    end
-  end
-
-  defp put_background_size(style, value) do
-    with {:ok, size} <- parse_background_size(value),
-         do: {:ok, Map.put(style, :background_size, size)}
-  end
-
-  defp parse_background_size(value, parser \\ &parse_size/1) do
+  @doc "Prepares a background size through the shared intrinsic-size and length parser."
+  @spec parse_background_size(String.t()) :: {:ok, term()} | :error | {:error, term()}
+  @spec parse_background_size(String.t(), (String.t() -> term())) ::
+          {:ok, term()} | :error | {:error, term()}
+  def parse_background_size(value, parser \\ &parse_size/1) do
     case value |> String.trim() |> String.downcase() do
       "contain" ->
         {:ok, :contain}
@@ -2376,16 +2502,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           _ ->
             {:error, :invalid_document}
         end
-    end
-  end
-
-  defp put_background_repeat(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "repeat" -> {:ok, Map.put(style, :background_repeat, :repeat)}
-      "no-repeat" -> {:ok, Map.put(style, :background_repeat, :no_repeat)}
-      "repeat-x" -> {:ok, Map.put(style, :background_repeat, :repeat_x)}
-      "repeat-y" -> {:ok, Map.put(style, :background_repeat, :repeat_y)}
-      _ -> {:error, :invalid_document}
     end
   end
 
@@ -2447,13 +2563,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       "none" -> {:ok, Map.put(style, :object_fit, :none)}
       "scale-down" -> {:ok, Map.put(style, :object_fit, :scale_down)}
       _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_two_axis_position(style, property, value) do
-    with {:ok, position} <-
-           parse_two_axis_position(value, style.font_size, property == :background_position) do
-      {:ok, Map.put(style, property, position)}
     end
   end
 
@@ -3340,7 +3449,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
         color =
           if is_nil(color) and not Enum.any?(tokens, &transparent_token?/1),
-            do: current_color,
+            do: if(is_map(current_color), do: current_color.color, else: current_color),
             else: color
 
         {:ok, edges(width), color, edges(border_style)}
@@ -3445,7 +3554,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_border_width(value) do
+  @doc "Prepares a shared CSS border, outline or text stroke width keyword or length."
+  @spec parse_border_width(String.t()) :: {:ok, term()} | :error | {:error, term()}
+  def parse_border_width(value) do
     case value |> String.trim() |> String.downcase() do
       "thin" -> {:ok, 0.75}
       "medium" -> {:ok, @medium_border_width}

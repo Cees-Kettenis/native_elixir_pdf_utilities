@@ -1583,7 +1583,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           "\u00a0khaki\u00a0",
           "rebecca-purple",
           "alice blue",
-          "Canvas",
+          "Canvas-invalid",
           "inherit"
         ] do
       assert :error = HtmlValidator.parse_css_color(token, nil)

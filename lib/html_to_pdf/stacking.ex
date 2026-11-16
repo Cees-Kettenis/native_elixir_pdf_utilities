@@ -75,7 +75,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Stacking do
                 Map.get(box, :_stacking_root_background, false)
           end
 
-        ancestry ++ [{if(own_background?, do: 0, else: 2), 0, index}]
+        ancestry ++
+          [
+            {cond do
+               Map.get(box, :css_paint_role) == :css_outline -> 3
+               own_background? -> 0
+               true -> 2
+             end, 0, index}
+          ]
       end)
       |> Enum.map(fn {box, _index} ->
         # A placed page can be finalized again when furniture is composed. Consume

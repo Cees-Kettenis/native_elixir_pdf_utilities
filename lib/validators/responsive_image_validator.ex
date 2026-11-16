@@ -364,10 +364,8 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
 
           %{candidate | density: density}
         end)
-        |> Enum.uniq_by(& &1.density)
-        |> Enum.sort_by(& &1.density)
 
-      chosen = Enum.find(candidates, &(&1.density >= context.density)) || List.last(candidates)
+      chosen = choose_density(candidates, context.density)
 
       dimensions =
         if source == "source" and
@@ -381,6 +379,13 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
         prepare_selection(chosen.url, chosen.density, dimensions, source, mode)
       end
     end
+  end
+
+  @doc "Chooses the first source at the smallest admitted density meeting the print density, or the largest available."
+  @spec choose_density([map()], number()) :: map() | nil
+  def choose_density(candidates, density) do
+    candidates = candidates |> Enum.uniq_by(& &1.density) |> Enum.sort_by(& &1.density)
+    Enum.find(candidates, &(&1.density >= density)) || List.last(candidates)
   end
 
   defp prepare_selection(url, density, dimensions, source, mode) do
@@ -416,14 +421,22 @@ defmodule NativeElixirPdfUtilities.Validators.ResponsiveImageValidator do
   end
 
   @doc "Validates density-corrected natural dimensions against the shared numeric limit."
-  @spec correct_natural_dimensions(map(), selection()) :: {:ok, map()} | {:error, {atom(), map()}}
+  @spec correct_natural_dimensions(map(), %{
+          required(:density) => number() | :infinity | {number(), number()},
+          required(:url) => String.t()
+        }) :: {:ok, map()} | {:error, {atom(), map()}}
   def correct_natural_dimensions(image, selected) do
     result =
       try do
-        scale = if selected.density == :infinity, do: 0.0, else: 1.0 / selected.density
+        {scale_x, scale_y} =
+          case selected.density do
+            :infinity -> {0.0, 0.0}
+            {x, y} -> {1.0 / x, 1.0 / y}
+            density -> {1.0 / density, 1.0 / density}
+          end
 
-        with {:ok, width} <- HtmlValidator.normalize_geometry_number(image.width * scale),
-             {:ok, height} <- HtmlValidator.normalize_geometry_number(image.height * scale) do
+        with {:ok, width} <- HtmlValidator.normalize_geometry_number(image.width * scale_x),
+             {:ok, height} <- HtmlValidator.normalize_geometry_number(image.height * scale_y) do
           {:ok, %{image | width: width, height: height}}
         end
       rescue

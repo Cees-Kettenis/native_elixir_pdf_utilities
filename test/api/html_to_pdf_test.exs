@@ -4075,7 +4075,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              }}} = HtmlToPdf.render(~s(<p style="color:bananas">Bad CSS</p>))
 
     bad_background_html = """
-    <style>p { background: linear-gradient(red, blue); }</style>
+    <style>p { background: linear-gradient(red); }</style>
     <p>Bad CSS value</p>
     """
 
@@ -4086,9 +4086,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
                reason: :invalid_css,
                line: 1,
                column: 5,
-               source: "background: linear-gradient(red, blue)",
+               source: "background: linear-gradient(red)",
                message:
-                 ~S|line 1: declaration "background: linear-gradient(red, blue)" is invalid or unsupported|
+                 ~S|line 1: declaration "background: linear-gradient(red)" is invalid or unsupported|
              }}} =
              HtmlToPdf.render(bad_background_html)
 

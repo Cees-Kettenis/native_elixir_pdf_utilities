@@ -191,7 +191,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       NativeElixirPdfUtilities.HtmlToPdf.Visibility.with_layout(fn ->
         NativeElixirPdfUtilities.HtmlToPdf.StickyGeometry.with_layout(fn ->
           NativeElixirPdfUtilities.HtmlToPdf.RenderCache.with_stylesheets(fn ->
-            do_layout_document(styled_tree, opts, viewport)
+            NativeElixirPdfUtilities.HtmlToPdf.CssBackground.with_layout(
+              fn -> do_layout_document(styled_tree, opts, viewport) end,
+              viewport
+            )
           end)
         end)
       end)
@@ -239,9 +242,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                     error -> throw({:render_resource_limit, error})
                   end
 
+                canvas_area = %{
+                  x: margins.left,
+                  y: margins.bottom,
+                  width: elem(page_size, 0) - margins.left - margins.right,
+                  height: elem(page_size, 1) - margins.top - margins.bottom
+                }
+
+                canvas_bounds =
+                  if NativeElixirPdfUtilities.HtmlToPdf.CssBackground.layered?(canvas.style),
+                    do: canvas_area,
+                    else: %{x: 0, y: 0, width: elem(page_size, 0), height: elem(page_size, 1)}
+
                 canvas_boxes =
-                  background_box(canvas.style, 0, 0, elem(page_size, 0), elem(page_size, 1))
-                  |> Enum.map(&Map.put(&1, :position_anchor, :canvas))
+                  background_box(
+                    canvas.style,
+                    canvas_bounds.x,
+                    canvas_bounds.y,
+                    canvas_bounds.width,
+                    canvas_bounds.height
+                  )
+
+                canvas_boxes =
+                  if canvas_boxes != [] and Enum.any?(Map.values(margins), &(&1 > 0)),
+                    do:
+                      NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(
+                        canvas_boxes,
+                        canvas_area
+                      ),
+                    else: canvas_boxes
+
+                canvas_boxes = Enum.map(canvas_boxes, &Map.put(&1, :position_anchor, :canvas))
 
                 available_width = elem(layout_page_size, 0) - margins.left - margins.right
 
@@ -328,7 +359,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                             do:
                               style
                               |> Map.put(:background_color, nil)
-                              |> Map.put(:background_image, nil),
+                              |> Map.put(:background_image, nil)
+                              |> Map.delete(:background_images),
                             else: style
                           )
                           |> Map.put(
@@ -467,16 +499,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           HtmlValidator.check_render_resource(:max_numeric_magnitude, width, :layout)
           border = Map.get(style, :border_widths, edges(0.0))
 
+          source_rect = %{
+            type: :rect,
+            x: 0.0,
+            y: 0.0,
+            width: width,
+            height: first.height,
+            border_radius: Map.get(style, :border_radius, 0.0),
+            border_widths: border
+          }
+
           tiles =
-            background_image_boxes(
-              style,
-              style.background_image,
-              0.0,
-              0.0,
-              width,
-              first.height,
-              border
-            )
+            cond do
+              NativeElixirPdfUtilities.HtmlToPdf.CssBackground.layered?(style) ->
+                NativeElixirPdfUtilities.HtmlToPdf.CssBackground.images(
+                  style,
+                  0.0,
+                  0.0,
+                  width,
+                  first.height
+                )
+
+              Map.get(style, :background_image) != nil ->
+                background_image_boxes(
+                  style,
+                  style.background_image,
+                  0.0,
+                  0.0,
+                  width,
+                  first.height,
+                  border
+                )
+
+              true ->
+                []
+            end
+
+          tiles =
+            if Map.get(style, :border_image_source) != nil,
+              do:
+                tiles ++
+                  NativeElixirPdfUtilities.HtmlToPdf.CssBorderImage.boxes(style, source_rect),
+              else: tiles
 
           # Adjacent runs form one painted inline fragment. Clipping every word
           # independently creates raster seams and restarts the source pattern.
@@ -531,6 +595,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               plain =
                 style
                 |> Map.put(:background_image, nil)
+                |> Map.delete(:background_images)
+                |> Map.drop([:box_shadow, :outline_style, :border_image_source])
                 |> Map.put(:border_widths, fragment_border)
 
               fill =
@@ -544,7 +610,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
               borders =
                 background_box(
-                  Map.put(plain, :background_color, nil),
+                  plain
+                  |> Map.put(:background_color, nil)
+                  |> then(fn plain ->
+                    if Map.get(style, :border_image_source) != nil,
+                      do: Map.put(plain, :border_widths, edges(0.0)),
+                      else: plain
+                  end),
                   first.x,
                   first.y,
                   band_width,
@@ -560,7 +632,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 end)
                 |> NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(bounds)
 
-              prepared = Enum.map(fill ++ images ++ borders, &Map.merge(&1, metadata))
+              host =
+                Map.merge(source_rect, %{
+                  x: first.x,
+                  y: first.y,
+                  width: band_width,
+                  border_widths: fragment_border
+                })
+
+              {:ok, radii} =
+                NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.used_radii(
+                  style,
+                  width,
+                  first.height
+                )
+
+              radii =
+                radii ||
+                  Map.new(
+                    [:top_left, :top_right, :bottom_left, :bottom_right],
+                    &{&1,
+                     {min(host.border_radius, host.height / 2),
+                      min(host.border_radius, host.height / 2)}}
+                  )
+
+              radii =
+                Map.new(radii, fn {corner, pair} ->
+                  cut? =
+                    (offset > 0 and corner in [:top_left, :bottom_left]) or
+                      (not approximately_equal?(offset + band_width, width) and
+                         corner in [:top_right, :bottom_right])
+
+                  {corner, if(cut?, do: {0.0, 0.0}, else: pair)}
+                end)
+
+              curved? = Enum.any?(radii, fn {_corner, {x, y}} -> x > 0 and y > 0 end)
+              host = if curved?, do: Map.put(host, :border_radii, radii), else: host
+
+              artwork =
+                Enum.map(fill ++ images ++ borders, fn box ->
+                  if box.type == :rect and curved?,
+                    do: box |> Map.put(:border_radii, radii) |> Map.put(:border_radius, 0.0),
+                    else: box
+                end)
+
+              artwork =
+                if NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint.present?(style),
+                  do: NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint.boxes(style, host, artwork),
+                  else: artwork
+
+              prepared = Enum.map(artwork, &Map.merge(&1, metadata))
 
               prepared =
                 case :maps.get(:clip, first, nil) do
@@ -2463,6 +2584,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         |> Map.put(:border_styles, edges(:none))
         |> Map.put(:background_color, nil)
         |> Map.put(:background_image, nil)
+        |> Map.delete(:background_images)
 
       proxy_style =
         Enum.reduce([:height, :min_height, :max_height], proxy_style, fn property, acc ->
@@ -4009,12 +4131,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                               |> Map.delete(:positioned_children)
 
                             fragment =
-                              if :maps.get(:background_image, inline_style, nil) == nil,
-                                do: fragment,
-                                else:
-                                  fragment
-                                  |> Map.put(:split_inline_background_id, context.id)
-                                  |> Map.put(:split_inline_source_style, inline_style)
+                              if :maps.get(:background_image, inline_style, nil) == nil and
+                                   not Map.has_key?(inline_style, :background_images),
+                                 do: fragment,
+                                 else:
+                                   fragment
+                                   |> Map.put(:split_inline_background_id, context.id)
+                                   |> Map.put(:split_inline_source_style, inline_style)
 
                             fragment =
                               if :maps.get(:position, inline_style, :static) == :relative,
@@ -4065,7 +4188,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   # descendants. Only an observable owner needs distinct inline box fragments.
   defp inline_fragments_need_box?(style) do
     :maps.get(:background_color, style, nil) != nil or
-      :maps.get(:background_image, style, nil) != nil or
+      :maps.get(:background_image, style, nil) != nil or Map.has_key?(style, :background_images) or
       :maps.get(:position, style, :static) != :static or
       :maps.get(:vertical_align, style, :baseline) != :baseline or
       Enum.any?([:link_url, :link_destination, :html_target], &(Map.get(style, &1) != nil)) or
@@ -8046,7 +8169,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp resolve_size_value(value, available_size, style \\ %{}) do
+  @doc "Resolves a prepared paint or layout size against its containing axis and selected style."
+  @spec resolve_size_value(term(), number() | nil, map()) :: number() | nil
+  def resolve_size_value(value, available_size, style \\ %{}) do
     case value do
       {:css_size_math, _} = calculation ->
         case NativeElixirPdfUtilities.Validators.CssSizingValidator.resolve_math(
@@ -8592,6 +8717,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           style
           |> Map.put(:background_color, nil)
           |> Map.put(:background_image, nil)
+          |> Map.delete(:background_images)
           |> background_box(x, y, width, height)
           |> tag_boxes(metadata)
           |> Enum.map(
@@ -9196,7 +9322,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
                       colors =
                         css_background_box(
-                          Map.put(layer_style, :background_image, nil),
+                          Map.delete(
+                            Map.put(layer_style, :background_image, nil),
+                            :background_images
+                          ),
                           clip.x,
                           clip.y,
                           clip.width,
@@ -9342,7 +9471,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp table_part_background_boxes(style, cells, x, y, widths, height, spacing, metadata, role) do
     if style == nil or
          (:maps.get(:background_color, style, nil) == nil and
-            :maps.get(:background_image, style, nil) == nil) do
+            :maps.get(:background_image, style, nil) == nil and
+            not Map.has_key?(style, :background_images)) do
       []
     else
       row_width = Enum.sum(widths) + spacing * (length(widths) + 1)
@@ -9468,6 +9598,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             style
             |> Map.put(:background_color, nil)
             |> Map.put(:background_image, nil)
+            |> Map.delete(:background_images)
             |> Map.put(:border_widths, edges(0.0)),
           else: style
 
@@ -13267,7 +13398,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
               if paint_width > 0 and height > 0 do
                 paint =
-                  if :maps.get(:background_image, background.style, nil) == nil do
+                  if :maps.get(:background_image, background.style, nil) == nil and
+                       not Map.has_key?(background.style, :background_images) and
+                       Map.get(background.style, :border_image_source) == nil and
+                       not NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint.present?(
+                         background.style
+                       ) and
+                       not (Map.get(background.style, :border_radius, 0.0) == 0 and
+                              Map.has_key?(background.style, :border_radii)) do
                     background_box(background.style, paint_x, y, paint_width, height)
                   else
                     source = %{
@@ -15079,6 +15217,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               if split_context != nil or
                    :maps.get(:background_color, style, nil) not in [nil, :transparent] or
                    :maps.get(:background_image, style, nil) != nil or
+                   Map.has_key?(style, :background_images) or
+                   Map.get(style, :border_image_source) != nil or
+                   NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint.present?(style) or
                    Enum.any?(border, fn {_side, width} -> width > 0 end) do
                 font_size = Map.fetch!(style, :font_size)
 
@@ -16092,6 +16233,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     }
 
     box =
+      case style do
+        %{text_fill_color: :current_color} -> box
+        %{text_fill_color: :transparent} -> %{box | color: {0.0, 0.0, 0.0, 0.0}}
+        %{text_fill_color: color} -> %{box | color: color}
+        _ -> box
+      end
+
+    box =
+      case style do
+        %{text_stroke_width: width} when width > 0 ->
+          color =
+            case Map.get(style, :text_stroke_color, :current_color) do
+              :current_color -> style.color
+              :transparent -> {0.0, 0.0, 0.0, 0.0}
+              color -> color
+            end
+
+          box |> Map.put(:text_stroke_width, width) |> Map.put(:text_stroke_color, color)
+
+        _ ->
+          box
+      end
+
+    box =
       case :maps.get(:word_spacing, style, 0.0) do
         spacing when spacing == 0 -> box
         spacing -> Map.put(box, :word_spacing, spacing)
@@ -16229,6 +16394,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         style
         |> Map.put(:background_color, nil)
         |> Map.put(:background_image, nil)
+        |> Map.delete(:background_images)
         |> Map.put(:border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: width})
         |> Map.put(:border_styles, %{top: :none, right: :none, bottom: :none, left: rule_style})
         |> Map.put(:border_colors, %{
@@ -16257,6 +16423,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         # form metadata. Its transparent fill carries geometry without ink.
         |> Map.put(:background_color, {0.0, 0.0, 0.0, 0.0})
         |> Map.put(:background_image, nil)
+        |> Map.delete(:background_images)
         |> Map.put(:border_styles, edges(:none))
       else
         style
@@ -16429,6 +16596,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     if width > 0 and height > 0 and
          (fill_color != nil or border_visible? or :maps.get(:background_image, style, nil) != nil or
+            Map.get(style, :border_image_source) != nil or
+            Map.has_key?(style, :background_images) or
+            NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint.present?(style) or
             !!:maps.get(:_form_control, style, nil) or Map.has_key?(style, :_initial_option_id)) do
       rect = %{
         type: type,
@@ -16449,6 +16619,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         form_owner: :maps.get(:_form_owner, style, nil),
         initial_option_id: :maps.get(:_initial_option_id, style, nil)
       }
+
+      rect =
+        case NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.used_radii(
+               style,
+               width,
+               height
+             ) do
+          {:ok, nil} -> rect
+          {:ok, radii} -> Map.put(rect, :border_radii, radii)
+          error -> throw({:render_resource_limit, error})
+        end
 
       rect =
         cond do
@@ -16510,14 +16691,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   @css_pixel_points
               end
 
-            color = {118 / 255, 118 / 255, 118 / 255, alpha}
+            color =
+              if Map.get(style, :color_scheme) == :dark,
+                do: {133 / 255, 133 / 255, 133 / 255, alpha},
+                else: {118 / 255, 118 / 255, 118 / 255, alpha}
 
             %{
               rect
               | border_radius: 1.5 + @css_pixel_points / 2,
                 fill_color:
                   if(
-                    Map.has_key?(style, :_temporal_display) or
+                    Map.get(style, :color_scheme) == :dark or
+                      Map.has_key?(style, :_temporal_display) or
                       Map.has_key?(style, :_color_state),
                     do: fill_color,
                     else:
@@ -16568,56 +16753,90 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           rect
         end
 
-      case :maps.get(:background_image, style, nil) do
-        nil ->
-          case {fill_color, border_visible?} do
-            {nil, false} ->
-              if :maps.get(:_form_control, style, nil),
-                do: [rect],
-                else: [%{rect | fill_color: {0.0, 0.0, 0.0, 0.0}}]
+      paint_style = style
 
-            _ ->
-              if :maps.get(:role, rect, nil) == :native_menu and
-                   :maps.get(:form_kind, style, nil) == :select and
-                   get_in(style, [:_form_control, :initial_state, :disabled]) do
-                # NativeThemeBase first paints its disabled lighten layer, then
-                # the translucent checkbox-background fill, within the same group.
-                lighten =
-                  rect
-                  |> Map.put(:type, HtmlValidator.reserve_layout_box(:rect))
-                  |> Map.put(:fill_color, {169 / 255, 169 / 255, 169 / 255, 51 / 255})
-                  |> Map.put(:stroke_color, nil)
-                  |> Map.put(:border_colors, edges(nil))
-                  |> Map.delete(:form_control)
+      style =
+        if Map.get(style, :border_image_source) != nil,
+          do: Map.put(style, :border_widths, border_widths),
+          else: style
 
-                [lighten, rect]
-              else
-                [rect]
+      rect =
+        if Map.get(style, :border_image_source) != nil,
+          do: %{rect | stroke_color: nil, stroke_width: 0.0, border_colors: edges(nil)},
+          else: rect
+
+      artwork =
+        if NativeElixirPdfUtilities.HtmlToPdf.CssBackground.layered?(style) do
+          NativeElixirPdfUtilities.HtmlToPdf.CssBackground.boxes(style, rect)
+        else
+          case :maps.get(:background_image, style, nil) do
+            nil ->
+              case {fill_color, border_visible?} do
+                {nil, false} ->
+                  if :maps.get(:_form_control, style, nil),
+                    do: [rect],
+                    else: [%{rect | fill_color: {0.0, 0.0, 0.0, 0.0}}]
+
+                _ ->
+                  if :maps.get(:role, rect, nil) == :native_menu and
+                       :maps.get(:form_kind, style, nil) == :select and
+                       get_in(style, [:_form_control, :initial_state, :disabled]) do
+                    # NativeThemeBase first paints its disabled lighten layer, then
+                    # the translucent checkbox-background fill, within the same group.
+                    lighten =
+                      rect
+                      |> Map.put(:type, HtmlValidator.reserve_layout_box(:rect))
+                      |> Map.put(:fill_color, {169 / 255, 169 / 255, 169 / 255, 51 / 255})
+                      |> Map.put(:stroke_color, nil)
+                      |> Map.put(:border_colors, edges(nil))
+                      |> Map.delete(:form_control)
+
+                    [lighten, rect]
+                  else
+                    [rect]
+                  end
               end
+
+            image ->
+              fill_boxes =
+                case fill_color do
+                  nil ->
+                    []
+
+                  _ ->
+                    [
+                      %{rect | stroke_color: nil, stroke_width: 0.0, border_widths: edges(0.0)}
+                    ]
+                end
+
+              border_boxes =
+                case border_visible? do
+                  true -> [%{rect | fill_color: nil}]
+                  false -> []
+                end
+
+              fill_boxes ++
+                background_image_boxes(style, image, x, y, width, height, border_widths) ++
+                border_boxes
           end
+        end
 
-        image ->
-          fill_boxes =
-            case fill_color do
-              nil ->
-                []
+      artwork =
+        if Map.get(paint_style, :border_image_source) != nil,
+          do:
+            Enum.reject(artwork, fn box ->
+              box.type == :rect and box.fill_color == nil and box.stroke_color == nil and
+                Map.get(box, :form_control) == nil
+            end) ++
+              NativeElixirPdfUtilities.HtmlToPdf.CssBorderImage.boxes(paint_style, %{
+                rect
+                | border_widths: border_widths
+              }),
+          else: artwork
 
-              _ ->
-                [
-                  %{rect | stroke_color: nil, stroke_width: 0.0, border_widths: edges(0.0)}
-                ]
-            end
-
-          border_boxes =
-            case border_visible? do
-              true -> [%{rect | fill_color: nil}]
-              false -> []
-            end
-
-          fill_boxes ++
-            background_image_boxes(style, image, x, y, width, height, border_widths) ++
-            border_boxes
-      end
+      if NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint.present?(paint_style),
+        do: NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint.boxes(paint_style, rect, artwork),
+        else: artwork
     else
       []
     end
@@ -16699,28 +16918,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         # Replaced content follows the content-edge curve after subtracting
         # each actual border and padding edge from the host radius.
-        if Map.has_key?(style, :_image_input_state) and style.border_radius > 0 do
+        if Map.get(style, :border_radius, 0.0) > 0 or Map.has_key?(style, :border_radii) do
           insets =
             Map.new(style.border_widths, fn {side, border} ->
               {side, border + Map.fetch!(style.padding, side)}
             end)
 
-          [
-            Map.put(
-              box,
-              :clip,
-              PageGeometry.inset_rounded_clip(
-                %{
-                  x: x - insets.left,
-                  y: y - insets.bottom,
-                  width: width + insets.left + insets.right,
-                  height: height + insets.top + insets.bottom,
-                  border_radius: style.border_radius
-                },
-                insets
-              )
-            )
-          ]
+          host = %{
+            x: x - insets.left,
+            y: y - insets.bottom,
+            width: width + insets.left + insets.right,
+            height: height + insets.top + insets.bottom,
+            border_radius: style.border_radius
+          }
+
+          host =
+            case NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.used_radii(
+                   style,
+                   host.width,
+                   host.height
+                 ) do
+              {:ok, nil} -> host
+              {:ok, radii} -> Map.put(host, :border_radii, radii)
+              error -> throw({:render_resource_limit, error})
+            end
+
+          # This content-edge curve is contained by the rectangular object-fit
+          # viewport, so it replaces that clip without adding a second wrapper.
+          [Map.put(box, :clip, PageGeometry.inset_rounded_clip(host, insets))]
         else
           [box]
         end
@@ -16747,8 +16972,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {natural_width, natural_height} =
           if image.height == 0 do
             # Density correction can zero natural dimensions without removing
-            # the decoded image's intrinsic aspect ratio.
-            {image.width_px * 0.75, image.height_px * 0.75}
+            # the oriented image's intrinsic aspect ratio.
+            if Map.get(image, :image_orientation, 1) in 5..8,
+              do: {image.height_px * 0.75, image.width_px * 0.75},
+              else: {image.width_px * 0.75, image.height_px * 0.75}
           else
             {image.width, image.height}
           end

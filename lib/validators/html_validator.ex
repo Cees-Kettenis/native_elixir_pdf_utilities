@@ -4332,6 +4332,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
     root_paints =
       :maps.get(:background_image, root_style, nil) != nil or
+        Enum.any?(Map.get(root_style, :background_images, []), &(&1 != nil)) or
         case root_color do
           nil -> false
           {_, _, _, alpha} when alpha == 0 -> false
@@ -4347,13 +4348,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             do: root_style,
             else: body_style
           ),
-          [
-            :background_color,
-            :background_image,
-            :background_position,
-            :background_repeat,
-            :background_size
-          ]
+          NativeElixirPdfUtilities.Validators.CssBackgroundValidator.canvas_fields()
         ),
       body_background_propagated:
         not root_paints and :maps.get(:content_visibility, root_style, nil) != :hidden and
@@ -4381,14 +4376,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       when is_map(style) and is_boolean(propagated) and map_size(plan) == 2 ->
         if Enum.all?(
              Map.keys(style),
-             &(&1 in [
-                 :background_color,
-                 :background_image,
-                 :background_position,
-                 :background_repeat,
-                 :background_size
-               ])
+             &(&1 in NativeElixirPdfUtilities.Validators.CssBackgroundValidator.canvas_fields())
            ) and
+             NativeElixirPdfUtilities.Validators.CssBackgroundValidator.validate_style(
+               style,
+               "document canvas"
+             ) == :ok and
              (style[:background_color] == nil or
                 NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(
                   style[:background_color]
@@ -8413,6 +8406,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  style,
                  source
                ),
+             :ok <- validate_paint_style(style, source),
              :ok <-
                NativeElixirPdfUtilities.Validators.CssBoxAlignmentValidator.validate_gaps(
                  style,
@@ -8828,6 +8822,75 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
+  # Paint controls are optional. Plain styled nodes share one admission
+  # dispatch; feature validators remain the sole owners of their value rules.
+  defp validate_paint_style(style, source) do
+    case style do
+      style
+      when not is_map_key(style, :image_orientation) and
+             not is_map_key(style, :image_resolution) and
+             not is_map_key(style, :image_rendering) and
+             not is_map_key(style, :outline_width) and
+             not is_map_key(style, :outline_style) and
+             not is_map_key(style, :outline_color) and
+             not is_map_key(style, :outline_offset) and
+             not is_map_key(style, :box_shadow) and
+             not is_map_key(style, :text_fill_color) and
+             not is_map_key(style, :text_stroke_color) and
+             not is_map_key(style, :text_stroke_width) and
+             not is_map_key(style, :border_image_source) and
+             not is_map_key(style, :border_image_slice) and
+             not is_map_key(style, :border_image_width) and
+             not is_map_key(style, :border_image_outset) and
+             not is_map_key(style, :border_image_repeat) and
+             not is_map_key(style, :border_radii) and
+             not is_map_key(style, :background_images) and
+             not is_map_key(style, :background_positions) and
+             not is_map_key(style, :background_sizes) and
+             not is_map_key(style, :background_repeats) and
+             not is_map_key(style, :background_origins) and
+             not is_map_key(style, :background_clips) and
+             not is_map_key(style, :background_attachments) and
+             not is_map_key(style, :color_scheme) and
+             not is_map_key(style, :print_color_adjust) and
+             not is_map_key(style, :forced_color_adjust) ->
+        :ok
+
+      _ ->
+        with :ok <-
+               NativeElixirPdfUtilities.Validators.CssImageValueValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssBorderImageValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssBackgroundValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssColorAdjustmentValidator.validate_style(
+                 style,
+                 source
+               ),
+             do: :ok
+    end
+  end
+
   @doc false
   @spec validate_furniture_option(term()) ::
           :ok | {:error, {:invalid_options, Diagnostics.diagnostic()}}
@@ -9186,10 +9249,17 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec parse_css_color_declaration(String.t(), term()) :: {:ok, term()} | :error
   def parse_css_color_declaration(value, inherited_color) do
     case value |> trim_ascii_whitespace() |> downcase_ascii() do
-      "inherit" -> {:ok, inherited_color}
-      "unset" -> {:ok, inherited_color}
-      "initial" -> {:ok, {0, 0, 0}}
-      _ -> parse_css_color(value, inherited_color)
+      "inherit" ->
+        {:ok, if(is_map(inherited_color), do: inherited_color.color, else: inherited_color)}
+
+      "unset" ->
+        {:ok, if(is_map(inherited_color), do: inherited_color.color, else: inherited_color)}
+
+      "initial" ->
+        parse_css_color("CanvasText", inherited_color)
+
+      _ ->
+        parse_css_color(value, inherited_color)
     end
   end
 

@@ -53,22 +53,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
       border_radius: max(radius - insets.left, 0.0)
     }
 
-    if length(Enum.uniq(Map.values(insets))) == 1 do
-      clip
-    else
-      # CSS edge curves retain Blink's fixed 1/64 CSS-pixel LayoutUnit
-      # precision before the enclosing rectangle is snapped for paint.
-      insets =
-        Map.new(insets, fn {side, extent} ->
-          {side, Float.floor(extent / @css_pixel_points * 64) / 64 * @css_pixel_points}
-        end)
+    case Map.get(host, :border_radii) do
+      nil ->
+        if length(Enum.uniq(Map.values(insets))) == 1 do
+          clip
+        else
+          # CSS edge curves retain Blink's fixed 1/64 CSS-pixel LayoutUnit
+          # precision before the enclosing rectangle is snapped for paint.
+          insets =
+            Map.new(insets, fn {side, extent} ->
+              {side, Float.floor(extent / @css_pixel_points * 64) / 64 * @css_pixel_points}
+            end)
 
-      Map.put(clip, :border_radii, %{
-        bottom_left: {max(radius - insets.left, 0.0), max(radius - insets.bottom, 0.0)},
-        bottom_right: {max(radius - insets.right, 0.0), max(radius - insets.bottom, 0.0)},
-        top_right: {max(radius - insets.right, 0.0), max(radius - insets.top, 0.0)},
-        top_left: {max(radius - insets.left, 0.0), max(radius - insets.top, 0.0)}
-      })
+          Map.put(clip, :border_radii, %{
+            bottom_left: {max(radius - insets.left, 0.0), max(radius - insets.bottom, 0.0)},
+            bottom_right: {max(radius - insets.right, 0.0), max(radius - insets.bottom, 0.0)},
+            top_right: {max(radius - insets.right, 0.0), max(radius - insets.top, 0.0)},
+            top_left: {max(radius - insets.left, 0.0), max(radius - insets.top, 0.0)}
+          })
+        end
+
+      radii ->
+        corners = %{
+          top_left: {:left, :top},
+          top_right: {:right, :top},
+          bottom_right: {:right, :bottom},
+          bottom_left: {:left, :bottom}
+        }
+
+        radii =
+          Map.new(radii, fn {corner, {x, y}} ->
+            {horizontal, vertical} = Map.fetch!(corners, corner)
+
+            {corner,
+             {max(x - Map.fetch!(insets, horizontal), 0.0),
+              max(y - Map.fetch!(insets, vertical), 0.0)}}
+          end)
+
+        clip |> Map.put(:border_radius, 0.0) |> Map.put(:border_radii, radii)
     end
   end
 
@@ -146,12 +168,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
         width = max(Float.floor(outer.x + outer.width - inset.right + 0.5) - x, 0)
         height = max(Float.floor(outer.y + outer.height - inset.bottom + 0.5) - y, 0)
 
-        radii = %{
-          bottom_left: {max(outer.radius - inset.left, 0), max(outer.radius - inset.top, 0)},
-          bottom_right: {max(outer.radius - inset.right, 0), max(outer.radius - inset.top, 0)},
-          top_right: {max(outer.radius - inset.right, 0), max(outer.radius - inset.bottom, 0)},
-          top_left: {max(outer.radius - inset.left, 0), max(outer.radius - inset.bottom, 0)}
-        }
+        radii =
+          case Map.get(box, :border_radii) do
+            nil ->
+              %{
+                bottom_left:
+                  {max(outer.radius - inset.left, 0), max(outer.radius - inset.top, 0)},
+                bottom_right:
+                  {max(outer.radius - inset.right, 0), max(outer.radius - inset.top, 0)},
+                top_right:
+                  {max(outer.radius - inset.right, 0), max(outer.radius - inset.bottom, 0)},
+                top_left: {max(outer.radius - inset.left, 0), max(outer.radius - inset.bottom, 0)}
+              }
+
+            radii ->
+              source = %{
+                bottom_left: {:top_left, :left, :top},
+                bottom_right: {:top_right, :right, :top},
+                top_right: {:bottom_right, :right, :bottom},
+                top_left: {:bottom_left, :left, :bottom}
+              }
+
+              Map.new(source, fn {corner, {original, horizontal, vertical}} ->
+                {x, y} = Map.fetch!(radii, original)
+
+                {corner,
+                 {max(x / scale - Map.fetch!(inset, horizontal), 0.0),
+                  max(y / scale - Map.fetch!(inset, vertical), 0.0)}}
+              end)
+          end
 
         %{
           x: x,

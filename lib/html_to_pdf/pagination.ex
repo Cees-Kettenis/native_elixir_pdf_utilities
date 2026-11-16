@@ -69,6 +69,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
              end
            end),
          pages =
+           if(Map.get(layout_tree, :css_fixed_backgrounds, false),
+             do: NativeElixirPdfUtilities.HtmlToPdf.CssBackground.resolve_fixed_pages(pages),
+             else: pages
+           ),
+         pages =
            Enum.map(pages, fn page ->
              %{page | boxes: NativeElixirPdfUtilities.HtmlToPdf.Stacking.order(page.boxes)}
            end),
@@ -509,6 +514,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                         border_widths: widths,
                         stroke_width: Enum.max(Map.values(widths))
                     }
+
+                    paint =
+                      if (index != first_page or index != last_page) and
+                           (paint.border_radius > 0 or Map.has_key?(paint, :border_radii)) do
+                        radii =
+                          Map.get_lazy(paint, :border_radii, fn ->
+                            Map.new(
+                              [:top_left, :top_right, :bottom_left, :bottom_right],
+                              &{&1, {paint.border_radius, paint.border_radius}}
+                            )
+                          end)
+
+                        radii =
+                          Map.new(radii, fn {corner, pair} ->
+                            cut? =
+                              (corner in [:top_left, :top_right] and index != first_page) or
+                                (corner in [:bottom_left, :bottom_right] and index != last_page)
+
+                            {corner, if(cut?, do: {0.0, 0.0}, else: pair)}
+                          end)
+
+                        paint = Map.put(paint, :border_radius, 0.0)
+
+                        if Enum.any?(radii, fn {_corner, {x, y}} -> x > 0 and y > 0 end),
+                          do: Map.put(paint, :border_radii, radii),
+                          else: Map.delete(paint, :border_radii)
+                      else
+                        paint
+                      end
 
                     paint =
                       if index == first_page, do: paint, else: Map.delete(paint, :border_cutout)

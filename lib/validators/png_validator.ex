@@ -308,6 +308,15 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
       {"IEND", _} ->
         error("PNG requires IDAT before IEND")
 
+      {type, _} when type in ["pHYs", "eXIf"] ->
+        metadata =
+          if type == "pHYs",
+            do: NativeElixirPdfUtilities.Validators.ImageMetadataValidator.png_resolution(data),
+            else: NativeElixirPdfUtilities.Validators.ImageMetadataValidator.tiff(data)
+
+        phase = if state.phase == :data, do: :after_data, else: state.phase
+        read_chunks(rest, state |> Map.merge(metadata) |> Map.put(:phase, phase))
+
       {<<first, _::binary>>, _} when first in ?A..?Z ->
         error("unsupported critical PNG chunk #{type}")
 

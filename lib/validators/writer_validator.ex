@@ -1316,6 +1316,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           (Map.get(box, :role) != :select_arrow or
              (Map.get(box, :shape) == {:chevron, :down} and is_map(Map.get(box, :clip)))) and
           valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
+          (not is_map_key(box, :border_radii) or valid_corner_radii?(box.border_radii)) and
           valid_baseline_paint?(box) and
           valid_gauge_frame?(box) and
           valid_range_frame?(box) and
@@ -2016,11 +2017,20 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
              not is_map_key(box, :word_spacing) and not is_map_key(box, :_justification_spacing) and
              not is_map_key(box, :_justification_boundaries) and
              not is_map_key(box, :text_baseline_offset) and
-             not is_map_key(box, :baseline_snap_depth) ->
+             not is_map_key(box, :baseline_snap_depth) and
+             not is_map_key(box, :text_stroke_color) and not is_map_key(box, :text_stroke_width) ->
         true
 
       _ ->
-        NativeElixirPdfUtilities.Validators.CssWritingModeValidator.valid_paint?(box) and
+        case box do
+          box
+          when not is_map_key(box, :text_stroke_width) and not is_map_key(box, :text_stroke_color) ->
+            true
+
+          _ ->
+            NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.valid_text_box?(box)
+        end and
+          NativeElixirPdfUtilities.Validators.CssWritingModeValidator.valid_paint?(box) and
           NativeElixirPdfUtilities.Validators.TextBidiValidator.valid_paint?(box) and
           NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.valid_paint?(box) and
           valid_baseline_paint?(box)
@@ -2031,6 +2041,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   @spec valid_image?(term()) :: boolean()
   def valid_image?(image) do
     case image do
+      # The eight TIFF orientation codes are a fixed image-format vocabulary.
+      %{image_orientation: orientation} when orientation not in 1..8 ->
+        false
+
       %{logical_text: text} ->
         if is_binary(text),
           do:
@@ -2114,6 +2128,31 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
+  defp valid_corner_radii?(radii) do
+    case radii do
+      nil ->
+        true
+
+      radii when is_map(radii) ->
+        Enum.sort(Map.keys(radii)) == [:bottom_left, :bottom_right, :top_left, :top_right] and
+          Enum.all?(radii, fn {_corner, pair} ->
+            case pair do
+              {rx, ry} ->
+                Enum.all?([rx, ry], fn value ->
+                  is_number(value) and value >= 0 and
+                    match?({:ok, _}, HtmlValidator.normalize_geometry_number(value))
+                end)
+
+              _ ->
+                false
+            end
+          end)
+
+      _ ->
+        false
+    end
+  end
+
   defp valid_clip_rectangle?(clip, rounded? \\ false) do
     case clip do
       nil ->
@@ -2128,28 +2167,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         radius = Map.get(clip, :border_radius, 0.0)
 
         radii_valid? =
-          case Map.get(clip, :border_radii) do
-            nil ->
-              true
-
-            radii when is_map(radii) ->
-              Enum.sort(Map.keys(radii)) == [:bottom_left, :bottom_right, :top_left, :top_right] and
-                Enum.all?(radii, fn {_corner, pair} ->
-                  case pair do
-                    {rx, ry} ->
-                      Enum.all?([rx, ry], fn value ->
-                        is_number(value) and value >= 0 and
-                          match?({:ok, _}, HtmlValidator.normalize_geometry_number(value))
-                      end)
-
-                    _ ->
-                      false
-                  end
-                end)
-
-            _ ->
-              false
-          end
+          valid_corner_radii?(Map.get(clip, :border_radii))
 
         radii_valid? and Enum.all?(Map.keys(clip), &(&1 in allowed)) and
           Enum.all?(

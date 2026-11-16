@@ -49,6 +49,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoder do
         decoded_stride: parsed.stride
       }
 
+      image = Map.merge(image, Map.take(parsed, [:exif_orientation, :resolution_densities]))
       {:ok, if(is_nil(alpha), do: image, else: Map.put(image, :alpha_data, alpha))}
     end
   end

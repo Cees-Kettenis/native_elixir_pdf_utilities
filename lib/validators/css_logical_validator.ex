@@ -25,6 +25,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssLogicalValidator do
                   end
                 )
               )
+              |> Map.merge(
+                Map.new(
+                  for block <- ["start", "end"],
+                      inline <- ["start", "end"],
+                      do: {"border-#{block}-#{inline}-radius", {:corner, block, inline}}
+                )
+              )
               |> Map.put("inset", :inset)
 
   @doc "Lists the fixed grammar of logical sizing and edge properties."
@@ -104,6 +111,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssLogicalValidator do
           prefix <>
             Atom.to_string(Map.fetch!(axes(style), String.to_existing_atom(axis <> "_size")))
         ]
+
+      {:corner, block, inline} ->
+        axes = axes(style)
+
+        sides = [
+          Map.fetch!(axes, String.to_existing_atom("block_" <> block)),
+          Map.fetch!(axes, String.to_existing_atom("inline_" <> inline))
+        ]
+
+        vertical = Enum.find(sides, &(&1 in [:top, :bottom]))
+        horizontal = Enum.find(sides, &(&1 in [:left, :right]))
+        ["border-#{vertical}-#{horizontal}-radius"]
 
       {:edges, family, axis, endpoint, suffix} ->
         endpoints = if endpoint, do: [endpoint], else: ["start", "end"]

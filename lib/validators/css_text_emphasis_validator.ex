@@ -49,7 +49,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssTextEmphasisValidator do
           {:ok, Map.put(style, :text_emphasis_color, :current_color)}
         else
           with {:ok, color} <- HtmlValidator.parse_css_color(value, nil),
-               true <- color != nil,
                do: {:ok, Map.put(style, :text_emphasis_color, color)}
         end
 

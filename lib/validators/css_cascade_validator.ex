@@ -6,7 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
   @sides ~w(top right bottom left)
   @font_controls NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties()
-  @simple ~w(color accent-color appearance content-visibility visibility resize box-sizing border-radius
+  @simple ~w(outline-width outline-style outline-color outline-offset box-shadow border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize box-sizing border-radius
     text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
     ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
@@ -20,6 +20,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             {name, [[String.to_atom(String.replace(name, "-", "_"))]]}
           end)
           |> Map.merge(%{
+            "-webkit-text-fill-color" => [[:text_fill_color]],
+            "-webkit-text-stroke-color" => [[:text_stroke_color]],
+            "-webkit-text-stroke-width" => [[:text_stroke_width]],
             "row-gap" => [[:row_gap], [:_row_gap_normal]],
             "column-gap" => [[:column_gap], [:_column_gap_normal]],
             "font-size" => [[:font_size]],
@@ -52,11 +55,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             ],
             "text-align" => [[:text_align], [:_text_align_initial]],
             "shape-outside" => [[:shape_outside], [:shape_image_source], [:shape_image]],
+            "border-top-left-radius" => [[:border_radii, :top_left]],
+            "border-top-right-radius" => [[:border_radii, :top_right]],
+            "border-bottom-right-radius" => [[:border_radii, :bottom_right]],
+            "border-bottom-left-radius" => [[:border_radii, :bottom_left]],
+            "background-origin" => [[:background_origins]],
+            "background-clip" => [[:background_clips]],
+            "background-attachment" => [[:background_attachments]],
             "background-color" => [[:background_color]],
-            "background-image" => [[:background_image], [:background_image_source]],
-            "background-position" => [[:background_position]],
-            "background-size" => [[:background_size]],
-            "background-repeat" => [[:background_repeat]],
+            "background-image" => [
+              [:background_image],
+              [:background_image_source],
+              [:background_images]
+            ],
+            "background-position" => [[:background_position], [:background_positions]],
+            "background-size" => [[:background_size], [:background_sizes]],
+            "background-repeat" => [[:background_repeat], [:background_repeats]],
             "list-style-type" => [[:list_marker_type]],
             "list-style-position" => [[:list_style_position]],
             "list-style-image" => [[:list_style_image], [:list_style_image_source]],
@@ -95,6 +109,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             end)
           end)
   @shorthands %{
+                "outline" => ~w(outline-width outline-style outline-color),
+                "-webkit-text-stroke" => ~w(-webkit-text-stroke-width -webkit-text-stroke-color),
                 "vertical-align" => ~w(baseline-source alignment-baseline baseline-shift),
                 "text-emphasis" => ~w(text-emphasis-style text-emphasis-color),
                 "white-space" => ~w(white-space-collapse text-wrap-mode white-space-trim),
@@ -103,13 +119,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                 "line-clamp" => ~w(max-lines block-ellipsis continue),
                 "margin" => Enum.map(@sides, &("margin-" <> &1)),
                 "padding" => Enum.map(@sides, &("padding-" <> &1)),
+                "border-image" =>
+                  ~w(border-image-source border-image-slice border-image-width border-image-outset border-image-repeat),
+                "border-radius" =>
+                  ~w(border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius),
                 "border-width" => Enum.map(@sides, &("border-" <> &1 <> "-width")),
                 "border-color" => Enum.map(@sides, &("border-" <> &1 <> "-color")),
                 "border-style" => Enum.map(@sides, &("border-" <> &1 <> "-style")),
                 "border" =>
-                  for(side <- @sides, kind <- ~w(width color style), do: "border-#{side}-#{kind}"),
+                  for(side <- @sides, kind <- ~w(width color style), do: "border-#{side}-#{kind}") ++
+                    ~w(border-image-source border-image-slice border-image-width border-image-outset border-image-repeat),
                 "background" =>
-                  ~w(background-color background-image background-position background-size background-repeat),
+                  ~w(background-color background-image background-position background-size background-repeat background-origin background-clip background-attachment),
                 "font" =>
                   ~w(font-size line-height font-family font-weight font-style font-width) ++
                     NativeElixirPdfUtilities.Validators.CssFontControlsValidator.font_resets(),
@@ -126,6 +147,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                 "place-content" => ~w(align-content justify-content),
                 "place-items" => ~w(align-items justify-items),
                 "place-self" => ~w(align-self justify-self),
+                "flex-flow" => ~w(flex-direction flex-wrap),
                 "flex" => ~w(flex-grow flex-shrink flex-basis),
                 "grid-template" =>
                   ~w(grid-template-columns grid-template-rows grid-template-areas),
@@ -147,7 +169,78 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     "page-break-after" => "break-after",
     "page-break-inside" => "break-inside"
   }
-  @inherited ~w(color accent-color font-size font-family font-style font-weight font-width line-height
+  @aliases Map.merge(
+             @aliases,
+             Map.new(
+               ~w(background-clip background-origin background-size border-bottom-left-radius border-bottom-right-radius border-top-left-radius border-top-right-radius border-radius box-shadow box-sizing flex flex-basis flex-direction flex-flow flex-grow flex-shrink flex-wrap justify-content align-content align-items align-self order appearance column-count column-width column-gap column-rule column-rule-color column-rule-style column-rule-width columns transform transform-origin print-color-adjust hyphens text-emphasis text-emphasis-style text-emphasis-color text-emphasis-position writing-mode text-orientation line-clamp),
+               &{"-webkit-" <> &1, &1}
+             )
+           )
+  @aliases Map.merge(@aliases, %{
+             "-webkit-box-align" => "align-items",
+             "-webkit-box-flex" => "flex-grow",
+             "-webkit-box-ordinal-group" => "order",
+             "-webkit-box-orient" => "flex-direction",
+             "-webkit-box-pack" => "justify-content"
+           })
+
+  @doc "Returns the standard owner for a selected static compatibility spelling."
+  @spec canonical_property(String.t()) :: String.t()
+  @compile {:inline, canonical_property: 1}
+  def canonical_property(property) do
+    case property do
+      "-webkit-" <> _ -> Map.get(@aliases, property, property)
+      _ -> property
+    end
+  end
+
+  @doc "Maps legacy static box keywords before invoking the standard owner's validator."
+  @spec normalize_declaration(String.t(), String.t()) :: {String.t(), String.t()}
+  def normalize_declaration(property, value) do
+    mapped =
+      case {property, value} do
+        {"display", value} ->
+          Map.get(
+            %{
+              "-webkit-box" => "flex",
+              "-webkit-flex" => "flex",
+              "-webkit-inline-box" => "inline-flex",
+              "-webkit-inline-flex" => "inline-flex"
+            },
+            value,
+            value
+          )
+
+        {"-webkit-box-orient", value} ->
+          Map.get(
+            %{
+              "horizontal" => "row",
+              "inline-axis" => "row",
+              "vertical" => "column",
+              "block-axis" => "column"
+            },
+            value,
+            value
+          )
+
+        {"-webkit-box-align", value} ->
+          Map.get(%{"start" => "flex-start", "end" => "flex-end"}, value, value)
+
+        {"-webkit-box-pack", value} ->
+          Map.get(
+            %{"start" => "flex-start", "end" => "flex-end", "justify" => "space-between"},
+            value,
+            value
+          )
+
+        _ ->
+          value
+      end
+
+    {canonical_property(property), mapped}
+  end
+
+  @inherited ~w(-webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color font-size font-family font-style font-weight font-width line-height
     dominant-baseline letter-spacing word-spacing text-indent text-align-last text-justify hanging-punctuation text-align text-transform quotes white-space white-space-collapse text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter-align initial-letter-wrap orphans widows caption-side border-collapse border-spacing empty-cells list-style-type list-style-position
     list-style-image visibility block-ellipsis ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction math-style math-shift math-depth) ++
@@ -707,7 +800,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   def initial(context \\ %{}) do
     base =
       %{
-        color: {0, 0, 0},
+        color:
+          case context do
+            %{color_scheme: :dark} ->
+              {:ok, color} = HtmlValidator.parse_css_color("CanvasText", context)
+              color
+
+            _ ->
+              {0, 0, 0}
+          end,
+        color_scheme: :light,
+        image_orientation: :from_image,
+        image_resolution: %{density: 1.0, from_image?: false, snap?: false},
+        image_rendering: :auto,
+        print_color_adjust: :economy,
+        forced_color_adjust: :auto,
         font_size: 12.0,
         font_families: ["serif"],
         font_weight: 400,
@@ -828,6 +935,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssInitialLetterValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssBaselineValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.defaults())
+      |> Map.put(:border_radii, %{
+        top_left: {0.0, 0.0},
+        top_right: {0.0, 0.0},
+        bottom_left: {0.0, 0.0},
+        bottom_right: {0.0, 0.0}
+      })
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.defaults())
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssBorderImageValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextShadowValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextEmphasisValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.RubyValidator.defaults())
