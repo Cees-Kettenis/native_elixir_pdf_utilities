@@ -38,10 +38,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           text-align text-transform unicode-bidi white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style text-wrap tab-size word-break word-wrap overflow-wrap line-break
           break-before page-break-before break-after page-break-after break-inside page-break-inside
           content-visibility visibility resize appearance ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction display box-sizing position z-index isolation contain object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
-          border-collapse caption-side table-layout flex-direction flex-wrap gap row-gap column-gap
-          justify-content align-items align-self justify-self justify-items align-content order
+          border-collapse caption-side table-layout empty-cells flex-direction flex-wrap gap row-gap column-gap
+          justify-content align-items align-self justify-self justify-items align-content place-content place-items place-self order
           flex-grow flex-shrink flex-basis flex grid-column grid-row grid-column-start grid-column-end
-          grid-row-start grid-row-end grid-area) ++
+          grid-row-start grid-row-end grid-area grid-template-areas grid-auto-flow grid-template grid float clear shape-outside shape-inside shape-margin shape-image-threshold) ++
                               @hyphenation_properties ++
                               @text_spacing_properties ++
                               @baseline_properties ++
@@ -401,7 +401,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               with {:ok, length} <- HtmlValidator.prepare_css_length_source(value, context),
                    do: {:ok, Map.merge(tokens, %{kind: :edge_length, length: length})}
 
-            property in ~w(gap row-gap column-gap border-spacing flex-basis) ->
+            property == "flex-basis" ->
+              with {:ok, basis} <-
+                     flex_basis_value(
+                       value,
+                       &HtmlValidator.prepare_css_length_source(&1, :nonnegative)
+                     ),
+                   do: {:ok, Map.merge(tokens, %{kind: :layout_lengths, lengths: basis})}
+
+            property in ~w(gap row-gap column-gap border-spacing) ->
               context = if property == "border-spacing", do: :length, else: :nonnegative
               parser = &HtmlValidator.prepare_css_length_source(&1, context)
 
@@ -511,15 +519,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               with {:ok, tracks} <-
                      parse_grid_tracks(
                        value,
-                       &HtmlValidator.prepare_css_length_source(&1, :length)
+                       &HtmlValidator.prepare_css_length_source(&1, :nonnegative)
                      ),
                    do: {:ok, Map.merge(tokens, %{kind: :grid_tracks, tracks: tracks})}
 
             property in ~w(grid-auto-columns grid-auto-rows) ->
               with {:ok, track} <-
-                     parse_grid_track(
+                     NativeElixirPdfUtilities.Validators.CssGridValidator.auto_tracks(
                        value,
-                       &HtmlValidator.prepare_css_length_source(&1, :length)
+                       &HtmlValidator.prepare_css_length_source(&1, :nonnegative)
                      ),
                    do: {:ok, Map.merge(tokens, %{kind: :grid_tracks, tracks: [track]})}
 
@@ -613,8 +621,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
          {:ok, style} <- CssMathValidator.resolve_scalars(style),
          {:ok, style} <- CssLengthValidator.resolve_edges(style),
          {:ok, style} <-
+           NativeElixirPdfUtilities.Validators.CssBoxAlignmentValidator.compute_gaps(style),
+         {:ok, style} <-
            NativeElixirPdfUtilities.Validators.CssBaselineValidator.compute_style(style),
          {:ok, style} <- CssSizingValidator.compute_dimensions(style),
+         {:ok, style} <-
+           NativeElixirPdfUtilities.Validators.CssFloatValidator.compute_style(style),
+         {:ok, style} <-
+           NativeElixirPdfUtilities.Validators.CssShapeValidator.compute_style(style),
+         {:ok, style} <- NativeElixirPdfUtilities.Validators.CssGridValidator.compute_style(style),
+         {:ok, style} <-
+           NativeElixirPdfUtilities.Validators.CssColumnsValidator.compute_style(style),
          {:ok, style} <- CssPositionValidator.compute_style(style),
          do: NativeElixirPdfUtilities.Validators.CssOverflowValidator.compute_style(style)
   end
@@ -1575,11 +1592,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             put_text_wrapping(style, property, value)
 
           property when property in ["break-before", "page-break-before"] ->
-            with {:ok, break_value} <- page_break_value(value),
+            with {:ok, break_value} <-
+                   NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.prepare_break(
+                     "break-before",
+                     value
+                   ),
                  do: {:ok, Map.put(style, :break_before, break_value)}
 
           property when property in ["break-after", "page-break-after"] ->
-            with {:ok, break_value} <- page_break_value(value),
+            with {:ok, break_value} <-
+                   NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.prepare_break(
+                     "break-after",
+                     value
+                   ),
                  do: {:ok, Map.put(style, :break_after, break_value)}
 
           property when property in ["break-inside", "page-break-inside"] ->
@@ -1835,6 +1860,49 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           "table-layout" ->
             put_table_layout(style, value)
 
+          "empty-cells" ->
+            with {:ok, policy} <-
+                   NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_empty_cells(
+                     value
+                   ),
+                 do: {:ok, Map.put(style, :empty_cells, policy)}
+
+          property
+          when property in [
+                 "shape-outside",
+                 "shape-inside",
+                 "shape-margin",
+                 "shape-image-threshold"
+               ] ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssShapeValidator.prepare(property, value),
+                 do: {:ok, Map.merge(style, fields)}
+
+          property when property in ["float", "clear"] ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssFloatValidator.prepare(property, value),
+                 do: {:ok, Map.merge(style, fields)}
+
+          property
+          when property in [
+                 "columns",
+                 "column-count",
+                 "column-width",
+                 "column-fill",
+                 "column-span",
+                 "column-rule",
+                 "column-rule-width",
+                 "column-rule-style",
+                 "column-rule-color"
+               ] ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssColumnsValidator.prepare(
+                     property,
+                     value,
+                     Map.get(style, :color, {0, 0, 0})
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
           "flex-direction" ->
             put_flex_direction(style, value)
 
@@ -1843,24 +1911,57 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           "gap" ->
             with {:ok, row_gap, column_gap} <- parse_gap(value) do
-              {:ok, style |> Map.put(:row_gap, row_gap) |> Map.put(:column_gap, column_gap)}
+              {:ok,
+               style
+               |> Map.put(:row_gap, row_gap)
+               |> Map.put(:column_gap, column_gap)
+               |> Map.put(
+                 :_row_gap_normal,
+                 row_gap == 0.0 and String.starts_with?(String.trim(value), "normal")
+               )
+               |> Map.put(
+                 :_column_gap_normal,
+                 List.last(HtmlValidator.split_css_tokens(value)) == "normal"
+               )}
             end
 
           property when property in ["row-gap", "column-gap"] ->
-            with {:ok, length} <- parse_length(value),
-                 do: {:ok, Map.put(style, gap_property(property), length)}
+            with {:ok, length} <-
+                   if(String.trim(value) == "normal",
+                     do: {:ok, 0.0},
+                     else:
+                       NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(
+                         value,
+                         :padding
+                       )
+                   ),
+                 do:
+                   {:ok,
+                    style
+                    |> Map.put(gap_property(property), length)
+                    |> Map.put(
+                      if(property == "row-gap", do: :_row_gap_normal, else: :_column_gap_normal),
+                      String.trim(value) == "normal"
+                    )}
 
-          "justify-content" ->
-            put_justify_content(style, value)
-
-          "align-items" ->
-            put_align_items(style, value)
-
-          "align-self" ->
-            put_align_self(style, value)
-
-          "justify-self" ->
-            put_grid_alignment(style, :justify_self, value)
+          property
+          when property in [
+                 "justify-content",
+                 "align-items",
+                 "align-self",
+                 "justify-self",
+                 "justify-items",
+                 "align-content",
+                 "place-content",
+                 "place-items",
+                 "place-self"
+               ] ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssBoxAlignmentValidator.prepare(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
 
           "order" ->
             put_order(style, value)
@@ -1882,8 +1983,29 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               {:ok, Map.put(style, grid_template_property(property), tracks)}
             end
 
+          "grid-template-areas" ->
+            with {:ok, areas} <- NativeElixirPdfUtilities.Validators.CssGridValidator.areas(value),
+                 do: {:ok, Map.put(style, :grid_template_areas, areas)}
+
+          "grid-auto-flow" ->
+            with {:ok, flow} <- NativeElixirPdfUtilities.Validators.CssGridValidator.flow(value),
+                 do: {:ok, Map.put(style, :grid_auto_flow, flow)}
+
+          property when property in ["grid-template", "grid"] ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssGridValidator.template(
+                     property,
+                     value,
+                     &parse_length/1
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
           property when property in ["grid-auto-columns", "grid-auto-rows"] ->
-            with {:ok, track} <- parse_grid_track(value) do
+            with {:ok, track} <-
+                   NativeElixirPdfUtilities.Validators.CssGridValidator.auto_tracks(
+                     value,
+                     &parse_length/1
+                   ) do
               {:ok, Map.put(style, grid_auto_property(property), track)}
             end
 
@@ -1898,12 +2020,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                  "grid-area"
                ] ->
             put_grid_placement(style, property, value)
-
-          "justify-items" ->
-            put_grid_alignment(style, :justify_items, value)
-
-          "align-content" ->
-            put_justify_content(style, value, :align_content)
 
           _ ->
             {:error, :invalid_document}
@@ -2516,11 +2632,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_break_inside(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" -> {:ok, Map.put(style, :break_inside, :auto)}
-      "avoid" -> {:ok, Map.put(style, :break_inside, :avoid)}
-      _ -> {:error, :invalid_document}
-    end
+    with {:ok, policy} <-
+           NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.prepare_break(
+             "break-inside",
+             value
+           ),
+         do: {:ok, Map.put(style, :break_inside, policy)}
   end
 
   defp flex_container_defaults(style) do
@@ -2561,76 +2678,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     case value |> String.trim() |> String.downcase() do
       "nowrap" -> {:ok, Map.put(style, :flex_wrap, :nowrap)}
       "wrap" -> {:ok, Map.put(style, :flex_wrap, :wrap)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_justify_content(style, value) do
-    put_justify_content(style, value, :justify_content)
-  end
-
-  defp put_justify_content(style, value, property) do
-    case value |> String.trim() |> String.downcase() do
-      "start" -> {:ok, Map.put(style, property, :start)}
-      "end" -> {:ok, Map.put(style, property, :end)}
-      "flex-start" -> {:ok, Map.put(style, property, :flex_start)}
-      "flex-end" -> {:ok, Map.put(style, property, :flex_end)}
-      "center" -> {:ok, Map.put(style, property, :center)}
-      value when value in ["normal", "stretch"] -> {:ok, Map.put(style, property, :stretch)}
-      "space-between" -> {:ok, Map.put(style, property, :space_between)}
-      "space-around" -> {:ok, Map.put(style, property, :space_around)}
-      "space-evenly" -> {:ok, Map.put(style, property, :space_evenly)}
-      _ -> {:error, :invalid_document}
-    end
-  end
-
-  defp put_align_items(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "stretch" ->
-        {:ok, Map.put(style, :align_items, :stretch)}
-
-      value when value in ["start", "flex-start"] ->
-        {:ok, Map.put(style, :align_items, :flex_start)}
-
-      value when value in ["end", "flex-end"] ->
-        {:ok, Map.put(style, :align_items, :flex_end)}
-
-      "center" ->
-        {:ok, Map.put(style, :align_items, :center)}
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp put_align_self(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" ->
-        {:ok, Map.put(style, :align_self, :auto)}
-
-      "stretch" ->
-        {:ok, Map.put(style, :align_self, :stretch)}
-
-      value when value in ["start", "flex-start"] ->
-        {:ok, Map.put(style, :align_self, :flex_start)}
-
-      value when value in ["end", "flex-end"] ->
-        {:ok, Map.put(style, :align_self, :flex_end)}
-
-      "center" ->
-        {:ok, Map.put(style, :align_self, :center)}
-
-      _ ->
-        {:error, :invalid_document}
-    end
-  end
-
-  defp put_grid_alignment(style, property, value) do
-    case value |> String.trim() |> String.downcase() do
-      "stretch" -> {:ok, Map.put(style, property, :stretch)}
-      value when value in ["start", "flex-start"] -> {:ok, Map.put(style, property, :flex_start)}
-      value when value in ["end", "flex-end"] -> {:ok, Map.put(style, property, :flex_end)}
-      "center" -> {:ok, Map.put(style, property, :center)}
+      "wrap-reverse" -> {:ok, Map.put(style, :flex_wrap, :wrap_reverse)}
       _ -> {:error, :invalid_document}
     end
   end
@@ -2666,65 +2714,73 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_flex_basis(style, value) do
-    case value |> String.trim() |> String.downcase() do
-      "auto" ->
-        {:ok, Map.put(style, :flex_basis, :auto)}
-
-      _ ->
-        with {:ok, length} <- parse_length(value), do: {:ok, Map.put(style, :flex_basis, length)}
-    end
+    with {:ok, basis} <- flex_basis_value(value, &parse_length/1),
+         do: {:ok, Map.put(style, :flex_basis, basis)}
   end
 
   defp put_flex(style, value, parser \\ &parse_length/1) do
     tokens = value |> String.trim() |> String.downcase() |> HtmlValidator.split_css_tokens()
 
-    case tokens do
-      ["none"] ->
-        {:ok,
-         style
-         |> Map.put(:flex_grow, 0.0)
-         |> Map.put(:flex_shrink, 0.0)
-         |> Map.put(:flex_basis, :auto)}
+    parsed =
+      case tokens do
+        ["none"] ->
+          {:ok, 0.0, 0.0, :auto}
 
-      ["auto"] ->
-        {:ok,
-         style
-         |> Map.put(:flex_grow, 1.0)
-         |> Map.put(:flex_shrink, 1.0)
-         |> Map.put(:flex_basis, :auto)}
+        ["auto"] ->
+          {:ok, 1.0, 1.0, :auto}
 
-      [grow] ->
-        with {:ok, grow} <- parse_nonnegative_number(grow) do
-          {:ok,
-           style
-           |> Map.put(:flex_grow, grow)
-           |> Map.put(:flex_shrink, 1.0)
-           |> Map.put(:flex_basis, 0.0)}
-        end
+        [token] ->
+          case parse_nonnegative_number(token) do
+            {:ok, grow} ->
+              {:ok, grow, 1.0, {:percent, 0.0}}
 
-      [grow, shrink] ->
-        with {:ok, grow} <- parse_nonnegative_number(grow),
-             {:ok, shrink} <- parse_nonnegative_number(shrink) do
-          {:ok,
-           style
-           |> Map.put(:flex_grow, grow)
-           |> Map.put(:flex_shrink, shrink)
-           |> Map.put(:flex_basis, 0.0)}
-        end
+            _ ->
+              with {:ok, basis} <- flex_basis_value(token, parser),
+                   do: {:ok, 1.0, 1.0, basis}
+          end
 
-      [grow, shrink, basis] ->
-        with {:ok, grow} <- parse_nonnegative_number(grow),
-             {:ok, shrink} <- parse_nonnegative_number(shrink),
-             {:ok, basis} <- flex_basis_value(basis, parser) do
-          {:ok,
-           style
-           |> Map.put(:flex_grow, grow)
-           |> Map.put(:flex_shrink, shrink)
-           |> Map.put(:flex_basis, basis)}
-        end
+        [first, second] ->
+          case {parse_nonnegative_number(first), parse_nonnegative_number(second)} do
+            {{:ok, grow}, {:ok, shrink}} ->
+              {:ok, grow, shrink, {:percent, 0.0}}
 
-      _ ->
-        {:error, :invalid_document}
+            {{:ok, grow}, _} ->
+              with {:ok, basis} <- flex_basis_value(second, parser),
+                   do: {:ok, grow, 1.0, basis}
+
+            {_, {:ok, grow}} ->
+              with {:ok, basis} <- flex_basis_value(first, parser),
+                   do: {:ok, grow, 1.0, basis}
+
+            _ ->
+              {:error, :invalid_document}
+          end
+
+        [first, second, third] ->
+          case {parse_nonnegative_number(first), parse_nonnegative_number(second),
+                parse_nonnegative_number(third)} do
+            {{:ok, grow}, {:ok, shrink}, _} ->
+              with {:ok, basis} <- flex_basis_value(third, parser),
+                   do: {:ok, grow, shrink, basis}
+
+            {_, {:ok, grow}, {:ok, shrink}} ->
+              with {:ok, basis} <- flex_basis_value(first, parser),
+                   do: {:ok, grow, shrink, basis}
+
+            _ ->
+              {:error, :invalid_document}
+          end
+
+        _ ->
+          {:error, :invalid_document}
+      end
+
+    with {:ok, grow, shrink, basis} <- parsed do
+      {:ok,
+       style
+       |> Map.put(:flex_grow, grow)
+       |> Map.put(:flex_shrink, shrink)
+       |> Map.put(:flex_basis, basis)}
     end
   end
 
@@ -2746,114 +2802,32 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp flex_basis_value(value, parser) do
-    case value do
-      "auto" -> {:ok, :auto}
-      value -> parser.(value)
+    case String.downcase(String.trim(value), :ascii) do
+      "auto" ->
+        {:ok, :auto}
+
+      "content" ->
+        {:ok, :content}
+
+      value ->
+        case NativeElixirPdfUtilities.Validators.CssIntrinsicSizingValidator.prepare(value) do
+          :error ->
+            case parser.(value) do
+              error when error in [:error, {:error, :invalid_document}] ->
+                NativeElixirPdfUtilities.Validators.CssSizingValidator.prepare_math(value)
+
+              result ->
+                result
+            end
+
+          result ->
+            result
+        end
     end
   end
 
   defp parse_grid_tracks(value, parser \\ &parse_length/1) do
-    result =
-      value
-      |> String.trim()
-      |> String.downcase()
-      |> HtmlValidator.split_css_tokens()
-      |> Enum.reduce_while({:ok, [], 0}, fn source, {:ok, chunks, track_count} ->
-        case parse_grid_track_source(source, parser) do
-          {:ok, tracks} ->
-            track_count = track_count + length(tracks)
-
-            case HtmlValidator.validate_layout_cardinality(:grid_tracks, track_count) do
-              :ok -> {:cont, {:ok, [tracks | chunks], track_count}}
-              {:error, {_reason, _diagnostic}} = error -> {:halt, error}
-            end
-
-          :error ->
-            {:halt, :error}
-
-          {:error, {_reason, _diagnostic}} = error ->
-            {:halt, error}
-        end
-      end)
-
-    case result do
-      {:ok, chunks, _track_count} -> {:ok, chunks |> Enum.reverse() |> List.flatten()}
-      result -> result
-    end
-  end
-
-  defp parse_grid_track_source(value, parser) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    case Regex.named_captures(~r/^repeat\((?<count>[1-9]\d*)\s*,\s*(?<track>.+)\)$/u, normalized) do
-      %{"count" => count, "track" => track} ->
-        with {count, ""} <- Integer.parse(count),
-             :ok <- HtmlValidator.validate_layout_cardinality(:grid_tracks, count),
-             {:ok, parsed_track} <- parse_grid_track(track, parser) do
-          {:ok, List.duplicate(parsed_track, count)}
-        else
-          {:error, {_reason, _diagnostic}} = error -> error
-          _ -> :error
-        end
-
-      _ ->
-        with {:ok, track} <- parse_grid_track(normalized, parser), do: {:ok, [track]}
-    end
-  end
-
-  defp parse_grid_track(value, parser \\ &parse_length/1) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    cond do
-      String.starts_with?(normalized, "minmax(") and String.ends_with?(normalized, ")") ->
-        parse_minmax_grid_track(normalized, parser)
-
-      true ->
-        parse_grid_track_leaf(normalized, parser)
-    end
-  end
-
-  defp parse_grid_track_leaf(normalized, parser) do
-    cond do
-      String.starts_with?(normalized, "minmax(") ->
-        :error
-
-      normalized == "auto" ->
-        {:ok, :auto}
-
-      Regex.match?(~r/^\d+(?:\.\d+)?fr$/u, normalized) ->
-        with {number, "fr"} <- HtmlValidator.parse_css_number(normalized),
-             do: {:ok, {:fr, number}}
-
-      true ->
-        with {:ok, length} <- parser.(normalized), do: {:ok, {:length, length}}
-    end
-  end
-
-  defp parse_minmax_grid_track(value, parser) do
-    arguments =
-      value |> binary_part(7, byte_size(value) - 8) |> HtmlValidator.split_css_comma(true)
-
-    case arguments do
-      [min_track, max_track] ->
-        with {:ok, minimum} <- parse_grid_track_leaf(min_track, parser),
-             {:ok, maximum} <- parse_grid_track_leaf(max_track, parser) do
-          minimum_valid = minimum == :auto or match?({:length, _length}, minimum)
-
-          maximum_valid =
-            maximum == :auto or
-              match?({:length, _length}, maximum) or
-              match?({:fr, _fraction}, maximum)
-
-          case minimum_valid and maximum_valid do
-            true -> {:ok, {:minmax, minimum, maximum}}
-            false -> :error
-          end
-        end
-
-      _ ->
-        :error
-    end
+    NativeElixirPdfUtilities.Validators.CssGridValidator.tracks(value, parser)
   end
 
   defp put_grid_placement(style, property, value) do
@@ -2897,15 +2871,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp parse_grid_axis(value) do
-    case value |> String.trim() |> String.downcase() |> String.split("/", trim: true) do
+    case NativeElixirPdfUtilities.Validators.CssSyntaxValidator.split(String.trim(value), "/") do
       [start_line] ->
-        with {:ok, start_line} <- parse_grid_line(start_line), do: {:ok, start_line, :auto}
+        with {:ok, start_line} <- parse_grid_line(start_line),
+             do:
+               {:ok, start_line,
+                if(match?({:named_line, _, _}, start_line), do: start_line, else: :auto)}
 
       [start_line, end_line] ->
         with {:ok, start_line} <- parse_grid_line(start_line),
-             {:ok, end_line} <- parse_grid_line(end_line) do
-          {:ok, start_line, end_line}
-        end
+             {:ok, end_line} <- parse_grid_line(end_line),
+             do: {:ok, start_line, end_line}
 
       _ ->
         :error
@@ -2913,52 +2889,28 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp parse_grid_area(value) do
-    case value |> String.trim() |> String.downcase() |> String.split("/", trim: true) do
-      [row_start, column_start, row_end, column_end] ->
-        with {:ok, row_start} <- parse_grid_line(row_start),
-             {:ok, column_start} <- parse_grid_line(column_start),
-             {:ok, row_end} <- parse_grid_line(row_end),
-             {:ok, column_end} <- parse_grid_line(column_end) do
-          {:ok, row_start, column_start, row_end, column_end}
-        end
+    parts = NativeElixirPdfUtilities.Validators.CssSyntaxValidator.split(String.trim(value), "/")
+    parsed = Enum.map(parts, &parse_grid_line/1)
 
-      _ ->
-        :error
+    if length(parts) in 1..4 and Enum.all?(parsed, &match?({:ok, _}, &1)) do
+      values = Enum.map(parsed, &elem(&1, 1))
+      [row | _] = values
+
+      named_default = fn value ->
+        if match?({:named_line, _, _}, value), do: value, else: :auto
+      end
+
+      column = Enum.at(values, 1, named_default.(row))
+      row_end = Enum.at(values, 2, named_default.(row))
+      column_end = Enum.at(values, 3, named_default.(column))
+      {:ok, row, column, row_end, column_end}
+    else
+      Enum.find(parsed, &match?({:error, _}, &1)) || :error
     end
   end
 
   defp parse_grid_line(value) do
-    normalized = value |> String.trim() |> String.downcase()
-
-    case normalized do
-      "auto" ->
-        {:ok, :auto}
-
-      _ ->
-        parse_grid_number_or_span(normalized)
-    end
-  end
-
-  defp parse_grid_number_or_span(value) do
-    cond do
-      Regex.match?(~r/^span\s+[1-9]\d*$/u, value) ->
-        ["span", count] = String.split(value, ~r/\s+/u, trim: true)
-        {count, ""} = Integer.parse(count)
-
-        with :ok <- HtmlValidator.validate_layout_cardinality(:grid_placement, count) do
-          {:ok, {:span, count}}
-        end
-
-      Regex.match?(~r/^[1-9]\d*$/u, value) ->
-        {line, ""} = Integer.parse(value)
-
-        with :ok <- HtmlValidator.validate_layout_cardinality(:grid_placement, line) do
-          {:ok, line}
-        end
-
-      true ->
-        :error
-    end
+    NativeElixirPdfUtilities.Validators.CssGridValidator.line(value)
   end
 
   defp grid_template_property(property) do
@@ -3044,11 +2996,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     end
   end
 
-  defp parse_gap(value, parser \\ &parse_length/1) do
+  defp parse_gap(
+         value,
+         parser \\ &NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(&1, :padding)
+       ) do
     gaps =
       value
       |> HtmlValidator.split_css_tokens()
-      |> Enum.map(parser)
+      |> Enum.map(fn value -> if value == "normal", do: {:ok, 0.0}, else: parser.(value) end)
 
     case gaps do
       [{:ok, both}] -> {:ok, both, both}
@@ -3509,15 +3464,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     case color do
       :transparent -> nil
       color -> color
-    end
-  end
-
-  defp page_break_value(value) do
-    case String.downcase(String.trim(value)) do
-      "auto" -> {:ok, :auto}
-      "always" -> {:ok, :page}
-      "page" -> {:ok, :page}
-      _ -> :error
     end
   end
 

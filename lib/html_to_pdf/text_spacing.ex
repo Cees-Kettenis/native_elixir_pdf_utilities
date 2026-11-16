@@ -147,7 +147,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextSpacing do
         ]
 
     exclusion = NativeElixirPdfUtilities.HtmlToPdf.InitialLetter.next_line(List.last(lines) || [])
-    lines ++ [following ++ exclusion]
+    floats = NativeElixirPdfUtilities.HtmlToPdf.FloatLayout.next_line(List.last(lines) || [])
+    lines ++ [following ++ exclusion ++ floats]
   end
 
   @doc "Identifies a line containing only unpainted positioning margins."

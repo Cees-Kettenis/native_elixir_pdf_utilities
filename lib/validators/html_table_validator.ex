@@ -6,6 +6,106 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.HtmlMetadataValidator
 
+  @doc "Parses the inherited empty-cell surface policy."
+  @spec prepare_empty_cells(String.t()) :: {:ok, :show | :hide} | :error
+  def prepare_empty_cells(value) do
+    case String.downcase(String.trim(value), :ascii) do
+      "show" -> {:ok, :show}
+      "hide" -> {:ok, :hide}
+      _ -> :error
+    end
+  end
+
+  @doc "Checks caller-supplied table paint policy before internal cell surfaces are formed."
+  @spec validate_surface_style(map(), String.t()) :: :ok | {:error, term()}
+  def validate_surface_style(style, source) do
+    case style do
+      style
+      when not is_map_key(style, :empty_cells) and not is_map_key(style, :_empty_cell_hidden) ->
+        :ok
+
+      _ ->
+        if Map.get(style, :empty_cells, :show) in [:show, :hide] and
+             not Map.has_key?(style, :_empty_cell_hidden),
+           do: :ok,
+           else:
+             Diagnostics.error(
+               :layout,
+               :invalid_layout,
+               "empty-cells requires show or hide; cell surface state is prepared by table formation",
+               operation: :layout,
+               module: __MODULE__,
+               source: source
+             )
+    end
+  end
+
+  defp prepare_empty_cell_surfaces(rows, table_style) do
+    hidden_policy? =
+      Map.get(table_style, :border_collapse, :separate) != :collapse and
+        Enum.any?(rows, fn row ->
+          Map.get(row.row.style, :empty_cells, :show) == :hide or
+            Enum.any?(row.cells, &(Map.get(&1.cell.style, :empty_cells, :show) == :hide))
+        end)
+
+    if not hidden_policy? do
+      rows
+    else
+      rows =
+        Enum.map(rows, fn row ->
+          cells =
+            Enum.map(row.cells, fn placement ->
+              cell = placement.cell
+              HtmlValidator.reserve_render_resource(:max_work, length(cell.children) + 1, :layout)
+
+              hidden =
+                Map.get(cell.style, :empty_cells, :show) == :hide and
+                  (Map.get(cell.style, :visibility, :visible) in [:hidden, :collapse] or
+                     Enum.all?(cell.children, fn child ->
+                       case child do
+                         %{type: :text, text: text} ->
+                           if Map.get(cell.style, :white_space, :normal) in [
+                                :pre,
+                                :pre_wrap,
+                                :break_spaces
+                              ], do: text == "", else: HtmlValidator.html_class_tokens(text) == []
+
+                         %{style: style} ->
+                           Map.get(style, :display) == :none or
+                             Map.get(style, :position, :static) in [:absolute, :fixed]
+                       end
+                     end))
+
+              if hidden,
+                do: %{
+                  placement
+                  | cell: %{cell | style: Map.put(cell.style, :_empty_cell_hidden, true)}
+                },
+                else: placement
+            end)
+
+          %{row | cells: cells}
+        end)
+
+      spans =
+        for {row, index} <- Enum.with_index(rows),
+            cell <- row.cells,
+            cell.rowspan > 1 and not Map.get(cell.cell.style, :_empty_cell_hidden, false),
+            do: {index, index + cell.rowspan}
+
+      Enum.with_index(rows, fn row, index ->
+        HtmlValidator.reserve_render_resource(:max_work, length(spans) + 1, :layout)
+
+        hidden =
+          (row.cells != [] or Map.get(row.row.style, :empty_cells, :show) == :hide) and
+            Enum.all?(row.cells, &Map.get(&1.cell.style, :_empty_cell_hidden, false)) and
+            not Enum.any?(spans, fn {first, last} -> index > first and index < last end)
+
+        Map.put(row, :empty_surface_collapse, hidden)
+      end)
+    end
+  end
+
   @doc "Reports whether a legacy table presentation attribute belongs to an HTML element."
   @spec presentation_attribute?(String.t(), String.t()) :: boolean()
   def presentation_attribute?(tag, name) do
@@ -1226,7 +1326,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
            {:ok, bounds, count} <- table_paint_ink_bounds(boxes),
            {:ok, units} <- row_break_units(boxes, fragmentainer_height) do
         HtmlValidator.reserve_render_resource(:max_work, count * 3, :pagination)
-        cut = whole_unit_cut(units, top, max(bottom, top - capacity))
+
+        cut =
+          NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.whole_unit_cut(
+            units,
+            top,
+            max(bottom, top - capacity)
+          )
+
         height = max(top - cut, 0.0)
 
         height =
@@ -1534,20 +1641,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
       error ->
         error
     end
-  end
-
-  # A moved boundary may intersect an earlier unit in another column. Iterate
-  # only while the boundary moves toward the top, so adjacent or overlapping lines remain
-  # together without requiring matching font metrics between cells.
-  defp whole_unit_cut(units, top, cut) do
-    next =
-      Enum.reduce(units, cut, fn {unit_top, unit_bottom}, boundary ->
-        if unit_top <= top and unit_top > boundary and unit_bottom < boundary,
-          do: max(boundary, unit_top),
-          else: boundary
-      end)
-
-    if next == cut, do: cut, else: whole_unit_cut(units, top, next)
   end
 
   @doc "Prepares unpaid whole-source cell flow on a later physical page after its measured row surfaces have ended."
@@ -2001,7 +2094,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
 
                 top = -consumed
                 capacity = max(box.y + box.height - bottom, 0.0)
-                cut = whole_unit_cut(units, top, max(-descriptor.total_height, top - capacity))
+
+                cut =
+                  NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.whole_unit_cut(
+                    units,
+                    top,
+                    max(-descriptor.total_height, top - capacity)
+                  )
+
                 # An atom taller than a complete empty fragmentainer paints once
                 # under its actual page clip, then advances by its whole source
                 # extent. This is the same oversized-atom policy as row placement.
@@ -3571,6 +3671,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTableValidator do
             columns = Enum.reverse(columns)
 
             rows = complete_collapsed_slots(rows, columns, table_style)
+            rows = prepare_empty_cell_surfaces(rows, table_style)
 
             {:ok,
              %{

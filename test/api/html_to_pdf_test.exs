@@ -1755,6 +1755,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
 
       assert {:ok, actual} = HtmlToPdf.render(raw, opts)
       assert {:ok, expected} = HtmlToPdf.render(reference, opts)
+
+      if actual != expected do
+        directory =
+          Paths.project(".quality/inline-block-equivalence-#{System.version()}-#{forms}")
+
+        File.mkdir_p!(directory)
+        File.write!(Path.join(directory, "actual.pdf"), actual)
+        File.write!(Path.join(directory, "expected.pdf"), expected)
+      end
+
       assert actual == expected
       assert {:ok, text} = Text.extract(actual)
       assert text =~ "BeforeInsideAfter"

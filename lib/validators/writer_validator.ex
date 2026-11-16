@@ -2027,7 +2027,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
-  defp valid_image?(image) do
+  @doc "Checks an already decoded image using the same byte, pixel and alpha contract as PDF painting."
+  @spec valid_image?(term()) :: boolean()
+  def valid_image?(image) do
     case image do
       %{logical_text: text} ->
         if is_binary(text),

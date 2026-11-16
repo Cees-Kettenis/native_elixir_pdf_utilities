@@ -8414,6 +8414,37 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                  source
                ),
              :ok <-
+               NativeElixirPdfUtilities.Validators.CssBoxAlignmentValidator.validate_gaps(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssBoxAlignmentValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssGridValidator.validate_style(style, source),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssFloatValidator.validate_style(style, source),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssShapeValidator.validate_style(style, source),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.CssColumnsValidator.validate_style(
+                 style,
+                 source
+               ),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.HtmlTableValidator.validate_surface_style(
+                 style,
+                 source
+               ),
+             :ok <-
                NativeElixirPdfUtilities.Validators.CssHyphenationValidator.validate_style(
                  style,
                  source

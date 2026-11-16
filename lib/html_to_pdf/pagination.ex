@@ -84,21 +84,119 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end
   end
 
+  @doc "Fragments already validated layout boxes into column viewports, retaining link and transform scopes for final page placement."
+  @spec fragment_columns([map()], number(), number()) :: {:ok, [page()]} | {:error, term()}
+  def fragment_columns(boxes, width, height) do
+    with :ok <-
+           NativeElixirPdfUtilities.Validators.CssColumnsValidator.validate_fragment_geometry(
+             width,
+             height
+           ) do
+      boxes =
+        Enum.map(
+          NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.translate_boxes(boxes, 0.0, height),
+          fn box ->
+            Enum.reduce([:break_before, :break_after], box, fn key, box ->
+              case Map.get(box, key) do
+                :column ->
+                  Map.put(box, key, :page)
+
+                :page ->
+                  box =
+                    Map.put(
+                      box,
+                      if(key == :break_before,
+                        do: :column_page_break_before,
+                        else: :column_page_break_after
+                      ),
+                      true
+                    )
+
+                  if box.type == :page_break, do: Map.put(box, :type, :flow_marker), else: box
+
+                _ ->
+                  box
+              end
+            end)
+          end
+        )
+
+      paginate_boxes(
+        {width, height},
+        boxes,
+        %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0},
+        %{},
+        [],
+        :columns
+      )
+    end
+  end
+
+  @doc "Measures the remaining physical page height after an already validated source prefix."
+  @spec remaining_height([map()], {number(), number()}, map(), number(), number()) ::
+          {:ok, number()} | {:error, term()}
+  def remaining_height(boxes, page_size, margins, x, y) do
+    id = make_ref()
+    marker = %{type: :flow_marker, x: x, y: y, width: 0.0, height: 0.0, flow_id: id}
+
+    with {:ok, pages} <-
+           paginate_boxes(page_size, boxes ++ [marker], margins, %{}, [], :measure_pages) do
+      placed =
+        Enum.find_value(pages, &Enum.find(&1.boxes, fn box -> Map.get(box, :flow_id) == id end))
+
+      {:ok, max(placed.y - margins.bottom, 0.0)}
+    end
+  end
+
   defp paginate_boxes(
          page_size,
          boxes,
          margins,
          layout_tree,
-         opts
+         opts,
+         context \\ :pages
        ) do
+    Process.put(
+      {__MODULE__, :page_budget},
+      if(context == :columns, do: :max_entries, else: :max_pages)
+    )
+
+    try do
+      do_paginate_boxes(page_size, boxes, margins, layout_tree, opts, context)
+    after
+      Process.delete({__MODULE__, :page_budget})
+    end
+  end
+
+  defp check_page_count(count) do
+    HtmlValidator.check_render_resource(
+      Process.get({__MODULE__, :page_budget}, :max_pages),
+      count,
+      :pagination
+    )
+  end
+
+  defp do_paginate_boxes(page_size, boxes, margins, layout_tree, opts, context) do
     {_page_width, page_height} = page_size
     content_height = page_height - margins.top - margins.bottom
     pagination_order = make_ref()
 
     boxes =
-      boxes
-      |> Enum.with_index()
-      |> Enum.map(fn {box, index} -> Map.put(box, pagination_order, index) end)
+      Enum.with_index(boxes, fn box, index ->
+        box =
+          case Map.get(box, :break_inside) do
+            :avoid_page ->
+              Map.put(box, :break_inside, if(context != :columns, do: :avoid, else: :auto))
+
+            :avoid_column ->
+              Map.put(box, :break_inside, if(context == :columns, do: :avoid, else: :auto))
+
+            _ ->
+              box
+          end
+
+        Map.put(box, pagination_order, index)
+      end)
 
     {canvas_boxes, boxes} = Enum.split_with(boxes, &(Map.get(&1, :position_anchor) == :canvas))
 
@@ -118,29 +216,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
     fieldset_paints = Enum.reverse(fieldset_paints)
 
-    flow_boxes =
-      if fieldset_paints == [] do
-        flow_boxes
-      else
-        Enum.map(flow_boxes, fn box ->
-          case Map.get(box, :fieldset_paint_id) do
-            nil ->
-              if Map.has_key?(box, :fieldset_ancestors),
-                do: Map.put(box, :fieldset_source_y, box.y),
-                else: box
-
-            _ ->
-              top = box.y + box.fieldset_bounds.top
-
-              box
-              |> Map.put(:type, :flow_marker)
-              |> Map.put(:width, 0.0)
-              |> Map.put(:height, 0.0)
-              |> Map.put(:y, top)
-              |> Map.put(:fieldset_source_y, top)
-          end
-        end)
-      end
+    flow_boxes = prepare_fieldset_source(flow_boxes, fieldset_paints)
 
     atomic_anchor = make_ref()
 
@@ -205,12 +281,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end)
 
     with {:ok, pages} <-
-           finalize(pages, layout_tree, Keyword.put(opts, :css_fragmentation_margins, margins)) do
+           if(context != :pages,
+             do: {:ok, pages},
+             else:
+               finalize(
+                 pages,
+                 layout_tree,
+                 Keyword.put(opts, :css_fragmentation_margins, margins)
+               )
+           ) do
       {:ok,
        Enum.map(pages, fn page ->
          %{
            page
-           | boxes: Enum.reject(page.boxes, &(Map.get(&1, :role) == :explicit_block_space))
+           | boxes:
+               if(context == :pages,
+                 do: Enum.reject(page.boxes, &(Map.get(&1, :role) == :explicit_block_space)),
+                 else: page.boxes
+               )
          }
        end)}
     end
@@ -671,7 +759,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         pages
 
       _ ->
-        HtmlValidator.check_render_resource(:max_pages, length(pages) + 1, :pagination)
+        check_page_count(length(pages) + 1)
 
         {:ok, boxes, next} =
           HtmlTableValidator.prepare_cell_page_fragments(
@@ -997,8 +1085,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         do: Map.put(marker, :fieldset_source_y, group.top - taken),
         else: marker
 
-    HtmlValidator.check_render_resource(:max_pages, state.page_count + 1, :pagination)
-    HtmlValidator.check_render_resource(:max_pages, state.page_count + 1, :pagination)
+    check_page_count(state.page_count + 1)
 
     state = %{
       state
@@ -1023,6 +1110,111 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp place_group(group, state, headers, page_size, margins) do
+    parallel? = Enum.any?(group.boxes, &Map.has_key?(&1, :parallel_item_bounds))
+
+    {group, state} =
+      if parallel? and group.break_before == :page,
+        do: {%{group | break_before: :auto}, page_break(state, page_size, margins)},
+        else: {group, state}
+
+    if parallel? and group.height > max(target_group_top(state, group) - margins.bottom, 0.0) and
+         (group.break_inside != :avoid or
+            group.height > elem(page_size, 1) - margins.top - margins.bottom) do
+      {:ok, units} =
+        NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.prepare_parallel_units(
+          group.boxes,
+          elem(page_size, 1) - margins.top - margins.bottom
+        )
+        |> propagate_error()
+
+      place_parallel_group(group, group.top, units, state, headers, page_size, margins)
+    else
+      place_ordinary_group(group, state, headers, page_size, margins)
+    end
+  end
+
+  defp place_parallel_group(group, source_top, units, state, headers, page_size, margins) do
+    capacity = max(target_group_top(state, %{group | top: source_top}) - margins.bottom, 0.0)
+
+    cut =
+      NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator.whole_unit_cut(
+        units,
+        source_top,
+        max(group.bottom, source_top - capacity)
+      )
+
+    cond do
+      cut == source_top and state.current_boxes != [] ->
+        place_parallel_group(
+          group,
+          source_top,
+          units,
+          page_break(state, page_size, margins),
+          headers,
+          page_size,
+          margins
+        )
+
+      cut == source_top ->
+        # Restrictions on an atom taller than a complete page relax to ensure
+        # progress, while normal lines and fitting rows retain whole-unit cuts.
+        cut = max(group.bottom, source_top - (elem(page_size, 1) - margins.top - margins.bottom))
+        place_parallel_fragment(group, source_top, cut, units, state, headers, page_size, margins)
+
+      true ->
+        place_parallel_fragment(group, source_top, cut, units, state, headers, page_size, margins)
+    end
+  end
+
+  defp place_parallel_fragment(group, top, bottom, units, state, headers, page_size, margins) do
+    # Keep source scopes on the clipped artwork until final page materialization.
+    order = make_ref()
+
+    source =
+      Enum.with_index(group.boxes) |> Enum.map(fn {box, index} -> Map.put(box, order, index) end)
+
+    boxes = atomic_slice_boxes(source, top, bottom, elem(page_size, 0), order)
+    boxes = Enum.map(boxes, &Map.delete(&1, order))
+
+    marker =
+      hd(group.boxes)
+      |> Map.take(Enum.filter(Map.keys(hd(group.boxes)), &is_reference/1))
+      |> Map.merge(%{
+        type: :flow_marker,
+        x: 0.0,
+        y: bottom,
+        width: 0.0,
+        height: top - bottom,
+        flow_id: make_ref()
+      })
+
+    fragment = %{
+      group
+      | boxes: [marker | boxes],
+        top: top,
+        bottom: bottom,
+        height: top - bottom,
+        break_before: if(top == group.top, do: group.break_before, else: :auto),
+        break_after: if(bottom == group.bottom, do: group.break_after, else: :auto)
+    }
+
+    state = place_whole_group(fragment, state, headers, page_size, margins)
+
+    if bottom > group.bottom,
+      do:
+        place_parallel_group(
+          group,
+          bottom,
+          units,
+          page_break(state, page_size, margins),
+          headers,
+          page_size,
+          margins
+        ),
+      else: state
+  end
+
+  defp place_ordinary_group(group, state, headers, page_size, margins) do
     content_height = elem(page_size, 1) - margins.top - margins.bottom
 
     group =
@@ -1272,13 +1464,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           %{state | position_delta: target_top - group.top}
 
         _ ->
-          HtmlValidator.check_render_resource(
-            :max_pages,
-            state.page_count + 1,
-            :pagination
-          )
-
-          HtmlValidator.check_render_resource(:max_pages, state.page_count + 1, :pagination)
+          check_page_count(state.page_count + 1)
 
           %{
             state
@@ -1326,7 +1512,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
               true ->
                 shifted_boxes =
                   header.boxes
-                  |> Enum.map(&Map.drop(&1, [:outline_anchor, :html_targets]))
+                  |> Enum.map(
+                    &(&1
+                      |> Map.drop([:outline_anchor, :html_targets])
+                      |> Map.put(:repeated_table_header_copy, true))
+                  )
                   |> shift_boxes(state.current_y - header.top)
 
                 %{
@@ -1363,6 +1553,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         current_y: content_top,
         position_delta: nil
     }
+  end
+
+  @doc "Finds a column's minimum height for fitting avoided groups, including their decorative edge allocations."
+  @spec minimum_column_height([map()], number()) :: number()
+  def minimum_column_height(boxes, upper) do
+    HtmlValidator.reserve_render_resource(:max_work, length(boxes), :columns)
+    paints = Enum.filter(boxes, &Map.has_key?(&1, :fieldset_paint_id))
+    boxes = prepare_fieldset_source(boxes, paints)
+
+    boxes
+    |> flow_groups()
+    |> Enum.reduce(0.0, fn group, minimum ->
+      avoided? = group.break_inside in [:avoid, :avoid_column]
+
+      reserved =
+        Enum.reduce(group.boxes, 0.0, fn box, reserved ->
+          case Map.get(box, :block_placement_height) do
+            nil ->
+              reserved
+
+            height ->
+              max(reserved, group.top - elem(PageGeometry.box_vertical_bounds(box), 0) + height)
+          end
+        end)
+
+      height = if avoided?, do: max(group.height, reserved), else: reserved
+      if height <= upper, do: max(minimum, height), else: minimum
+    end)
+  end
+
+  defp prepare_fieldset_source(flow_boxes, fieldset_paints) do
+    if fieldset_paints == [] do
+      flow_boxes
+    else
+      Enum.map(flow_boxes, fn box ->
+        case Map.get(box, :fieldset_paint_id) do
+          nil ->
+            if Map.has_key?(box, :fieldset_ancestors),
+              do: Map.put(box, :fieldset_source_y, box.y),
+              else: box
+
+          _ ->
+            top = box.y + box.fieldset_bounds.top
+
+            box
+            |> Map.put(:type, :flow_marker)
+            |> Map.put(:width, 0.0)
+            |> Map.put(:height, 0.0)
+            |> Map.put(:y, top)
+            |> Map.put(:fieldset_source_y, top)
+        end
+      end)
+    end
   end
 
   defp flow_groups(boxes) do
@@ -1506,7 +1749,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     if group.height > content_height and
          Enum.any?(group.boxes, &(Map.get(&1, :role) == :atomic_table_line)) do
       count = ceil(group.height / content_height)
-      HtmlValidator.check_render_resource(:max_pages, count, :pagination)
+      check_page_count(count)
 
       HtmlValidator.reserve_render_resource(
         :max_work,
@@ -1586,8 +1829,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
             )
 
           total = max(total, first_page + count)
-          HtmlValidator.check_render_resource(:max_pages, total, :pagination)
-          HtmlValidator.check_render_resource(:max_pages, total, :pagination)
+          check_page_count(total)
 
           HtmlValidator.reserve_render_resource(
             :max_work,

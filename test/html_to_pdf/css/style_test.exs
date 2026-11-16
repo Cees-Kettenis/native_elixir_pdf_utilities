@@ -3332,7 +3332,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "letter-spacing: wide",
       "white-space: invalid",
       "page-break-inside: always",
-      "float: left",
+      "float: center",
       "display: grid; grid-template-columns: minmax()",
       "display: grid; grid-template-columns: minmax(1fr, 2fr)",
       "display: grid; grid-template-columns: minmax(minmax(0, 1fr), 2fr)",
@@ -5321,13 +5321,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
   test "flex shorthand resets respect declaration order specificity and importance" do
     for {rules, inline, expected} <- [
-          {".item{flex-basis:80pt;flex-shrink:0;flex:1}", "", {1.0, 1.0, 0.0}},
-          {".item{flex:0 0 80pt;flex:1}", "", {1.0, 1.0, 0.0}},
-          {".item{flex-basis:80pt;flex:1 1}", "", {1.0, 1.0, 0.0}},
-          {".item{flex:0 0 80pt}.item{flex:1}", "", {1.0, 1.0, 0.0}},
-          {"#target{flex:1}.item{flex-basis:80pt;flex-shrink:0}", "", {1.0, 1.0, 0.0}},
-          {".item{flex-basis:80pt;flex-shrink:0}", "flex:1", {1.0, 1.0, 0.0}},
-          {".item{flex:1!important}", "flex-basis:80pt;flex-shrink:0", {1.0, 1.0, 0.0}},
+          {".item{flex-basis:80pt;flex-shrink:0;flex:1}", "", {1.0, 1.0, {:percent, 0.0}}},
+          {".item{flex:0 0 80pt;flex:1}", "", {1.0, 1.0, {:percent, 0.0}}},
+          {".item{flex-basis:80pt;flex:1 1}", "", {1.0, 1.0, {:percent, 0.0}}},
+          {".item{flex:0 0 80pt}.item{flex:1}", "", {1.0, 1.0, {:percent, 0.0}}},
+          {"#target{flex:1}.item{flex-basis:80pt;flex-shrink:0}", "",
+           {1.0, 1.0, {:percent, 0.0}}},
+          {".item{flex-basis:80pt;flex-shrink:0}", "flex:1", {1.0, 1.0, {:percent, 0.0}}},
+          {".item{flex:1!important}", "flex-basis:80pt;flex-shrink:0",
+           {1.0, 1.0, {:percent, 0.0}}},
           {".item{flex-basis:80pt!important;flex-shrink:0!important;flex:1}", "",
            {1.0, 0.0, 80.0}},
           {"#target{flex-basis:80pt;flex-shrink:0}.item{flex:1}", "", {1.0, 0.0, 80.0}},
@@ -5387,7 +5389,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert container.style.row_gap == 4.0
     assert container.style.column_gap == 6.0
     assert container.style.justify_items == :center
-    assert container.style.align_items == :flex_end
+    assert container.style.align_items == :end
     assert container.style.justify_content == :space_between
     assert container.style.align_content == :center
 
@@ -5400,7 +5402,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert second.style.grid_column_start == 1
     assert second.style.grid_row_end == 3
     assert second.style.grid_column_end == 2
-    assert second.style.align_self == :flex_start
+    assert second.style.align_self == :start
   end
 
   test "compute loads data URI PNG and base_url relative JPEG images" do
@@ -6124,11 +6126,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"display: flex; justify-content: space-around", :justify_content, :space_around},
       {"display: flex; justify-content: space-evenly", :justify_content, :space_evenly},
       {"display: flex; align-items: stretch", :align_items, :stretch},
-      {"display: flex; align-items: start", :align_items, :flex_start},
+      {"display: flex; align-items: start", :align_items, :start},
       {"display: flex; align-self: auto", :align_self, :auto},
       {"display: flex; align-self: stretch", :align_self, :stretch},
-      {"display: flex; align-self: start", :align_self, :flex_start},
-      {"display: flex; align-self: end", :align_self, :flex_end},
+      {"display: flex; align-self: start", :align_self, :start},
+      {"display: flex; align-self: end", :align_self, :end},
       {"display: flex; flex-basis: auto", :flex_basis, :auto},
       {"display: flex; flex: none", :flex_grow, 0.0},
       {"display: flex; flex: auto", :flex_grow, 1.0},
@@ -6144,8 +6146,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       {"display: grid; grid-row-end: 3", :grid_row_end, 3},
       {"display: grid; grid-column: 2", :grid_column_start, 2},
       {"display: grid; justify-items: stretch", :justify_items, :stretch},
-      {"display: grid; justify-items: start", :justify_items, :flex_start},
-      {"display: grid; justify-items: end", :justify_items, :flex_end}
+      {"display: grid; justify-items: start", :justify_items, :start},
+      {"display: grid; justify-items: end", :justify_items, :end}
     ]
 
     Enum.each(assertions, fn {style, key, expected} ->
@@ -6159,15 +6161,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
       "display: unknown",
       "flex-direction: sideways",
       "flex-wrap: reverse",
-      "align-items: baseline",
-      "align-self: baseline",
-      "justify-items: baseline",
+      "align-items: second baseline",
+      "align-self: second baseline",
+      "justify-items: second baseline",
       "order: first",
       "flex-grow: -1",
       "flex: 1 1 1pt extra",
       "grid-template-columns: bad",
       "grid-column: 1 / 2 / 3",
-      "grid-area: 1 / 2 / 3",
+      "grid-area: 1 / 2 / 3 / 4 / 5",
       "text-align: stretch",
       "font-weight: 1001",
       "font-weight: heavy",
@@ -6222,7 +6224,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert style_for("div", "flex: 1 1 auto") == {:ok, style_for!("div", "flex: 1 1 auto")}
     assert {:ok, recovered} = style_for("div", "grid-template-columns: ")
     assert Map.get(recovered, :grid_template_columns) == nil
-    assert style_for("div", "grid-column: x") == {:error, :invalid_document}
+    assert style_for("div", "grid-column: span -1") == {:error, :invalid_document}
     assert {:ok, missing_font_style} = style_for("div", "font-family: Missing")
     assert missing_font_style.font_family == "DejaVu Sans"
     assert style_for("div", "background-color: nope") == {:error, :invalid_document}

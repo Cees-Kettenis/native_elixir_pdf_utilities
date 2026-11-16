@@ -107,7 +107,7 @@ A transformed containing block keeps its fixed
 children local. Sticky uses the initial print scrollport before pagination and
 retains its normal flow allocation. No scrolling is simulated. Transforms move
 artwork without reflow. Isolation, layout/paint containment and positioned stacking
-contexts preserve paint order. Full containment, floats, 3D transforms, perspective
+contexts preserve paint order. Full containment, 3D transforms, perspective
 and animations are unsupported. Child-document form repetition restrictions still apply.
 
 Logical sizes, edges and insets follow `writing-mode` and `direction` during the
@@ -115,6 +115,31 @@ cascade. Vertical and sideways text use the glyph orientation and font metrics
 described under typography below. Aspect ratios use the selected content or border box, and definite
 ratio-derived heights resolve descendant percentages. Flow roots contain margins;
 ordinary blocks collapse adjoining positive and negative margin sets.
+
+Flex layout supports intrinsic and percentage bases, automatic content minima,
+min/max freezing, reverse wrapping and shared first/last baseline alignment.
+Flex and grid accept `place-*` shorthands, safe/unsafe positions and distributed
+alignment. Grid supports named lines and areas, template shorthands, intrinsic
+and fit-content tracks, auto-fill/auto-fit, dense placement and subgrid tracks,
+names and gaps. Orthogonal flex/grid items retain their own writing plane;
+subgrids map inherited tracks and intrinsic contributions across those axes.
+
+Floats support physical and inline edges, clearance and formatting-context
+avoidance. `shape-outside` accepts circles, ellipses, rounded insets, polygons,
+reference boxes and images, with margins and alpha thresholds. Shape images use
+the ordinary image permissions and resource budgets. Selected `shape-inside`
+behavior supports basic shapes in boxes with a definite height; complete
+exclusions, multiple inside intervals and shape padding remain unsupported.
+
+Multi-column blocks support column counts and preferred widths, normal or
+explicit gaps, rules, spanning blocks, column breaks and bounded balancing.
+Spanners can cross normal block ancestors; separate formatting contexts and
+fixed-position containing blocks stop that propagation.
+Definite-height blocks can overflow into additional horizontal columns.
+Automatic-height blocks use the remaining first-page space and continue in
+column sets on later pages. Flex/grid
+continuations retain whole lines and fitting item rows; nested columns use the
+final outer fragmentainer height when assigning their text.
 
 `visibility:hidden` preserves allocation and allows visible descendants;
 `force-hidden` suppresses the entire subtree. Hidden artwork creates no links or
@@ -170,6 +195,7 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | --- | --- |
 | Layout | Automatic/fixed sizing, nested tables, separate/collapsed borders |
 | Spans | `colspan` and `rowspan`; rowspans stop at row-group boundaries |
+| Empty cells | `empty-cells: show/hide` in separate-border tables; ignored with collapsed borders |
 
 Automatic tables can exceed their CSS `width` when cell contents need more space.
 The renderer preserves text size and does not shrink the page to fit; content
@@ -184,7 +210,7 @@ therefore wrap differently or extend farther beyond the page.
 | --- | --- |
 | `<thead>` | Repeats in ordinary tables |
 | `<tbody>` | `break-inside: avoid` keeps fitting groups together; larger groups split between rows |
-| Individual rows | Never split; oversized rows may overflow |
+| Individual rows | Continue at whole-line or atomic boundaries when they cannot fit; spanning cells retain their source geometry |
 | Oversized inline-block tables | Slice across pages without repeating headings |
 
 [Grouped table example](html-to-pdf-examples.md#paginate-a-table-with-row-groups).

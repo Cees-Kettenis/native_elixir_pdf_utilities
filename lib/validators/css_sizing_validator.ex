@@ -8,7 +8,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
     HtmlValidator
   }
 
-  @dimension_properties [:width, :height, :min_width, :max_width, :min_height, :max_height]
+  @dimension_properties [
+    :width,
+    :height,
+    :min_width,
+    :max_width,
+    :min_height,
+    :max_height,
+    :flex_basis
+  ]
 
   @properties [
     :calculation_context,
@@ -87,7 +95,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
         background_size: {:auto, :auto}
       }
       when not is_tuple(width) and not is_tuple(height) and not is_tuple(min_width) and
-             not is_tuple(max_width) and not is_tuple(min_height) and not is_tuple(max_height) ->
+             not is_tuple(max_width) and not is_tuple(min_height) and not is_tuple(max_height) and
+             (not is_map_key(style, :flex_basis) or
+                not is_tuple(:erlang.map_get(:flex_basis, style))) ->
         {:ok, style}
 
       _ ->
@@ -147,7 +157,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSizingValidator do
         is_tuple(value) and tuple_size(value) > 0 and
           elem(value, 0) in [:css_size_math, :css_intrinsic_size, :min]
 
-      if calculated? and HtmlValidator.validate_prepared_css_size(value, property) != :ok do
+      context = if property == :flex_basis, do: :size, else: property
+
+      if calculated? and HtmlValidator.validate_prepared_css_size(value, context) != :ok do
         {:halt,
          Diagnostics.error(
            :layout,

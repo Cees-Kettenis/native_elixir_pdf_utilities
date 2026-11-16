@@ -3875,45 +3875,71 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     style =
       if :maps.get(:display, style, nil) == :none,
-        do: Map.drop(style, [:background_image_source, :list_style_image_source]),
+        do:
+          Map.drop(style, [
+            :background_image_source,
+            :list_style_image_source,
+            :shape_image_source
+          ]),
         else: style
 
-    Enum.reduce_while(
-      [
-        {:background_image, :background_image_source},
-        {:list_style_image, :list_style_image_source}
-      ],
-      {:ok, style},
-      fn {property, source_property}, {:ok, style} ->
-        case Map.get(style, source_property) do
-          nil ->
-            {:cont, {:ok, style}}
+    case style do
+      style
+      when (not is_map_key(style, :background_image_source) or
+              :erlang.map_get(:background_image_source, style) == nil) and
+             (not is_map_key(style, :list_style_image_source) or
+                :erlang.map_get(:list_style_image_source, style) == nil) and
+             (not is_map_key(style, :shape_image_source) or
+                :erlang.map_get(:shape_image_source, style) == nil) ->
+        {:ok, style}
 
-          source ->
-            kind = if property == :list_style_image, do: :image, else: property
+      _ ->
+        Enum.reduce_while(
+          [
+            {:background_image, :background_image_source},
+            {:list_style_image, :list_style_image_source},
+            {:shape_image, :shape_image_source}
+          ],
+          {:ok, style},
+          fn {property, source_property}, {:ok, style} ->
+            case Map.get(style, source_property) do
+              nil ->
+                {:cont, {:ok, style}}
 
-            result =
-              case load_image_style(source, opts, kind) do
-                {:ok, %{image: image}} ->
-                  {:ok, image}
+              source ->
+                kind =
+                  if property in [:list_style_image, :shape_image], do: :image, else: property
 
-                {:ok, %{svg_image: svg}} ->
-                  rasterize_svg_image(svg, [], image_budget, opts, Limits.get(:svg_raster_scale))
+                result =
+                  case load_image_style(source, opts, kind) do
+                    {:ok, %{image: image}} ->
+                      {:ok, image}
 
-                {:error, _} = error ->
-                  error
-              end
+                    {:ok, %{svg_image: svg}} ->
+                      rasterize_svg_image(
+                        svg,
+                        [],
+                        image_budget,
+                        opts,
+                        Limits.get(:svg_raster_scale)
+                      )
 
-            case result do
-              {:ok, image} ->
-                {:cont, {:ok, style |> Map.put(property, image) |> Map.delete(source_property)}}
+                    {:error, _} = error ->
+                      error
+                  end
 
-              {:error, _} = error ->
-                {:halt, error}
+                case result do
+                  {:ok, image} ->
+                    {:cont,
+                     {:ok, style |> Map.put(property, image) |> Map.delete(source_property)}}
+
+                  {:error, _} = error ->
+                    {:halt, error}
+                end
             end
-        end
-      end
-    )
+          end
+        )
+    end
   end
 
   defp put_line_height(style) do

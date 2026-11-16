@@ -10,16 +10,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
     ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
-    border-spacing caption-side table-layout flex-direction flex-wrap row-gap column-gap
+    border-spacing caption-side table-layout empty-cells column-count column-width column-fill column-span column-rule-width column-rule-style column-rule-color float clear shape-outside shape-inside shape-margin shape-image-threshold flex-direction flex-wrap row-gap column-gap
     justify-content align-items align-self justify-self justify-items align-content order
     flex-grow flex-shrink flex-basis grid-template-columns grid-template-rows grid-auto-columns
-    grid-auto-rows grid-column-start grid-column-end grid-row-start grid-row-end
+    grid-auto-rows grid-template-areas grid-auto-flow grid-column-start grid-column-end grid-row-start grid-row-end
     white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break math-style math-shift math-depth) ++
             NativeElixirPdfUtilities.Validators.CssHyphenationValidator.properties()
   @fields Map.new(@simple, fn name ->
             {name, [[String.to_atom(String.replace(name, "-", "_"))]]}
           end)
           |> Map.merge(%{
+            "row-gap" => [[:row_gap], [:_row_gap_normal]],
+            "column-gap" => [[:column_gap], [:_column_gap_normal]],
             "font-size" => [[:font_size]],
             "font-weight" => [[:font_weight]],
             "font-style" => [[:font_style], [:font_oblique]],
@@ -49,6 +51,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
               [:table_section]
             ],
             "text-align" => [[:text_align], [:_text_align_initial]],
+            "shape-outside" => [[:shape_outside], [:shape_image_source], [:shape_image]],
             "background-color" => [[:background_color]],
             "background-image" => [[:background_image], [:background_image_source]],
             "background-position" => [[:background_position]],
@@ -117,8 +120,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                 "list-style" => ~w(list-style-type list-style-position list-style-image),
                 "text-decoration" =>
                   ~w(text-decoration-line text-decoration-color text-decoration-style text-decoration-thickness),
+                "columns" => ~w(column-count column-width),
+                "column-rule" => ~w(column-rule-width column-rule-style column-rule-color),
                 "gap" => ~w(row-gap column-gap),
+                "place-content" => ~w(align-content justify-content),
+                "place-items" => ~w(align-items justify-items),
+                "place-self" => ~w(align-self justify-self),
                 "flex" => ~w(flex-grow flex-shrink flex-basis),
+                "grid-template" =>
+                  ~w(grid-template-columns grid-template-rows grid-template-areas),
+                "grid" =>
+                  ~w(grid-template-columns grid-template-rows grid-template-areas grid-auto-columns grid-auto-rows grid-auto-flow),
                 "grid-column" => ~w(grid-column-start grid-column-end),
                 "grid-row" => ~w(grid-row-start grid-row-end),
                 "grid-area" => ~w(grid-row-start grid-column-start grid-row-end grid-column-end)
@@ -137,7 +149,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   }
   @inherited ~w(color accent-color font-size font-family font-style font-weight font-width line-height
     dominant-baseline letter-spacing word-spacing text-indent text-align-last text-justify hanging-punctuation text-align text-transform quotes white-space white-space-collapse text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break
-    text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter-align initial-letter-wrap orphans widows caption-side border-collapse border-spacing list-style-type list-style-position
+    text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter-align initial-letter-wrap orphans widows caption-side border-collapse border-spacing empty-cells list-style-type list-style-position
     list-style-image visibility block-ellipsis ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction math-style math-shift math-depth) ++
                @font_controls ++
                NativeElixirPdfUtilities.Validators.CssHyphenationValidator.properties()
@@ -754,6 +766,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         border_spacing: {0.0, 0.0},
         caption_side: :top,
         table_layout: :auto,
+        empty_cells: :show,
+        column_count: :auto,
+        column_width: :auto,
+        column_fill: :balance,
+        column_span: :none,
+        column_rule_width: 2.25,
+        column_rule_style: :none,
+        column_rule_color: :current_color,
+        _row_gap_normal: true,
+        _column_gap_normal: true,
+        shape_outside: :none,
+        shape_inside: :auto,
+        shape_margin: 0.0,
+        shape_image_threshold: 0.0,
+        shape_image_source: nil,
+        shape_image: nil,
+        float: :none,
+        clear: :none,
         flex_direction: :row,
         flex_wrap: :nowrap,
         row_gap: 0.0,
@@ -770,6 +800,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         align_content: :none,
         grid_template_columns: [],
         grid_template_rows: [],
+        grid_template_areas: [],
+        grid_auto_flow: :row,
         grid_auto_columns: :auto,
         grid_auto_rows: :auto,
         grid_column_start: :auto,

@@ -27,6 +27,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   alias NativeElixirPdfUtilities.HtmlToPdf.SvgScene
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.HtmlToPdf.MarginGeometry
+  alias NativeElixirPdfUtilities.HtmlToPdf.GridTracks
+  alias NativeElixirPdfUtilities.HtmlToPdf.FloatLayout
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator
   alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
@@ -1495,6 +1497,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec layout_blocks([term()], {number(), number()}, PageGeometry.margins()) ::
           {:ok, [box()], number()} | {:error, :invalid_layout}
   defp layout_blocks(children, page_size, margins) do
+    NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.with_page(children, page_size, margins, fn ->
+      FloatLayout.with_context(fn ->
+        case layout_root_blocks(children, page_size, margins) do
+          {:ok, boxes, next_y} -> {:ok, boxes, FloatLayout.bottom(next_y)}
+          error -> error
+        end
+      end)
+    end)
+  end
+
+  defp layout_root_blocks(children, page_size, margins) do
     NativeElixirPdfUtilities.HtmlToPdf.WritingModeLayout.with_viewport(page_size, fn ->
       {page_width, page_height} = page_size
 
@@ -1530,7 +1543,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 {:ok, [group], y - height}
               end
             else
-              layout_block(child, margins.left, y, page_width - margins.left - margins.right)
+              NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.with_prefix(
+                boxes,
+                fn ->
+                  layout_block(child, margins.left, y, page_width - margins.left - margins.right)
+                end,
+                true
+              )
             end
 
           case result do
@@ -1562,6 +1581,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   @spec layout_block(term(), number(), number(), number()) ::
           {:ok, [box()], number()} | {:error, :invalid_layout}
   defp layout_block(block, x, y, width) do
+    FloatLayout.layout(block, x, y, width, &layout_positioned_block/4, fn node, available ->
+      case node.style do
+        %{display: :image} ->
+          {width, _height} = image_content_size(node.style, available, nil)
+          {width, width}
+
+        _ ->
+          {intrinsic_content_width(node.children, node.style, :min),
+           intrinsic_content_width(node.children, node.style, :max)}
+      end
+    end)
+  end
+
+  defp layout_positioned_block(block, x, y, width) do
     block = resolve_fit_content_style(block, width)
 
     case do_layout_block(block, x, y, width) do
@@ -1708,8 +1741,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp preserve_item_outline(item, child) do
+  defp prepare_layout_item(item, child) do
     item = Map.put(item, :positioned_children, :maps.get(:positioned_children, child, []))
+
+    style = child.style
+
+    orthogonal? =
+      Map.has_key?(style, :_writing_orthogonal) or
+        (Map.get(style, :writing_mode, :horizontal_tb) != :horizontal_tb and
+           not Map.has_key?(style, :_writing_plane))
+
+    item =
+      if orthogonal? and not Map.has_key?(item, :image) do
+        raw = Map.get(child, :_writing_source, child)
+
+        original_style =
+          NativeElixirPdfUtilities.Validators.CssFloatValidator.prepare_item(raw.style)
+
+        raw = %{raw | style: Map.put(original_style, :margin, edges(0.0))}
+
+        source =
+          raw
+          |> Map.put(:_writing_source, raw)
+          |> Map.put(
+            :style,
+            raw.style
+            |> Map.put(:_writing_orthogonal, true)
+            |> Map.put(:_writing_parent, Map.get(style, :_writing_parent, :horizontal_tb))
+          )
+
+        available = Map.get(item, :intrinsic_width, Map.get(item, :main_box, 0.0))
+
+        {:ok, boxes, bottom} =
+          NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.without_page(fn ->
+            FloatLayout.with_context(fn -> layout_block(source, 0.0, 0.0, available) end)
+          end)
+          |> layout_value()
+
+        width = Enum.find_value(boxes, fn box -> get_in(box, [:writing_extent, :width]) end)
+        height = -bottom
+
+        prepared =
+          item
+          |> Map.put(:orthogonal_node, source)
+          |> Map.put(:orthogonal_style, original_style)
+          |> Map.put(:intrinsic_width, width)
+          |> Map.put(:min_content_width, width)
+          |> Map.put(:intrinsic_height, height)
+          |> Map.put(:positioned_children, [])
+
+        case Map.get(item, :main_axis) do
+          nil ->
+            prepared
+
+          axis ->
+            {main, cross} = if axis == :row, do: {width, height}, else: {height, width}
+            property = if axis == :row, do: :width, else: :height
+
+            main =
+              if Map.get(style, :flex_basis, :auto) in [:auto, :content] and
+                   Map.get(style, property) in [nil, :auto],
+                 do: main,
+                 else: item.main_box
+
+            Map.merge(prepared, %{
+              main_box: main,
+              cross_box: cross,
+              content_minimum: main - flex_main_box_size(style, axis),
+              outer_main: main + flex_main_margin_size(item.margin, axis),
+              outer_cross: cross + flex_cross_margin_size(item.margin, axis)
+            })
+        end
+      else
+        item
+      end
 
     case outline_heading(child) do
       nil -> item
@@ -2060,16 +2165,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               next_y = box_top - box_height - margin.bottom
 
               page_break_box = fn position ->
+                value =
+                  Map.fetch!(
+                    flow_metadata,
+                    if(position == :before, do: :break_before, else: :break_after)
+                  )
+
                 %{
-                  type: HtmlValidator.reserve_layout_box(:page_break),
+                  type:
+                    HtmlValidator.reserve_layout_box(
+                      if(value == :column, do: :flow_marker, else: :page_break)
+                    ),
                   x: box_x,
                   y: if(position == :before, do: box_top, else: next_y),
                   width: box_width,
                   height: 0.0
                 }
                 |> Map.merge(%{
-                  break_before: if(position == :before, do: :page, else: :auto),
-                  break_after: if(position == :after, do: :page, else: :auto),
+                  break_before: if(position == :before, do: value, else: :auto),
+                  break_after: if(position == :after, do: value, else: :auto),
                   break_inside: :auto,
                   flow_id: {:page_break, position, box_x, box_top}
                 })
@@ -2140,13 +2254,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
               boxes =
                 case :maps.get(:break_before, flow_metadata, nil) do
-                  :page -> [page_break_box.(:before) | boxes]
+                  value when value in [:page, :column] -> [page_break_box.(:before) | boxes]
                   _ -> boxes
                 end
 
               boxes =
                 case :maps.get(:break_after, flow_metadata, nil) do
-                  :page -> boxes ++ [page_break_box.(:after)]
+                  value when value in [:page, :column] -> boxes ++ [page_break_box.(:after)]
                   _ -> boxes
                 end
 
@@ -3259,13 +3373,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp layout_block_content(children, style, x, y, width, metadata) do
-    LineClamp.layout(
-      style,
-      fn ->
-        layout_scoped_block_content(children, style, x, y, width, metadata)
-      end,
-      discard_region(style, y)
-    )
+    if NativeElixirPdfUtilities.Validators.CssDisplayValidator.independent?(style) do
+      FloatLayout.with_context(fn ->
+        layout_owned_block_content(children, style, x, y, width, metadata)
+      end)
+    else
+      layout_owned_block_content(children, style, x, y, width, metadata)
+    end
+  end
+
+  defp layout_owned_block_content(children, style, x, y, width, metadata) do
+    result =
+      LineClamp.layout(
+        style,
+        fn ->
+          layout_scoped_block_content(children, style, x, y, width, metadata)
+        end,
+        discard_region(style, y)
+      )
+
+    case result do
+      {:ok, boxes, height} -> {:ok, boxes, FloatLayout.content_height(style, y, height)}
+      error -> error
+    end
   end
 
   defp discard_region(style, top) do
@@ -3360,6 +3490,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         layout_embedded_document(surface, x, y, width, height, metadata, style)
 
+      NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.enabled?(style) ->
+        NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.layout(
+          children,
+          style,
+          x,
+          y,
+          width,
+          fn children, style, x, y, width ->
+            FloatLayout.with_context(fn ->
+              do_layout_block_content(children, style, x, y, width, metadata)
+            end)
+          end,
+          &column_rule_boxes/4
+        )
+
       :maps.get(:_fieldset, style, false) ->
         padding = Map.get(style, :padding, edges(0.0))
         border = Map.get(style, :border_widths, edges(0.0))
@@ -3403,11 +3548,66 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             {:ok, boxes, content_height}
 
           {:error, _reason} ->
-            with {:ok, boxes, next_y} <- layout_block_flow(children, style, x, y, width) do
-              {:ok, boxes, y - next_y}
+            {normal, floats} = FloatLayout.extract_inline(children)
+
+            case if(floats != [], do: inline_runs(normal, style), else: :block_flow) do
+              {:ok, runs} ->
+                layout_inline_floats(floats, runs, style, x, y, width, metadata)
+
+              _ ->
+                with {:ok, boxes, next_y} <- layout_block_flow(children, style, x, y, width) do
+                  {:ok, boxes, y - next_y}
+                end
             end
         end
     end
+  end
+
+  # A source float can begin on the current inline line. Its insertion prefix
+  # uses the same fitter and metrics as the final paragraph, including exclusions
+  # from earlier floats. Native source runs remain in their original order.
+  defp layout_inline_floats(floats, runs, style, x, y, width, metadata) do
+    float_boxes =
+      Enum.flat_map(floats, fn entry ->
+        prefix = inline_runs(entry.prefix, style) |> layout_value()
+
+        prefix =
+          FloatLayout.inherit_exclusions(prefix, style, x, y, width, fn line ->
+            inline_line_height(line, style, width)
+          end)
+
+        lines = if prefix == [], do: [], else: inline_lines(prefix, width)
+        last = List.last(lines) || []
+        height = if lines == [], do: 0.0, else: inline_content_height(prefix, lines, style)
+        line_height = if lines == [], do: 0.0, else: inline_line_height(last, style, width)
+
+        clearances =
+          Enum.reduce(lines, 0.0, fn line, total ->
+            total +
+              Enum.find_value(line, 0.0, fn run ->
+                case Map.get(run, :_float_line) do
+                  %{clearance: clearance} -> clearance
+                  nil -> nil
+                end
+              end)
+          end)
+
+        top = y - height + line_height - clearances
+        preceding = if last == [], do: 0.0, else: inline_line_width(last, width)
+
+        float_style =
+          entry.node.style
+          |> Map.put(:_float_preceding_width, preceding)
+          |> Map.put(:_float_line_height, max(line_height, style.line_height))
+
+        {:ok, paint, _} =
+          layout_block(%{entry.node | style: float_style}, x, top, width) |> layout_value()
+
+        paint
+      end)
+
+    {text_boxes, height} = inline_text_boxes(runs, style, x, y, width, metadata)
+    {:ok, float_boxes ++ text_boxes, height}
   end
 
   defp layout_block_flow(children, style, x, y, width) do
@@ -3428,13 +3628,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             {margin_top, margin_bottom} = flow_child_vertical_margins(child, style)
 
             collapsed_margin =
-              if not is_nil(get_in(child, [:style, :_static_position_anchor])),
-                do: 0.0,
-                else:
-                  collapsed_sibling_margin(
-                    previous_margin_bottom,
-                    MarginGeometry.edge(:maps.get(:style, child, %{}), :top)
-                  )
+              if not is_nil(get_in(child, [:style, :_static_position_anchor])) or
+                   FloatLayout.floating?(Map.get(child, :style, %{})),
+                 do: 0.0,
+                 else:
+                   collapsed_sibling_margin(
+                     previous_margin_bottom,
+                     MarginGeometry.edge(:maps.get(:style, child, %{}), :top)
+                   )
 
             clearance =
               max(
@@ -3476,13 +3677,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                   ),
                 else: Map.delete(flow_style, :_initial_exclusion_region)
 
-            case layout_flow_child(child, flow_style, x, flow_y, width) do
+            result =
+              NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.with_prefix(
+                boxes,
+                fn ->
+                  layout_flow_child(child, flow_style, x, flow_y, width)
+                end,
+                true
+              )
+
+            case result do
               {:ok, child_boxes, next_y} ->
                 {next_y, next_margin_bottom} =
                   cond do
                     child_boxes != [] and
                         Enum.all?(child_boxes, &Map.has_key?(&1, :_static_position_anchor)) ->
                       {next_y, previous_margin_bottom}
+
+                    FloatLayout.floating?(child_style) ->
+                      {current_y, previous_margin_bottom}
 
                     get_in(child, [:style, :_collapses_through]) == true ->
                       child_style = child.style
@@ -4281,8 +4494,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     content_x = box_x + border_widths.left + padding.left
     content_top = box_top - border_widths.top - padding.top
 
+    source_style = style
+
+    style =
+      GridTracks.expand(
+        style,
+        content_width,
+        resolved_content_size(style, :height, :maps.get(:_containing_height, style, nil), nil)
+      )
+
     with {:ok, items} <- grid_items(children) do
+      items = Enum.map(items, &GridTracks.place_lines(&1, style))
+      {items, style} = GridTracks.prepend_implicit(items, style)
       placed_items = place_grid_items(items, style)
+      {placed_items, style} = GridTracks.collapse_auto_fit(placed_items, style)
       column_count = grid_axis_count(placed_items, style, :column)
       row_count = grid_axis_count(placed_items, style, :row)
       HtmlValidator.reserve_render_resource(:max_entries, column_count + row_count, :layout)
@@ -4290,7 +4515,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       row_tracks = grid_tracks(style, :row, row_count)
 
       column_intrinsics =
-        grid_axis_intrinsics(placed_items, column_tracks, grid_column_gap(style), :column)
+        grid_axis_intrinsics(
+          grid_subgrid_intrinsic_items(placed_items, style, :column),
+          column_tracks,
+          grid_column_gap(style),
+          :column
+        )
 
       column_sizes =
         resolve_grid_columns(
@@ -4309,7 +4539,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           grid_column_gap(style)
         )
 
-      row_intrinsics = grid_axis_intrinsics(placed_items, row_tracks, grid_row_gap(style), :row)
+      placed_items =
+        grid_baseline_groups(placed_items, style, column_sizes, grid_column_gap(style))
+
+      row_intrinsics =
+        grid_axis_intrinsics(
+          grid_subgrid_intrinsic_items(placed_items, style, :row),
+          row_tracks,
+          grid_row_gap(style),
+          :row
+        )
 
       available_height =
         resolved_content_size(style, :height, :maps.get(:_containing_height, style, nil), nil)
@@ -4352,6 +4591,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             ),
           else: row_sizes
 
+      style =
+        NativeElixirPdfUtilities.Validators.CssBoxAlignmentValidator.used_gaps(
+          Map.put(style, :row_gap, Map.get(source_style, :row_gap, 0.0)),
+          content_width,
+          content_height
+        )
+
       flow_metadata =
         style
         |> break_metadata()
@@ -4376,7 +4622,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                content_height,
                column_sizes,
                row_sizes,
-               flow_metadata.flow_id
+               flow_metadata
              ) do
         content = %{
           x: content_x,
@@ -4437,11 +4683,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp grid_items(children) do
     children
+    |> anonymous_layout_children()
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {child, index}, {:ok, acc} ->
       case grid_item(child, index) do
         {:ok, nil} -> {:cont, {:ok, acc}}
-        {:ok, item} -> {:cont, {:ok, [preserve_item_outline(item, child) | acc]}}
+        {:ok, item} -> {:cont, {:ok, [prepare_layout_item(item, child) | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
@@ -4452,6 +4699,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp grid_item(child, index) do
+    child = %{
+      child
+      | style: NativeElixirPdfUtilities.Validators.CssFloatValidator.prepare_item(child.style)
+    }
+
     case child do
       %{type: :text, text: text} when is_binary(text) ->
         text = normalize_inline_whitespace(text, child.style)
@@ -4497,6 +4749,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp build_grid_item(style, runs, index) do
     margin = Map.get(style, :margin, edges(0.0))
     text_width = intrinsic_inline_line_width(runs, nil)
+    minimum_width = inline_minimum_content_width(runs)
+    style = layout_intrinsic_style(style, minimum_width, text_width)
     content_width = resolved_content_size(style, :width, nil, text_width)
 
     content_height =
@@ -4514,6 +4768,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       index: index,
       style: style,
       runs: runs,
+      min_content_width:
+        resolved_content_size(style, :width, nil, minimum_width) + horizontal_box_size(style),
       intrinsic_width: content_width + horizontal_box_size(style),
       intrinsic_height: content_height + vertical_box_size(style),
       margin: margin,
@@ -4527,6 +4783,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp build_grid_block_item(style, children, index) do
     margin = Map.get(style, :margin, edges(0.0))
     intrinsic_width = flex_block_intrinsic_width(children)
+    minimum_width = intrinsic_content_width(children, style, :min)
+    style = layout_intrinsic_style(style, minimum_width, intrinsic_width)
     content_width = resolved_content_size(style, :width, nil, intrinsic_width)
 
     case layout_container_content_height(style, children, max(content_width, 0.0)) do
@@ -4538,6 +4796,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
            index: index,
            style: style,
            children: children,
+           min_content_width:
+             resolved_content_size(style, :width, nil, minimum_width) + horizontal_box_size(style),
            intrinsic_width: content_width + horizontal_box_size(style),
            intrinsic_height: content_height + vertical_box_size(style),
            margin: margin,
@@ -4560,6 +4820,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       index: index,
       style: style,
       image: :maps.get(:image, style, :deferred),
+      min_content_width: content_width + horizontal_box_size(style),
       intrinsic_width: content_width + horizontal_box_size(style),
       intrinsic_height: content_height + vertical_box_size(style),
       margin: margin,
@@ -4571,6 +4832,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp place_grid_items(items, style) do
+    if :maps.get(:grid_auto_flow, style, :row) in [:column, :column_dense] do
+      transposed =
+        Enum.map(items, fn item ->
+          %{
+            item
+            | row_start: item.column_start,
+              row_end: item.column_end,
+              column_start: item.row_start,
+              column_end: item.row_end
+          }
+        end)
+
+      transposed_style =
+        style |> Map.put(:grid_template_columns, Map.get(style, :grid_template_rows, []))
+
+      place_grid_rows(transposed, transposed_style)
+      |> Enum.map(fn item ->
+        %{
+          item
+          | row_start: item.column_start,
+            row_end: item.column_end,
+            column_start: item.row_start,
+            column_end: item.row_end
+        }
+      end)
+    else
+      place_grid_rows(items, style)
+    end
+  end
+
+  defp place_grid_rows(items, style) do
     explicit_count = style |> Map.get(:grid_template_columns, []) |> length() |> max(1)
 
     column_count =
@@ -4585,15 +4877,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         row = grid_line_start(item.row_start, item.row_end)
         column = grid_line_start(item.column_start, item.column_end)
 
-        cond do
-          is_integer(row) and is_integer(column) -> 0
-          is_integer(row) -> 1
-          true -> 2
-        end
+        phase =
+          cond do
+            is_integer(row) and is_integer(column) -> 0
+            is_integer(row) -> 1
+            true -> 2
+          end
+
+        {phase, Map.get(item.style, :order, 0), item.index}
       end)
 
     {_occupied, _cursor, placed} =
       Enum.reduce(ordered_items, {MapSet.new(), {1, 1}, []}, fn item, {occupied, cursor, acc} ->
+        cursor =
+          if :maps.get(:grid_auto_flow, style, :row) in [:row_dense, :column_dense],
+            do: {1, 1},
+            else: cursor
+
         placement = grid_item_placement(item, column_count, occupied, cursor)
 
         HtmlValidator.reserve_render_resource(
@@ -4618,7 +4918,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {occupied, cursor, [Map.merge(item, placement) | acc]}
       end)
 
-    Enum.sort_by(placed, & &1.index)
+    Enum.sort_by(placed, &{Map.get(&1.style, :order, 0), &1.index})
   end
 
   defp grid_item_placement(item, column_count, occupied, {cursor_row, cursor_column} = cursor) do
@@ -4665,7 +4965,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         line
 
       {_start_line, line} when is_integer(line) ->
-        max(line - grid_axis_span(start_line, end_line), 1)
+        line - grid_axis_span(start_line, end_line)
 
       _ ->
         :auto
@@ -4775,10 +5075,169 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
 
     missing = max(count - length(template), 0)
-    template ++ List.duplicate(auto_track, missing)
+
+    case auto_track do
+      {:track_cycle, tracks} ->
+        template ++
+          if missing > 0,
+            do: Enum.map(0..(missing - 1), &Enum.at(tracks, rem(&1, length(tracks)))),
+            else: []
+
+      track ->
+        template ++ List.duplicate(track, missing)
+    end
   end
 
   defp grid_axis_intrinsics(items, tracks, gap, axis) do
+    minimums = grid_axis_intrinsics(items, tracks, gap, axis, :min)
+    maximums = grid_axis_intrinsics(items, tracks, gap, axis, :max)
+    automatic = grid_axis_intrinsics(items, tracks, gap, axis, :auto)
+
+    Enum.zip([minimums, maximums, automatic])
+    |> Enum.map(fn {minimum, maximum, auto} ->
+      %{min: minimum, max: max(maximum, minimum), auto: auto}
+    end)
+  end
+
+  # Subgrid descendants contribute directly to the parent's shared tracks.
+  # Keep the owning item's edges as a separate spanning contribution.
+  defp grid_subgrid_intrinsic_items(items, style, axis) do
+    Enum.flat_map(items, fn item ->
+      subgrid? =
+        Enum.any?(
+          [:grid_template_columns, :grid_template_rows],
+          &match?([{:subgrid, _}], Map.get(item.style, &1))
+        )
+
+      inherited = if subgrid?, do: GridTracks.inherit(item, style, nil, nil)
+
+      mapping =
+        if inherited, do: inherited.subgrid_axes[axis], else: %{axis: axis, reverse?: false}
+
+      property = if mapping.axis == :column, do: :grid_template_columns, else: :grid_template_rows
+
+      case {Map.get(item.style, property), Map.get(item, :children)} do
+        {[{:subgrid, _}], children} when is_list(children) ->
+          child_style = GridTracks.expand(inherited.style, 0.0, nil)
+          nested = grid_items(children) |> layout_value()
+
+          nested =
+            nested
+            |> Enum.map(&GridTracks.place_lines(&1, child_style))
+            |> place_grid_items(child_style)
+
+          nested = grid_subgrid_intrinsic_items(nested, child_style, mapping.axis)
+
+          {leading, trailing} = Map.get(inherited.subgrid_insets, axis, {0.0, 0.0})
+
+          {parent_first, parent_last} =
+            if axis == :column,
+              do: {item.column_start, item.column_end},
+              else: {item.row_start, item.row_end}
+
+          nested =
+            Enum.map(nested, fn child ->
+              {first, last} =
+                if mapping.axis == :column,
+                  do: {child.column_start, child.column_end},
+                  else: {child.row_start, child.row_end}
+
+              count = parent_last - parent_first
+
+              {first, last} =
+                if mapping.reverse?,
+                  do: {count + 2 - last, count + 2 - first},
+                  else: {first, last}
+
+              first = min(parent_first + first - 1, parent_last - 1)
+              last = min(parent_first + last - 1, parent_last)
+
+              child =
+                if Map.has_key?(item, :orthogonal_node) and
+                     Map.get(style, :_writing_plane, :horizontal_tb) != :horizontal_tb do
+                  prepared_style =
+                    NativeElixirPdfUtilities.HtmlToPdf.WritingModeLayout.normalize_style(
+                      child.style,
+                      style._writing_plane
+                    )
+
+                  Map.merge(child, %{
+                    style: prepared_style,
+                    margin: prepared_style.margin,
+                    intrinsic_width: child.intrinsic_height,
+                    min_content_width: child.intrinsic_height,
+                    intrinsic_height: child.intrinsic_width
+                  })
+                else
+                  child
+                end
+
+              extra_before = if first == parent_first, do: leading, else: 0.0
+              extra_after = if last == parent_last, do: trailing, else: 0.0
+
+              {before_key, after_key} =
+                if axis == :column, do: {:left, :right}, else: {:top, :bottom}
+
+              margin =
+                child.margin
+                |> Map.update!(before_key, &(&1 + extra_before))
+                |> Map.update!(after_key, &(&1 + extra_after))
+
+              child = %{child | margin: margin}
+
+              if axis == :column,
+                do: %{child | column_start: first, column_end: last},
+                else: %{child | row_start: first, row_end: last}
+            end)
+
+          item =
+            if axis == :column do
+              size =
+                resolved_content_size(item.style, :width, nil, 0.0) +
+                  horizontal_box_size(item.style)
+
+              Map.merge(item, %{intrinsic_width: size, min_content_width: size})
+            else
+              size =
+                resolved_content_size(item.style, :height, nil, 0.0) +
+                  vertical_box_size(item.style)
+
+              Map.put(item, :intrinsic_height, size)
+            end
+
+          edges =
+            [{parent_first, leading}, {parent_last - 1, trailing}]
+            |> Enum.flat_map(fn {line, size} ->
+              if size > 0 do
+                edge =
+                  Map.merge(item, %{
+                    style: %{min_width: size},
+                    margin: edges(0.0),
+                    intrinsic_width: size,
+                    min_content_width: size,
+                    intrinsic_height: size
+                  })
+
+                [
+                  if(axis == :column,
+                    do: %{edge | column_start: line, column_end: line + 1},
+                    else: %{edge | row_start: line, row_end: line + 1}
+                  )
+                ]
+              else
+                []
+              end
+            end)
+
+          [item | nested ++ edges]
+
+        _ ->
+          [item]
+      end
+    end)
+  end
+
+  defp grid_axis_intrinsics(items, tracks, gap, axis, kind) do
     count = length(tracks)
 
     HtmlValidator.reserve_render_resource(
@@ -4792,7 +5251,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         case axis do
           :column ->
             {item.column_start - 1, item.column_end - item.column_start,
-             item.intrinsic_width + item.margin.left + item.margin.right}
+             case kind do
+               :min -> Map.get(item, :min_content_width, item.intrinsic_width)
+               :max -> item.intrinsic_width
+               :auto -> grid_automatic_minimum(item, tracks)
+             end + item.margin.left + item.margin.right}
 
           :row ->
             {item.row_start - 1, item.row_end - item.row_start,
@@ -4864,16 +5327,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 intrinsic_tracks =
                   Enum.filter(spanned, fn {_index, {track, _size}} ->
                     case track do
-                      :auto -> true
-                      {:minmax, :auto, _maximum} -> true
-                      {:minmax, _minimum, :auto} -> true
-                      _ -> false
+                      value when value in [:auto, :min_content, :max_content] ->
+                        true
+
+                      {:fit_content, _} ->
+                        true
+
+                      {:minmax, minimum, maximum} ->
+                        minimum in [:auto, :min_content, :max_content] or
+                          maximum in [:auto, :min_content, :max_content]
+
+                      _ ->
+                        false
                     end
                   end)
 
                 growing_tracks =
                   Enum.filter(intrinsic_tracks, fn {_index, {track, _size}} ->
-                    track == :auto or match?({:minmax, _, :auto}, track)
+                    track in [:auto, :min_content, :max_content] or
+                      match?({:fit_content, _}, track) or match?({:minmax, _, :auto}, track)
                   end)
 
                 # A fixed maximum is already included in occupied space. Grow
@@ -4931,22 +5403,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp grid_item_with_resolved_height(item, container_style, column_sizes, column_gap) do
+    original = item
+    item = GridTracks.inherit(item, container_style, column_sizes, nil)
     area_width = grid_track_span(column_sizes, column_gap, item.column_start, item.column_end)
     justify = grid_item_justify(item, container_style)
     box_width = grid_aligned_box_size(item, :width, justify, area_width)
     content_width = max(box_width - horizontal_box_size(item.style), 0.0)
 
-    content_height = grid_item_content_height(item, content_width)
-    Map.put(item, :intrinsic_height, content_height + vertical_box_size(item.style))
+    content_height = layout_item_content_height(item, content_width)
+    # Keep subgrid syntax on the owner until the row tracks are also resolved.
+    Map.put(original, :intrinsic_height, content_height + vertical_box_size(item.style))
   end
 
-  defp grid_item_content_height(item, content_width) do
+  defp layout_item_content_height(item, content_width) do
     cond do
+      Map.has_key?(item, :orthogonal_node) ->
+        resolved_content_size(
+          item.style,
+          :height,
+          Map.get(item.style, :_containing_height),
+          max(item.intrinsic_height - vertical_box_size(item.style), 0.0)
+        )
+
       Map.has_key?(item, :runs) ->
         resolved_content_size(
           item.style,
           :height,
-          nil,
+          :maps.get(:_containing_height, item.style, nil),
           inline_content_height(item.runs, content_width, item.style)
         )
 
@@ -4954,12 +5437,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {:ok, content_height} =
           layout_container_content_height(item.style, item.children, content_width)
 
-        resolved_content_size(item.style, :height, nil, content_height)
+        resolved_content_size(
+          item.style,
+          :height,
+          :maps.get(:_containing_height, item.style, nil),
+          content_height
+        )
 
       Map.has_key?(item, :image) ->
         {_content_width, content_height} = image_content_size(item.style, content_width, nil)
         content_height
     end
+  end
+
+  defp grid_baseline_groups(items, style, column_sizes, column_gap) do
+    {items, groups} =
+      Enum.map_reduce(items, %{}, fn item, groups ->
+        align = grid_item_align(item, style)
+
+        auto? =
+          NativeElixirPdfUtilities.Validators.CssSizingValidator.margin_flags(item.style, :height) !=
+            {false, false}
+
+        if not auto? and align in [:baseline, :first_baseline, :last_baseline] do
+          area = grid_track_span(column_sizes, column_gap, item.column_start, item.column_end)
+          width = grid_aligned_box_size(item, :width, grid_item_justify(item, style), area)
+          {first, last} = layout_item_baselines(item, width)
+          group = if align == :last_baseline, do: :last, else: :first
+          line = if group == :last, do: item.row_end, else: item.row_start
+          depth = item.margin.top + if(group == :last, do: last, else: first)
+          descent = item.intrinsic_height + item.margin.top + item.margin.bottom - depth
+          key = {group, line}
+          {above, below} = Map.get(groups, key, {0.0, 0.0})
+
+          {Map.put(item, :alignment_baseline, {key, depth}),
+           Map.put(groups, key, {max(above, depth), max(below, descent)})}
+        else
+          {item, groups}
+        end
+      end)
+
+    Enum.map(items, fn item ->
+      case Map.get(item, :alignment_baseline) do
+        {{group, _} = key, depth} ->
+          {above, below} = Map.fetch!(groups, key)
+
+          item
+          |> Map.put(:alignment_baseline, {group, depth, above, below})
+          |> Map.put(
+            :intrinsic_height,
+            max(
+              item.intrinsic_height,
+              above + below - item.margin.top - item.margin.bottom
+            )
+          )
+
+        nil ->
+          item
+      end
+    end)
   end
 
   defp resolve_grid_rows(tracks, row_intrinsics, gap, available_height, align_content) do
@@ -4979,15 +5515,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         %{
           fixed_size: grid_fixed_track_size(track, intrinsic),
+          max_content: grid_intrinsic(intrinsic, :max),
           fraction: fraction,
           index: index,
           minimum:
             case fraction do
-              nil -> 0.0
+              nil -> grid_track_base_size(track, intrinsic)
               _fraction -> grid_flexible_track_minimum(track, intrinsic, axis)
             end
         }
       end)
+
+    track_data = grow_intrinsic_grid_tracks(track_data, available_size, gap)
 
     fixed_total =
       Enum.reduce(track_data, 0.0, fn data, total ->
@@ -5015,7 +5554,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         # must accommodate every flexible track's intrinsic minimum.
         fraction_unit =
           flexible_tracks
-          |> Enum.map(&(&1.minimum / max(&1.fraction, 1.0)))
+          |> Enum.map(&(max(&1.minimum, &1.max_content) / max(&1.fraction, 1.0)))
           |> Enum.max(fn -> 0.0 end)
 
         Map.new(flexible_tracks, fn track ->
@@ -5039,13 +5578,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  defp grid_track_base_size(track, intrinsic) do
+    case track do
+      {:length, value} -> value
+      :max_content -> grid_intrinsic(intrinsic, :max)
+      value when value in [:auto, :min_content] -> grid_intrinsic(intrinsic, :min)
+      {:fit_content, _} -> grid_intrinsic(intrinsic, :min)
+      {:minmax, minimum, _} -> grid_minimum_track_size(minimum, intrinsic)
+    end
+  end
+
+  # Maximize intrinsic tracks only through the available free space and each
+  # growth limit. Sorting by capacity implements equal shares with freezing
+  # without repeatedly scanning tracks or depending on their source order.
+  defp grow_intrinsic_grid_tracks(tracks, available, gap) do
+    if is_number(available) do
+      occupied = Enum.reduce(tracks, gap * max(length(tracks) - 1, 0), &(&1.minimum + &2))
+
+      intrinsic =
+        tracks
+        |> Enum.filter(&is_nil(&1.fraction))
+        |> Enum.sort_by(&max(&1.fixed_size - &1.minimum, 0.0))
+
+      {sizes, _, _} =
+        Enum.reduce(intrinsic, {%{}, max(available - occupied, 0.0), length(intrinsic)}, fn track,
+                                                                                            {sizes,
+                                                                                             remaining,
+                                                                                             count} ->
+          addition = min(max(track.fixed_size - track.minimum, 0.0), remaining / count)
+          {Map.put(sizes, track.index, track.minimum + addition), remaining - addition, count - 1}
+        end)
+
+      Enum.map(tracks, fn track ->
+        if is_nil(track.fraction),
+          do: %{track | fixed_size: Map.fetch!(sizes, track.index)},
+          else: track
+      end)
+    else
+      tracks
+    end
+  end
+
   defp grid_fixed_track_size(track, intrinsic) do
     case track do
       {:length, length} ->
         length
 
-      :auto ->
-        intrinsic
+      value when value in [:auto, :max_content] ->
+        grid_intrinsic(intrinsic, :max)
+
+      :min_content ->
+        grid_intrinsic(intrinsic, :min)
+
+      {:fit_content, limit} ->
+        max(
+          grid_intrinsic(intrinsic, :min),
+          min(grid_intrinsic(intrinsic, :max), limit || grid_intrinsic(intrinsic, :max))
+        )
 
       {:fr, _fraction} ->
         0.0
@@ -5054,22 +5643,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         minimum_size = grid_minimum_track_size(minimum, intrinsic)
 
         case maximum do
-          {:length, length} -> max(minimum_size, length)
-          :auto -> max(minimum_size, intrinsic)
-          {:fr, _fraction} -> minimum_size
+          {:length, length} ->
+            max(minimum_size, length)
+
+          :min_content ->
+            max(minimum_size, grid_intrinsic(intrinsic, :min))
+
+          maximum when maximum in [:auto, :max_content] ->
+            max(minimum_size, grid_intrinsic(intrinsic, :max))
+
+          {:fr, _fraction} ->
+            minimum_size
         end
+    end
+  end
+
+  defp grid_intrinsic(intrinsic, kind) do
+    case intrinsic do
+      %{min: minimum, max: maximum} -> if(kind == :min, do: minimum, else: maximum)
+      value -> value
     end
   end
 
   defp grid_flexible_track_minimum(track, intrinsic, axis) do
     minimum =
       case track do
-        {:fr, _fraction} -> 0.0
+        {:fr, _fraction} -> grid_minimum_track_size(:auto, intrinsic)
         {:minmax, minimum, {:fr, _fraction}} -> grid_minimum_track_size(minimum, intrinsic)
       end
 
     case axis do
-      :row -> max(minimum, intrinsic)
+      :row -> max(minimum, grid_intrinsic(intrinsic, :min))
       :column -> minimum
     end
   end
@@ -5077,7 +5681,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp grid_minimum_track_size(minimum, intrinsic) do
     case minimum do
       {:length, length} -> length
-      :auto -> intrinsic
+      :auto -> if is_map(intrinsic), do: intrinsic.auto, else: intrinsic
+      :min_content -> grid_intrinsic(intrinsic, :min)
+      :max_content -> grid_intrinsic(intrinsic, :max)
+    end
+  end
+
+  defp grid_automatic_minimum(item, tracks) do
+    edges = horizontal_box_size(item.style)
+
+    case resolved_constraint_size(item.style, :min_width, nil) do
+      minimum when is_number(minimum) ->
+        if :maps.get(:box_sizing, item.style, nil) == :border_box,
+          do: max(minimum, edges),
+          else: minimum + edges
+
+      _ ->
+        flexible_span? =
+          item.column_end - item.column_start > 1 and
+            tracks
+            |> Enum.slice(item.column_start - 1, item.column_end - item.column_start)
+            |> Enum.any?(&(grid_track_fraction(&1) != nil))
+
+        if flexible_span? or
+             :maps.get(:overflow_x, item.style, :visible) in [:auto, :scroll, :hidden],
+           do: edges,
+           else: Map.get(item, :min_content_width, item.intrinsic_width)
     end
   end
 
@@ -5190,18 +5819,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          content_height,
          column_sizes,
          row_sizes,
-         container_flow_id
+         container_flow_metadata
        ) do
     column_gap = grid_column_gap(style)
     row_gap = grid_row_gap(style)
     grid_width = grid_tracks_size(column_sizes, column_gap)
     grid_height = grid_tracks_size(row_sizes, row_gap)
+    rtl? = Map.get(style, :direction, :ltr) == :rtl
+
+    alignment_style =
+      if rtl? do
+        case Map.get(style, :justify_content) do
+          :left -> Map.put(style, :justify_content, :end)
+          :right -> Map.put(style, :justify_content, :start)
+          _ -> style
+        end
+      else
+        style
+      end
 
     {content_x, content_gap} =
       content_distribution(
-        style,
+        alignment_style,
         :justify_content,
-        max(content_width - grid_width, 0.0),
+        content_width - grid_width,
         column_gap,
         length(column_sizes)
       )
@@ -5210,7 +5851,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       content_distribution(
         style,
         :align_content,
-        max(content_height - grid_height, 0.0),
+        content_height - grid_height,
         row_gap,
         length(row_sizes)
       )
@@ -5228,8 +5869,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           row_gap
         )
 
+      item = GridTracks.inherit(item, style, column_sizes, row_sizes)
+
+      item =
+        if rtl?, do: %{item | x: x + content_width - (item.x - x) - item.box_width}, else: item
+
       {:ok, boxes} = flex_item_boxes(item, :row)
-      tagged_boxes = tag_atomic_boxes(boxes, %{flow_id: container_flow_id})
+
+      tagged_boxes =
+        tag_atomic_boxes(
+          boxes,
+          Map.put(
+            container_flow_metadata,
+            :parallel_item_bounds,
+            {item.y, item.y - item.box_height}
+          )
+        )
 
       anchored_boxes =
         attach_outline_anchor(item, attach_html_target(item.style, tagged_boxes, item.x, item.y))
@@ -5302,7 +5957,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             area_height - box_height - item.margin.top - item.margin.bottom,
             :flow
           ),
-        else: grid_axis_position(align, box_height, area_height)
+        else:
+          (case Map.get(item, :alignment_baseline) do
+             {:first, depth, above, _} ->
+               above - depth - item.margin.top
+
+             {:last, depth, _, below} ->
+               area_height - below - depth - item.margin.top
+
+             nil ->
+               grid_axis_position(
+                 align,
+                 box_height + item.margin.top + item.margin.bottom,
+                 area_height
+               )
+           end)
 
     Map.merge(item, %{
       x: area_x + x_offset + item.margin.left,
@@ -5314,6 +5983,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp content_distribution(style, property, free_space, gap, count) do
     case Map.get(style, property, :flex_start) do
+      {safety, position} when safety in [:safe, :unsafe] ->
+        {box_alignment_offset({safety, position}, free_space), gap}
+
       alignment when alignment in [:end, :flex_end] ->
         {free_space, gap}
 
@@ -5394,10 +6066,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp grid_axis_position(align, box_size, area_size) do
-    case align do
-      :flex_end -> max(area_size - box_size, 0.0)
-      :center -> max((area_size - box_size) / 2, 0.0)
-      _ -> 0.0
+    box_alignment_offset(align, area_size - box_size)
+  end
+
+  # Flex and grid use the same overflow-position rule. Only flex-relative
+  # start/end reverse with an axis; logical start/end keep the writing axis.
+  defp box_alignment_offset(alignment, free, reverse \\ false) do
+    case alignment do
+      {:safe, _} when free < 0 ->
+        0.0
+
+      {safety, position} when safety in [:safe, :unsafe] ->
+        box_alignment_offset(position, free, reverse)
+
+      position when position in [:end, :self_end, :right, :last_baseline] ->
+        free
+
+      :flex_end ->
+        if reverse, do: 0.0, else: free
+
+      :flex_start ->
+        if reverse, do: free, else: 0.0
+
+      :center ->
+        free / 2
+
+      _ ->
+        0.0
     end
   end
 
@@ -5409,9 +6104,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp grid_item_justify(item, container_style) do
-    case :maps.get(:justify_self, item.style, :auto) do
-      :auto -> :maps.get(:justify_items, container_style, :stretch)
-      justify -> justify
+    alignment =
+      case :maps.get(:justify_self, item.style, :auto) do
+        :auto -> :maps.get(:justify_items, container_style, :stretch)
+        justify -> justify
+      end
+
+    position =
+      case alignment do
+        {_, position} -> position
+        position -> position
+      end
+
+    opposite? =
+      Map.get(item.style, :direction, :ltr) != Map.get(container_style, :direction, :ltr)
+
+    position =
+      case {position, opposite?, Map.get(container_style, :direction, :ltr)} do
+        {:self_start, true, _} -> :end
+        {:self_end, true, _} -> :start
+        {:left, _, :rtl} -> :end
+        {:right, _, :rtl} -> :start
+        _ -> position
+      end
+
+    case alignment do
+      {safety, _} -> {safety, position}
+      _ -> position
     end
   end
 
@@ -5427,7 +6146,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     margin = Map.get(style, :margin, edges(0.0, 0.0, :maps.get(:margin_after, style, 0.0), 0.0))
 
     rounded_rows? =
-      flex_main_axis(style) == :row and :maps.get(:flex_wrap, style, :nowrap) == :wrap and
+      flex_main_axis(style) == :row and :maps.get(:flex_wrap, style, :nowrap) != :nowrap and
         is_number(
           resolved_content_size(style, :height, :maps.get(:_containing_height, style, nil), nil)
         )
@@ -5488,6 +6207,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       if is_number(containing_height),
         do: max(containing_height - horizontal_gutter, 0.0),
         else: nil
+
+    style =
+      NativeElixirPdfUtilities.Validators.CssBoxAlignmentValidator.used_gaps(
+        style,
+        content_width,
+        containing_height
+      )
 
     {available_main, available_cross} =
       case main_axis do
@@ -5556,7 +6282,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                    content_top,
                    content_width,
                    content_height,
-                   flow_metadata.flow_id
+                   flow_metadata
                  ) do
             content = %{
               x: content_x,
@@ -5590,12 +6316,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp flex_items(children, main_axis, available_main, available_cross) do
     children
+    |> anonymous_layout_children()
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {child, index}, {:ok, acc} ->
       case flex_item(child, index, main_axis, available_main, available_cross) do
-        {:ok, nil} -> {:cont, {:ok, acc}}
-        {:ok, item} -> {:cont, {:ok, acc ++ [preserve_item_outline(item, child)]}}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:ok, nil} ->
+          {:cont, {:ok, acc}}
+
+        {:ok, item} ->
+          {:cont,
+           {:ok,
+            acc ++ [prepare_layout_item(Map.put(item, :cross_basis, available_cross), child)]}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
       end
     end)
     |> case do
@@ -5604,9 +6338,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  defp anonymous_layout_children(children) do
+    children
+    |> Enum.chunk_by(&(Map.get(&1, :type) == :text))
+    |> Enum.flat_map(fn group ->
+      first = hd(group)
+
+      if first.type == :text and length(group) > 1 do
+        if Enum.all?(group, &(HtmlValidator.trim_ascii_whitespace(&1.text) == "")) do
+          []
+        else
+          [
+            %{
+              type: :element,
+              tag: nil,
+              children: group,
+              style: first.style |> text_style() |> Map.put(:display, :block)
+            }
+          ]
+        end
+      else
+        group
+      end
+    end)
+  end
+
   defp flex_item(child, index, main_axis, available_main, available_cross) do
     height = if main_axis == :row, do: available_cross, else: available_main
-    child = %{child | style: Map.put(child.style, :_containing_height, height)}
+
+    child = %{
+      child
+      | style:
+          child.style
+          |> NativeElixirPdfUtilities.Validators.CssFloatValidator.prepare_item()
+          |> Map.put(:_containing_height, height)
+    }
 
     case child do
       %{type: :text, text: text} when is_binary(text) ->
@@ -5658,7 +6424,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             resolved_content_size(style, :height, :maps.get(:_containing_height, style, nil), nil)
           )
 
-        case inline_runs(children, style) do
+        case if(NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.enabled?(style),
+               do: {:error, :column_context},
+               else: inline_runs(children, style)
+             ) do
           {:ok, runs} ->
             item = build_flex_item(style, runs, index, main_axis, available_main, available_cross)
             {:ok, Map.put(item, :inline_children, children)}
@@ -5680,9 +6449,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     margin = Map.get(style, :margin, edges(0.0))
 
     text_width =
-      intrinsic_inline_line_width(runs, available_main)
+      runs
+      |> inline_lines(nil, false)
+      |> Enum.map(&intrinsic_inline_line_width(&1, available_main))
+      |> Enum.max()
 
-    {content_main, content_cross} =
+    minimum_width = inline_minimum_content_width(runs)
+    style = layout_intrinsic_style(style, minimum_width, text_width)
+
+    {content_main, content_cross, content_minimum} =
       case main_axis do
         :row ->
           content_main = flex_basis(style, :width, available_main, text_width)
@@ -5694,17 +6469,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
              :height,
              :maps.get(:_containing_height, style, nil),
              content_height
-           )}
+           ), minimum_width}
 
         :column ->
           content_width = resolved_content_size(style, :width, available_cross, text_width)
 
-          content_height =
-            if Enum.any?(runs, &(Map.get(&1, :type) == :inline_image)),
-              do: inline_content_height(runs, content_width, style),
-              else: :maps.get(:line_height, style, 14.4)
+          content_height = inline_content_height(runs, content_width, style)
 
-          {flex_basis(style, :height, available_main, content_height), content_width}
+          {flex_basis(style, :height, available_main, content_height), content_width,
+           content_height}
       end
 
     main_box = content_main + flex_main_box_size(style, main_axis)
@@ -5720,6 +6493,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       main_axis: main_axis,
       main_box: main_box,
       cross_box: cross_box,
+      content_minimum: content_minimum,
       outer_main: main_box + flex_main_margin_size(margin, main_axis),
       outer_cross: cross_box + flex_cross_margin_size(margin, main_axis),
       margin: margin
@@ -5734,13 +6508,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         do: elem(EmbeddedViewportValidator.intrinsic_size(), 0),
         else: flex_block_intrinsic_width(children)
 
+    minimum_width = intrinsic_content_width(children, style, :min)
+    style = layout_intrinsic_style(style, minimum_width, intrinsic_width)
+
     content_width =
       case main_axis do
         :row ->
           default_width =
             if Map.has_key?(style, :embedded_document),
               do: intrinsic_width,
-              else: min(intrinsic_width, available_main)
+              else: intrinsic_width
 
           flex_basis(style, :width, available_main, default_width)
 
@@ -5781,6 +6558,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
            main_axis: main_axis,
            main_box: main_box,
            cross_box: cross_box,
+           content_minimum: if(main_axis == :row, do: minimum_width, else: content_height),
            outer_main: main_box + flex_main_margin_size(margin, main_axis),
            outer_cross: cross_box + flex_cross_margin_size(margin, main_axis),
            margin: margin
@@ -5792,6 +6570,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp layout_container_content_height(style, children, content_width) do
+    NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.without_page(fn ->
+      FloatLayout.with_context(fn ->
+        measure_container_content_height(style, children, content_width)
+      end)
+    end)
+  end
+
+  defp measure_container_content_height(style, children, content_width) do
     case style do
       %{embedded_document: _surface} ->
         {:ok,
@@ -5846,13 +6632,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         :column -> {available_cross, available_main}
       end
 
-    {content_width, content_height} = image_content_size(style, available_width, available_height)
+    property = if main_axis == :row, do: :width, else: :height
 
-    {content_main, content_cross} =
+    constraints =
+      if main_axis == :row, do: [:min_width, :max_width], else: [:min_height, :max_height]
+
+    intrinsic_style = Map.drop(style, [property | constraints])
+
+    {content_width, content_height} =
+      image_content_size(intrinsic_style, available_width, available_height)
+
+    {content_main, _intrinsic_cross} =
       case main_axis do
         :row -> {content_width, content_height}
         :column -> {content_height, content_width}
       end
+
+    content_minimum = content_main
+    content_main = flex_basis(style, property, available_main, content_main)
+
+    {preferred_width, preferred_height} =
+      image_content_size(Map.drop(style, constraints), available_width, available_height)
+
+    content_cross = if main_axis == :row, do: preferred_height, else: preferred_width
 
     main_box = content_main + flex_main_box_size(style, main_axis)
     cross_box = content_cross + flex_cross_box_size(style, main_axis)
@@ -5867,6 +6669,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       main_axis: main_axis,
       main_box: main_box,
       cross_box: cross_box,
+      content_minimum: content_minimum,
       outer_main: main_box + flex_main_margin_size(margin, main_axis),
       outer_cross: cross_box + flex_cross_margin_size(margin, main_axis),
       margin: margin
@@ -5874,10 +6677,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp flex_basis(style, size_property, available_size, intrinsic_size) do
+    constraints =
+      if size_property == :width,
+        do: [:min_width, :max_width],
+        else: [:min_height, :max_height]
+
+    # The flex base ignores main-axis min/max constraints. Those apply to the
+    # hypothetical size and to each proposed size in the freezing algorithm.
+    unconstrained = Map.drop(style, constraints)
+
+    cross_property = if size_property == :width, do: :height, else: :width
+
+    cross =
+      resolved_content_size(
+        unconstrained,
+        cross_property,
+        Map.get(style, :_containing_height),
+        nil
+      )
+
+    ratio = NativeElixirPdfUtilities.Validators.CssSizingValidator.preferred_ratio(style)
+
+    intrinsic_size =
+      if is_number(cross) and is_number(ratio),
+        do: ratio_content_size(unconstrained, cross, ratio, size_property),
+        else: intrinsic_size
+
     case :maps.get(:flex_basis, style, :auto) do
-      :auto -> resolved_content_size(style, size_property, available_size, intrinsic_size)
-      basis when is_number(basis) -> basis
+      :auto ->
+        resolved_content_size(unconstrained, size_property, available_size, intrinsic_size)
+
+      :content ->
+        intrinsic_size
+
+      basis ->
+        unconstrained
+        |> Map.put(size_property, basis)
+        |> resolved_content_size(size_property, available_size, intrinsic_size)
     end
+  end
+
+  # Both inline and block flex items use these measurements for intrinsic basis
+  # keywords and explicit intrinsic min/max sizes, with the same box-sizing basis.
+  defp layout_intrinsic_style(style, minimum, maximum) do
+    edges =
+      if :maps.get(:box_sizing, style, nil) == :border_box,
+        do: horizontal_box_size(style),
+        else: 0.0
+
+    Map.put(style, :_intrinsic_widths, %{
+      min_content: minimum + edges,
+      max_content: maximum + edges,
+      auto: maximum + edges
+    })
   end
 
   defp flex_lines(items, style, content_width) do
@@ -5898,11 +6750,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     lines =
       Enum.reduce(items, [], fn item, lines ->
+        {minimum, maximum} = flex_main_constraints(item, constraint_available_main)
+        hypothetical = constrain_flex_main(item.main_box, minimum, maximum)
+
+        item =
+          Map.put(
+            item,
+            :hypothetical_outer_main,
+            hypothetical + flex_main_margin_size(item.margin, main_axis)
+          )
+
         append_flex_item_to_lines(lines, item, wrap, available_main, gap)
       end)
 
     lines =
-      Enum.map(lines, &resolve_flex_line(&1, available_main, constraint_available_main, gap))
+      Enum.map(
+        lines,
+        &resolve_flex_line(&1, available_main, constraint_available_main, gap, style)
+      )
 
     if Enum.any?(items, &(Map.get(&1.style, :visibility) == :collapse)) do
       content_height = flex_content_height(lines, style)
@@ -5915,7 +6780,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             into: %{},
             do:
               {item.index,
-               if(wrap == :wrap,
+               if(wrap != :nowrap,
                  do: line.cross,
                  else: if(main_axis == :row, do: content_height, else: content_width)
                )}
@@ -5945,7 +6810,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             %{line | items: visible},
             available_main,
             constraint_available_main,
-            gap
+            gap,
+            style
           )
 
         cross = Enum.reduce(collapsed, resolved.cross, &max(Map.fetch!(struts, &1.index), &2))
@@ -5957,17 +6823,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp append_flex_item_to_lines(lines, item, wrap, available_main, gap) do
+    outer_main = Map.get(item, :hypothetical_outer_main, item.outer_main)
+
     case lines do
       [] ->
-        [%{items: [item], base_main: item.outer_main}]
+        [%{items: [item], base_main: outer_main}]
 
       lines ->
         [line | previous] = Enum.reverse(lines)
-        next_base = line.base_main + gap + item.outer_main
+        next_base = line.base_main + gap + outer_main
 
-        case wrap == :wrap and line.items != [] and next_base > available_main do
+        case wrap != :nowrap and line.items != [] and next_base > available_main do
           true ->
-            Enum.reverse(previous) ++ [line, %{items: [item], base_main: item.outer_main}]
+            Enum.reverse(previous) ++ [line, %{items: [item], base_main: outer_main}]
 
           false ->
             Enum.reverse(previous) ++
@@ -5976,29 +6844,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp resolve_flex_line(line, available_main, constraint_available_main, gap) do
+  defp resolve_flex_line(line, available_main, constraint_available_main, gap, style) do
     item_gap_total = gap * max(length(line.items) - 1, 0)
     base_without_gap = Enum.reduce(line.items, 0.0, &(&1.outer_main + &2))
 
     free_space = available_main - base_without_gap - item_gap_total
 
+    resolved = resolve_flex_item_sizes(line.items, free_space, constraint_available_main)
+
     items =
-      line.items
-      |> resolve_flex_item_sizes(free_space, constraint_available_main)
-      |> Enum.map(fn item ->
-        case {item.main_axis, :maps.get(:runs, item, nil)} do
-          {:row, runs} when is_list(runs) ->
+      Enum.zip_with(line.items, resolved, fn original, item ->
+        case item.main_axis do
+          :row when not is_map_key(item, :image) and item.main_box != original.main_box ->
             content_width = max(item.main_box - flex_main_box_size(item.style, :row), 0.0)
-            content_height = inline_content_height(runs, content_width, item.style)
 
             cross_box =
-              resolved_content_size(
-                item.style,
-                :height,
-                :maps.get(:_containing_height, item.style, nil),
-                content_height
-              ) +
-                flex_cross_box_size(item.style, :row)
+              layout_item_content_height(item, content_width) + vertical_box_size(item.style)
 
             %{
               item
@@ -6007,14 +6868,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             }
 
           _ ->
-            item
+            resolve_flex_image_cross_size(item)
         end
       end)
 
     outer_main = Enum.reduce(items, 0.0, &(&1.outer_main + &2)) + item_gap_total
-    cross = items |> Enum.map(& &1.outer_cross) |> Enum.max(fn -> 0.0 end)
+    {items, cross} = flex_baseline_groups(items, style)
 
     %{items: items, main: outer_main, cross: cross}
+  end
+
+  defp resolve_flex_image_cross_size(item) do
+    property = if item.main_axis == :row, do: :height, else: :width
+
+    if Map.has_key?(item, :image) and Map.get(item.style, property) in [nil, :auto] do
+      main_property = if item.main_axis == :row, do: :width, else: :height
+
+      constraints =
+        if item.main_axis == :row, do: [:min_width, :max_width], else: [:min_height, :max_height]
+
+      style =
+        item.style
+        |> Map.drop(constraints)
+        |> Map.put(
+          main_property,
+          declared_size_for_border_box(item.style, main_property, item.main_box)
+        )
+
+      {width_basis, height_basis} =
+        if item.main_axis == :row, do: {nil, item.cross_basis}, else: {item.cross_basis, nil}
+
+      {width, height} = image_content_size(style, width_basis, height_basis)
+      cross = if item.main_axis == :row, do: height, else: width
+      cross_box = cross + flex_cross_box_size(item.style, item.main_axis)
+
+      %{
+        item
+        | cross_box: cross_box,
+          outer_cross: cross_box + flex_cross_margin_size(item.margin, item.main_axis)
+      }
+    else
+      item
+    end
   end
 
   defp resolve_flex_item_sizes(items, free_space, available_main) do
@@ -6151,7 +7046,59 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
     end
 
-    minimum = constraint_box_size.(minimum_property, box_size)
+    automatic_minimum =
+      if Map.get(item.style, minimum_property, :auto) in [nil, :auto] and
+           :maps.get(:overflow_x, item.style, :visible) not in [:auto, :scroll, :hidden] and
+           :maps.get(:overflow_y, item.style, :visible) not in [:auto, :scroll, :hidden] do
+        content = Map.get(item, :content_minimum, 0.0)
+        property = if item.main_axis == :row, do: :width, else: :height
+
+        specified =
+          item.style
+          |> Map.drop([minimum_property, maximum_property])
+          |> resolved_content_size(property, available_main, nil)
+
+        cross_property = if item.main_axis == :row, do: :height, else: :width
+
+        cross =
+          resolved_content_size(
+            item.style,
+            cross_property,
+            Map.get(item.style, :_containing_height),
+            nil
+          )
+
+        natural_ratio =
+          case Map.get(item, :image) do
+            %{width: width, height: height} when height > 0 -> width / height
+            _ -> nil
+          end
+
+        ratio =
+          NativeElixirPdfUtilities.Validators.CssSizingValidator.preferred_ratio(
+            item.style,
+            natural_ratio
+          )
+
+        content =
+          if is_number(cross) and is_number(ratio) do
+            transferred = ratio_content_size(item.style, cross, ratio, property)
+
+            if Map.has_key?(item, :image),
+              do: min(content, transferred),
+              else: max(content, transferred)
+          else
+            content
+          end
+
+        content = if is_number(specified), do: min(content, specified), else: content
+        maximum = constraint_box_size.(maximum_property, nil)
+        if is_number(maximum), do: min(content + box_size, maximum), else: content + box_size
+      else
+        box_size
+      end
+
+    minimum = constraint_box_size.(minimum_property, automatic_minimum)
     maximum = constraint_box_size.(maximum_property, nil)
 
     case maximum do
@@ -6174,11 +7121,81 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     %{item | main_box: main_box, outer_main: outer_main}
   end
 
+  defp flex_baseline_groups(items, style) do
+    {items, groups} =
+      Enum.map_reduce(items, %{}, fn item, groups ->
+        align = flex_item_align(item, style)
+
+        auto? =
+          NativeElixirPdfUtilities.Validators.CssSizingValidator.margin_flags(item.style, :height) !=
+            {false, false}
+
+        if item.main_axis == :row and not auto? and
+             align in [:baseline, :first_baseline, :last_baseline] do
+          {first, last} = layout_item_baselines(item, item.main_box)
+          group = if align == :last_baseline, do: :last, else: :first
+          depth = item.margin.top + if(group == :last, do: last, else: first)
+          descent = item.outer_cross - depth
+          {above, below} = Map.get(groups, group, {0.0, 0.0})
+
+          {Map.put(item, :alignment_baseline, {group, depth}),
+           Map.put(groups, group, {max(above, depth), max(below, descent)})}
+        else
+          {item, groups}
+        end
+      end)
+
+    cross = Enum.reduce(items, 0.0, &max(&1.outer_cross, &2))
+
+    cross =
+      Enum.reduce(groups, cross, fn {_, {above, below}}, size -> max(size, above + below) end)
+
+    {Enum.map(items, fn item ->
+       case Map.get(item, :alignment_baseline) do
+         {group, depth} ->
+           {above, below} = Map.fetch!(groups, group)
+           Map.put(item, :alignment_baseline, {group, depth, above, below})
+
+         nil ->
+           item
+       end
+     end), cross}
+  end
+
+  # Reuse the inline atomic measurement owner for first/last flow baselines,
+  # including nested block, flex, grid and table descendants. Empty/replaced
+  # boxes synthesize their baseline at the appropriate border edge.
+  defp layout_item_baselines(item, width) do
+    if Map.has_key?(item, :image) or Map.has_key?(item, :orthogonal_node) do
+      height = Map.get(item, :cross_box, Map.get(item, :intrinsic_height))
+      {height, height}
+    else
+      display =
+        case Map.get(item.style, :display) do
+          display when display in [:flex, :inline_flex] -> :inline_flex
+          display when display in [:grid, :inline_grid] -> :inline_grid
+          display when display in [:table, :inline_table] -> :inline_table
+          _ -> :inline_block
+        end
+
+      style =
+        item.style
+        |> Map.put(:display, display)
+        |> Map.put(:width, declared_size_for_border_box(item.style, :width, width))
+
+      run =
+        item |> Map.take([:runs, :children]) |> Map.merge(%{type: :inline_block, style: style})
+
+      measured = measure_inline_block(run, width)
+      {measured._inline_first_baseline_depth, measured._inline_baseline_depth}
+    end
+  end
+
   defp flex_cross_distribution(lines, style, content_width, content_height) do
     main_axis = flex_main_axis(style)
     cross_gap = flex_cross_gap(style)
     line_count = length(lines)
-    wrapped? = :maps.get(:flex_wrap, style, :nowrap) == :wrap
+    wrapped? = :maps.get(:flex_wrap, style, :nowrap) != :nowrap
 
     {lines, cross_start, cross_gap} =
       if wrapped? do
@@ -6212,6 +7229,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         {offset, gap} =
           content_distribution(style, :align_content, free_space, cross_gap, line_count)
 
+        alignment = Map.get(style, :align_content, :none)
+
+        position =
+          case alignment do
+            {_, position} -> position
+            position -> position
+          end
+
+        physical? =
+          position in [:start, :end, :self_start, :self_end] or
+            (match?({:safe, _}, alignment) and free_space < 0)
+
+        offset =
+          if Map.get(style, :flex_wrap) == :wrap_reverse and physical?,
+            do: free_space - offset,
+            else: offset
+
         {lines, offset, gap}
       else
         {lines, 0.0, cross_gap}
@@ -6220,9 +7254,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     {lines, cross_start, cross_gap}
   end
 
-  defp flex_line_boxes(lines, style, x, y, content_width, content_height, container_flow_id) do
+  defp flex_line_boxes(lines, style, x, y, content_width, content_height, container_flow_metadata) do
     main_axis = flex_main_axis(style)
-    wrapped? = :maps.get(:flex_wrap, style, :nowrap) == :wrap
+    wrapped? = :maps.get(:flex_wrap, style, :nowrap) != :nowrap
 
     {lines, cross_start, cross_gap} =
       flex_cross_distribution(lines, style, content_width, content_height)
@@ -6236,6 +7270,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             true -> resolved_content_size(style, :width, nil, line.cross)
           end
 
+        physical_cross_offset =
+          if :maps.get(:flex_wrap, style, :nowrap) == :wrap_reverse do
+            available_cross = if main_axis == :row, do: content_height, else: content_width
+            available_cross - cross_offset - line_cross
+          else
+            cross_offset
+          end
+
         positioned =
           flex_position_line(
             line,
@@ -6244,7 +7286,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             y,
             content_width,
             content_height,
-            cross_offset,
+            physical_cross_offset,
             line_cross
           )
 
@@ -6254,7 +7296,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     Enum.reduce_while(lines, {:ok, []}, fn item, {:ok, acc} ->
       case flex_item_boxes(item, main_axis) do
         {:ok, boxes} ->
-          tagged_boxes = tag_atomic_boxes(boxes, %{flow_id: container_flow_id})
+          tagged_boxes =
+            tag_atomic_boxes(
+              boxes,
+              Map.put(
+                container_flow_metadata,
+                :parallel_item_bounds,
+                {item.y, item.y - item.box_height}
+              )
+            )
 
           anchored_boxes =
             attach_outline_anchor(
@@ -6370,15 +7420,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         else: line_cross
 
     cross_position =
-      if cross_auto,
-        do:
+      cond do
+        cross_auto ->
           NativeElixirPdfUtilities.Validators.CssSizingValidator.auto_margin_offset(
             item.style,
             cross_dimension,
             available_cross - item.outer_cross,
             :flow
-          ),
-        else: flex_cross_position(align, item.outer_cross, line_cross)
+          )
+
+        Map.has_key?(item, :alignment_baseline) ->
+          case item.alignment_baseline do
+            {:first, depth, above, _below} -> above - depth
+            {:last, depth, _above, below} -> line_cross - below - depth
+          end
+
+        true ->
+          box_alignment_offset(
+            align,
+            line_cross - item.outer_cross,
+            :maps.get(:flex_wrap, style, :nowrap) == :wrap_reverse
+          )
+      end
 
     case main_axis do
       :row ->
@@ -6408,20 +7471,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp flex_item_boxes(item, main_axis) do
+    FloatLayout.with_context(fn -> layout_flex_grid_item(item, main_axis) end)
+  end
+
+  defp layout_flex_grid_item(item, main_axis) do
     style = item.style
     padding = Map.get(style, :padding, edges(0.0))
     border_widths = Map.get(style, :border_widths, edges(0.0))
 
     result =
-      case :maps.get(:image, item, nil) do
+      case Map.get(item, :orthogonal_node) do
         nil ->
-          case :maps.get(:children, item, nil) do
-            nil -> flex_text_item_boxes(item, main_axis, style, padding, border_widths)
-            children -> flex_block_item_boxes(item, style, padding, border_widths, children)
+          case :maps.get(:image, item, nil) do
+            nil ->
+              case :maps.get(:children, item, nil) do
+                nil -> flex_text_item_boxes(item, main_axis, style, padding, border_widths)
+                children -> flex_block_item_boxes(item, style, padding, border_widths, children)
+              end
+
+            image ->
+              flex_image_item_boxes(item, main_axis, style, padding, border_widths, image)
           end
 
-        image ->
-          flex_image_item_boxes(item, main_axis, style, padding, border_widths, image)
+        source ->
+          inherited =
+            Map.take(style, [:grid_template_columns, :grid_template_rows, :column_gap, :row_gap])
+
+          raw = source._writing_source
+
+          sized_item =
+            if Map.get(source.style, :_writing_parent, :horizontal_tb) == :horizontal_tb,
+              do: item,
+              else: %{item | box_width: item.box_height, box_height: item.box_width}
+
+          raw_style = Map.merge(raw.style, inherited) |> nested_flex_item_style(sized_item)
+          raw = %{raw | style: raw_style}
+
+          source = %{
+            source
+            | _writing_source: raw,
+              style:
+                raw_style
+                |> Map.put(:_writing_orthogonal, true)
+                |> Map.put(
+                  :_writing_parent,
+                  Map.get(source.style, :_writing_parent, :horizontal_tb)
+                )
+          }
+
+          with {:ok, boxes, _} <- layout_block(source, item.x, item.y, item.box_width),
+               do: {:ok, boxes}
       end
 
     bounds = %{x: item.x, top: item.y, width: item.box_width, height: item.box_height}
@@ -6487,7 +7586,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       end
 
     {text_boxes, _content_height} =
-      inline_text_boxes(runs, style, content_x, content_top, max(content_width, 0.0), %{})
+      inline_text_boxes(
+        runs,
+        style,
+        content_x,
+        content_top,
+        max(content_width, 0.0),
+        layout_line_metadata(style, {:parallel_source, make_ref()})
+      )
 
     {:ok,
      case main_axis do
@@ -6596,7 +7702,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             content_x,
             content_top,
             max(content_width, 0.0),
-            %{}
+            layout_line_metadata(style, {:parallel_source, make_ref()})
           )
       end
 
@@ -6666,7 +7772,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           Enum.reduce(lines, 0.0, &max(&1.main, &2))
       end
 
-    if flex_main_axis(style) == :row and :maps.get(:flex_wrap, style, :nowrap) == :wrap,
+    if flex_main_axis(style) == :row and :maps.get(:flex_wrap, style, :nowrap) != :nowrap,
       do:
         rounded_content_size(
           style,
@@ -6697,6 +7803,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     start_offset = if reversed, do: free_space, else: 0.0
 
     case :maps.get(:justify_content, style, :flex_start) do
+      {safety, position} when safety in [:safe, :unsafe] ->
+        {box_alignment_offset({safety, position}, free_space, reversed), gap}
+
       :start ->
         {0.0, gap}
 
@@ -6728,14 +7837,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp flex_cross_position(align, item_outer_cross, line_cross) do
-    case align do
-      :flex_end -> max(line_cross - item_outer_cross, 0.0)
-      :center -> max((line_cross - item_outer_cross) / 2, 0.0)
-      _ -> 0.0
-    end
-  end
-
   defp flex_aligned_cross_box(item, align, line_cross, main_axis) do
     cross_property =
       case main_axis do
@@ -6746,7 +7847,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     # Flex stretch applies only when the computed cross size is auto.
     case {align, Map.get(item.style, cross_property)} do
       {:stretch, auto} when auto in [nil, :auto] ->
-        max(line_cross - flex_cross_margin_size(item.margin, main_axis), 0.0)
+        edges = flex_cross_box_size(item.style, main_axis)
+
+        resolved_content_size(
+          item.style,
+          cross_property,
+          line_cross,
+          max(line_cross - flex_cross_margin_size(item.margin, main_axis) - edges, 0.0)
+        ) + edges
 
       _ ->
         item.cross_box
@@ -8065,7 +9173,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             end
 
           parent_backgrounds =
-            case cell_backgrounds do
+            case if(Map.get(cell.style, :_empty_cell_hidden, false),
+                   do: nil,
+                   else: cell_backgrounds
+                 ) do
               nil ->
                 []
 
@@ -8241,7 +9352,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           widths == [] ->
             []
 
-          spacing == 0 ->
+          spacing == 0 and
+              not Enum.any?(cells, &Map.get(&1.cell.style, :_empty_cell_hidden, false)) ->
             [{0.0, row_width}]
 
           true ->
@@ -8254,7 +9366,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 )
               end)
 
-            cells = Enum.map(cells, &{&1.column, &1.colspan})
+            cells =
+              cells
+              |> Enum.reject(&Map.get(&1.cell.style, :_empty_cell_hidden, false))
+              |> Enum.map(&{&1.column, &1.colspan})
 
             empty_tracks =
               for index <- 0..(length(widths) - 1),
@@ -8347,8 +9462,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           height: max(height - border_widths.top - border_widths.bottom, 0.0)
         })
 
+      surface_style =
+        if Map.get(style, :_empty_cell_hidden, false),
+          do:
+            style
+            |> Map.put(:background_color, nil)
+            |> Map.put(:background_image, nil)
+            |> Map.put(:border_widths, edges(0.0)),
+          else: style
+
       cell_box =
-        table_cell_background_box(style, x, y - height, width, height, border_collapse)
+        table_cell_background_box(surface_style, x, y - height, width, height, border_collapse)
         |> tag_boxes(row_metadata)
         |> Enum.map(fn box ->
           box
@@ -9680,10 +10804,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     |> Enum.max(fn -> 0.0 end)
   end
 
-  # Cell source lines retain their own paragraph identity beneath atomic row paint.
-  defp table_cell_line_metadata(style, x, y) do
+  # Parallel and table source lines retain their paragraph identity beneath owner paint.
+  defp layout_line_metadata(style, identity) do
     %{
-      flow_id: {:table_cell_source, x, y},
+      flow_id: identity,
       fragment_lines: true,
       orphans: :maps.get(:orphans, style, 2),
       widows: :maps.get(:widows, style, 2),
@@ -9694,12 +10818,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_table_cell_content(children, style, x, y, width, available_height) do
     children = used_edge_children(children, style, width)
 
-    case inline_runs(children, style) do
+    case if(NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout.enabled?(style),
+           do: :columns,
+           else: inline_runs(children, style)
+         ) do
+      :columns ->
+        with {:ok, boxes, height} <-
+               layout_block_content(
+                 children,
+                 style,
+                 x,
+                 y,
+                 width,
+                 layout_line_metadata(style, {:table_cell_source, x, y})
+               ),
+             do: {:ok, boxes, y - height}
+
       {:ok, runs} ->
         runs = Enum.map(runs, &Map.put(&1, :_table_text, true))
 
         {boxes, content_height} =
-          inline_text_boxes(runs, style, x, y, width, table_cell_line_metadata(style, x, y))
+          inline_text_boxes(
+            runs,
+            style,
+            x,
+            y,
+            width,
+            layout_line_metadata(style, {:table_cell_source, x, y})
+          )
 
         {:ok, boxes, y - content_height}
 
@@ -9762,7 +10908,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp layout_table_cell_block(child, style, x, y, width, available_height) do
     case child do
       %{type: :inline_flow, children: children} ->
-        layout_inline_flow(children, style, x, y, width, table_cell_line_metadata(style, x, y))
+        layout_inline_flow(
+          children,
+          style,
+          x,
+          y,
+          width,
+          layout_line_metadata(style, {:table_cell_source, x, y})
+        )
 
       _ ->
         child_style = Map.fetch!(child, :style)
@@ -10571,6 +11724,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     runs =
       NativeElixirPdfUtilities.HtmlToPdf.InitialLetter.inherit_exclusion(runs, style, x, y, width)
 
+    runs =
+      FloatLayout.inherit_exclusions(runs, style, x, y, width, fn line ->
+        inline_line_height(line, style, width)
+      end)
+
     lines = prepared_lines || inline_lines(runs, width)
     lines = fit_hyphenation_fragmentainer(runs, lines, style, width)
 
@@ -10681,6 +11839,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       lines
       |> Enum.with_index()
       |> Enum.reduce({[], 0.0}, fn {line_runs, index}, {boxes, consumed_height} ->
+        {line_runs, x, width, clearance} = FloatLayout.paint_line(line_runs, x, width)
+        consumed_height = consumed_height + clearance
+
         line_runs =
           NativeElixirPdfUtilities.HtmlToPdf.TextSpacing.justify(
             line_runs,
@@ -13014,6 +14175,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp append_inline_atomic(lines, run, width) do
     current_line = List.last(lines) || []
 
+    current_line =
+      if NativeElixirPdfUtilities.HtmlToPdf.TextSpacing.empty_line?(current_line) and
+           Enum.any?(current_line, &Map.has_key?(&1, :_float_exclusion)) do
+        FloatLayout.fit_line(
+          current_line,
+          inline_run_width(run, width),
+          inline_line_height(current_line ++ [run], run.style, width)
+        )
+      else
+        current_line
+      end
+
+    lines = List.replace_at(lines, -1, current_line)
+
     # The containing inline context decides placement breaks. An atomic
     # control's editor white-space applies only to its own contents.
     outer_white_space =
@@ -13220,6 +14395,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
          else: run
 
     whitespace? = not preserve? and HtmlValidator.trim_ascii_whitespace(run.text) == ""
+
+    current_line =
+      if empty? and not whitespace? and
+           Enum.any?(current_line, &Map.has_key?(&1, :_float_exclusion)) do
+        text =
+          if emergency?,
+            do: List.first(UnicodeGrapheme.graphemes(run.text)) || "",
+            else: trim_trailing_inline_text(run.text)
+
+        FloatLayout.fit_line(
+          current_line,
+          text_width(text, run.style),
+          inline_line_height(current_line ++ [run], run.style, width)
+        )
+      else
+        current_line
+      end
+
+    lines = List.replace_at(lines, -1, current_line)
 
     cond do
       whitespace? and empty? ->
@@ -14425,7 +15619,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                          widths.(:max_content) + spacing * (count + 1)}
 
                   :inline_grid ->
+                    style = GridTracks.expand(style, nil, nil)
                     {:ok, items} = grid_items(children)
+                    items = Enum.map(items, &GridTracks.place_lines(&1, style))
+                    {items, style} = GridTracks.prepend_implicit(items, style)
                     placed = place_grid_items(items, style)
                     count = grid_axis_count(placed, style, :column)
                     tracks = grid_tracks(style, :column, count)
@@ -14437,7 +15634,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                       resolve_grid_columns(
                         tracks,
                         intrinsics,
-                        Enum.sum(intrinsics),
+                        nil,
                         grid_column_gap(style),
                         :flex_start
                       )
@@ -14503,8 +15700,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp measure_inline_block(run, available_width) do
     # Atomic inline layout has no page fragmentation, even when a valid
     # prepared descendant omitted inherited style transport fields.
-    HtmlTableValidator.with_layout_context(:surface, fn ->
-      do_measure_inline_block(run, available_width)
+    FloatLayout.with_context(fn ->
+      HtmlTableValidator.with_layout_context(:surface, fn ->
+        do_measure_inline_block(run, available_width)
+      end)
     end)
   end
 
@@ -15021,6 +16220,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   # Native gauge artwork shares the normal box path across inline, block, flex,
   # grid and positioned layout. The state is canonical validator output.
+  defp column_rule_boxes(style, x, y, height) do
+    width = Map.get(style, :column_rule_width, 2.25)
+    rule_style = Map.get(style, :column_rule_style, :none)
+
+    if width > 0 and rule_style not in [:none, :hidden] do
+      rule =
+        style
+        |> Map.put(:background_color, nil)
+        |> Map.put(:background_image, nil)
+        |> Map.put(:border_widths, %{top: 0.0, right: 0.0, bottom: 0.0, left: width})
+        |> Map.put(:border_styles, %{top: :none, right: :none, bottom: :none, left: rule_style})
+        |> Map.put(:border_colors, %{
+          top: nil,
+          right: nil,
+          bottom: nil,
+          left:
+            case Map.get(style, :column_rule_color, :current_color) do
+              :current_color -> style.color
+              color -> color
+            end
+        })
+        |> Map.put(:border_radius, 0.0)
+
+      background_box(rule, x - width / 2, y - height, width, height)
+    else
+      []
+    end
+  end
+
   defp background_box(style, x, y, width, height) do
     background_style =
       if Map.has_key?(style, :_range_state) and style.appearance == :auto do
@@ -15699,6 +16927,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             Map.put_new(
               box,
               :table_cell_flow,
+              Map.take(box, [:flow_id, :fragment_id, :orphans, :widows, :break_inside])
+            ),
+          else: box
+
+      box =
+        if Map.has_key?(metadata, :parallel_item_bounds) and Map.has_key?(box, :fragment_id),
+          do:
+            Map.put_new(
+              box,
+              :parallel_source_flow,
               Map.take(box, [:flow_id, :fragment_id, :orphans, :widows, :break_inside])
             ),
           else: box

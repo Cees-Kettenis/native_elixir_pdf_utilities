@@ -158,12 +158,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.WritingModeLayout do
       |> Map.put(:_writing_source, node)
       |> Map.put(
         :style,
-        logical_style(style, mode)
+        normalize_style(style, mode)
         |> Map.put(:_writing_parent, mode)
         |> Map.put(:_writing_orthogonal, true)
       )
     else
-      style = logical_style(style, mode)
+      style = normalize_style(style, mode)
 
       style =
         if mode == :horizontal_tb,
@@ -185,7 +185,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.WritingModeLayout do
     end
   end
 
-  defp logical_style(style, mode) do
+  @doc "Maps physical sizing and edges into a validated writing mode's logical layout plane."
+  @spec normalize_style(map(), atom()) :: map()
+  def normalize_style(style, mode) do
     pairs =
       if mode == :horizontal_tb,
         do: [],

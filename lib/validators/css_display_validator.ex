@@ -409,6 +409,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssDisplayValidator do
       :inline_table,
       :table_cell
     ] or Map.get(style, :_flow_root, false) or
+      match?(%{float: float} when float != :none, style) or
+      match?(%{column_count: count} when count != :auto, style) or
+      match?(%{column_width: width} when width != :auto, style) or
+      match?(%{column_span: :all}, style) or
       Map.get(style, :position, :static) in [:absolute, :fixed] or
       Map.get(style, :contain, []) != [] or Map.get(style, :_fieldset, false) or
       Map.has_key?(style, :embedded_document) or

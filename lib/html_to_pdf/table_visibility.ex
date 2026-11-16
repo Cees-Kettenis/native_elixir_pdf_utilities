@@ -9,14 +9,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableVisibility do
     collapsed? =
       Enum.any?(tracks.rows, fn row ->
         match?(%{row: %{style: %{visibility: :collapse}}}, row) or
-          match?(%{group_style: %{visibility: :collapse}}, row)
+          match?(%{group_style: %{visibility: :collapse}}, row) or
+          Map.get(row, :empty_surface_collapse, false)
       end) or Enum.any?(columns, &match?(%{visibility_collapse: true}, &1))
 
     if collapsed? do
       rows =
         Enum.map(tracks.rows, fn row ->
           Map.get(row.row.style, :visibility) == :collapse or
-            Map.get(row.group_style || %{}, :visibility) == :collapse
+            Map.get(row.group_style || %{}, :visibility) == :collapse or
+            Map.get(row, :empty_surface_collapse, false)
         end)
 
       {spacing, _} = tracks.spacing

@@ -167,7 +167,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   def resolve_scalars(style) do
     result =
       Enum.reduce_while(
-        [:z_index, :orphans, :widows, :order, :flex_grow, :flex_shrink],
+        [:z_index, :orphans, :widows, :order, :flex_grow, :flex_shrink, :column_count],
         {:ok, style},
         fn property, {:ok, result} ->
           case Map.get(result, property) do
