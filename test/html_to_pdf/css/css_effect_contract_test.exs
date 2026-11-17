@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectContractTest do
     CssCompositingValidator,
     CssEffectsValidator,
     CssMaskValidator,
+    CssMotionValidator,
     CssProjectionValidator,
     CssTransformValidator,
     SvgPathValidator
@@ -36,6 +37,79 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectContractTest do
        _root_font_size: 12.0,
        _root_line_height: 15.0
      }}
+  end
+
+  test "static geometry preparation shares declaring metrics and keeps actionable calculation failures",
+       %{style: style} do
+    assert {:ok, used} = CssProjectionValidator.prepare(style, "perspective", "2em")
+    assert {:ok, used} = CssMotionValidator.prepare(used, "offset-distance", "3em")
+    assert {:ok, used} = CssTransformValidator.individual(used, "translate", "1em 0")
+    assert {:ok, computed} = CssTransformValidator.compute_style(used)
+    assert computed.css_perspective == 24.0
+    assert computed.css_offset_distance == 36.0
+    assert computed.css_translate_metric_style.font_size == 12.0
+
+    for invalid <- [
+          %{css_perspective: {:css_length_math, {"foo(", false, :length}}},
+          %{css_offset_distance: {:css_position_math, "foo("}}
+        ] do
+      assert {:error, {:invalid_layout, diagnostic}} =
+               CssTransformValidator.compute_style(Map.merge(style, invalid))
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.source =~ "foo("
+      assert is_binary(diagnostic.message)
+    end
+  end
+
+  test "styled-tree admission rejects malformed compositing facts through their owning validator" do
+    for invalid <- [%{opacity: :bad}, %{mix_blend_mode: :Unknown}, %{background_blend_modes: []}] do
+      tree = %{
+        type: :document,
+        children: [
+          %{
+            type: :element,
+            tag: "div",
+            children: [],
+            style: Map.merge(%{display: :block}, invalid)
+          }
+        ]
+      }
+
+      assert {:error, {:invalid_layout, diagnostic}} =
+               NativeElixirPdfUtilities.Validators.HtmlValidator.prepare_layout_input(tree, [])
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.operation == :layout
+      assert diagnostic.source == "div"
+      assert diagnostic.message =~ "recompute styles"
+    end
+  end
+
+  test "optional scene dispatch still rejects each malformed prepared feature" do
+    for invalid <- [
+          %{css_filter: [{"invert", 2.0}]},
+          %{css_clip_path: :bad},
+          %{css_mask: :bad},
+          %{css_transform: :bad},
+          %{_css_3d_context: :bad},
+          %{css_offset_rotate: :bad}
+        ] do
+      tree = %{
+        type: :document,
+        children: [
+          %{
+            type: :element,
+            tag: "div",
+            children: [],
+            style: Map.merge(%{display: :block}, invalid)
+          }
+        ]
+      }
+
+      assert {:error, :invalid_layout} =
+               NativeElixirPdfUtilities.Validators.HtmlValidator.prepare_layout_input(tree, [])
+    end
   end
 
   test "homogeneous operations preserve independently specified three-dimensional points" do

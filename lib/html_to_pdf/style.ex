@@ -5509,10 +5509,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              {:ok, style} <- put_font_face(style, rules.cache),
              {:ok, style} <-
                NativeElixirPdfUtilities.Validators.CssTransformValidator.compute_style(style),
-             {:ok, style} <-
-               NativeElixirPdfUtilities.Validators.CssProjectionValidator.compute_style(style),
-             {:ok, style} <-
-               NativeElixirPdfUtilities.Validators.CssMotionValidator.compute_style(style),
              {:ok, style} <- MathLayoutValidator.compute_style(style),
              {:ok, style} <-
                if(declarations != [] or hints != [],

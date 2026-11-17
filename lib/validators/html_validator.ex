@@ -8287,6 +8287,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                not is_map_key(style, :_display_role) and not is_map_key(style, :_force_hidden) and
                not is_map_key(style, :isolation) and
                not is_map_key(style, :opacity) and not is_map_key(style, :mix_blend_mode) and
+               not is_map_key(style, :background_blend_modes) and
                not is_map_key(style, :_css_compositing_contexts) and
                not is_map_key(style, :contain) and not is_map_key(style, :_stacking_item) and
                not is_map_key(style, :overflow_x) and not is_map_key(style, :overflow_y) and
@@ -8497,17 +8498,48 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end
   end
 
+  # Most styled nodes have no scene properties. Their admission needs no
+  # effect/transform value work; authored facts still use each owning validator.
+  defp valid_css_scene_style?(style) do
+    case style do
+      style
+      when not is_map_key(style, :css_filter) and
+             not is_map_key(style, :css_backdrop_filter) and
+             not is_map_key(style, :css_clip_path) and
+             not is_map_key(style, :css_mask) and
+             not is_map_key(style, :css_transform) and
+             not is_map_key(style, :css_translate) and
+             not is_map_key(style, :css_rotate) and
+             not is_map_key(style, :css_scale) and
+             not is_map_key(style, :css_transform_box) and
+             not is_map_key(style, :transform_origin) and
+             not is_map_key(style, :css_transform_style) and
+             not is_map_key(style, :css_backface_visibility) and
+             not is_map_key(style, :_css_3d_context) and
+             not is_map_key(style, :css_perspective) and
+             not is_map_key(style, :css_perspective_origin) and
+             not is_map_key(style, :css_offset_path) and
+             not is_map_key(style, :css_offset_distance) and
+             not is_map_key(style, :css_offset_position) and
+             not is_map_key(style, :css_offset_anchor) and
+             not is_map_key(style, :css_offset_rotate) ->
+        true
+
+      _ ->
+        NativeElixirPdfUtilities.Validators.CssEffectsValidator.valid_style?(style) and
+          NativeElixirPdfUtilities.Validators.CssClipValidator.valid_style?(style) and
+          NativeElixirPdfUtilities.Validators.CssMaskValidator.valid_style?(style) and
+          NativeElixirPdfUtilities.Validators.CssTransformValidator.valid_style?(style) and
+          NativeElixirPdfUtilities.Validators.CssProjectionValidator.valid_style?(style) and
+          NativeElixirPdfUtilities.Validators.CssMotionValidator.valid_style?(style)
+    end
+  end
+
   defp valid_layout_style?(style) do
     # Collapsed edge metadata is prepared after input validation.
     # Incoming styled trees must not supply internal border calculations.
     is_map(style) and
-      NativeElixirPdfUtilities.Validators.CssCompositingValidator.valid_style?(style) and
-      NativeElixirPdfUtilities.Validators.CssEffectsValidator.valid_style?(style) and
-      NativeElixirPdfUtilities.Validators.CssClipValidator.valid_style?(style) and
-      NativeElixirPdfUtilities.Validators.CssMaskValidator.valid_style?(style) and
-      NativeElixirPdfUtilities.Validators.CssTransformValidator.valid_style?(style) and
-      NativeElixirPdfUtilities.Validators.CssProjectionValidator.valid_style?(style) and
-      NativeElixirPdfUtilities.Validators.CssMotionValidator.valid_style?(style) and
+      valid_css_scene_style?(style) and
       not Map.has_key?(style, :_collapsed_borders) and
       (:maps.get(:_image_map, style, nil) == nil or
          NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_model?(style._image_map)) and

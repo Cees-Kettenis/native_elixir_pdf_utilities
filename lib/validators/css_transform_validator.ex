@@ -37,8 +37,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
     end
   end
 
-  @doc "Captures declaring font/viewport metrics before explicit transform inheritance."
-  @spec compute_style(map()) :: {:ok, map()}
+  @doc "Freezes static transform, projection and motion geometry with the declaring font/viewport metrics."
+  @spec compute_style(map()) :: {:ok, map()} | :error | {:error, term()}
   def compute_style(style) do
     case style do
       style
@@ -46,7 +46,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
              not is_map_key(style, :css_translate) and
              not is_map_key(style, :css_rotate) and
              not is_map_key(style, :css_scale) and
-             not is_map_key(style, :transform_origin) ->
+             not is_map_key(style, :transform_origin) and
+             not is_map_key(style, :css_perspective) and
+             not is_map_key(style, :css_perspective_origin) and
+             not is_map_key(style, :css_offset_position) and
+             not is_map_key(style, :css_offset_anchor) and
+             not is_map_key(style, :css_offset_distance) ->
         {:ok, style}
 
       _ ->
@@ -54,14 +59,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
           Map.put(@individuals, "transform", {:css_transform, :css_transform_metric_style})
           |> Map.put("transform-origin", {:transform_origin, :transform_origin_metric_style})
 
-        {:ok,
-         Enum.reduce(fields, style, fn {property, {key, metric}}, style ->
-           value = Map.get(style, key, :none)
+        style =
+          Enum.reduce(fields, style, fn {property, {key, metric}}, style ->
+            value = Map.get(style, key, :none)
 
-           if value not in [:none, nil, {{:percent, 0.5}, {:percent, 0.5}}],
-             do: Map.put_new(style, metric, metric_style(style, property)),
-             else: style
-         end)}
+            if value not in [:none, nil, {{:percent, 0.5}, {:percent, 0.5}}],
+              do: Map.put_new(style, metric, metric_style(style, property)),
+              else: style
+          end)
+
+        with {:ok, style} <-
+               NativeElixirPdfUtilities.Validators.CssProjectionValidator.compute_style(style),
+             {:ok, style} <-
+               NativeElixirPdfUtilities.Validators.CssMotionValidator.compute_style(style),
+             do: {:ok, style}
     end
   end
 
