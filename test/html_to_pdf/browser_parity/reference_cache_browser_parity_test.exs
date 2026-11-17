@@ -15,7 +15,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReferenceCacheBrowserParityTest do
       System.get_env("BROWSER_PARITY_TOOLCHAIN", "contract-test")
     )
 
-    {:ok, _} = BrowserReferenceCache.start()
+    {:ok, cache} = BrowserReferenceCache.start()
+    # on_exit owns teardown after this test process has exited.
+    Process.unlink(cache)
 
     on_exit(fn ->
       BrowserReferenceCache.stop()

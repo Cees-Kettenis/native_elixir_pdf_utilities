@@ -92,8 +92,10 @@ jobs:
             deps
             _build
             priv/plts
-          key: mix-elixir-${{ steps.runtime.outputs.cache-key }}-${{ hashFiles('mix.lock') }}
+          # Parity must not claim the checks archive before Dialyzer saves its PLT.
+          key: mix-v2-${{ matrix.suite }}-elixir-${{ steps.runtime.outputs.cache-key }}-${{ hashFiles('mix.lock') }}
           restore-keys: |
+            mix-v2-${{ matrix.suite }}-elixir-${{ steps.runtime.outputs.cache-key }}-
             mix-elixir-${{ steps.runtime.outputs.cache-key }}-
 
       - name: Install dependencies

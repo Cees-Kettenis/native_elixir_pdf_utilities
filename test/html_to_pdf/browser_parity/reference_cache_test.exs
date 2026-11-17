@@ -16,7 +16,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserReferenceCacheTest do
     BrowserReferenceCache.stop()
     System.put_env("BROWSER_PARITY_CACHE", directory)
     System.put_env("BROWSER_PARITY_TOOLCHAIN", "cache-contract-image")
-    {:ok, _} = BrowserReferenceCache.start()
+    {:ok, cache} = BrowserReferenceCache.start()
+    # on_exit owns teardown after this test process has exited.
+    Process.unlink(cache)
 
     on_exit(fn ->
       BrowserReferenceCache.stop()
@@ -87,7 +89,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserReferenceCacheTest do
 
     BrowserReferenceCache.stop()
     System.put_env("BROWSER_PARITY_TOOLCHAIN", "another-image")
-    {:ok, _} = BrowserReferenceCache.start()
+    {:ok, cache} = BrowserReferenceCache.start()
+    Process.unlink(cache)
     refute BrowserReferenceCache.key(identity) == key
 
     tree = Path.join(context.directory, "dependencies")
@@ -146,7 +149,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserReferenceCacheTest do
     end
 
     File.touch!(Path.join(context.directory, "old.cache"), 1)
-    {:ok, _} = BrowserReferenceCache.start()
+    {:ok, cache} = BrowserReferenceCache.start()
+    Process.unlink(cache)
     refute File.exists?(Path.join(context.directory, "old.cache"))
     refute File.exists?(Path.join(context.directory, "interrupted.tmp"))
 

@@ -9,7 +9,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities do
   def decode(text, context) do
     case {text, context} do
       {text, context} when is_binary(text) and context in [:text, :attribute] ->
-        decode_text(text, context, [])
+        if :binary.match(text, "&") == :nomatch,
+          do: text,
+          else: decode_text(text, context, [])
     end
   end
 

@@ -134,7 +134,8 @@ defmodule NativeElixirPdfUtilities.Validators.TextShapingValidator do
   defp ascii_trigger?(text, cmap, selected) do
     case text do
       <<byte, rest::binary>> ->
-        MapSet.member?(selected, Map.get(cmap, byte)) or ascii_trigger?(rest, cmap, selected)
+        MapSet.member?(selected, :maps.get(byte, cmap, nil)) or
+          ascii_trigger?(rest, cmap, selected)
 
       "" ->
         false

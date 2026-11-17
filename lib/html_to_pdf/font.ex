@@ -666,7 +666,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       |> shape_ligatures(font, letter_spacing)
       |> String.to_charlist()
       |> Enum.map_reduce(-1, fn codepoint, maximum ->
-        glyph = Map.get(font.cmap, codepoint, 0)
+        glyph = :maps.get(codepoint, font.cmap, 0)
         {if(paint?, do: {codepoint, glyph}, else: glyph), max(glyph, maximum)}
       end)
 
@@ -674,7 +674,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
     measured =
       if paint? do
-        kerning = Map.get(font, :kerning, %{})
+        kerning = :maps.get(:kerning, font, %{})
 
         {advances, pending} =
           glyphs
@@ -692,7 +692,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
                   advances
 
                 {previous_codepoint, previous_glyph, previous_base} ->
-                  adjustment = Map.get(kerning, {previous_glyph, glyph_id}, 0)
+                  adjustment = :maps.get({previous_glyph, glyph_id}, kerning, 0)
 
                   combined =
                     if adjustment == 0,
@@ -723,12 +723,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       else
         # Scalar layout and Math measurements keep their existing compact
         # integer reduction; only callers requesting a paint plan own a list.
-        kerning = Map.get(font, :kerning, %{})
+        kerning = :maps.get(:kerning, font, %{})
 
         width =
           glyphs
           |> Enum.reduce({0, nil}, fn glyph_id, {acc, previous} ->
-            adjustment = Map.get(kerning, {previous, glyph_id}, 0)
+            adjustment = :maps.get({previous, glyph_id}, kerning, 0)
 
             width =
               if glyph_id < tuple_size(widths),

@@ -129,6 +129,11 @@ all ordinary checks. There are no browser test partitions. The existing
 cancellation and skipped-job reporting. The local matrix invokes the same full
 suite once per runtime and clears any inherited `MIX_TEST_PARTITION` value.
 
+Mix caches are owned separately by checks and parity jobs. Only the checks job
+creates the canonical dependency PLT under `_build/test/`; parity must not save
+an earlier archive under that same immutable key. Runtime and dependency-lock
+identities still control restoration and invalidation.
+
 | Task | Command |
 | --- | --- |
 | Complete host parity suite | `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity` |
