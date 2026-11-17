@@ -1,48 +1,13 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.MergeTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Merge
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
-  alias NativeElixirPdfUtilities.Validators.MergeValidator
 
   @fixture_directory Paths.fixture("pdf_reader")
-
-  setup do
-    original_limits = Limits.effective()
-    on_exit(fn -> Limits.install(original_limits) end)
-    :ok
-  end
-
-  defp merge_pdf(objects, root_id \\ 1) do
-    header = "%PDF-1.7\n"
-
-    {body, offsets} =
-      Enum.reduce(objects, {header, %{}}, fn {id, source}, {body, offsets} ->
-        rendered = "#{id} 0 obj\n#{source}\nendobj\n"
-        {body <> rendered, Map.put(offsets, id, byte_size(body))}
-      end)
-
-    maximum = Enum.max(Map.keys(offsets))
-    xref_offset = byte_size(body)
-
-    entries =
-      for object <- 0..maximum do
-        case Map.get(offsets, object) do
-          nil -> "0000000000 " <> if(object == 0, do: "65535 f \n", else: "00000 f \n")
-          offset -> String.pad_leading(Integer.to_string(offset), 10, "0") <> " 00000 n \n"
-        end
-      end
-
-    body <>
-      "xref\n0 #{maximum + 1}\n" <>
-      Enum.join(entries) <>
-      "trailer\n<< /Size #{maximum + 1} /Root #{root_id} 0 R >>\n" <>
-      "startxref\n#{xref_offset}\n%%EOF\n"
-  end
 
   test "rejects an empty input list" do
     assert {:error,
@@ -104,6 +69,45 @@ defmodule NativeElixirPdfUtilities.MergeTest do
                operation: :merge,
                module: NativeElixirPdfUtilities.Merge
              }}} = Merge.merge([encrypted])
+  end
+
+  test "adds input context to reader failures without replacing their diagnostic fields" do
+    source = File.read!(Path.join(@fixture_directory, "classic-xref.pdf"))
+    assert {:error, {reason, original}} = Reader.read_validated("not a PDF")
+    assert {:error, {^reason, diagnostic}} = Merge.merge([source, "not a PDF"])
+
+    assert diagnostic ==
+             Map.merge(original, %{operation: :merge, module: Merge, source: "merge input 2"})
+  end
+
+  test "merges xref-stream and object-stream PDFs through the shared reader" do
+    xref_stream = File.read!(Path.join(@fixture_directory, "xref-stream.pdf"))
+    object_stream = File.read!(Path.join(@fixture_directory, "object-stream.pdf"))
+
+    assert {:ok, merged} = Merge.merge([xref_stream, object_stream])
+    assert {:ok, document} = Reader.read(merged)
+    assert length(document.pages) == 2
+
+    assert Text.extract(merged, layout: false) ==
+             {:ok, "Reader milestone fixture\nReader milestone fixture"}
+  end
+end
+
+defmodule NativeElixirPdfUtilities.MergeGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Validators.MergeValidator
+
+  @fixture_directory Paths.fixture("pdf_reader")
+
+  setup do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    :ok
   end
 
   test "rejects excessive merge work before parsing any input" do
@@ -242,15 +246,6 @@ defmodule NativeElixirPdfUtilities.MergeTest do
         assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
       end
     end
-  end
-
-  test "adds input context to reader failures without replacing their diagnostic fields" do
-    source = File.read!(Path.join(@fixture_directory, "classic-xref.pdf"))
-    assert {:error, {reason, original}} = Reader.read_validated("not a PDF")
-    assert {:error, {^reason, diagnostic}} = Merge.merge([source, "not a PDF"])
-
-    assert diagnostic ==
-             Map.merge(original, %{operation: :merge, module: Merge, source: "merge input 2"})
   end
 
   test "renumbers pages and injects inherited page attributes" do
@@ -744,15 +739,30 @@ defmodule NativeElixirPdfUtilities.MergeTest do
     assert {:error, {:invalid_pdf_input, _diagnostic}} = Merge.merge([cyclic_pages])
   end
 
-  test "merges xref-stream and object-stream PDFs through the shared reader" do
-    xref_stream = File.read!(Path.join(@fixture_directory, "xref-stream.pdf"))
-    object_stream = File.read!(Path.join(@fixture_directory, "object-stream.pdf"))
+  defp merge_pdf(objects, root_id \\ 1) do
+    header = "%PDF-1.7\n"
 
-    assert {:ok, merged} = Merge.merge([xref_stream, object_stream])
-    assert {:ok, document} = Reader.read(merged)
-    assert length(document.pages) == 2
+    {body, offsets} =
+      Enum.reduce(objects, {header, %{}}, fn {id, source}, {body, offsets} ->
+        rendered = "#{id} 0 obj\n#{source}\nendobj\n"
+        {body <> rendered, Map.put(offsets, id, byte_size(body))}
+      end)
 
-    assert Text.extract(merged, layout: false) ==
-             {:ok, "Reader milestone fixture\nReader milestone fixture"}
+    maximum = Enum.max(Map.keys(offsets))
+    xref_offset = byte_size(body)
+
+    entries =
+      for object <- 0..maximum do
+        case Map.get(offsets, object) do
+          nil -> "0000000000 " <> if(object == 0, do: "65535 f \n", else: "00000 f \n")
+          offset -> String.pad_leading(Integer.to_string(offset), 10, "0") <> " 00000 n \n"
+        end
+      end
+
+    body <>
+      "xref\n0 #{maximum + 1}\n" <>
+      Enum.join(entries) <>
+      "trailer\n<< /Size #{maximum + 1} /Root #{root_id} 0 R >>\n" <>
+      "startxref\n#{xref_offset}\n%%EOF\n"
   end
 end

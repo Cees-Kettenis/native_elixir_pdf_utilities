@@ -2,7 +2,7 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixtu
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("open_type_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Font}

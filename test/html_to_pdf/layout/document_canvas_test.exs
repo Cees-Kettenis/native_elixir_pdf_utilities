@@ -1,6 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentCanvasTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.Limits
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     EmbeddedViewport,
@@ -11,12 +10,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentCanvasTest do
   }
 
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ResourceValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "root background wins the canvas while the body paints its box" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
@@ -84,6 +77,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentCanvasTest do
       assert :ok = ResourceValidator.validate_context(small.context)
       assert ResourceContext.current() == parent
     end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentCanvasGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    HtmlParser,
+    Layout,
+    ResourceContext,
+    Style
+  }
+
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "malformed public prepared canvas and canvas-box limits return diagnostics" do

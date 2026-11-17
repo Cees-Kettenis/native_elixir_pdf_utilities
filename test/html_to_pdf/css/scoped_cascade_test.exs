@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ScopedCascadeTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
 
   # Cascade 6, 6 September 2024, section 2.5; Nesting 1, 22 January 2026, section 3.3.

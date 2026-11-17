@@ -1,20 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
-  use ExUnit.Case, async: false
-
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Validators.{
-    HtmlValidator,
-    SvgConverterValidator,
     SvgFilterWorkValidator
   }
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
 
   test "unresolvable stylesheet geometry keeps conservative filter-work refusal" do
     alias NativeElixirPdfUtilities.Validators.{SvgSceneValidator, SvgValidator}
@@ -37,6 +26,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsTest do
       assert diagnostic.message =~ "CSS filter declarations" and
                diagnostic.message =~ "max_raster_work"
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterWorkLimitsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    SvgConverterValidator,
+    SvgFilterWorkValidator
+  }
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
   end
 
   test "the original small-source, large-radius trigger is rejected without native execution" do

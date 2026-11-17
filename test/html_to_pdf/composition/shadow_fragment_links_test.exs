@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ShadowFragmentLinksTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}

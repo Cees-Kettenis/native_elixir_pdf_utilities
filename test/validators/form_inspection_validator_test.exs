@@ -1,4 +1,56 @@
 defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidatorTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.FormInspectionValidator
+
+  setup do
+    original = Limits.effective()
+
+    %{limits: original}
+  end
+
+  test "loaded-font reuse accepts only identical descriptors and does not cache a failed load" do
+    FormInspectionValidator.with_active_scope(fn ->
+      assert {:error, {:unsupported_form, %{}}} =
+               FormInspectionValidator.loaded_fonts([:first], fn ->
+                 {:error, {:unsupported_form, %{}}}
+               end)
+
+      assert {:ok, [:one]} =
+               FormInspectionValidator.loaded_fonts([:first], fn -> {:ok, [:one]} end)
+
+      assert {:ok, [:one]} =
+               FormInspectionValidator.loaded_fonts([:first], fn ->
+                 flunk("identical fonts should reuse the checked faces")
+               end)
+
+      assert {:ok, [:two]} =
+               FormInspectionValidator.loaded_fonts([:second], fn -> {:ok, [:two]} end)
+    end)
+  end
+
+  test "nested foreign documents cannot reuse font bytes and scopes restore after exceptions" do
+    object = fn bytes -> %{value: %{"Length" => byte_size(bytes)}, stream: bytes} end
+    first = %{objects: %{{1, 0} => object.("one")}}
+    second = %{objects: %{{1, 0} => object.("two")}}
+
+    FormInspectionValidator.with_scope(first, fn ->
+      assert {:ok, "one"} = FormInspectionValidator.decoded_font(first, {:ref, {1, 0}})
+
+      assert_raise RuntimeError, "scope failure", fn ->
+        FormInspectionValidator.with_scope(second, fn ->
+          assert {:ok, "two"} = FormInspectionValidator.decoded_font(second, {:ref, {1, 0}})
+          raise "scope failure"
+        end)
+      end
+
+      assert {:ok, "one"} = FormInspectionValidator.decoded_font(first, {:ref, {1, 0}})
+      assert {:error, _} = FormInspectionValidator.decoded_font(first, {:ref, {999, 0}})
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidatorGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.FormInspectionValidator
@@ -73,45 +125,5 @@ defmodule NativeElixirPdfUtilities.Validators.FormInspectionValidatorTest do
              FormInspectionValidator.with_scope(document, fn ->
                FormInspectionValidator.decoded_font(document, {:ref, {1, 0}})
              end)
-  end
-
-  test "loaded-font reuse accepts only identical descriptors and does not cache a failed load" do
-    FormInspectionValidator.with_active_scope(fn ->
-      assert {:error, {:unsupported_form, %{}}} =
-               FormInspectionValidator.loaded_fonts([:first], fn ->
-                 {:error, {:unsupported_form, %{}}}
-               end)
-
-      assert {:ok, [:one]} =
-               FormInspectionValidator.loaded_fonts([:first], fn -> {:ok, [:one]} end)
-
-      assert {:ok, [:one]} =
-               FormInspectionValidator.loaded_fonts([:first], fn ->
-                 flunk("identical fonts should reuse the checked faces")
-               end)
-
-      assert {:ok, [:two]} =
-               FormInspectionValidator.loaded_fonts([:second], fn -> {:ok, [:two]} end)
-    end)
-  end
-
-  test "nested foreign documents cannot reuse font bytes and scopes restore after exceptions" do
-    object = fn bytes -> %{value: %{"Length" => byte_size(bytes)}, stream: bytes} end
-    first = %{objects: %{{1, 0} => object.("one")}}
-    second = %{objects: %{{1, 0} => object.("two")}}
-
-    FormInspectionValidator.with_scope(first, fn ->
-      assert {:ok, "one"} = FormInspectionValidator.decoded_font(first, {:ref, {1, 0}})
-
-      assert_raise RuntimeError, "scope failure", fn ->
-        FormInspectionValidator.with_scope(second, fn ->
-          assert {:ok, "two"} = FormInspectionValidator.decoded_font(second, {:ref, {1, 0}})
-          raise "scope failure"
-        end)
-      end
-
-      assert {:ok, "one"} = FormInspectionValidator.decoded_font(first, {:ref, {1, 0}})
-      assert {:error, _} = FormInspectionValidator.decoded_font(first, {:ref, {999, 0}})
-    end)
   end
 end

@@ -1,8 +1,8 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, PdfWriter, Style}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.WriterValidator
@@ -84,40 +84,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderTest do
         assert text =~ caption
       end
     end
-  end
-
-  test "source contour piece work uses shared limits and invalid surface metadata has a diagnostic" do
-    previous = Limits.effective()
-
-    failure =
-      try do
-        Limits.install(Map.put(previous, :max_work, 1))
-
-        HtmlToPdf.render(
-          "<div style='width:100pt;height:30pt;background:#eef;border:2px dashed red;border-radius:8px'>Real</div>",
-          forms: :static
-        )
-      after
-        Limits.install(previous)
-      end
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = failure
-
-    assert diagnostic.reason == :resource_limit_exceeded and
-             diagnostic.message =~ "max_work"
-
-    assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
-
-    invalid = %{
-      type: :rect,
-      css_border_surface: %{
-        alpha: 0.3,
-        clip: %{x: 0, y: 0, width: 1, height: 1, border_radius: 0.5}
-      }
-    }
-
-    assert {:error, {_reason, diagnostic}} = WriterValidator.validate_native_boxes([invalid])
-    assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
   end
 
   test "short clipped native border hosts remain valid without zero-length PDF dash arrays" do
@@ -211,5 +177,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderTest do
     assert [left, bottom, right, top] = rect
     assert left >= 0 and bottom >= 0 and right > left and top > bottom
     assert pdf =~ "https://example.com/actual-negative-artwork"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CurvedBorderGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Validators.WriterValidator
+
+  test "source contour piece work uses shared limits and invalid surface metadata has a diagnostic" do
+    previous = Limits.effective()
+
+    failure =
+      try do
+        Limits.install(Map.put(previous, :max_work, 1))
+
+        HtmlToPdf.render(
+          "<div style='width:100pt;height:30pt;background:#eef;border:2px dashed red;border-radius:8px'>Real</div>",
+          forms: :static
+        )
+      after
+        Limits.install(previous)
+      end
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = failure
+
+    assert diagnostic.reason == :resource_limit_exceeded and
+             diagnostic.message =~ "max_work"
+
+    assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
+
+    invalid = %{
+      type: :rect,
+      css_border_surface: %{
+        alpha: 0.3,
+        clip: %{x: 0, y: 0, width: 1, height: 1, border_radius: 0.5}
+      }
+    }
+
+    assert {:error, {_reason, diagnostic}} = WriterValidator.validate_native_boxes([invalid])
+    assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
   end
 end

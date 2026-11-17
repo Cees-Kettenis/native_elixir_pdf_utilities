@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     HtmlParser,
@@ -12,7 +12,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
   }
 
   alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
-  alias NativeElixirPdfUtilities.Limits
 
   @fixture Paths.fixture("html_to_pdf/browser_parity/html_table_span_layered_backgrounds.html")
 
@@ -21,15 +20,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
     {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
     {:ok, layout} = Layout.layout(styled, page_size: {240, 160}, margin: 12)
     {:ok, layout: layout}
-  end
-
-  defp artwork(boxes) do
-    Enum.flat_map(boxes, fn box ->
-      case box do
-        %{boxes: children} -> [box | artwork(children)]
-        _ -> [box]
-      end
-    end)
   end
 
   test "page consumption preserves source text exactly once and repeats headers", %{
@@ -258,6 +248,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentTest do
     assert diagnostic.stage == :pdf
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.WriterValidator
     assert diagnostic.message =~ "writer"
+  end
+
+  defp artwork(boxes) do
+    Enum.flat_map(boxes, fn box ->
+      case box do
+        %{boxes: children} -> [box | artwork(children)]
+        _ -> [box]
+      end
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellPageFragmentGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    HtmlParser,
+    Style,
+    Layout
+  }
+
+  alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
+  alias NativeElixirPdfUtilities.Limits
+
+  @fixture Paths.fixture("html_to_pdf/browser_parity/html_table_span_layered_backgrounds.html")
+
+  setup do
+    {:ok, dom} = HtmlParser.parse_document_detailed(File.read!(@fixture))
+    {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    {:ok, layout} = Layout.layout(styled, page_size: {240, 160}, margin: 12)
+    {:ok, layout: layout}
   end
 
   test "page-fragment quota precedes artwork copying", %{layout: layout} do

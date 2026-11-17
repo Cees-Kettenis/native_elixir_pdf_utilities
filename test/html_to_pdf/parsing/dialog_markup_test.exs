@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.DialogMarkupTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}

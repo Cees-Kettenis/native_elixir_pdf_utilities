@@ -1,15 +1,12 @@
 defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Style}
 
   alias NativeElixirPdfUtilities.Validators.{
     CssSyntaxValidator,
-    HtmlCssSourceValidator,
-    HtmlValidator
+    HtmlCssSourceValidator
   }
-
-  alias NativeElixirPdfUtilities.Limits
 
   # CSS Syntax 3, 1 October 2026, sections 4.3 and 5.5. These authored
   # expectations do not use the production parser to construct a reference.
@@ -116,7 +113,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidatorTest do
     assert {:ok, [rule]} = CssParser.parse("p{color:red")
     assert rule.declarations == [{"color", "red"}]
   end
+end
 
+defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssSyntaxValidator,
+    HtmlCssSourceValidator,
+    HtmlValidator
+  }
+
+  alias NativeElixirPdfUtilities.Limits
+
+  # CSS Syntax 3, 1 October 2026, sections 4.3 and 5.5. These authored
+  # expectations do not use the production parser to construct a reference.
   test "component nesting is bounded independently of CSS byte length" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)

@@ -1066,15 +1066,24 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     :erts_debug.flat_size(term) * :erlang.system_info(:wordsize) + :erlang.external_size(term)
   end
 
+  @doc "Admits one cache entry before its value is copied into the shared cache process."
+  @spec cache_entry_size(tuple()) :: non_neg_integer() | nil
+  def cache_entry_size(entry) do
+    bytes = cache_bytes(entry)
+    if bytes <= Limits.get(:max_cache_bytes), do: bytes
+  end
+
   @doc false
   @spec cache_evictions([tuple()], pos_integer(), Limits.key()) :: [term()]
-  def cache_evictions(entries, maximum_entries, byte_limit) do
+  @spec cache_evictions([tuple()], pos_integer(), Limits.key(), (tuple() -> non_neg_integer())) ::
+          [term()]
+  def cache_evictions(entries, maximum_entries, byte_limit, size_of \\ &cache_bytes/1) do
     # Both cache formats put the insertion sequence last and their key first.
     {_retained, _bytes, evicted} =
       entries
       |> Enum.sort_by(&elem(&1, tuple_size(&1) - 1), :desc)
       |> Enum.reduce({0, 0, []}, fn entry, {count, bytes, evicted} ->
-        size = cache_bytes(entry)
+        size = size_of.(entry)
 
         case count < maximum_entries and bytes + size <= Limits.get(byte_limit) do
           true -> {count + 1, bytes + size, evicted}

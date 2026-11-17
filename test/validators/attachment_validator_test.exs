@@ -1,17 +1,12 @@
 defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Attachments, HtmlToPdf, Limits}
-  alias NativeElixirPdfUtilities.Pdf.{Reader, IncrementalWriter}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Attachments, HtmlToPdf}
 
   alias NativeElixirPdfUtilities.Validators.{
-    AttachmentValidator,
-    MimeValidator,
-    ModificationValidator
+    MimeValidator
   }
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     {:ok, pdf} = HtmlToPdf.render("<p>Attachment tests</p>")
     {:ok, attached} = Attachments.embed(pdf, [%{filename: "one.txt", bytes: "one"}])
     %{pdf: pdf, attached: attached}
@@ -49,6 +44,26 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorTest do
 
     assert {:ok, "application/pdf"} =
              MimeValidator.prepare("%PDF-1.7", "a.pdf", "application/octet-stream")
+  end
+end
+
+defmodule NativeElixirPdfUtilities.AttachmentValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Attachments, HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Pdf.{Reader, IncrementalWriter}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    AttachmentValidator,
+    MimeValidator,
+    ModificationValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, pdf} = HtmlToPdf.render("<p>Attachment tests</p>")
+    {:ok, attached} = Attachments.embed(pdf, [%{filename: "one.txt", bytes: "one"}])
+    %{pdf: pdf, attached: attached}
   end
 
   test "bounded ZIP metadata rejects ambiguous, forged and truncated directories" do

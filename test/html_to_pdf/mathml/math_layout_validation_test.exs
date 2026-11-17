@@ -1,19 +1,15 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, ResourceContext}
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
-    MathLayoutValidator,
-    MathPaintValidator,
-    MathTableValidator
+    MathPaintValidator
   }
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
     {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
 
@@ -27,47 +23,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     }
 
     {:ok, style: style, registry: registry}
-  end
-
-  defp node(tag, children, style, attributes \\ %{}) do
-    %{
-      type: :element,
-      namespace: :mathml,
-      tag: tag,
-      children: children,
-      attributes: attributes,
-      style: style
-    }
-  end
-
-  defp token(text, style), do: node("mn", [%{type: :text, text: text, style: style}], style)
-
-  defp measured(html) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
-      assert {:ok, dom} = HtmlParser.parse_detailed(html)
-
-      assert {:ok, %{children: [root]}} =
-               Style.compute_detailed(dom, system_font_discovery: false)
-
-      root.style._math_box
-    end)
-  end
-
-  defp document(html) do
-    budget = HtmlValidator.new_image_budget()
-
-    ResourceContext.run([], budget, fn _ ->
-      assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
-
-      assert {:ok, document} =
-               HtmlToPdf.prepare_document(
-                 dom,
-                 [page_size: {180, 120}, margin: 10, system_font_discovery: false],
-                 budget
-               )
-
-      document
-    end)
   end
 
   test "Math page markers reject malformed pagination geometry and clipped markers vanish" do
@@ -136,6 +91,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     assert diagnostic.message =~ "bounded placed geometry"
     assert {:error, {_, diagnostic}} = MathPaintValidator.prepare_flow_boxes([nil], 180, 120)
     assert diagnostic.message =~ "typed layout boxes"
+  end
+
+  test "invalid positioned math descendants retain the child diagnostic" do
+    assert {:error, {reason, diagnostic}} =
+             HtmlToPdf.render(
+               "<math><mrow style='position:absolute;left:10pt;top:10pt'><mn>à</mn></mrow></math>",
+               system_font_discovery: false
+             )
+
+    assert diagnostic.reason == reason and diagnostic.stage == :layout
+    assert diagnostic.operation == :measure_math and diagnostic.source == "à"
+    assert diagnostic.message =~ "combining"
+  end
+
+  defp document(html) do
+    budget = HtmlValidator.new_image_budget()
+
+    ResourceContext.run([], budget, fn _ ->
+      assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+
+      assert {:ok, document} =
+               HtmlToPdf.prepare_document(
+                 dom,
+                 [page_size: {180, 120}, margin: 10, system_font_discovery: false],
+                 budget
+               )
+
+      document
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    MathLayoutValidator,
+    MathPaintValidator,
+    MathTableValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+    style = %{
+      display: :block,
+      font_size: 20,
+      font_face: font,
+      color: {0, 0, 0},
+      line_height: 24,
+      math_style: :compact
+    }
+
+    {:ok, style: style, registry: registry}
   end
 
   test "native Math paint fails at the selected-face glyph boundary and propagates nested errors" do
@@ -611,15 +627,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutValidationTest do
     end
   end
 
-  test "invalid positioned math descendants retain the child diagnostic" do
-    assert {:error, {reason, diagnostic}} =
-             HtmlToPdf.render(
-               "<math><mrow style='position:absolute;left:10pt;top:10pt'><mn>à</mn></mrow></math>",
-               system_font_discovery: false
-             )
+  defp node(tag, children, style, attributes \\ %{}) do
+    %{
+      type: :element,
+      namespace: :mathml,
+      tag: tag,
+      children: children,
+      attributes: attributes,
+      style: style
+    }
+  end
 
-    assert diagnostic.reason == reason and diagnostic.stage == :layout
-    assert diagnostic.operation == :measure_math and diagnostic.source == "à"
-    assert diagnostic.message =~ "combining"
+  defp token(text, style), do: node("mn", [%{type: :text, text: text, style: style}], style)
+
+  defp measured(html) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+
+      assert {:ok, %{children: [root]}} =
+               Style.compute_detailed(dom, system_font_discovery: false)
+
+      root.style._math_box
+    end)
   end
 end

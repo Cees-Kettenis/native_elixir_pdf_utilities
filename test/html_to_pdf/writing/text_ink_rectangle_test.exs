@@ -1,8 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TextInkRectangleTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.FontValidator
-  alias NativeElixirPdfUtilities.Limits
 
   setup do
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
@@ -38,41 +37,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextInkRectangleTest do
              FontValidator.prepare_text_ink_rectangle(Map.put(box, :glyph_ids, ids))
 
     assert selected_right > kerned_right
-  end
-
-  test "malformed coordinate and spacing requests diagnose before geometry", %{font: font} do
-    box = %{text: "A", font_face: font, font_size: 12.0, x: 0.0, y: 0.0}
-
-    for invalid <- [
-          Map.delete(box, :x),
-          %{box | x: :bad},
-          Map.put(box, :letter_spacing, :bad),
-          Map.put(box, :letter_spacing, 1.0e20),
-          Map.put(box, :bidi_levels, [127]),
-          Map.put(box, :glyph_basis, {1, 0, 0, 0}),
-          Map.put(box, :glyph_basis, nil),
-          Map.put(box, :word_spacing, :bad),
-          Map.put(box, :glyph_ids, [Map.fetch!(font.cmap, ?A) | :bad]),
-          Map.put(box, :glyph_ids, [])
-        ] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               FontValidator.prepare_text_ink_rectangle(invalid)
-
-      assert diagnostic.stage == :font
-      assert diagnostic.module == FontValidator
-      assert diagnostic.operation == :measure_child
-      assert diagnostic.source == "A"
-      assert diagnostic.message =~ "bounded point geometry"
-    end
-
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FontValidator.prepare_text_ink_rectangle(box)
-
-    assert diagnostic.stage == :font and diagnostic.reason == :resource_limit_exceeded
   end
 
   test "selected glyph bases rotate bounds and advances while synthetic shear follows the same basis",
@@ -115,5 +79,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextInkRectangleTest do
     # CSS positions quantize the intervening advance in 1/64 CSS pixels;
     # explicit Math selections retain their design-unit advance.
     assert_in_delta raw_top, actual_top, 0.75 / 64
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TextInkRectangleGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :italic, registry)
+    {:ok, font: font}
+  end
+
+  test "malformed coordinate and spacing requests diagnose before geometry", %{font: font} do
+    box = %{text: "A", font_face: font, font_size: 12.0, x: 0.0, y: 0.0}
+
+    for invalid <- [
+          Map.delete(box, :x),
+          %{box | x: :bad},
+          Map.put(box, :letter_spacing, :bad),
+          Map.put(box, :letter_spacing, 1.0e20),
+          Map.put(box, :bidi_levels, [127]),
+          Map.put(box, :glyph_basis, {1, 0, 0, 0}),
+          Map.put(box, :glyph_basis, nil),
+          Map.put(box, :word_spacing, :bad),
+          Map.put(box, :glyph_ids, [Map.fetch!(font.cmap, ?A) | :bad]),
+          Map.put(box, :glyph_ids, [])
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               FontValidator.prepare_text_ink_rectangle(invalid)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.module == FontValidator
+      assert diagnostic.operation == :measure_child
+      assert diagnostic.source == "A"
+      assert diagnostic.message =~ "bounded point geometry"
+    end
+
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FontValidator.prepare_text_ink_rectangle(box)
+
+    assert diagnostic.stage == :font and diagnostic.reason == :resource_limit_exceeded
   end
 end

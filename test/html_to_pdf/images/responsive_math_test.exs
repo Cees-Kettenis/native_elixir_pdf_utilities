@@ -3,7 +3,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveMathTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Validators.{PrintMediaValidator, ResponsiveImageValidator}
   @context %{width: 800.0, height: 600.0, density: 1.0, type: :print}

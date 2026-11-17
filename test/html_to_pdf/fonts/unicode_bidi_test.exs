@@ -1,14 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.UnicodeBidiTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeBidi
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.TestSupport.Paths
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "compact official Unicode 17 cases retain independent levels and visual order" do
     fixture =
@@ -82,6 +75,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.UnicodeBidiTest do
     [letter] = Enum.filter(resolved.records, &(&1.codepoint == ?A))
     assert letter.level == 124
     assert Enum.all?(resolved.levels, &(&1 in 0..126))
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.UnicodeBidiGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeBidi
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "invalid direction, text and depleted work return actionable diagnostics" do

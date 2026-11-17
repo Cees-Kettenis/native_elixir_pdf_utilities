@@ -4,12 +4,12 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgLinkTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf"), limits: limits}
   end
 

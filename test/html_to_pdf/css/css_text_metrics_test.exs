@@ -1,10 +1,9 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextMetricsTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
-  alias NativeElixirPdfUtilities.Validators.{HtmlLineBreakValidator, HtmlValidator}
-  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{HtmlLineBreakValidator}
   @font Paths.fixture("html_to_pdf/browser_parity/assets/cjk-ruby-fixture.ttf")
   @fonts [%{family: "CJK Ruby Fixture", path: @font}]
 
@@ -35,25 +34,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextMetricsTest do
     assert diagnostic.stage == :layout
     assert diagnostic.operation == :line_break
     assert diagnostic.message =~ "boolean"
-  end
-
-  test "preserved-space traversal shares the render text work budget" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_work, 10))
-
-    assert {:ok, _} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlLineBreakValidator.opportunities("A  B")
-             end)
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlLineBreakValidator.opportunities("A  B", true)
-             end)
-
-    assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_work"
   end
 
   test "alphabetic numeric hyphens retain Unicode and complete-grapheme opportunities" do
@@ -126,5 +106,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextMetricsTest do
       assert lines == expected
       assert Enum.map_join(text, & &1.text) == Regex.replace(~r/<[^>]+>/, content, "")
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextMetricsGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Validators.{HtmlLineBreakValidator, HtmlValidator}
+  alias NativeElixirPdfUtilities.Limits
+
+  test "preserved-space traversal shares the render text work budget" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(Map.put(limits, :max_work, 10))
+
+    assert {:ok, _} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlLineBreakValidator.opportunities("A  B")
+             end)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlLineBreakValidator.opportunities("A  B", true)
+             end)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.message =~ "max_work"
   end
 end

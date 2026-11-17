@@ -311,20 +311,29 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
   end
 
   defp literals(state, count, config) do
-    if count == 0 do
-      {state, config}
-    else
-      {domain, state} = consume(state, config.literal)
-      mode = elem(config.modes, domain.type)
-      lookup = BrotliData.context()
+    case {count, config.literal, config.literal_trees} do
+      {0, _, _} ->
+        {state, config}
 
-      context =
-        :binary.at(lookup, mode * 512 + state.prev1) |||
-          :binary.at(lookup, mode * 512 + 256 + state.prev2)
+      {_, %{count: 1}, {{:single, value}}} ->
+        # One admitted tree makes every context select this same literal.
+        # Its symbols and the single block type consume no stream bits.
+        size = min(count, 256 - state.used)
+        state = append_chunk(state, :binary.copy(<<value>>, size))
+        literals(state, count - size, config)
 
-      tree = elem(config.literal_map, domain.type * 64 + context)
-      {value, state} = symbol(state, elem(config.literal_trees, tree))
-      literals(append(state, value), count - 1, %{config | literal: domain})
+      _ ->
+        {domain, state} = consume(state, config.literal)
+        mode = elem(config.modes, domain.type)
+        lookup = BrotliData.context()
+
+        context =
+          :binary.at(lookup, mode * 512 + state.prev1) |||
+            :binary.at(lookup, mode * 512 + 256 + state.prev2)
+
+        tree = elem(config.literal_map, domain.type * 64 + context)
+        {value, state} = symbol(state, elem(config.literal_trees, tree))
+        literals(append(state, value), count - 1, %{config | literal: domain})
     end
   end
 
@@ -648,8 +657,51 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
 
   defp append_bytes(state, bytes) do
     case bytes do
-      <<>> -> state
-      <<value, rest::binary>> -> append_bytes(append(state, value), rest)
+      <<>> ->
+        state
+
+      _ ->
+        count = min(byte_size(bytes), 256 - state.used)
+        <<chunk::binary-size(^count), rest::binary>> = bytes
+        append_bytes(append_chunk(state, chunk), rest)
+    end
+  end
+
+  # 256-byte history blocks are an internal representation, not a resource limit.
+  defp append_chunk(state, chunk) do
+    count = byte_size(chunk)
+
+    available =
+      min(count, NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_work))
+
+    FontValidator.reserve(:max_work, available)
+    if available < count, do: FontValidator.reserve(:max_work, 1)
+
+    prefix =
+      if state.used == 0,
+        do: <<>>,
+        else: :array.to_list(state.buffer) |> Enum.take(state.used) |> :binary.list_to_bin()
+
+    bytes = prefix <> chunk
+    used = state.used + count
+
+    state = %{
+      state
+      | size: state.size + count,
+        used: used,
+        prev2: if(count == 1, do: state.prev1, else: :binary.at(chunk, count - 2)),
+        prev1: :binary.at(chunk, count - 1)
+    }
+
+    if used == 256 do
+      %{
+        state
+        | blocks: :array.set(div(state.size, 256) - 1, bytes, state.blocks),
+          buffer: :array.new(256, default: 0),
+          used: 0
+      }
+    else
+      %{state | buffer: :array.from_list(:binary.bin_to_list(bytes), 0)}
     end
   end
 
@@ -687,16 +739,27 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
     if left == 0 do
       state
     else
-      position = state.size - distance
+      count = min(left, 256 - state.used)
+      seed = history_bytes(state, state.size - distance, min(distance, count))
+      copies = div(count + byte_size(seed) - 1, byte_size(seed))
+      chunk = :binary.copy(seed, copies) |> binary_part(0, count)
+      copy_history(append_chunk(state, chunk), left - count, distance)
+    end
+  end
 
-      value =
-        if div(position, 256) == div(state.size, 256) do
-          :array.get(rem(position, 256), state.buffer)
-        else
-          :binary.at(:array.get(div(position, 256), state.blocks), rem(position, 256))
-        end
+  defp history_bytes(state, position, count) do
+    if count == 0 do
+      <<>>
+    else
+      offset = rem(position, 256)
+      take = min(count, 256 - offset)
 
-      copy_history(append(state, value), left - 1, distance)
+      block =
+        if div(position, 256) == div(state.size, 256),
+          do: :array.to_list(state.buffer) |> :binary.list_to_bin(),
+          else: :array.get(div(position, 256), state.blocks)
+
+      binary_part(block, offset, take) <> history_bytes(state, position + take, count - take)
     end
   end
 

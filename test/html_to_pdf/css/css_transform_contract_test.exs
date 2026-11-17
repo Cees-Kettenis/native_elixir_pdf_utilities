@@ -1,13 +1,11 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, Font, ResourceContext}
   alias NativeElixirPdfUtilities.Validators.{CssTransformValidator, HtmlValidator}
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
     {:ok, _, face} = Font.resolve("DejaVu Sans", 400, :normal, registry)
 
@@ -231,32 +229,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
     end)
   end
 
-  test "numeric bounds and malformed retained scopes use canonical errors", %{
-    style: style
-  } do
-    assert {:ok, limits} =
-             NativeElixirPdfUtilities.Validators.LimitsValidator.validate(
-               max_numeric_magnitude: 9_223_372_036_854_775_807
-             )
-
-    Limits.install(limits)
-
-    assert {:ok, prepared} =
-             CssTransformValidator.apply(style, "transform", "scale(1e18) scale(1e18)")
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssTransformValidator.resolve(prepared, %{x: 0, top: 30, width: 20, height: 20})
-
-    assert diagnostic.message =~ "max_numeric_magnitude"
-    assert diagnostic.stage == :layout
-    source = %{type: :rect, x: 0, y: 0, width: 20, height: 20, css_transform_scopes: [nil]}
-
-    assert {:error, {:invalid_layout, diagnostic}} =
-             CssTransformValidator.materialize([%{size: {90, 60}, boxes: [source]}], [])
-
-    assert diagnostic.source == "css_transform_scopes"
-  end
-
   test "atomic inline transforms preserve numeric resource diagnostics" do
     for content <- [
           "<span style='display:inline-block;transform:scale(1000000000) scale(1000000000)'>Text</span>",
@@ -350,6 +322,120 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
              end)
   end
 
+  test "native clipped source fragments preserve measured transform recipes with optional page margins" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      assert {:ok, dom} =
+               HtmlParser.parse_document_detailed(
+                 "<style>html,body{margin:0}section{height:100pt;transform:rotate(3deg)}p{margin:0}</style><section><p>First source</p><p>Second source</p></section>"
+               )
+
+      assert {:ok, tree} = Style.compute_detailed(dom, [], context.image_budget)
+      assert {:ok, layout} = Layout.layout(tree, page_size: {120, 60}, margin: 0)
+      first = DrawingGeometry.clip_boxes(layout.boxes, %{x: 0, y: 0, width: 120, height: 60})
+
+      second =
+        DrawingGeometry.clip_boxes(DrawingGeometry.translate_boxes(layout.boxes, 0, 60), %{
+          x: 0,
+          y: 0,
+          width: 120,
+          height: 60
+        })
+
+      source_pages = [%{size: {120, 60}, boxes: first}, %{size: {120, 60}, boxes: second}]
+
+      for opts <- [[], [css_fragmentation_margins: %{top: 5, bottom: 5, left: 0, right: 0}]] do
+        assert {:ok, pages} = CssTransformValidator.materialize(source_pages, opts, context)
+        assert length(pages) == 2
+
+        assert Enum.all?(pages, fn page ->
+                 Enum.all?(page.boxes, &(Map.get(&1, :css_transform_scopes) == nil))
+               end)
+      end
+    end)
+  end
+
+  test "positioned fields in fragmented empty parents keep one source AP and widget slices" do
+    source =
+      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:10pt}section{position:relative;height:150pt;background:#ddd}input{position:absolute;left:10pt;top:35pt;width:60pt;height:95pt}</style><section><input name=actual value=Original></section>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(source, page_size: {120, 90}, margin: 0)
+
+    assert {:ok, [%{name: "actual", value: "Original", widgets: widgets}]} =
+             NativeElixirPdfUtilities.Forms.fields(pdf)
+
+    assert Enum.map(widgets, & &1.page) == [1, 2]
+    assert {:ok, filled} = NativeElixirPdfUtilities.Forms.fill(pdf, %{"actual" => "Changed"})
+
+    assert {:ok, [%{value: "Changed", widgets: widgets}]} =
+             NativeElixirPdfUtilities.Forms.fields(filled)
+
+    assert length(widgets) == 2
+    assert {:ok, flattened} = NativeElixirPdfUtilities.Forms.flatten(filled)
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(flattened)
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(flattened)
+    assert String.replace(text, ~r/\s+/, "") =~ "Changed"
+
+    assert {:ok, static} =
+             HtmlToPdf.render(source, page_size: {120, 90}, margin: 0, forms: :static)
+
+    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(static)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, ResourceContext}
+  alias NativeElixirPdfUtilities.Validators.{CssTransformValidator, HtmlValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, face} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    %{
+      style: %{
+        font_face: face,
+        font_size: 12,
+        line_height: 15,
+        _root_font_face: face,
+        _root_font_size: 12,
+        _root_line_height: 15,
+        _position_viewport: %{width: 200, height: 120}
+      }
+    }
+  end
+
+  test "numeric bounds and malformed retained scopes use canonical errors", %{
+    style: style
+  } do
+    assert {:ok, limits} =
+             NativeElixirPdfUtilities.Validators.LimitsValidator.validate(
+               max_numeric_magnitude: 9_223_372_036_854_775_807
+             )
+
+    Limits.install(limits)
+
+    assert {:ok, prepared} =
+             CssTransformValidator.apply(style, "transform", "scale(1e18) scale(1e18)")
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssTransformValidator.resolve(prepared, %{x: 0, top: 30, width: 20, height: 20})
+
+    assert diagnostic.message =~ "max_numeric_magnitude"
+    assert diagnostic.stage == :layout
+    source = %{type: :rect, x: 0, y: 0, width: 20, height: 20, css_transform_scopes: [nil]}
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             CssTransformValidator.materialize([%{size: {90, 60}, boxes: [source]}], [])
+
+    assert diagnostic.source == "css_transform_scopes"
+  end
+
   test "transformed paint obeys the clip arrangement allocation ceiling" do
     Limits.install(%{Limits.effective() | max_work: 0})
 
@@ -427,40 +513,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
              end)
   end
 
-  test "native clipped source fragments preserve measured transform recipes with optional page margins" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
-
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-      assert {:ok, dom} =
-               HtmlParser.parse_document_detailed(
-                 "<style>html,body{margin:0}section{height:100pt;transform:rotate(3deg)}p{margin:0}</style><section><p>First source</p><p>Second source</p></section>"
-               )
-
-      assert {:ok, tree} = Style.compute_detailed(dom, [], context.image_budget)
-      assert {:ok, layout} = Layout.layout(tree, page_size: {120, 60}, margin: 0)
-      first = DrawingGeometry.clip_boxes(layout.boxes, %{x: 0, y: 0, width: 120, height: 60})
-
-      second =
-        DrawingGeometry.clip_boxes(DrawingGeometry.translate_boxes(layout.boxes, 0, 60), %{
-          x: 0,
-          y: 0,
-          width: 120,
-          height: 60
-        })
-
-      source_pages = [%{size: {120, 60}, boxes: first}, %{size: {120, 60}, boxes: second}]
-
-      for opts <- [[], [css_fragmentation_margins: %{top: 5, bottom: 5, left: 0, right: 0}]] do
-        assert {:ok, pages} = CssTransformValidator.materialize(source_pages, opts, context)
-        assert length(pages) == 2
-
-        assert Enum.all?(pages, fn page ->
-                 Enum.all?(page.boxes, &(Map.get(&1, :css_transform_scopes) == nil))
-               end)
-      end
-    end)
-  end
-
   test "painted empty source capacity obeys page limits and rejects orphan descendant owners" do
     alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Pagination, Style}
     limits = Limits.effective()
@@ -500,32 +552,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformContractTest do
       assert diagnostic.stage == :pagination
       assert diagnostic.source == "fieldset_paint_id"
     end)
-  end
-
-  test "positioned fields in fragmented empty parents keep one source AP and widget slices" do
-    source =
-      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:10pt}section{position:relative;height:150pt;background:#ddd}input{position:absolute;left:10pt;top:35pt;width:60pt;height:95pt}</style><section><input name=actual value=Original></section>"
-
-    assert {:ok, pdf} = HtmlToPdf.render(source, page_size: {120, 90}, margin: 0)
-
-    assert {:ok, [%{name: "actual", value: "Original", widgets: widgets}]} =
-             NativeElixirPdfUtilities.Forms.fields(pdf)
-
-    assert Enum.map(widgets, & &1.page) == [1, 2]
-    assert {:ok, filled} = NativeElixirPdfUtilities.Forms.fill(pdf, %{"actual" => "Changed"})
-
-    assert {:ok, [%{value: "Changed", widgets: widgets}]} =
-             NativeElixirPdfUtilities.Forms.fields(filled)
-
-    assert length(widgets) == 2
-    assert {:ok, flattened} = NativeElixirPdfUtilities.Forms.flatten(filled)
-    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(flattened)
-    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(flattened)
-    assert String.replace(text, ~r/\s+/, "") =~ "Changed"
-
-    assert {:ok, static} =
-             HtmlToPdf.render(source, page_size: {120, 90}, margin: 0, forms: :static)
-
-    assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(static)
   end
 end

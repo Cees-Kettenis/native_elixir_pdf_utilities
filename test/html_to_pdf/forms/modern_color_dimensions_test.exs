@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorDimensionsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Limits
 

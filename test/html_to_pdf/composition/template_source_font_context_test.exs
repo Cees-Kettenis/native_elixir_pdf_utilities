@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontContextTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   @opts [system_font_discovery: false, compress_streams: false]
 

@@ -1,12 +1,12 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MixedTextAndGraphicsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -65,24 +65,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MixedTextAndGraphicsTest do
     assert String.replace(text, ~r/\s/u, "") =~ "x123"
   end
 
-  test "ordinary HTML loads Unicode line breaking in a fresh VM without the private binding path" do
-    paths =
-      :code.get_path()
-      |> Enum.map(&List.to_string/1)
-      |> Enum.filter(&(Path.basename(&1) == "ebin"))
-      |> Enum.flat_map(&["-pa", &1])
-
-    script =
-      "{:ok, _} = Application.ensure_all_started(:native_elixir_pdf_utilities)\nfalse = Code.ensure_loaded?(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes)\n{:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(\"<p>Cold ordinary text</p>\",\n  default_font: \"Helvetica\", system_font_discovery: false)\n{:ok, \"Cold ordinary text\"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)\nIO.puts(\"cold ordinary render passed\")\n"
-
-    assert {output, 0} =
-             System.cmd(System.find_executable("elixir"), paths ++ ["-e", script],
-               stderr_to_stdout: true
-             )
-
-    assert output =~ "cold ordinary render passed"
-  end
-
   test "an atomic owner's preserved text does not suppress its parent's wrapping opportunities" do
     for {parent_white_space, same_line} <- [{"normal", false}, {"nowrap", true}, {"pre", true}] do
       html = "<p style='margin:0;width:90pt;white-space:#{parent_white_space}'>
@@ -132,6 +114,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MixedTextAndGraphicsTest do
 
     assert pdf == expected
     assert {:ok, "Good"} = Text.extract(pdf)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MixedTextAndGraphicsGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
+  end
+
+  test "ordinary HTML loads Unicode line breaking in a fresh VM without the private binding path" do
+    paths =
+      :code.get_path()
+      |> Enum.map(&List.to_string/1)
+      |> Enum.filter(&(Path.basename(&1) == "ebin"))
+      |> Enum.flat_map(&["-pa", &1])
+
+    script =
+      "{:ok, _} = Application.ensure_all_started(:native_elixir_pdf_utilities)\nfalse = Code.ensure_loaded?(NativeElixirPdfUtilities.HtmlToPdf.SvgBackend.NativeBytes)\n{:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(\"<p>Cold ordinary text</p>\",\n  default_font: \"Helvetica\", system_font_discovery: false)\n{:ok, \"Cold ordinary text\"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)\nIO.puts(\"cold ordinary render passed\")\n"
+
+    assert {output, 0} =
+             System.cmd(System.find_executable("elixir"), paths ++ ["-e", script],
+               stderr_to_stdout: true
+             )
+
+    assert output =~ "cold ordinary render passed"
   end
 
   test("composed SVG alpha and PNG conversion use the shared budget without leaking state", %{

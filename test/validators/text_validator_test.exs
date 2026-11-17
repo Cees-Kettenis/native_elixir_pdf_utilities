@@ -1,57 +1,13 @@
 defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Validators.TextValidator
   alias NativeElixirPdfUtilities.Limits
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
-  end
-
-  test "content arrays and dictionaries enforce one shared cap before collecting excess values",
-       %{limits: limits} do
-    for content <- [
-          "[1 2] ignored",
-          "/Span << /A 1 /B 2 >> BDC EMC",
-          "/Span << /A [1 2] /B << /C 1 /D 2 >> >> BDC EMC",
-          "/Span << /A 1 /A 2 >> BDC EMC"
-        ] do
-      Limits.install(limits)
-
-      assert {:ok, _, preparation} =
-               TextValidator.instructions(content, 3, TextValidator.new_preparation_context())
-
-      Limits.install(%{limits | max_entries: preparation.parsed_tokens})
-      assert {:ok, _} = TextValidator.instructions(content, 3)
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               TextValidator.instructions(content <> " q @", 3)
-
-      assert diagnostic.stage == :limits
-      assert diagnostic.message =~ "max_entries"
-      assert diagnostic.message =~ "page 3"
-    end
-
-    Limits.install(%{limits | max_entries: 3})
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             TextValidator.instructions(
-               ["[1 2", "3] ignored"],
-               1,
-               TextValidator.new_preparation_context()
-             )
-  end
-
-  test "instruction admission stops before later invalid syntax", %{limits: limits} do
-    Limits.install(%{limits | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             TextValidator.instructions("q q @", 1)
-
-    assert diagnostic.stage == :limits and diagnostic.operation == :extract
-    assert diagnostic.message =~ "parsed content token"
   end
 
   test "shallow sibling arrays require linear preparation work" do
@@ -72,49 +28,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
     small = measure.(256)
     large = measure.(1_024)
     assert large < small * 6
-  end
-
-  test "token and value quotas admit boundaries and stop before later lexical failures", %{
-    limits: limits
-  } do
-    Limits.install(%{limits | max_entries: 3})
-    assert {:ok, [%{operator: "ignored"}]} = TextValidator.instructions("[] ignored", 1)
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             TextValidator.instructions("[] ignored q @", 2)
-
-    assert diagnostic.stage == :limits and diagnostic.operation == :extract
-    assert diagnostic.message =~ "token count"
-    assert diagnostic.message =~ "page 2"
-
-    Limits.install(%{limits | max_entries: 4})
-    assert {:ok, [_]} = TextValidator.instructions("[1] ignored", 1)
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             TextValidator.instructions("[1 2 3 4 @", 3)
-
-    assert diagnostic.message =~ "token count"
-    assert diagnostic.message =~ "page 3"
-  end
-
-  test "admission counters span content streams and unique page preparations", %{limits: limits} do
-    Limits.install(%{
-      limits
-      | max_entries: 4
-    })
-
-    assert {:ok, [_]} = TextValidator.instructions(["[", "1] ignored"], 1)
-    context = TextValidator.new_preparation_context()
-    assert {:ok, [_], context} = TextValidator.instructions("1 ignored", 1, context)
-    assert {:ok, [_], context} = TextValidator.instructions("2 ignored", 2, context)
-
-    assert context.parsed_tokens == 4 and context.parsed_values == 2 and
-             context.parsed_instructions == 2
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             TextValidator.instructions("q @", 3, context)
-
-    assert diagnostic.message =~ "token count"
   end
 
   test "invalid preparation context and content stream input return canonical failures" do
@@ -218,5 +131,105 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidatorTest do
                module: TextValidator,
                message: "content scope instruction is malformed; page 1"
              }}} = TextValidator.validate_scopes([[%{}]], 1)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.TextValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Validators.TextValidator
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
+  end
+
+  test "content arrays and dictionaries enforce one shared cap before collecting excess values",
+       %{limits: limits} do
+    for content <- [
+          "[1 2] ignored",
+          "/Span << /A 1 /B 2 >> BDC EMC",
+          "/Span << /A [1 2] /B << /C 1 /D 2 >> >> BDC EMC",
+          "/Span << /A 1 /A 2 >> BDC EMC"
+        ] do
+      Limits.install(limits)
+
+      assert {:ok, _, preparation} =
+               TextValidator.instructions(content, 3, TextValidator.new_preparation_context())
+
+      Limits.install(%{limits | max_entries: preparation.parsed_tokens})
+      assert {:ok, _} = TextValidator.instructions(content, 3)
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               TextValidator.instructions(content <> " q @", 3)
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ "max_entries"
+      assert diagnostic.message =~ "page 3"
+    end
+
+    Limits.install(%{limits | max_entries: 3})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TextValidator.instructions(
+               ["[1 2", "3] ignored"],
+               1,
+               TextValidator.new_preparation_context()
+             )
+  end
+
+  test "instruction admission stops before later invalid syntax", %{limits: limits} do
+    Limits.install(%{limits | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TextValidator.instructions("q q @", 1)
+
+    assert diagnostic.stage == :limits and diagnostic.operation == :extract
+    assert diagnostic.message =~ "parsed content token"
+  end
+
+  test "token and value quotas admit boundaries and stop before later lexical failures", %{
+    limits: limits
+  } do
+    Limits.install(%{limits | max_entries: 3})
+    assert {:ok, [%{operator: "ignored"}]} = TextValidator.instructions("[] ignored", 1)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TextValidator.instructions("[] ignored q @", 2)
+
+    assert diagnostic.stage == :limits and diagnostic.operation == :extract
+    assert diagnostic.message =~ "token count"
+    assert diagnostic.message =~ "page 2"
+
+    Limits.install(%{limits | max_entries: 4})
+    assert {:ok, [_]} = TextValidator.instructions("[1] ignored", 1)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TextValidator.instructions("[1 2 3 4 @", 3)
+
+    assert diagnostic.message =~ "token count"
+    assert diagnostic.message =~ "page 3"
+  end
+
+  test "admission counters span content streams and unique page preparations", %{limits: limits} do
+    Limits.install(%{
+      limits
+      | max_entries: 4
+    })
+
+    assert {:ok, [_]} = TextValidator.instructions(["[", "1] ignored"], 1)
+    context = TextValidator.new_preparation_context()
+    assert {:ok, [_], context} = TextValidator.instructions("1 ignored", 1, context)
+    assert {:ok, [_], context} = TextValidator.instructions("2 ignored", 2, context)
+
+    assert context.parsed_tokens == 4 and context.parsed_values == 2 and
+             context.parsed_instructions == 2
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             TextValidator.instructions("q @", 3, context)
+
+    assert diagnostic.message =~ "token count"
   end
 end

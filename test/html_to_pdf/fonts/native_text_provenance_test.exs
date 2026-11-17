@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.NativeTextProvenanceTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{Forms, HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, HtmlTree}
   alias NativeElixirPdfUtilities.Pdf.Reader

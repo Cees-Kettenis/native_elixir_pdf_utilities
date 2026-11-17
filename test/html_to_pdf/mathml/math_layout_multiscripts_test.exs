@@ -1,14 +1,12 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMultiscriptsTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
     {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
 
@@ -24,27 +22,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMultiscriptsTest do
     }
 
     {:ok, style: style}
-  end
-
-  defp element(tag, children, style) do
-    %{
-      type: :element,
-      namespace: :mathml,
-      tag: tag,
-      children: children,
-      style: style,
-      attributes: %{}
-    }
-  end
-
-  defp token(text, style), do: element("mn", [%{type: :text, text: text, style: style}], style)
-
-  defp styled(html) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
-      with {:ok, dom} <- HtmlParser.parse_detailed(html),
-           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false),
-           do: {:ok, node}
-    end)
   end
 
   test "one postscript pair is exactly the existing selected-font msubsup contract" do
@@ -81,6 +58,91 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMultiscriptsTest do
 
       assert left.actual_text == right.actual_text
     end
+  end
+
+  test "parsed marker selects script depth and lower math-shift on both sides" do
+    assert {:ok, math} =
+             styled(
+               "<math style='font-size:20pt'><mmultiscripts><mn>0</mn><mn>1</mn><mn>2</mn><mprescripts/><mn>3</mn><mn>4</mn></mmultiscripts></math>"
+             )
+
+    source =
+      "<math><mmultiscripts><mn>0</mn><mn>1</mn><mn>2</mn><mprescripts/><mn>3</mn><mn>4</mn></mmultiscripts></math>"
+
+    assert {:ok, %{children: [parsed_math]}} = HtmlParser.parse_detailed(source)
+    [parsed_math] = HtmlValidator.assign_render_metadata([parsed_math])
+    [scripts] = parsed_math.children
+    [base, sub, sup, marker, pre_sub, pre_sup] = scripts.children
+    inherited = math.style
+    assert MathLayoutValidator.schema_child_defaults(base, inherited, [scripts]) == %{}
+
+    for child <- [sub, sup, marker, pre_sub, pre_sup] do
+      defaults = MathLayoutValidator.schema_child_defaults(child, inherited, [scripts])
+      assert defaults.math_depth == inherited.math_depth + 1
+      assert defaults.math_style == :compact
+    end
+
+    for child <- [sub, pre_sub] do
+      assert MathLayoutValidator.schema_child_defaults(child, inherited, [scripts]).math_shift ==
+               :compact
+    end
+
+    for child <- [sup, pre_sup] do
+      refute Map.has_key?(
+               MathLayoutValidator.schema_child_defaults(child, inherited, [scripts]),
+               :math_shift
+             )
+    end
+
+    assert hd(math.style._math_box.glyphs).font_size == 20
+
+    for glyph <- tl(math.style._math_box.glyphs),
+        do: assert_in_delta(glyph.font_size, 14, 0.0000001)
+
+    assert math.style._math_box.actual_text == "01234"
+  end
+
+  test "public PDF tensor scripts preserve all logical Unicode in source order" do
+    html =
+      "<math><mmultiscripts><mi>α</mi><mn>1</mn><mn>2</mn><mprescripts/><mi>β</mi><mn>3</mn></mmultiscripts></math>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+    assert {:ok, "α12β3"} = Text.extract(pdf, layout: false)
+  end
+
+  defp styled(html) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+      with {:ok, dom} <- HtmlParser.parse_detailed(html),
+           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false),
+           do: {:ok, node}
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMultiscriptsGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout}
+  alias NativeElixirPdfUtilities.Validators.{MathLayoutValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+    style = %{
+      display: :block,
+      font_size: 18,
+      font_face: font,
+      color: {0, 0, 0},
+      line_height: 24,
+      math_style: :compact,
+      math_shift: :normal,
+      text_transform: :none
+    }
+
+    {:ok, style: style}
   end
 
   test "prescripts have selected-font advances, right alignment and DOM Unicode", %{
@@ -141,48 +203,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMultiscriptsTest do
     assert elem(Enum.at(placed.offsets, 2), 1) == elem(Enum.at(placed.offsets, 4), 1)
     assert -elem(Enum.at(placed.offsets, 1), 1) >= 35 - prepared.constants.subscript_top_max
     assert placed.descent >= 8 - elem(Enum.at(placed.offsets, 3), 1)
-  end
-
-  test "parsed marker selects script depth and lower math-shift on both sides" do
-    assert {:ok, math} =
-             styled(
-               "<math style='font-size:20pt'><mmultiscripts><mn>0</mn><mn>1</mn><mn>2</mn><mprescripts/><mn>3</mn><mn>4</mn></mmultiscripts></math>"
-             )
-
-    source =
-      "<math><mmultiscripts><mn>0</mn><mn>1</mn><mn>2</mn><mprescripts/><mn>3</mn><mn>4</mn></mmultiscripts></math>"
-
-    assert {:ok, %{children: [parsed_math]}} = HtmlParser.parse_detailed(source)
-    [parsed_math] = HtmlValidator.assign_render_metadata([parsed_math])
-    [scripts] = parsed_math.children
-    [base, sub, sup, marker, pre_sub, pre_sup] = scripts.children
-    inherited = math.style
-    assert MathLayoutValidator.schema_child_defaults(base, inherited, [scripts]) == %{}
-
-    for child <- [sub, sup, marker, pre_sub, pre_sup] do
-      defaults = MathLayoutValidator.schema_child_defaults(child, inherited, [scripts])
-      assert defaults.math_depth == inherited.math_depth + 1
-      assert defaults.math_style == :compact
-    end
-
-    for child <- [sub, pre_sub] do
-      assert MathLayoutValidator.schema_child_defaults(child, inherited, [scripts]).math_shift ==
-               :compact
-    end
-
-    for child <- [sup, pre_sup] do
-      refute Map.has_key?(
-               MathLayoutValidator.schema_child_defaults(child, inherited, [scripts]),
-               :math_shift
-             )
-    end
-
-    assert hd(math.style._math_box.glyphs).font_size == 20
-
-    for glyph <- tl(math.style._math_box.glyphs),
-        do: assert_in_delta(glyph.font_size, 14, 0.0000001)
-
-    assert math.style._math_box.actual_text == "01234"
   end
 
   test "odd pairs, duplicate markers, marker base and empty lists use mrow fallback", %{
@@ -342,11 +362,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutMultiscriptsTest do
     assert Enum.any?(package["cases"], &(number.(&1["expected"]["upper_kern"]) != 0))
   end
 
-  test "public PDF tensor scripts preserve all logical Unicode in source order" do
-    html =
-      "<math><mmultiscripts><mi>α</mi><mn>1</mn><mn>2</mn><mprescripts/><mi>β</mi><mn>3</mn></mmultiscripts></math>"
-
-    assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
-    assert {:ok, "α12β3"} = Text.extract(pdf, layout: false)
+  defp element(tag, children, style) do
+    %{
+      type: :element,
+      namespace: :mathml,
+      tag: tag,
+      children: children,
+      style: style,
+      attributes: %{}
+    }
   end
+
+  defp token(text, style), do: element("mn", [%{type: :text, text: text, style: style}], style)
 end

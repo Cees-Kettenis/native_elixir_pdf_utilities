@@ -1,7 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, HtmlParser, ResourceContext, Style}
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -9,12 +8,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsTest do
     FramesetValidator,
     HtmlValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "frames and iframes share legacy margins, numeric recovery and scrollbar keywords" do
     for {attributes, margins, scrollbars} <- [
@@ -138,36 +131,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsTest do
     end)
   end
 
-  test "malformed direct initialization records and numeric resource limits return shared diagnostics" do
-    for {attributes, host} <- [{nil, :iframe}, {%{}, :object}, {%{"scrolling" => 12}, :iframe}] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               EmbeddedViewportValidator.prepare_initialization(attributes, host)
-
-      assert diagnostic.stage == :layout and diagnostic.operation == :initialize_child_viewport
-      assert diagnostic.message != "" and diagnostic.module == EmbeddedViewportValidator
-    end
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             HtmlValidator.iframe_hints(%{"frameborder" => 12})
-
-    assert diagnostic.source == "iframe" and diagnostic.operation == :prepare_hints
-    assert {:error, {:invalid_document, _}} = HtmlValidator.iframe_hints(nil)
-
-    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(
-               "<iframe frameborder='00' src='https://denied.test/never'></iframe>"
-             )
-
-    assert diagnostic.source == "00" and diagnostic.operation == :render
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             EmbeddedViewportValidator.prepare_initialization(%{"marginwidth" => "12"}, :iframe)
-
-    assert diagnostic.source == "12" and diagnostic.message =~ "max_numeric_token_bytes"
-  end
-
   test "invalid prepared scrollbar policy remains diagnostic for iframe and frame hosts" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, prepared} =
@@ -235,5 +198,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsTest do
       assert inner.context.tree_scope_id != outer.context.tree_scope_id
       assert ResourceContext.current() == parent
     end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.IframeInitializationHintsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    EmbeddedViewportValidator,
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "malformed direct initialization records and numeric resource limits return shared diagnostics" do
+    for {attributes, host} <- [{nil, :iframe}, {%{}, :object}, {%{"scrolling" => 12}, :iframe}] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               EmbeddedViewportValidator.prepare_initialization(attributes, host)
+
+      assert diagnostic.stage == :layout and diagnostic.operation == :initialize_child_viewport
+      assert diagnostic.message != "" and diagnostic.module == EmbeddedViewportValidator
+    end
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             HtmlValidator.iframe_hints(%{"frameborder" => 12})
+
+    assert diagnostic.source == "iframe" and diagnostic.operation == :prepare_hints
+    assert {:error, {:invalid_document, _}} = HtmlValidator.iframe_hints(nil)
+
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(
+               "<iframe frameborder='00' src='https://denied.test/never'></iframe>"
+             )
+
+    assert diagnostic.source == "00" and diagnostic.operation == :render
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             EmbeddedViewportValidator.prepare_initialization(%{"marginwidth" => "12"}, :iframe)
+
+    assert diagnostic.source == "12" and diagnostic.message =~ "max_numeric_token_bytes"
   end
 end

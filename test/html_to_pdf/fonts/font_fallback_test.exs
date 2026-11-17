@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.FontFallback

@@ -1,14 +1,9 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.TextTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Text
-  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
-  alias NativeElixirPdfUtilities.Validators.TextResourceValidator
-  alias NativeElixirPdfUtilities.Validators.TextValidator
 
   test "file extraction rejects nonregular inputs with requested operation context" do
     path = Path.join(System.tmp_dir!(), "nonregular-pdf-#{System.unique_integer([:positive])}")
@@ -21,6 +16,35 @@ defmodule NativeElixirPdfUtilities.TextTest do
     assert diagnostic.source == path
     assert diagnostic.message =~ "regular file"
   end
+
+  test "positioned extraction rejects invalid replacement options with public diagnostics" do
+    for actual_text <- [:semantic, nil, "true", 1] do
+      assert {:error, {:invalid_options, diagnostic}} =
+               Text.extract_spans("", actual_text: actual_text)
+
+      assert diagnostic.stage == :options
+      assert diagnostic.reason == :invalid_options
+      assert diagnostic.module == Text
+      assert diagnostic.operation == :extract_spans
+      assert diagnostic.message == "actual_text option must be a boolean"
+    end
+  end
+
+  test "opens objects stored in an object stream" do
+    path = Paths.fixture("pdf_reader/object-stream.pdf")
+    assert Text.extract(File.read!(path), layout: false) == {:ok, "Reader milestone fixture"}
+  end
+end
+
+defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+  alias NativeElixirPdfUtilities.Validators.TextResourceValidator
+  alias NativeElixirPdfUtilities.Validators.TextValidator
 
   test "invalid physical page frames reject nonpositive MediaBox geometry" do
     source = page_pdf("BT /F1 12 Tf (A) Tj ET")
@@ -76,19 +100,6 @@ defmodule NativeElixirPdfUtilities.TextTest do
       File.write!(path, source)
       on_exit(fn -> File.rm!(path) end)
       assert {:ok, %{pages: [%{spans: ^expected}]}} = Text.extract_file_spans(path)
-    end
-  end
-
-  test "positioned extraction rejects invalid replacement options with public diagnostics" do
-    for actual_text <- [:semantic, nil, "true", 1] do
-      assert {:error, {:invalid_options, diagnostic}} =
-               Text.extract_spans("", actual_text: actual_text)
-
-      assert diagnostic.stage == :options
-      assert diagnostic.reason == :invalid_options
-      assert diagnostic.module == Text
-      assert diagnostic.operation == :extract_spans
-      assert diagnostic.message == "actual_text option must be a boolean"
     end
   end
 
@@ -1271,11 +1282,6 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
       assert Text.extract(pdf(objects), layout: false) == {:ok, expected}
     end
-  end
-
-  test "opens objects stored in an object stream" do
-    path = Paths.fixture("pdf_reader/object-stream.pdf")
-    assert Text.extract(File.read!(path), layout: false) == {:ok, "Reader milestone fixture"}
   end
 
   test "layout mode keeps positional columns" do

@@ -1,8 +1,118 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, ResourceContext, Style}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
+
+  setup do
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+    {:ok, metrics} = Font.math_metrics(font)
+    {:ok, bounds} = Font.glyph_bounds(font)
+
+    style = %{
+      display: :block,
+      font_size: 20,
+      font_face: font,
+      color: {1, 0, 0},
+      line_height: 24,
+      math_style: :compact,
+      text_transform: :none
+    }
+
+    {:ok, font: font, metrics: metrics, bounds: bounds, style: style}
+  end
+
+  test "HTML applies root depth, compact shift, authored precedence and child classification",
+       c do
+    assert {:ok, root} =
+             styled_math(
+               "<math style='font-size:20pt'><mroot><mn>16</mn><mn>3</mn></mroot></math>"
+             )
+
+    assert List.last(root.glyphs).font_size ==
+             20 * c.metrics.constants.script_script_percent_scale_down / 100
+
+    assert {:ok, authored} =
+             styled_math(
+               "<math style='font-size:20pt'><mroot><mn>16</mn><mn style='math-depth:0;font-size:18pt'>3</mn></mroot></math>"
+             )
+
+    assert List.last(authored.glyphs).font_size == 18
+
+    assert MathLayoutValidator.defaults(%{tag: "msqrt", attributes: %{}}, c.style).math_shift ==
+             :compact
+
+    assert MathLayoutValidator.defaults(%{tag: "mroot", attributes: %{}}, c.style).math_shift ==
+             :compact
+
+    assert MathLayoutValidator.schema_child_defaults(%{}, c.style, [
+             %{namespace: :mathml, tag: "mroot", children: []}
+           ]) == %{}
+
+    for html <- [
+          "<mroot/>",
+          "<mroot><mn>1</mn></mroot>",
+          "<mroot><mn>1</mn><mn>2</mn><mn>3</mn></mroot>"
+        ] do
+      assert {:ok, row} = styled_math("<math>#{html}</math>")
+      refute Enum.any?(row.glyphs, &(&1.text == "√"))
+    end
+
+    assert {:ok, hidden} =
+             styled_math(
+               "<math><mroot><mn>1</mn><mn>2</mn><mn style='display:none'>3</mn></mroot></math>"
+             )
+
+    assert hidden.actual_text == "12" and hd(hidden.glyphs).text == "√"
+    assert {:ok, anonymous} = styled_math("<math><msqrt>1<mo>+</mo><mn>2</mn></msqrt></math>")
+    assert anonymous.actual_text == "+2"
+  end
+
+  test "native HTML links and nested fractions keep ordered original Unicode and paint" do
+    html =
+      "<p>Before <math><mroot mathcolor=blue><msqrt><mfrac><mn>12</mn><mtext><a href='https://radical.test/'>Link</a></mtext></mfrac><mo>&#x2062;</mo><mn>4</mn></msqrt><mn>3</mn></mroot></math> After</p>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert pdf =~ "https://radical.test/"
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    compact = String.replace(text, ~r/\s/u, "")
+    assert compact == "Before12Link\u206243After"
+
+    assert {:ok, measured} =
+             styled_math(
+               "<math><msqrt><mtext><a href='https://radical.test/'>Link</a></mtext></msqrt></math>"
+             )
+
+    [rule, surd | _] = measured.drawing_items
+    assert rule.kind == :native and surd.kind == :glyph
+
+    assert "https://radical.test/" in Enum.flat_map(
+             measured.drawing_items,
+             &links(Map.get(&1, :box, %{}))
+           )
+  end
+
+  defp styled_math(html) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
+      with {:ok, dom} <- HtmlParser.parse_detailed(html),
+           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
+        {:ok, node.style._math_box}
+      end
+    end)
+  end
+
+  defp links(box) do
+    List.wrap(Map.get(box, :link_url)) ++ Enum.flat_map(Map.get(box, :boxes, []), &links/1)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout}
   alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator, MathLayoutValidator}
 
   setup do
@@ -24,34 +134,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
     }
 
     {:ok, font: font, metrics: metrics, bounds: bounds, style: style}
-  end
-
-  defp element(tag, children, style, attributes \\ %{}) do
-    %{
-      type: :element,
-      namespace: :mathml,
-      tag: tag,
-      children: children,
-      style: style,
-      attributes: attributes
-    }
-  end
-
-  defp token(text, style) do
-    element("mn", [%{type: :text, text: text, style: style}], style)
-  end
-
-  defp styled_math(html) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
-      with {:ok, dom} <- HtmlParser.parse_detailed(html),
-           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
-        {:ok, node.style._math_box}
-      end
-    end)
-  end
-
-  defp links(box) do
-    List.wrap(Map.get(box, :link_url)) ++ Enum.flat_map(Map.get(box, :boxes, []), &links/1)
   end
 
   test "square roots select font variants by Core advance and align bar and base independently",
@@ -268,52 +350,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
     assert root.actual_text == "163"
   end
 
-  test "HTML applies root depth, compact shift, authored precedence and child classification",
-       c do
-    assert {:ok, root} =
-             styled_math(
-               "<math style='font-size:20pt'><mroot><mn>16</mn><mn>3</mn></mroot></math>"
-             )
-
-    assert List.last(root.glyphs).font_size ==
-             20 * c.metrics.constants.script_script_percent_scale_down / 100
-
-    assert {:ok, authored} =
-             styled_math(
-               "<math style='font-size:20pt'><mroot><mn>16</mn><mn style='math-depth:0;font-size:18pt'>3</mn></mroot></math>"
-             )
-
-    assert List.last(authored.glyphs).font_size == 18
-
-    assert MathLayoutValidator.defaults(%{tag: "msqrt", attributes: %{}}, c.style).math_shift ==
-             :compact
-
-    assert MathLayoutValidator.defaults(%{tag: "mroot", attributes: %{}}, c.style).math_shift ==
-             :compact
-
-    assert MathLayoutValidator.schema_child_defaults(%{}, c.style, [
-             %{namespace: :mathml, tag: "mroot", children: []}
-           ]) == %{}
-
-    for html <- [
-          "<mroot/>",
-          "<mroot><mn>1</mn></mroot>",
-          "<mroot><mn>1</mn><mn>2</mn><mn>3</mn></mroot>"
-        ] do
-      assert {:ok, row} = styled_math("<math>#{html}</math>")
-      refute Enum.any?(row.glyphs, &(&1.text == "√"))
-    end
-
-    assert {:ok, hidden} =
-             styled_math(
-               "<math><mroot><mn>1</mn><mn>2</mn><mn style='display:none'>3</mn></mroot></math>"
-             )
-
-    assert hidden.actual_text == "12" and hd(hidden.glyphs).text == "√"
-    assert {:ok, anonymous} = styled_math("<math><msqrt>1<mo>+</mo><mn>2</mn></msqrt></math>")
-    assert anonymous.actual_text == "+2"
-  end
-
   test "square anonymous row decoration stays local and empty roots have no invented text", c do
     n = token("2", c.style)
 
@@ -329,30 +365,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
     assert_in_delta hd(padded.glyphs).x, hd(plain.glyphs).x + 5, 1.0e-10
     assert {:ok, empty} = HtmlToPdf.render("<math><msqrt/></math>")
     assert {:error, {:no_extractable_text, _}} = Text.extract(empty)
-  end
-
-  test "native HTML links and nested fractions keep ordered original Unicode and paint" do
-    html =
-      "<p>Before <math><mroot mathcolor=blue><msqrt><mfrac><mn>12</mn><mtext><a href='https://radical.test/'>Link</a></mtext></mfrac><mo>&#x2062;</mo><mn>4</mn></msqrt><mn>3</mn></mroot></math> After</p>"
-
-    assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert pdf =~ "https://radical.test/"
-    assert {:ok, text} = Text.extract(pdf, layout: false)
-    compact = String.replace(text, ~r/\s/u, "")
-    assert compact == "Before12Link\u206243After"
-
-    assert {:ok, measured} =
-             styled_math(
-               "<math><msqrt><mtext><a href='https://radical.test/'>Link</a></mtext></msqrt></math>"
-             )
-
-    [rule, surd | _] = measured.drawing_items
-    assert rule.kind == :native and surd.kind == :glyph
-
-    assert "https://radical.test/" in Enum.flat_map(
-             measured.drawing_items,
-             &links(Map.get(&1, :box, %{}))
-           )
   end
 
   test "radical resource errors return inside the caller's cumulative scopes", c do
@@ -438,5 +450,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutRadicalsTest do
              )
 
     assert diagnostic.message =~ "exceeds"
+  end
+
+  defp element(tag, children, style, attributes \\ %{}) do
+    %{
+      type: :element,
+      namespace: :mathml,
+      tag: tag,
+      children: children,
+      style: style,
+      attributes: attributes
+    }
+  end
+
+  defp token(text, style) do
+    element("mn", [%{type: :text, text: text, style: style}], style)
   end
 end

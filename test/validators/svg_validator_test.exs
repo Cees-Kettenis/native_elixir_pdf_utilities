@@ -4,17 +4,16 @@ Code.require_file(Paths.support("png_fixture.ex"))
 Code.require_file(Paths.support("font_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.SvgValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.SvgValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, PngDecoder}
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgConverterValidator, FontValidator}
-  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgConverterValidator}
   alias NativeElixirPdfUtilities.HtmlToPdf
 
   setup do
     old = Limits.effective()
-    on_exit(fn -> Limits.install(old) end)
+
     %{limits: old}
   end
 
@@ -36,6 +35,102 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
 
     assert reason == diagnostic.reason and diagnostic.stage == :font
     assert is_binary(diagnostic.source) and diagnostic.message != ""
+  end
+
+  test "leading-dot intrinsic SVG dimensions match equivalent leading-zero lengths" do
+    for {width, height, view_box, options, expected} <- [
+          {".5in", ".25in", "", [], [width: 48, height: 24]},
+          {"+.5in", "+.25in", "", [], [width: 48, height: 24]},
+          {".5", ".25", "", [width: 40], [width: 40, height: 20]},
+          {".48e2", ".24E2", "", [], [width: 48, height: 24]},
+          {".5%", ".25%", " viewBox='0 0 400 400'", [], [width: 2, height: 1]}
+        ] do
+      source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='#{width}' height='#{height}'#{view_box}/>"
+
+      canonical = String.replace(source, ~r/(?<=['+])\./, "0.")
+      assert {:ok, ^expected} = SvgValidator.validate(canonical, options, nil)
+      assert SvgValidator.validate(source, options, nil) == {:ok, expected}
+    end
+  end
+
+  test "leading-dot SVG images rasterize and render through the public API" do
+    for {width, height} <- [{".5in", ".25in"}, {"0.5in", "0.25in"}] do
+      source =
+        "<svg xmlns='http://www.w3.org/2000/svg' width='#{width}' height='#{height}'><rect width='100%' height='100%' fill='red'/></svg>"
+
+      assert {:ok, png} = SvgRasterizer.rasterize(source, [], nil)
+      assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
+      assert image.width_px == 48 and image.height_px == 24
+      assert image.data == :binary.copy(<<255, 0, 0>>, 48 * 24)
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<img src='icon.svg'>",
+                 assets: %{"icon.svg" => {:bytes, source}},
+                 system_font_discovery: false
+               )
+
+      assert pdf =~ "/Subtype /Image"
+    end
+  end
+
+  test "overflowing SVG dimensions return diagnostics instead of raising" do
+    for {source, options} <- [
+          {"<svg width=\"1e308in\" height=\"1\"/>", []},
+          {"<svg viewBox=\"0 0 1e308 1\" width=\"1000%\"/>", []},
+          {"<svg width=\"1e-308\" height=\"1e308\"/>", [width: 1]},
+          {"<svg width=\"1e308\" height=\"1e-308\"/>", [height: 1]}
+        ] do
+      assert {:error, {:invalid_document, %{stage: :style, source: "SVG", message: message}}} =
+               SvgRasterizer.rasterize(source, options, nil)
+
+      assert message =~ "numeric range"
+    end
+
+    source =
+      "data:image/svg+xml;base64," <> Base.encode64("<svg width=\"1e308in\" height=\"1\"/>")
+
+    assert {:error,
+            {:invalid_document,
+             %{stage: :style, source: "SVG", operation: :render, module: HtmlToPdf}}} =
+             HtmlToPdf.render("<img src=\"#{source}\">")
+  end
+
+  test "inline stylesheet non-scaling strokes are recorded as a converter limitation" do
+    source =
+      "<svg width='20' height='20'><style>rect{vector-effect:non-scaling-stroke}</style><rect width='20' height='20'/></svg>"
+
+    assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :image})
+    assert MapSet.member?(summary.converter_features, :non_scaling_stroke)
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             SvgConverterValidator.validate_capabilities(summary)
+
+    assert diagnostic.source == "vector-effect"
+    assert diagnostic.message =~ "non-scaling strokes"
+  end
+
+  test "stretch viewport attributes keep unchanged transport for non-integer raster targets" do
+    attributes = %{"width" => "10", "height" => "10"}
+
+    assert {:ok, nil} = SvgValidator.stretch_viewport_attributes(attributes, 10.5, 10)
+    assert {:ok, nil} = SvgValidator.stretch_viewport_attributes(attributes, nil, 10)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.SvgValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.SvgValidator
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, PngDecoder}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgConverterValidator, FontValidator}
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+  alias NativeElixirPdfUtilities.HtmlToPdf
+
+  setup do
+    old = Limits.effective()
+    on_exit(fn -> Limits.install(old) end)
+    %{limits: old}
   end
 
   test "converter raster allocation joins the allowance consumed before conversion" do
@@ -310,43 +405,6 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
              )
   end
 
-  test "leading-dot intrinsic SVG dimensions match equivalent leading-zero lengths" do
-    for {width, height, view_box, options, expected} <- [
-          {".5in", ".25in", "", [], [width: 48, height: 24]},
-          {"+.5in", "+.25in", "", [], [width: 48, height: 24]},
-          {".5", ".25", "", [width: 40], [width: 40, height: 20]},
-          {".48e2", ".24E2", "", [], [width: 48, height: 24]},
-          {".5%", ".25%", " viewBox='0 0 400 400'", [], [width: 2, height: 1]}
-        ] do
-      source =
-        "<svg xmlns='http://www.w3.org/2000/svg' width='#{width}' height='#{height}'#{view_box}/>"
-
-      canonical = String.replace(source, ~r/(?<=['+])\./, "0.")
-      assert {:ok, ^expected} = SvgValidator.validate(canonical, options, nil)
-      assert SvgValidator.validate(source, options, nil) == {:ok, expected}
-    end
-  end
-
-  test "leading-dot SVG images rasterize and render through the public API" do
-    for {width, height} <- [{".5in", ".25in"}, {"0.5in", "0.25in"}] do
-      source =
-        "<svg xmlns='http://www.w3.org/2000/svg' width='#{width}' height='#{height}'><rect width='100%' height='100%' fill='red'/></svg>"
-
-      assert {:ok, png} = SvgRasterizer.rasterize(source, [], nil)
-      assert {:ok, image} = PngDecoder.decode(png, HtmlValidator.new_image_budget(), false)
-      assert image.width_px == 48 and image.height_px == 24
-      assert image.data == :binary.copy(<<255, 0, 0>>, 48 * 24)
-
-      assert {:ok, pdf} =
-               HtmlToPdf.render("<img src='icon.svg'>",
-                 assets: %{"icon.svg" => {:bytes, source}},
-                 system_font_discovery: false
-               )
-
-      assert pdf =~ "/Subtype /Image"
-    end
-  end
-
   test "intrinsic SVG number parsing retains invalid-input diagnostics and raster limits", %{
     limits: old
   } do
@@ -379,28 +437,6 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       assert diagnostic.reason == :resource_limit_exceeded
       assert diagnostic.message =~ "per-axis limit"
     end
-  end
-
-  test "overflowing SVG dimensions return diagnostics instead of raising" do
-    for {source, options} <- [
-          {"<svg width=\"1e308in\" height=\"1\"/>", []},
-          {"<svg viewBox=\"0 0 1e308 1\" width=\"1000%\"/>", []},
-          {"<svg width=\"1e-308\" height=\"1e308\"/>", [width: 1]},
-          {"<svg width=\"1e308\" height=\"1e-308\"/>", [height: 1]}
-        ] do
-      assert {:error, {:invalid_document, %{stage: :style, source: "SVG", message: message}}} =
-               SvgRasterizer.rasterize(source, options, nil)
-
-      assert message =~ "numeric range"
-    end
-
-    source =
-      "data:image/svg+xml;base64," <> Base.encode64("<svg width=\"1e308in\" height=\"1\"/>")
-
-    assert {:error,
-            {:invalid_document,
-             %{stage: :style, source: "SVG", operation: :render, module: HtmlToPdf}}} =
-             HtmlToPdf.render("<img src=\"#{source}\">")
   end
 
   test "native PNG dimension bounds cannot be disabled by configuration", %{limits: old} do
@@ -1099,27 +1135,6 @@ defmodule NativeElixirPdfUtilities.SvgValidatorTest do
       Map.get(context, :fonts, []),
       Map.delete(context, :fonts)
     )
-  end
-
-  test "inline stylesheet non-scaling strokes are recorded as a converter limitation" do
-    source =
-      "<svg width='20' height='20'><style>rect{vector-effect:non-scaling-stroke}</style><rect width='20' height='20'/></svg>"
-
-    assert {:ok, summary} = SvgValidator.validate_processing(source, %{mode: :image})
-    assert MapSet.member?(summary.converter_features, :non_scaling_stroke)
-
-    assert {:error, {:unsupported_html, diagnostic}} =
-             SvgConverterValidator.validate_capabilities(summary)
-
-    assert diagnostic.source == "vector-effect"
-    assert diagnostic.message =~ "non-scaling strokes"
-  end
-
-  test "stretch viewport attributes keep unchanged transport for non-integer raster targets" do
-    attributes = %{"width" => "10", "height" => "10"}
-
-    assert {:ok, nil} = SvgValidator.stretch_viewport_attributes(attributes, 10.5, 10)
-    assert {:ok, nil} = SvgValidator.stretch_viewport_attributes(attributes, nil, 10)
   end
 
   defp svg(content) do

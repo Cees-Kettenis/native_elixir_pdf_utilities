@@ -2,17 +2,10 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("svg_converted_image.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageViewportTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder, ResourceContext, SvgRasterizer}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgImageValidator}
   alias NativeElixirPdfUtilities.TestSupport.SvgConvertedImage
-  alias NativeElixirPdfUtilities.Limits
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   @source "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='10 10 20 10'><rect x='10' y='10' width='10' height='10' fill='red'/></svg>"
 
@@ -64,6 +57,65 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageViewportTest do
     assert pdf =~ "https://example.test/art"
   end
 
+  test "viewport requests keep their approved source and font bytes in the issuing document" do
+    budget = HtmlValidator.new_image_budget()
+
+    ResourceContext.run([], budget, fn parent ->
+      assert {:ok, png, descriptor} =
+               SvgRasterizer.rasterize_image(@source, [], budget, [],
+                 system_font_discovery: false
+               )
+
+      assert {:ok, image} = PngDecoder.decode(png, budget, false)
+      image = Map.put(image, :svg_viewport, Map.put(descriptor, :source, "<svg/>"))
+      assert {:ok, resized} = SvgRasterizer.resize_image(image, 12, 12)
+      assert {resized.width_px, resized.height_px} == {32, 32}
+      assert :binary.at(resized.alpha_data, 16 * 32 + 8) == 255
+      assert ResourceContext.current() == parent
+
+      for descriptor <- [nil, %{}, %{id: make_ref(), context: parent}] do
+        assert {:error, {:invalid_document, diagnostic}} =
+                 SvgImageValidator.viewport_request(descriptor, 12, 12)
+
+        assert diagnostic.source == "SVG" and diagnostic.message =~ "issued source scope"
+      end
+
+      assert {:error, {:invalid_document, _}} =
+               SvgImageValidator.viewport_request(descriptor, 0, 12)
+
+      assert {:error, {_reason, diagnostic}} =
+               SvgImageValidator.viewport_request(%{descriptor | context: %{}}, 12, 12)
+
+      assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
+
+      assert {:error, {:invalid_document, _}} =
+               SvgRasterizer.resize_image(%{image | svg_viewport: %{}}, 12, 12)
+    end)
+  end
+
+  test "ordinary decoded images have no deferred SVG viewport" do
+    image = %{width: 12, height: 12}
+    assert {:ok, ^image} = SvgRasterizer.resize_image(image, 24, 24)
+
+    assert {:ok, _png, nil} =
+             SvgRasterizer.rasterize_image(@source, [], nil, [], system_font_discovery: false)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageViewportGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder, ResourceContext, SvgRasterizer}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+  alias NativeElixirPdfUtilities.Limits
+
+  @source "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='10 10 20 10'><rect x='10' y='10' width='10' height='10' fill='red'/></svg>"
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
   test "cached final viewports charge each occurrence against the actual raster ceiling" do
     Limits.install(%{Limits.effective() | max_raster_pixels: 3500})
     budget = HtmlValidator.new_image_budget()
@@ -108,49 +160,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageViewportTest do
       assert {:error, {:resource_limit_exceeded, ^diagnostic}} =
                SvgRasterizer.resize_image(image, 12, 12)
     end)
-  end
-
-  test "viewport requests keep their approved source and font bytes in the issuing document" do
-    budget = HtmlValidator.new_image_budget()
-
-    ResourceContext.run([], budget, fn parent ->
-      assert {:ok, png, descriptor} =
-               SvgRasterizer.rasterize_image(@source, [], budget, [],
-                 system_font_discovery: false
-               )
-
-      assert {:ok, image} = PngDecoder.decode(png, budget, false)
-      image = Map.put(image, :svg_viewport, Map.put(descriptor, :source, "<svg/>"))
-      assert {:ok, resized} = SvgRasterizer.resize_image(image, 12, 12)
-      assert {resized.width_px, resized.height_px} == {32, 32}
-      assert :binary.at(resized.alpha_data, 16 * 32 + 8) == 255
-      assert ResourceContext.current() == parent
-
-      for descriptor <- [nil, %{}, %{id: make_ref(), context: parent}] do
-        assert {:error, {:invalid_document, diagnostic}} =
-                 SvgImageValidator.viewport_request(descriptor, 12, 12)
-
-        assert diagnostic.source == "SVG" and diagnostic.message =~ "issued source scope"
-      end
-
-      assert {:error, {:invalid_document, _}} =
-               SvgImageValidator.viewport_request(descriptor, 0, 12)
-
-      assert {:error, {_reason, diagnostic}} =
-               SvgImageValidator.viewport_request(%{descriptor | context: %{}}, 12, 12)
-
-      assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
-
-      assert {:error, {:invalid_document, _}} =
-               SvgRasterizer.resize_image(%{image | svg_viewport: %{}}, 12, 12)
-    end)
-  end
-
-  test "ordinary decoded images have no deferred SVG viewport" do
-    image = %{width: 12, height: 12}
-    assert {:ok, ^image} = SvgRasterizer.resize_image(image, 24, 24)
-
-    assert {:ok, _png, nil} =
-             SvgRasterizer.rasterize_image(@source, [], nil, [], system_font_discovery: false)
   end
 end

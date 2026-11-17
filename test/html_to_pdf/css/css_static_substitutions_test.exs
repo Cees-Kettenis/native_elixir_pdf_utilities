@@ -1,37 +1,10 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
   alias NativeElixirPdfUtilities.Validators.{CssSubstitutionValidator, HtmlValidator}
 
   # CSS Values 5 editor draft 2da1cb17a43306d3ef80d09d328883c71cdb54b2, attr().
   # CSS Environment Variables 1, 23 September 2025, env() and safe-area variables.
-  test "attribute variable expansion failures survive custom-property preparation" do
-    alias NativeElixirPdfUtilities.Limits
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_decoded_bytes, 1))
-
-    context = %{
-      _css_attributes: %{"value" => "var(--text)"},
-      _custom_properties: %{"--text" => "ABCDE"}
-    }
-
-    for operation <- [
-          fn -> CssSubstitutionValidator.resolve("attr(value type(*))", context) end,
-          fn ->
-            CssSubstitutionValidator.prepare_properties(
-              %{"--result" => "attr(value type(*))", "--text" => "ABCDE"},
-              context,
-              HtmlValidator.new_css_budget()
-            )
-          end
-        ] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
-      assert diagnostic.stage == :limits
-      assert diagnostic.message =~ "max_decoded_bytes"
-    end
-  end
-
   test "typed attributes, raw strings and fallbacks use the originating element" do
     styles =
       CssStyles.by_id(
@@ -190,33 +163,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
     end
   end
 
-  test "substitution budgets fail before expanding custom properties or accepting attribute URLs" do
-    alias NativeElixirPdfUtilities.Limits
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_depth, 0))
-    context = %{_css_attributes: %{"n" => "1pt"}}
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               CssSubstitutionValidator.prepare_properties(
-                 %{"--n" => "attr(n type(<length>))"},
-                 context,
-                 HtmlValidator.new_css_budget()
-               )
-             end)
-
-    assert diagnostic.message =~ "max_depth"
-    Limits.install(Map.put(original, :max_input_bytes, 4))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               CssSubstitutionValidator.resolve("attr(n)", context)
-             end)
-
-    assert diagnostic.message =~ "max_input_bytes"
-  end
-
   test "unused attribute and environment fallbacks retain custom-property cycles" do
     styles =
       CssStyles.by_id("""
@@ -228,35 +174,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
     assert styles["env"].width == 5
     assert styles["attr"].width == 5
     assert styles["valid"].width == 0
-  end
-
-  test "typed strings reject unquoted values and variable expansion keeps its cumulative resource diagnostic" do
-    context = %{_css_attributes: %{"data-text" => "unquoted text"}}
-
-    assert {:ok, "2pt"} =
-             CssSubstitutionValidator.resolve("attr(data-text type(<string>), 2pt)", context)
-
-    alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator
-    assert {:ok, syntax} = CssPropertyRegistrationValidator.syntax("\"<resolution>\"")
-    refute CssPropertyRegistrationValidator.matches_syntax?(syntax, "calc(-1dppx)")
-    alias NativeElixirPdfUtilities.Limits
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_work, 0))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               CssSubstitutionValidator.prepare_properties(
-                 %{"--n" => "attr(data-n type(*))"},
-                 %{
-                   _css_attributes: %{"data-n" => "var(--value)"},
-                   _custom_properties: %{"--value" => "1pt"}
-                 },
-                 HtmlValidator.new_css_budget()
-               )
-             end)
-
-    assert diagnostic.message =~ "max_work"
   end
 
   test "unapplied substitutions validate grammar without borrowing an element's attributes" do
@@ -289,5 +206,95 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsTest do
              )
 
     assert diagnostic.source == css and diagnostic.line == 1
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssStaticSubstitutionsGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Validators.{CssSubstitutionValidator, HtmlValidator}
+
+  # CSS Values 5 editor draft 2da1cb17a43306d3ef80d09d328883c71cdb54b2, attr().
+  # CSS Environment Variables 1, 23 September 2025, env() and safe-area variables.
+  test "attribute variable expansion failures survive custom-property preparation" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_decoded_bytes, 1))
+
+    context = %{
+      _css_attributes: %{"value" => "var(--text)"},
+      _custom_properties: %{"--text" => "ABCDE"}
+    }
+
+    for operation <- [
+          fn -> CssSubstitutionValidator.resolve("attr(value type(*))", context) end,
+          fn ->
+            CssSubstitutionValidator.prepare_properties(
+              %{"--result" => "attr(value type(*))", "--text" => "ABCDE"},
+              context,
+              HtmlValidator.new_css_budget()
+            )
+          end
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ "max_decoded_bytes"
+    end
+  end
+
+  test "substitution budgets fail before expanding custom properties or accepting attribute URLs" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_depth, 0))
+    context = %{_css_attributes: %{"n" => "1pt"}}
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               CssSubstitutionValidator.prepare_properties(
+                 %{"--n" => "attr(n type(<length>))"},
+                 context,
+                 HtmlValidator.new_css_budget()
+               )
+             end)
+
+    assert diagnostic.message =~ "max_depth"
+    Limits.install(Map.put(original, :max_input_bytes, 4))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               CssSubstitutionValidator.resolve("attr(n)", context)
+             end)
+
+    assert diagnostic.message =~ "max_input_bytes"
+  end
+
+  test "typed strings reject unquoted values and variable expansion keeps its cumulative resource diagnostic" do
+    context = %{_css_attributes: %{"data-text" => "unquoted text"}}
+
+    assert {:ok, "2pt"} =
+             CssSubstitutionValidator.resolve("attr(data-text type(<string>), 2pt)", context)
+
+    alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator
+    assert {:ok, syntax} = CssPropertyRegistrationValidator.syntax("\"<resolution>\"")
+    refute CssPropertyRegistrationValidator.matches_syntax?(syntax, "calc(-1dppx)")
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_work, 0))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               CssSubstitutionValidator.prepare_properties(
+                 %{"--n" => "attr(data-n type(*))"},
+                 %{
+                   _css_attributes: %{"data-n" => "var(--value)"},
+                   _custom_properties: %{"--value" => "1pt"}
+                 },
+                 HtmlValidator.new_css_budget()
+               )
+             end)
+
+    assert diagnostic.message =~ "max_work"
   end
 end

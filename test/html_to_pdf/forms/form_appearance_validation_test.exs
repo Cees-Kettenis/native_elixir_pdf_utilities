@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, Layout, ResourceContext}
 
@@ -12,9 +12,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
   }
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
     assert {:ok, pdf} =
              HtmlToPdf.render("<input name='editor' value='Initial' style='border-radius:3px'>",
                system_font_discovery: false
@@ -29,34 +26,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
      field: field,
      editor: widget.source_editor,
      wire: widget.dictionary["NEPUSourceEditor"]}
-  end
-
-  test "list-box projection returns an appearance serialization failure" do
-    assert {:ok, pdf} =
-             HtmlToPdf.render(
-               "<select name='pick' size='2'><option value='one' selected>One</option><option value='two'>Two</option></select>",
-               system_font_discovery: false
-             )
-
-    assert {:ok, context} = Reader.read_validated(pdf)
-    assert {:ok, %{fields: [field]}} = FormValidator.inspect_document(context)
-    [widget] = field.widgets
-    [left, bottom, right, top] = widget.rect
-
-    projected =
-      FormAppearanceValidator.project_field(
-        Map.put(field, :source_editor, widget.source_editor),
-        {1, 0, 0, 1, 0, 0},
-        [[{left, bottom}, {right, bottom}, {right, top}, {left, top}]],
-        {left, bottom, right, top}
-      )
-
-    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FormAppearanceValidator.appearance(projected, projected.source_editor, field.value)
-
-    assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.stage)
   end
 
   test "persisted templates reject malformed fonts, unknown instructions and invalid styles", %{
@@ -81,44 +50,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
       assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
       assert diagnostic.message != ""
     end
-  end
-
-  test "persisted geometry remains closed and bounded through every projection", %{
-    document: document,
-    wire: wire
-  } do
-    projection = %{
-      "Matrix" => [1, 0, 0, 1, 0, 0],
-      "Bounds" => [0, 0, 100, 30],
-      "Polygons" => [[0, 0, 100, 0, 100, 30, 0, 30]]
-    }
-
-    for altered <- [
-          Map.put(wire, "Clip", nil),
-          put_in(wire, ["Clip", "Unexpected"], 1),
-          put_in(wire, ["Clip", "Width"], -1),
-          put_in(wire, ["Clip", "Inner"], Map.put(wire["Clip"], "Inner", wire["Clip"])),
-          Map.put(wire, "Projections", [%{}]),
-          Map.put(wire, "Projections", [Map.put(projection, "Unexpected", 1)]),
-          Map.put(wire, "Projections", [Map.put(projection, "Polygons", [[0, 0, 1]])]),
-          Map.put(wire, "Projections", [Map.put(projection, "Matrix", [1, 0, 0, 1, "bad", 0])]),
-          Map.put(wire, "Projections", [Map.put(projection, "Bounds", [0, 0, 0, 30])]),
-          Map.put(wire, "Projections", [Map.put(projection, "Polygons", [[0, 0, "bad", 0, 0, 1]])])
-        ] do
-      assert {:error, {reason, diagnostic}} = FormAppearanceValidator.prepare(document, altered)
-      assert diagnostic.reason == reason and is_binary(diagnostic.message)
-    end
-
-    assert {:ok, rounded} =
-             FormAppearanceValidator.prepare(document, put_in(wire, ["Clip", "Radius"], 2))
-
-    assert rounded.clip.border_radius == 2
-    assert :ok = Limits.install(%{Limits.effective() | max_depth: 0})
-
-    assert {:error, {:unsupported_form, diagnostic}} =
-             FormAppearanceValidator.prepare(document, Map.put(wire, "Projections", [projection]))
-
-    assert diagnostic.message =~ "resource shape or depth"
   end
 
   test "projected text retains source font and rounded inner clip after serialization", %{
@@ -148,34 +79,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
     assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render([appearance])
     assert {:ok, text} = Text.extract(pdf, layout: false)
     assert text =~ "Updated ffi"
-  end
-
-  test "projection coordinates consume preparation entries before pair allocation", %{
-    document: document,
-    wire: wire
-  } do
-    projection = %{
-      "Matrix" => [1, 0, 0, 1, 0, 0],
-      "Bounds" => [0, 0, 100, 30],
-      "Polygons" => [[0, 0, 100, 0, 100, 30, 0, 30]]
-    }
-
-    wire = Map.put(wire, "Projections", [projection])
-    limits = Limits.effective()
-
-    assert {{:ok, _}, entries} =
-             NativeElixirPdfUtilities.TestSupport.ResourceBudget.measure(:max_entries, fn ->
-               FormAppearanceValidator.prepare(document, wire)
-             end)
-
-    Limits.install(%{limits | max_entries: entries})
-    assert {:ok, _} = FormAppearanceValidator.prepare(document, wire)
-    Limits.install(%{limits | max_entries: entries - 2})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FormAppearanceValidator.prepare(document, wire)
-
-    assert diagnostic.stage == :forms and diagnostic.source == "Polygons", inspect(diagnostic)
   end
 
   test "resolved scalar painter denies foreign nodes and malformed geometry", %{editor: editor} do
@@ -291,6 +194,132 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationTest do
       assert captured.clip == field.source_editor.clip
       assert Enum.find(fields, &(&1.name == "number")).source_editor != nil
     end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Pdf.Reader
+
+  alias NativeElixirPdfUtilities.Validators.{
+    FormAppearanceValidator,
+    FormValidator,
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<input name='editor' value='Initial' style='border-radius:3px'>",
+               system_font_discovery: false
+             )
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, %{fields: [field]}} = FormValidator.inspect_document(context)
+    [widget] = field.widgets
+
+    {:ok,
+     document: context.document,
+     field: field,
+     editor: widget.source_editor,
+     wire: widget.dictionary["NEPUSourceEditor"]}
+  end
+
+  test "list-box projection returns an appearance serialization failure" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<select name='pick' size='2'><option value='one' selected>One</option><option value='two'>Two</option></select>",
+               system_font_discovery: false
+             )
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, %{fields: [field]}} = FormValidator.inspect_document(context)
+    [widget] = field.widgets
+    [left, bottom, right, top] = widget.rect
+
+    projected =
+      FormAppearanceValidator.project_field(
+        Map.put(field, :source_editor, widget.source_editor),
+        {1, 0, 0, 1, 0, 0},
+        [[{left, bottom}, {right, bottom}, {right, top}, {left, top}]],
+        {left, bottom, right, top}
+      )
+
+    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FormAppearanceValidator.appearance(projected, projected.source_editor, field.value)
+
+    assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.stage)
+  end
+
+  test "persisted geometry remains closed and bounded through every projection", %{
+    document: document,
+    wire: wire
+  } do
+    projection = %{
+      "Matrix" => [1, 0, 0, 1, 0, 0],
+      "Bounds" => [0, 0, 100, 30],
+      "Polygons" => [[0, 0, 100, 0, 100, 30, 0, 30]]
+    }
+
+    for altered <- [
+          Map.put(wire, "Clip", nil),
+          put_in(wire, ["Clip", "Unexpected"], 1),
+          put_in(wire, ["Clip", "Width"], -1),
+          put_in(wire, ["Clip", "Inner"], Map.put(wire["Clip"], "Inner", wire["Clip"])),
+          Map.put(wire, "Projections", [%{}]),
+          Map.put(wire, "Projections", [Map.put(projection, "Unexpected", 1)]),
+          Map.put(wire, "Projections", [Map.put(projection, "Polygons", [[0, 0, 1]])]),
+          Map.put(wire, "Projections", [Map.put(projection, "Matrix", [1, 0, 0, 1, "bad", 0])]),
+          Map.put(wire, "Projections", [Map.put(projection, "Bounds", [0, 0, 0, 30])]),
+          Map.put(wire, "Projections", [Map.put(projection, "Polygons", [[0, 0, "bad", 0, 0, 1]])])
+        ] do
+      assert {:error, {reason, diagnostic}} = FormAppearanceValidator.prepare(document, altered)
+      assert diagnostic.reason == reason and is_binary(diagnostic.message)
+    end
+
+    assert {:ok, rounded} =
+             FormAppearanceValidator.prepare(document, put_in(wire, ["Clip", "Radius"], 2))
+
+    assert rounded.clip.border_radius == 2
+    assert :ok = Limits.install(%{Limits.effective() | max_depth: 0})
+
+    assert {:error, {:unsupported_form, diagnostic}} =
+             FormAppearanceValidator.prepare(document, Map.put(wire, "Projections", [projection]))
+
+    assert diagnostic.message =~ "resource shape or depth"
+  end
+
+  test "projection coordinates consume preparation entries before pair allocation", %{
+    document: document,
+    wire: wire
+  } do
+    projection = %{
+      "Matrix" => [1, 0, 0, 1, 0, 0],
+      "Bounds" => [0, 0, 100, 30],
+      "Polygons" => [[0, 0, 100, 0, 100, 30, 0, 30]]
+    }
+
+    wire = Map.put(wire, "Projections", [projection])
+    limits = Limits.effective()
+
+    assert {{:ok, _}, entries} =
+             NativeElixirPdfUtilities.TestSupport.ResourceBudget.measure(:max_entries, fn ->
+               FormAppearanceValidator.prepare(document, wire)
+             end)
+
+    Limits.install(%{limits | max_entries: entries})
+    assert {:ok, _} = FormAppearanceValidator.prepare(document, wire)
+    Limits.install(%{limits | max_entries: entries - 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FormAppearanceValidator.prepare(document, wire)
+
+    assert diagnostic.stage == :forms and diagnostic.source == "Polygons", inspect(diagnostic)
   end
 
   test "source text work exhaustion includes the field and operation", %{

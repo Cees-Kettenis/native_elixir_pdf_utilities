@@ -3,7 +3,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgForeignObjectTest do
   Code.require_file(Paths.support("svg_public_workflow.ex"))
   Code.require_file(Paths.support("png_fixture.ex"))
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf}
 
   test "native HTML drawing forms paint at their scene positions before ancestor vector effects" do

@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowResourceBudgetTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{FloatLayout, FlowShape, GridTracks}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Diagnostics}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{FloatLayout, GridTracks}
 
   alias NativeElixirPdfUtilities.Validators.{
     CssBoxAlignmentValidator,
@@ -10,29 +10,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowResourceBudgetTest do
     CssShapeValidator,
     HtmlValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-  end
-
-  test "grid source and typed cardinality failures keep the shared resource diagnostic" do
-    Limits.install(%{Limits.effective() | max_entries: 4})
-    parser = &HtmlValidator.parse_css_length(&1, :nonnegative)
-
-    for source <- ["repeat(5,10pt)", "subgrid repeat(5,[a])"] do
-      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
-               CssGridValidator.tracks(source, parser)
-
-      assert message =~ "4-item"
-    end
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             CssGridValidator.auto_tracks("repeat(5,10pt)", parser)
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             CssGridValidator.validate_style(%{grid_column_start: 5}, "panel")
-  end
 
   test "nested track grammars preserve an underlying length diagnostic" do
     failure =
@@ -114,6 +91,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowResourceBudgetTest do
                  )
                end)
              end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowResourceBudgetGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{FlowShape}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssColumnsValidator,
+    CssGridValidator,
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+  end
+
+  test "grid source and typed cardinality failures keep the shared resource diagnostic" do
+    Limits.install(%{Limits.effective() | max_entries: 4})
+    parser = &HtmlValidator.parse_css_length(&1, :nonnegative)
+
+    for source <- ["repeat(5,10pt)", "subgrid repeat(5,[a])"] do
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+               CssGridValidator.tracks(source, parser)
+
+      assert message =~ "4-item"
+    end
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             CssGridValidator.auto_tracks("repeat(5,10pt)", parser)
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             CssGridValidator.validate_style(%{grid_column_start: 5}, "panel")
   end
 
   test "shape geometry retains length and position evaluation errors" do

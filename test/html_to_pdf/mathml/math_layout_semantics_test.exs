@@ -1,4 +1,61 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
+
+  test "author CSS exposes text and HTML annotations without changing selected source identity" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render("""
+             <style>semantics > :first-child {display:none}
+             semantics > annotation {display:inline}
+             semantics > annotation-xml {display:inline-block}</style>
+             <math><semantics><mn>Hidden</mn><annotation>α</annotation>
+             <annotation-xml encoding='TEXT/HTML'><span>β</span></annotation-xml></semantics></math>
+             """)
+
+    assert {:ok, text} = Text.extract(pdf, layout: false)
+    assert text == "αβ"
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<math><semantics><mn>1</mn><annotation-xml encoding='application/xhtml+xml'><span id='original'>β</span></annotation-xml></semantics></math>"
+             )
+
+    [%{children: [%{children: [first, annotation]}]}] = dom.children
+    [html] = annotation.children
+    assert html.namespace == :html and html.attributes["id"] == "original"
+    assert first.node_id != annotation.node_id
+    [parent] = HtmlValidator.assign_render_metadata(hd(dom.children).children)
+    [first, annotation] = parent.children
+    assert MathLayoutValidator.child_selection_defaults(first, [parent]) == %{}
+    assert MathLayoutValidator.child_selection_defaults(annotation, [parent]) == %{display: :none}
+  end
+
+  test "computed hidden backgrounds skip assets while revealed alternatives use ordinary asset diagnostics" do
+    html =
+      "<math><semantics><mn>1</mn><annotation style='background-image:url(https://unselected.invalid/background.png)'>Hidden</annotation></semantics></math>"
+
+    assert {:ok, _pdf} = HtmlToPdf.render(html)
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             HtmlToPdf.render("<style>semantics > annotation {display:block}</style>" <> html)
+
+    assert diagnostic.stage == :asset
+    assert diagnostic.source == "https://unselected.invalid/background.png"
+    assert diagnostic.message =~ "provide bytes"
+
+    for css <- ["display:none", "display:block;display:none"] do
+      assert {:ok, _pdf} =
+               HtmlToPdf.render(
+                 "<span style='#{css};background-image:url(https://unselected.invalid/background.png)'>Hidden</span>"
+               )
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
@@ -10,15 +67,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     :ok
-  end
-
-  defp styled_math(html) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
-      with {:ok, dom} <- HtmlParser.parse_detailed(html),
-           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
-        {:ok, node.style._math_box}
-      end
-    end)
   end
 
   test "initial selection retains the first element geometry and original Unicode" do
@@ -81,34 +129,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
       assert measured.glyphs == [] and measured.width == 0
       assert :ok == MathLayoutValidator.validate_measured_geometry(measured)
     end
-  end
-
-  test "author CSS exposes text and HTML annotations without changing selected source identity" do
-    assert {:ok, pdf} =
-             HtmlToPdf.render("""
-             <style>semantics > :first-child {display:none}
-             semantics > annotation {display:inline}
-             semantics > annotation-xml {display:inline-block}</style>
-             <math><semantics><mn>Hidden</mn><annotation>α</annotation>
-             <annotation-xml encoding='TEXT/HTML'><span>β</span></annotation-xml></semantics></math>
-             """)
-
-    assert {:ok, text} = Text.extract(pdf, layout: false)
-    assert text == "αβ"
-
-    assert {:ok, dom} =
-             HtmlParser.parse_detailed(
-               "<math><semantics><mn>1</mn><annotation-xml encoding='application/xhtml+xml'><span id='original'>β</span></annotation-xml></semantics></math>"
-             )
-
-    [%{children: [%{children: [first, annotation]}]}] = dom.children
-    [html] = annotation.children
-    assert html.namespace == :html and html.attributes["id"] == "original"
-    assert first.node_id != annotation.node_id
-    [parent] = HtmlValidator.assign_render_metadata(hd(dom.children).children)
-    [first, annotation] = parent.children
-    assert MathLayoutValidator.child_selection_defaults(first, [parent]) == %{}
-    assert MathLayoutValidator.child_selection_defaults(annotation, [parent]) == %{display: :none}
   end
 
   test "unselected HTML and SVG payloads do not fetch, paint, link or consume glyph work" do
@@ -198,27 +218,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
     assert diagnostic.message =~ "max_entries"
   end
 
-  test "computed hidden backgrounds skip assets while revealed alternatives use ordinary asset diagnostics" do
-    html =
-      "<math><semantics><mn>1</mn><annotation style='background-image:url(https://unselected.invalid/background.png)'>Hidden</annotation></semantics></math>"
-
-    assert {:ok, _pdf} = HtmlToPdf.render(html)
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             HtmlToPdf.render("<style>semantics > annotation {display:block}</style>" <> html)
-
-    assert diagnostic.stage == :asset
-    assert diagnostic.source == "https://unselected.invalid/background.png"
-    assert diagnostic.message =~ "provide bytes"
-
-    for css <- ["display:none", "display:block;display:none"] do
-      assert {:ok, _pdf} =
-               HtmlToPdf.render(
-                 "<span style='#{css};background-image:url(https://unselected.invalid/background.png)'>Hidden</span>"
-               )
-    end
-  end
-
   test "selected content retains shared input and font work diagnostics" do
     assert {:error, {:unsupported_html, diagnostic}} =
              HtmlToPdf.render(
@@ -237,5 +236,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutSemanticsTest do
 
     assert diagnostic.message =~ "max_work"
     assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
+  end
+
+  defp styled_math(html) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
+      with {:ok, dom} <- HtmlParser.parse_detailed(html),
+           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
+        {:ok, node.style._math_box}
+      end
+    end)
   end
 end

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Forms, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
 
@@ -155,17 +155,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsTest do
     assert node.style._color_state.rgb == {1.0, 0.0, 0.0}
   end
 
-  test "skipped file intrinsic width obeys the existing shared numeric ceiling" do
-    alias NativeElixirPdfUtilities.Limits
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_numeric_magnitude: 100})
-    assert {:ok, dom} = HtmlParser.parse_detailed("<input hidden=until-found type=file>")
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Style.compute_detailed(dom)
-    assert diagnostic.stage == :style
-    assert diagnostic.message =~ "max_numeric_magnitude"
-  end
-
   test "forged skipped paint state returns an actionable public layout diagnostic" do
     assert {:ok, dom} =
              HtmlParser.parse_detailed("<body><input hidden=until-found type=color></body>")
@@ -181,5 +170,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsTest do
     assert diagnostic.stage == :layout and diagnostic.operation == :layout
     assert diagnostic.source in ["input", "color"]
     assert is_binary(diagnostic.message) and byte_size(diagnostic.message) > 20
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SkippedSpecialControlsGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+
+  test "skipped file intrinsic width obeys the existing shared numeric ceiling" do
+    alias NativeElixirPdfUtilities.Limits
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(%{previous | max_numeric_magnitude: 100})
+    assert {:ok, dom} = HtmlParser.parse_detailed("<input hidden=until-found type=file>")
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Style.compute_detailed(dom)
+    assert diagnostic.stage == :style
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 end

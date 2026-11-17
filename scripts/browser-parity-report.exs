@@ -74,6 +74,12 @@ peak = Enum.max(peaks, fn -> 0 end)
 
 report = %{
   phases: phases,
+  reference_cache:
+    events
+    |> Enum.filter(&(&1["phase"] == "shared_reference"))
+    |> Enum.map(& &1["reference_cache"])
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies(),
   owners: owners,
   peak_completed_browser_captures: peak,
   raster_pages:

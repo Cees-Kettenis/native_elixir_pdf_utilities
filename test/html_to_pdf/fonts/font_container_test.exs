@@ -1,16 +1,13 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontContainerTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, TrueTypeSubset}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
   alias NativeElixirPdfUtilities.TestSupport.Paths
   alias NativeElixirPdfUtilities.Validators.{FontContainerValidator, FontValidator}
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
     %{
       woff: File.read!(Paths.fixture("fonts/selected-container.woff")),
       ttc: File.read!(Paths.fixture("fonts/selected-container.ttc"))
@@ -285,38 +282,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontContainerTest do
     assert {:error, {:invalid_font, _}} = FontContainerValidator.prepare(overlapping)
   end
 
-  test "decoded bytes and cumulative reconstruction work have independent limits", %{
-    woff: woff,
-    ttc: ttc
-  } do
-    limits = Limits.effective()
-    Limits.install(%{limits | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
-             FontValidator.with_budget(fn ->
-               NativeElixirPdfUtilities.Validators.CssFontValidator.prepare_face_properties(%{
-                 unicode_range: [{1, 2}, {3, 4}]
-               })
-             end)
-
-    assert message =~ "max_work"
-    Limits.install(%{limits | max_decoded_bytes: 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = FontContainerValidator.prepare(woff)
-    assert diagnostic.message =~ "max_decoded_bytes"
-    Limits.install(%{limits | max_work: 1})
-
-    for data <- [woff, ttc] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               FontContainerValidator.prepare(data)
-
-      assert diagnostic.message =~ "max_work"
-    end
-
-    Limits.install(%{limits | max_entries: 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = FontContainerValidator.prepare(ttc)
-    assert diagnostic.message =~ "max_entries"
-  end
-
   defp replace_u32(data, offset, value), do: replace_bytes(data, offset, <<value::32>>)
 
   defp replace_bytes(data, offset, bytes) do
@@ -351,5 +316,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontContainerTest do
       Enum.reverse(records),
       Enum.reverse(payloads)
     ])
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FontContainerGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.TestSupport.Paths
+  alias NativeElixirPdfUtilities.Validators.{FontContainerValidator, FontValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    %{
+      woff: File.read!(Paths.fixture("fonts/selected-container.woff")),
+      ttc: File.read!(Paths.fixture("fonts/selected-container.ttc"))
+    }
+  end
+
+  test "decoded bytes and cumulative reconstruction work have independent limits", %{
+    woff: woff,
+    ttc: ttc
+  } do
+    limits = Limits.effective()
+    Limits.install(%{limits | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             FontValidator.with_budget(fn ->
+               NativeElixirPdfUtilities.Validators.CssFontValidator.prepare_face_properties(%{
+                 unicode_range: [{1, 2}, {3, 4}]
+               })
+             end)
+
+    assert message =~ "max_work"
+    Limits.install(%{limits | max_decoded_bytes: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = FontContainerValidator.prepare(woff)
+    assert diagnostic.message =~ "max_decoded_bytes"
+    Limits.install(%{limits | max_work: 1})
+
+    for data <- [woff, ttc] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FontContainerValidator.prepare(data)
+
+      assert diagnostic.message =~ "max_work"
+    end
+
+    Limits.install(%{limits | max_entries: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = FontContainerValidator.prepare(ttc)
+    assert diagnostic.message =~ "max_entries"
   end
 end

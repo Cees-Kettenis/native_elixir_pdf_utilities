@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.StampRasterTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.Stamp

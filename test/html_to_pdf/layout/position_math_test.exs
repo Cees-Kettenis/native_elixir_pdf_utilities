@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PositionMathTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
   alias NativeElixirPdfUtilities.Validators.{CssPositionValidator, CssValueValidator}
 

@@ -1,8 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TableRowBandGeometryTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
-  alias NativeElixirPdfUtilities.Limits
 
   setup do
     {:ok, dom} =
@@ -54,6 +53,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableRowBandGeometryTest do
       assert diagnostic.operation == :prepare_row_band_geometry
       assert diagnostic.message =~ "recompute table geometry"
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TableRowBandGeometryGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+  alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    {:ok, dom} =
+      HtmlParser.parse_detailed(
+        "<table><tr><td rowspan='3'>Span</td><td>First</td></tr><tr><td>Second</td></tr><tr><td>Third</td></tr></table>"
+      )
+
+    {:ok, %{children: [table]}} = Style.compute_detailed(dom)
+    {:ok, %{rows: rows}} = HtmlTableValidator.form(table.children, table.style)
+    {:ok, rows: rows}
   end
 
   test "grid quota rejects canonical span plans before band allocation", %{rows: rows} do

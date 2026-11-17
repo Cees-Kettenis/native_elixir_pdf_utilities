@@ -1,4 +1,31 @@
 defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+
+  alias NativeElixirPdfUtilities.Pdf.{
+    IncrementalWriter,
+    Reader
+  }
+
+  setup do
+    limits = Limits.effective()
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: []}])
+    %{limits: limits, pdf: pdf}
+  end
+
+  test "the shared incremental serializer rejects unsupported copied trailer entries", ctx do
+    assert {:ok, context} = Reader.read_validated(ctx.pdf)
+    context = put_in(context.document.trailer["Info"], :unsupported)
+    assert {:error, {:invalid_pdf_input, diagnostic}} = IncrementalWriter.write(context, [])
+    assert diagnostic.stage == :incremental_write
+    assert diagnostic.message =~ "trailer cannot be serialized"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Merge, Outlines, Stamp}
@@ -407,14 +434,6 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsTest do
     Limits.install(ctx.limits)
     assert {:ok, removed} = Outlines.put(sparse, [])
     assert {:ok, _} = Reader.read_validated(removed)
-  end
-
-  test "the shared incremental serializer rejects unsupported copied trailer entries", ctx do
-    assert {:ok, context} = Reader.read_validated(ctx.pdf)
-    context = put_in(context.document.trailer["Info"], :unsupported)
-    assert {:error, {:invalid_pdf_input, diagnostic}} = IncrementalWriter.write(context, [])
-    assert diagnostic.stage == :incremental_write
-    assert diagnostic.message =~ "trailer cannot be serialized"
   end
 
   test "outline additions and removals reserve an incremental revision before writing", ctx do

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterWorkflowTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.Pdf.Reader

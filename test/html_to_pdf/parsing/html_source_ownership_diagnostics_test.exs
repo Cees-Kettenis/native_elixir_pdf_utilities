@@ -1,61 +1,23 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.Validators.HtmlSourceOwnershipDiagnosticsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   Code.require_file(Paths.support("png_fixture.ex"))
-  alias NativeElixirPdfUtilities.TestSupport.PngFixture
-  alias NativeElixirPdfUtilities.Limits
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
-    AssetLoader,
-    CssParser,
     FontFallback,
     HtmlParser,
     HtmlTree,
-    ResourceContext,
     Style
   }
 
   alias NativeElixirPdfUtilities.Validators.{
-    CssValueValidator,
     HtmlTreeValidator,
     HtmlValidator,
     TemplatePatchValidator,
     TemplateRendererContextValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
-
-  test "malformed and oversized diagnostic CSS preserves the shared validator failure" do
-    assert [record] = CssValueValidator.stylesheet_declaration_sources("p { width: bananas }")
-    assert record.source.text == "width: bananas"
-
-    for css <- [nil, <<255>>] do
-      assert {:error, {:invalid_css, diagnostic}} = CssParser.style_declaration_records(css)
-      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-      assert is_binary(diagnostic.message) and diagnostic.message != ""
-
-      assert {:error, {:invalid_css, ^diagnostic}} =
-               CssValueValidator.stylesheet_declaration_sources(css)
-
-      assert {:invalid_css, ^diagnostic} =
-               CssValueValidator.declaration_error(css, {:error, {:invalid_css, diagnostic}})
-    end
-
-    assert {:ok, []} = CssParser.style_declaration_records("p {")
-
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssValueValidator.stylesheet_declaration_sources("p { width: bananas }")
-
-    assert diagnostic.stage == :css and diagnostic.message =~ "max_input_bytes"
-  end
 
   test "wrong patch parent and missing end marker are recoverable without changing the tree" do
     assert {:ok, document} =
@@ -251,6 +213,78 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSourceOwnershipDiagnosticsTest
     refute Process.get({TemplateRendererContextValidator, :preparation})
   end
 
+  test "noframes placement uses the same native content-model authority" do
+    for context <- [:document, :after_doctype, :after_head, "html", "head", "body", "frameset"] do
+      assert HtmlValidator.valid_html_child?(context, "noframes")
+    end
+
+    refute HtmlValidator.valid_html_child?("div", "noframes")
+
+    assert {:error, {:unsupported_html, diagnostic}} =
+             HtmlParser.parse_document_detailed(
+               "<body><div><noframes>Fallback</noframes></div></body>"
+             )
+
+    assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
+    assert diagnostic.source == "<noframes>" and diagnostic.line == 1 and diagnostic.column == 12
+    assert diagnostic.message =~ "noframes"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.HtmlSourceOwnershipDiagnosticsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  Code.require_file(Paths.support("png_fixture.ex"))
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+  alias NativeElixirPdfUtilities.Limits
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    AssetLoader,
+    CssParser,
+    HtmlParser,
+    HtmlTree,
+    ResourceContext
+  }
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssValueValidator,
+    HtmlValidator,
+    TemplatePatchValidator,
+    TemplateRendererContextValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "malformed and oversized diagnostic CSS preserves the shared validator failure" do
+    assert [record] = CssValueValidator.stylesheet_declaration_sources("p { width: bananas }")
+    assert record.source.text == "width: bananas"
+
+    for css <- [nil, <<255>>] do
+      assert {:error, {:invalid_css, diagnostic}} = CssParser.style_declaration_records(css)
+      assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
+      assert is_binary(diagnostic.message) and diagnostic.message != ""
+
+      assert {:error, {:invalid_css, ^diagnostic}} =
+               CssValueValidator.stylesheet_declaration_sources(css)
+
+      assert {:invalid_css, ^diagnostic} =
+               CssValueValidator.declaration_error(css, {:error, {:invalid_css, diagnostic}})
+    end
+
+    assert {:ok, []} = CssParser.style_declaration_records("p {")
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssValueValidator.stylesheet_declaration_sources("p { width: bananas }")
+
+    assert diagnostic.stage == :css and diagnostic.message =~ "max_input_bytes"
+  end
+
   test "an issued marker expires and cannot bind a later resource observation" do
     png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
     prefix = "<?marker name='A'><p>Original</p><img src='pixel.png'>"
@@ -339,22 +373,5 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSourceOwnershipDiagnosticsTest
     after
       :erlang.trace_pattern({AssetLoader, :resolve, 4}, false, [:local])
     end
-  end
-
-  test "noframes placement uses the same native content-model authority" do
-    for context <- [:document, :after_doctype, :after_head, "html", "head", "body", "frameset"] do
-      assert HtmlValidator.valid_html_child?(context, "noframes")
-    end
-
-    refute HtmlValidator.valid_html_child?("div", "noframes")
-
-    assert {:error, {:unsupported_html, diagnostic}} =
-             HtmlParser.parse_document_detailed(
-               "<body><div><noframes>Fallback</noframes></div></body>"
-             )
-
-    assert diagnostic.stage == :html and diagnostic.reason == :unsupported_html
-    assert diagnostic.source == "<noframes>" and diagnostic.line == 1 and diagnostic.column == 12
-    assert diagnostic.message =~ "noframes"
   end
 end

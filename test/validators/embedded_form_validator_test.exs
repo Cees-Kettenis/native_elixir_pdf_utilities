@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, Layout, ResourceContext}
 
@@ -9,12 +9,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
     HtmlValidator,
     WriterValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "child controls issue opaque scoped fields and retain clipped appearance paint" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
@@ -101,6 +95,78 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
 
       assert ResourceContext.current() == parent
     end)
+  end
+
+  test "unknown, tampered, cross-document and expired descriptors cannot become fields" do
+    descriptor =
+      ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
+        assert {:ok, first} =
+                 EmbeddedViewport.prepare_iframe_document({:blank, "about:blank"}, parent)
+
+        assert {:ok, second} =
+                 EmbeddedViewport.prepare_iframe_document({:blank, "about:blank"}, parent)
+
+        assert {:ok, descriptor} = EmbeddedFormValidator.issue(first.context, [])
+
+        assert {:error, {:invalid_form, slice_diagnostic}} =
+                 EmbeddedFormValidator.issue_slice(%{descriptor | token: make_ref()})
+
+        assert slice_diagnostic.operation == :compose_child_widgets
+
+        assert {:error, {:invalid_form, diagnostic}} =
+                 EmbeddedFormValidator.resolve(%{descriptor | token: make_ref()})
+
+        assert diagnostic.operation == :compose_child_widgets
+
+        assert {:error, {:invalid_form, diagnostic}} =
+                 EmbeddedFormValidator.resolve(%{descriptor | context: second.context})
+
+        assert diagnostic.message =~ "different document"
+
+        assert {:error, {:invalid_options, _}} =
+                 EmbeddedFormValidator.resolve(%{
+                   descriptor
+                   | context: %{first.context | authorization_root: "/changed"}
+                 })
+
+        assert {:error, {:invalid_form, _}} = EmbeddedFormValidator.resolve(%{fields: []})
+        descriptor
+      end)
+
+    assert {:error, {:invalid_options, diagnostic}} = EmbeddedFormValidator.resolve(descriptor)
+    assert diagnostic.message =~ "immutable scope"
+  end
+
+  test "geometry authority rejects malformed or excessive rect coordinates before appearance allocation" do
+    for values <- [
+          [],
+          [0, 0, 1, 1],
+          List.duplicate(:invalid, 8),
+          [0, 0, Limits.get(:max_numeric_magnitude) + 1, 1, 0, 0, 1, 1]
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               WriterValidator.validate_pdf_geometry(values)
+
+      assert diagnostic.stage == :pdf and diagnostic.message != ""
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, Layout, ResourceContext}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    EmbeddedFormValidator,
+    HtmlFormValidator,
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "public axis projections validate geometry and preserve empty clips" do
@@ -286,46 +352,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
     end)
   end
 
-  test "unknown, tampered, cross-document and expired descriptors cannot become fields" do
-    descriptor =
-      ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
-        assert {:ok, first} =
-                 EmbeddedViewport.prepare_iframe_document({:blank, "about:blank"}, parent)
-
-        assert {:ok, second} =
-                 EmbeddedViewport.prepare_iframe_document({:blank, "about:blank"}, parent)
-
-        assert {:ok, descriptor} = EmbeddedFormValidator.issue(first.context, [])
-
-        assert {:error, {:invalid_form, slice_diagnostic}} =
-                 EmbeddedFormValidator.issue_slice(%{descriptor | token: make_ref()})
-
-        assert slice_diagnostic.operation == :compose_child_widgets
-
-        assert {:error, {:invalid_form, diagnostic}} =
-                 EmbeddedFormValidator.resolve(%{descriptor | token: make_ref()})
-
-        assert diagnostic.operation == :compose_child_widgets
-
-        assert {:error, {:invalid_form, diagnostic}} =
-                 EmbeddedFormValidator.resolve(%{descriptor | context: second.context})
-
-        assert diagnostic.message =~ "different document"
-
-        assert {:error, {:invalid_options, _}} =
-                 EmbeddedFormValidator.resolve(%{
-                   descriptor
-                   | context: %{first.context | authorization_root: "/changed"}
-                 })
-
-        assert {:error, {:invalid_form, _}} = EmbeddedFormValidator.resolve(%{fields: []})
-        descriptor
-      end)
-
-    assert {:error, {:invalid_options, diagnostic}} = EmbeddedFormValidator.resolve(descriptor)
-    assert diagnostic.message =~ "immutable scope"
-  end
-
   test "source widget charging is cumulative and does not abandon the caller callback" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, prepared} =
@@ -356,19 +382,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedFormValidatorTest do
       :continued
     end)
     |> then(&assert(&1 == :continued))
-  end
-
-  test "geometry authority rejects malformed or excessive rect coordinates before appearance allocation" do
-    for values <- [
-          [],
-          [0, 0, 1, 1],
-          List.duplicate(:invalid, 8),
-          [0, 0, Limits.get(:max_numeric_magnitude) + 1, 1, 0, 0, 1, 1]
-        ] do
-      assert {:error, {:invalid_pdf_input, diagnostic}} =
-               WriterValidator.validate_pdf_geometry(values)
-
-      assert diagnostic.stage == :pdf and diagnostic.message != ""
-    end
   end
 end

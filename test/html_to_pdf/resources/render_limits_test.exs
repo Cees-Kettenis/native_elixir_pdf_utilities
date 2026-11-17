@@ -1,16 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf
-  alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Layout, PdfWriter, Style}
-  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "reversed list preparation and painting share image admission" do
     alias NativeElixirPdfUtilities.TestSupport.Paths
@@ -26,6 +19,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
                  base_url: base
                )
     end
+  end
+
+  test "column group formation ignores parent span independently of strict source conformance" do
+    html = "<table><colgroup><col span=1></colgroup><tr><td>Actual column</td></tr></table>"
+    assert {:ok, reference} = HtmlToPdf.render(String.replace(html, " span=1", ""))
+    assert {:ok, ^reference} = HtmlToPdf.render(html)
+    assert {:ok, dom} = HtmlParser.parse(html)
+
+    assert {:ok, styled} =
+             Style.compute_detailed(dom, stylesheets: [{:css, "col[span='1']{width:42pt}"}])
+
+    [table] = styled.children
+    assert table.style._table_model.width == 1
+    assert hd(hd(table.children).children).style.width == 42.0
+
+    # HTML source conformance prohibits span together with authored col children.
+    invalid = String.replace(html, "<colgroup>", "<colgroup span=99999>")
+    assert {:error, :unsupported_html} = HtmlParser.parse(invalid)
+
+    # The logical formation algorithm still defines ignored-parent recovery.
+    [table] = dom.children
+    [group, row] = table.children
+    group = %{group | attributes: Map.put(group.attributes, "span", "99999")}
+    nodes = HtmlValidator.assign_render_metadata([%{table | children: [group, row]}])
+
+    assert {:ok, [prepared]} =
+             NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_document(nodes)
+
+    assert prepared._table_model.width == 1
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Layout, PdfWriter, Style}
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "HTML destination descriptors charge the existing render work budget" do
@@ -163,35 +200,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsTest do
     assert diagnostic.line == 8 and diagnostic.column == 5
     assert diagnostic.source == "<td rowspan=3>"
     assert diagnostic.reason == :resource_limit_exceeded and diagnostic.message =~ "2-item limit"
-  end
-
-  test "column group formation ignores parent span independently of strict source conformance" do
-    html = "<table><colgroup><col span=1></colgroup><tr><td>Actual column</td></tr></table>"
-    assert {:ok, reference} = HtmlToPdf.render(String.replace(html, " span=1", ""))
-    assert {:ok, ^reference} = HtmlToPdf.render(html)
-    assert {:ok, dom} = HtmlParser.parse(html)
-
-    assert {:ok, styled} =
-             Style.compute_detailed(dom, stylesheets: [{:css, "col[span='1']{width:42pt}"}])
-
-    [table] = styled.children
-    assert table.style._table_model.width == 1
-    assert hd(hd(table.children).children).style.width == 42.0
-
-    # HTML source conformance prohibits span together with authored col children.
-    invalid = String.replace(html, "<colgroup>", "<colgroup span=99999>")
-    assert {:error, :unsupported_html} = HtmlParser.parse(invalid)
-
-    # The logical formation algorithm still defines ignored-parent recovery.
-    [table] = dom.children
-    [group, row] = table.children
-    group = %{group | attributes: Map.put(group.attributes, "span", "99999")}
-    nodes = HtmlValidator.assign_render_metadata([%{table | children: [group, row]}])
-
-    assert {:ok, [prepared]} =
-             NativeElixirPdfUtilities.Validators.HtmlTableValidator.prepare_document(nodes)
-
-    assert prepared._table_model.width == 1
   end
 
   test "editability traversal charges shared CSS work and releases failed caches" do

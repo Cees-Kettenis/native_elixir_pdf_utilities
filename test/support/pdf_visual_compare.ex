@@ -2,6 +2,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 
 Code.require_file(Paths.support("browser_parity_telemetry.ex"))
 Code.require_file(Paths.support("browser_reference_validator.ex"))
+Code.require_file(Paths.support("browser_reference_cache.ex"))
 Code.require_file(Paths.support("chromium_pool.ex"))
 Code.require_file(Paths.support("browser_fixture_pages.ex"))
 
@@ -14,6 +15,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.TestSupport.BrowserParityTelemetry, as: Telemetry
   alias NativeElixirPdfUtilities.TestSupport.BrowserReferenceValidator
+  alias NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache
 
   @type comparison_stats :: %{
           required(:fixture) => String.t(),
@@ -458,8 +460,18 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
             &prepare_fixture_page_references!/4
           )
 
+      owned_reference =
+        if is_nil(reference) and BrowserReferenceCache.candidate?(fixture_path, opts),
+          do: prepare_browser_reference!(fixture_path, opts)
+
+      reference = reference || owned_reference
       opts = if reference, do: Keyword.put(opts, :reference, reference), else: opts
-      compare_browser_fixture!(fixture_path, opts)
+
+      try do
+        compare_browser_fixture!(fixture_path, opts)
+      after
+        if owned_reference, do: File.rm_rf!(owned_reference.artifact_dir)
+      end
     end)
   end
 
@@ -839,6 +851,10 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       margin: Keyword.get(render_opts, :margin),
       dpi: dpi,
       reference_mode: Keyword.get(opts, :svg_reference),
+      reference_scale:
+        if(Keyword.get(opts, :svg_reference) == :png,
+          do: NativeElixirPdfUtilities.Limits.get(:svg_raster_scale)
+        ),
       browser: command_output!(chromium_bin, ["--version"]),
       rasterizer: command_output!(pdftoppm_bin, ["-v"]),
       environment:
@@ -864,36 +880,91 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       ])
 
     Telemetry.measure(:shared_reference, %{fixture: Path.expand(fixture_path)}, fn ->
-      prepared =
-        prepare_browser_fixture!(fixture_path, Keyword.put(opts, :artifact_dir, directory))
-
+      prepared = prepare_browser_input!(fixture_path, Keyword.put(opts, :artifact_dir, directory))
       %{pdftoppm_bin: rasterizer, chromium_pdf: pdf, dpi: dpi} = prepared
-      pages = rasterize_pdf!(rasterizer, pdf, Path.join(directory, "chromium"), dpi)
 
-      vector_pages =
-        if Keyword.get(opts, :svg_reference) == :png do
-          rasterize_pdf!(
+      try do
+        identity =
+          browser_reference_identity(
+            prepared.fixture_path,
+            prepared.chromium_fixture_path,
+            prepared.chromium_bin,
             rasterizer,
-            Path.rootname(pdf) <> "-vector.pdf",
-            Path.join(directory, "chromium-vector"),
-            72
+            prepared.render_opts,
+            opts,
+            dpi
           )
-        else
-          []
+
+        key =
+          if BrowserReferenceCache.candidate?(fixture_path, opts) and
+               BrowserReferenceCache.eligible?(prepared.chromium_fixture_path, opts),
+             do: BrowserReferenceCache.key(identity)
+
+        cached = if key, do: BrowserReferenceCache.restore(key, directory)
+        cache_status = if(key, do: if(cached, do: :hit, else: :miss), else: :bypass)
+        Telemetry.annotate(%{reference_cache: cache_status})
+
+        captured =
+          cached ||
+            (
+              requests =
+                render_chromium_pdf!(
+                  prepared.chromium_bin,
+                  prepared.chromium_fixture_path,
+                  pdf,
+                  opts,
+                  prepared.render_opts
+                )
+
+              pages = rasterize_pdf!(rasterizer, pdf, Path.join(directory, "chromium"), dpi)
+
+              vector_pages =
+                if Keyword.get(opts, :svg_reference) == :png,
+                  do:
+                    rasterize_pdf!(
+                      rasterizer,
+                      Path.rootname(pdf) <> "-vector.pdf",
+                      Path.join(directory, "chromium-vector"),
+                      72
+                    ),
+                  else: []
+
+              %{
+                pages: pages,
+                vector_pages: vector_pages,
+                embedded_fonts: command_output!(pdffonts_bin!(), [pdf]),
+                requests: requests
+              }
+            )
+
+        artifacts =
+          directory |> Path.join("chromium*") |> Path.wildcard() |> Enum.filter(&File.regular?/1)
+
+        reference =
+          prepared
+          |> Map.drop([:chromium_fixture_path, :temporary_input])
+          |> Map.merge(captured)
+          |> Map.merge(%{
+            identity: identity,
+            cache_status: cache_status,
+            artifacts: artifacts,
+            artifact_hashes:
+              Map.new(artifacts, fn path ->
+                {path, Base.encode16(:crypto.hash(:sha256, File.read!(path)), case: :lower)}
+              end)
+          })
+
+        if key && is_nil(cached) do
+          allowed = [prepared.chromium_fixture_path, prepared.fixture_path]
+
+          if BrowserReferenceCache.requests_covered?(reference.requests, allowed, directory),
+            do: BrowserReferenceCache.store(key, reference)
         end
 
-      artifacts = directory |> Path.join("*") |> Path.wildcard() |> Enum.filter(&File.regular?/1)
-
-      Map.merge(prepared, %{
-        pages: pages,
-        vector_pages: vector_pages,
-        embedded_fonts: command_output!(pdffonts_bin!(), [pdf]),
-        artifacts: artifacts,
-        artifact_hashes:
-          Map.new(artifacts, fn path ->
-            {path, Base.encode16(:crypto.hash(:sha256, File.read!(path)), case: :lower)}
-          end)
-      })
+        reference
+      after
+        if prepared.temporary_input, do: File.rm!(prepared.temporary_input)
+      end
     end)
   end
 
@@ -1311,7 +1382,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           width: (width - margin.left - margin.right) / 0.75,
           height: (height - margin.top - margin.bottom) / 0.75,
           scale: NativeElixirPdfUtilities.Limits.get(:svg_raster_scale)
-        }
+        },
+        request_observer: self()
       )
     else
       if System.get_env("BROWSER_PARITY_BROWSER") == "cli" do
@@ -1320,9 +1392,21 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         NativeElixirPdfUtilities.TestSupport.ChromiumPool.print_pdf!(
           chromium_bin,
           fixture_path,
-          output_path
+          output_path,
+          nil,
+          request_observer: self()
         )
       end
+    end
+
+    collect_browser_requests([])
+  end
+
+  defp collect_browser_requests(requests) do
+    receive do
+      {:chromium_request, _pid, url} -> collect_browser_requests([url | requests])
+    after
+      0 -> Enum.uniq(requests)
     end
   end
 

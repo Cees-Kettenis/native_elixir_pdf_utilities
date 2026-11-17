@@ -1,7 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, SvgScene, SvgRasterizer, PngDecoder}
-  alias NativeElixirPdfUtilities.Limits
 
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
@@ -10,12 +9,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest d
   }
 
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "qualified image references retain approved PNG bytes across XML transport" do
     png = PngFixture.build(2, 1, 2, 8, 0, fn _, _ -> [10, 20, 30] end)
@@ -38,17 +31,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest d
     assert {:ok, rendered} = SvgRasterizer.rasterize(source, [], nil, [], context)
     assert {:ok, image} = PngDecoder.decode(rendered, nil, false)
     assert image.data == :binary.copy(<<10, 20, 30>>, 2)
-  end
-
-  test "extraction charges XML source before building its canonical tree" do
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               SvgConverterValidator.prepare_extraction("<svg/>")
-             end)
-
-    assert diagnostic.source == "SVG" and diagnostic.message =~ "max_input_bytes"
   end
 
   test "extracted scenes support optional budgets and independently discovered text fonts" do
@@ -256,6 +238,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest d
 
       assert request.source =~ kept
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    SvgConverterValidator
+  }
+
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "extraction charges XML source before building its canonical tree" do
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               SvgConverterValidator.prepare_extraction("<svg/>")
+             end)
+
+    assert diagnostic.source == "SVG" and diagnostic.message =~ "max_input_bytes"
   end
 
   test "reused nested raster resources charge their decoded planes per expansion" do

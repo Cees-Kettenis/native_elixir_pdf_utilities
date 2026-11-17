@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgViewport, Layout}
   alias NativeElixirPdfUtilities.Validators.{SvgStyleValidator, SvgViewportValidator}
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
@@ -7,7 +7,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPreparationTest do
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 

@@ -1,8 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellBackgroundGeometryTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
   alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
-  alias NativeElixirPdfUtilities.Limits
 
   setup do
     {:ok, dom} =
@@ -111,6 +110,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellBackgroundGeometryTest do
       assert diagnostic.operation == :prepare_cell_background_geometry
       assert diagnostic.message =~ "recompute table geometry"
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TableCellBackgroundGeometryGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+  alias NativeElixirPdfUtilities.Validators.HtmlTableValidator
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    {:ok, dom} =
+      HtmlParser.parse_detailed(
+        "<table><tbody style='background:#f0dcb8'><tr style='background:#eef'><td rowspan='3'>Span</td><td>First</td></tr><tr style='background:#fee'><td>Second</td></tr><tr><td>Third</td></tr></tbody></table>"
+      )
+
+    {:ok, %{children: [table]}} = Style.compute_detailed(dom)
+    {:ok, %{rows: rows}} = HtmlTableValidator.form(table.children, table.style)
+    {:ok, rows: rows}
   end
 
   test "bounded grid work is reserved before allocating background geometry", %{rows: rows} do

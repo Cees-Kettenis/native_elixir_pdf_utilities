@@ -1,16 +1,10 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Forms, Text, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, ResourceContext}
   alias NativeElixirPdfUtilities.Validators.{HtmlTableValidator, HtmlValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "final hidden controls and word-break objects retain authored cascade without becoming table ancestors" do
     for html <- [
@@ -571,52 +565,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
     assert complete != [] and painted_height > 0.0 and painted_height <= 136.0
   end
 
-  test "source-field validation rejects invalid context and complete field limits before carrier issuance" do
-    html = "<form><input name=first value=First><input name=second value=Second></form>"
-
-    assert :ok ==
-             ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-               assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
-               assert {:ok, styled} = Style.compute_detailed(dom)
-               assert {:ok, layout} = Layout.layout(styled, page_size: {240, 160}, margin: 12)
-               canvas = %{x: 0.0, y: 0.0, width: 240.0, height: 160.0}
-
-               assert {:error, {_reason, invalid_context}} =
-                        HtmlTableValidator.prepare_cell_fields(
-                          layout.boxes,
-                          canvas,
-                          nil,
-                          :interactive
-                        )
-
-               assert is_binary(invalid_context.message)
-               original = Limits.effective()
-               Limits.install(%{original | max_entries: 1})
-
-               assert {:error, {:resource_limit_exceeded, field_limit}} =
-                        HtmlTableValidator.prepare_cell_fields(
-                          layout.boxes,
-                          canvas,
-                          context,
-                          :interactive
-                        )
-
-               assert field_limit.message =~ "max_entries"
-               Limits.install(original)
-
-               assert {:ok, carriers} =
-                        HtmlTableValidator.prepare_cell_fields(
-                          layout.boxes,
-                          canvas,
-                          context,
-                          :interactive
-                        )
-
-               assert Enum.count(carriers, &Map.has_key?(&1, :embedded_widgets)) == 2
-               :ok
-             end)
-  end
-
   test "row target wrappers retain source anchors through partial ordinary and spanning cuts" do
     alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
     lines = Enum.map_join(1..24, "<br>", &"Line#{&1}")
@@ -662,57 +610,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
              )
 
     assert Enum.any?(carried, &(Map.get(&1, :html_targets, []) != []))
-  end
-
-  test "source projection checks current numeric limits before allocating widget paint" do
-    alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, EmbeddedFormValidator}
-
-    assert {:error, {:invalid_pdf_input, diagnostic}} =
-             ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-               assert {:ok, dom} =
-                        HtmlParser.parse_document_detailed(
-                          "<input name=field value=Value style='display:block;width:40pt;height:18pt'>"
-                        )
-
-               assert {:ok, styled} = Style.compute_detailed(dom)
-               assert {:ok, layout} = Layout.layout(styled, page_size: {240, 160}, margin: 12)
-
-               assert {:ok, [_], fields} =
-                        HtmlFormValidator.prepare_scoped(
-                          [%{size: {240.0, 160.0}, boxes: layout.boxes}],
-                          [],
-                          context
-                        )
-
-               assert {:ok, descriptor} = EmbeddedFormValidator.issue(context, fields)
-               original = Limits.effective()
-
-               try do
-                 Limits.install(%{original | max_numeric_magnitude: 100})
-
-                 group = %{
-                   type: :drawing_group,
-                   x: 0.0,
-                   y: 0.0,
-                   width: 100.0,
-                   height: 100.0,
-                   transform: {0.1, 0, 0, 0.1, 0, 0},
-                   boxes: [],
-                   embedded_widgets: descriptor
-                 }
-
-                 HtmlTableValidator.prepare_cell_band_paint(
-                   [group],
-                   [%{row: 0, offset: 0.0, height: 100.0}],
-                   100.0
-                 )
-               after
-                 Limits.install(original)
-               end
-             end)
-
-    assert diagnostic.message =~ "max_numeric_magnitude"
-    assert diagnostic.stage == :pdf
   end
 
   test "paid decorative row fragments retain their bounded CSS source advance" do
@@ -959,6 +856,116 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationTes
     assert {:ok, text} = Text.extract(pdf, layout: false)
     assert length(Regex.scan(~r/Span/, text)) == 1
     assert length(Regex.scan(~r/Two/, text)) == 1
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TableSourceAndFragmentValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, ResourceContext}
+  alias NativeElixirPdfUtilities.Validators.{HtmlTableValidator, HtmlValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "source-field validation rejects invalid context and complete field limits before carrier issuance" do
+    html = "<form><input name=first value=First><input name=second value=Second></form>"
+
+    assert :ok ==
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+               assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+               assert {:ok, styled} = Style.compute_detailed(dom)
+               assert {:ok, layout} = Layout.layout(styled, page_size: {240, 160}, margin: 12)
+               canvas = %{x: 0.0, y: 0.0, width: 240.0, height: 160.0}
+
+               assert {:error, {_reason, invalid_context}} =
+                        HtmlTableValidator.prepare_cell_fields(
+                          layout.boxes,
+                          canvas,
+                          nil,
+                          :interactive
+                        )
+
+               assert is_binary(invalid_context.message)
+               original = Limits.effective()
+               Limits.install(%{original | max_entries: 1})
+
+               assert {:error, {:resource_limit_exceeded, field_limit}} =
+                        HtmlTableValidator.prepare_cell_fields(
+                          layout.boxes,
+                          canvas,
+                          context,
+                          :interactive
+                        )
+
+               assert field_limit.message =~ "max_entries"
+               Limits.install(original)
+
+               assert {:ok, carriers} =
+                        HtmlTableValidator.prepare_cell_fields(
+                          layout.boxes,
+                          canvas,
+                          context,
+                          :interactive
+                        )
+
+               assert Enum.count(carriers, &Map.has_key?(&1, :embedded_widgets)) == 2
+               :ok
+             end)
+  end
+
+  test "source projection checks current numeric limits before allocating widget paint" do
+    alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, EmbeddedFormValidator}
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+               assert {:ok, dom} =
+                        HtmlParser.parse_document_detailed(
+                          "<input name=field value=Value style='display:block;width:40pt;height:18pt'>"
+                        )
+
+               assert {:ok, styled} = Style.compute_detailed(dom)
+               assert {:ok, layout} = Layout.layout(styled, page_size: {240, 160}, margin: 12)
+
+               assert {:ok, [_], fields} =
+                        HtmlFormValidator.prepare_scoped(
+                          [%{size: {240.0, 160.0}, boxes: layout.boxes}],
+                          [],
+                          context
+                        )
+
+               assert {:ok, descriptor} = EmbeddedFormValidator.issue(context, fields)
+               original = Limits.effective()
+
+               try do
+                 Limits.install(%{original | max_numeric_magnitude: 100})
+
+                 group = %{
+                   type: :drawing_group,
+                   x: 0.0,
+                   y: 0.0,
+                   width: 100.0,
+                   height: 100.0,
+                   transform: {0.1, 0, 0, 0.1, 0, 0},
+                   boxes: [],
+                   embedded_widgets: descriptor
+                 }
+
+                 HtmlTableValidator.prepare_cell_band_paint(
+                   [group],
+                   [%{row: 0, offset: 0.0, height: 100.0}],
+                   100.0
+                 )
+               after
+                 Limits.install(original)
+               end
+             end)
+
+    assert diagnostic.message =~ "max_numeric_magnitude"
+    assert diagnostic.stage == :pdf
   end
 
   test "an already styled span retains actionable diagnostics when its cardinality budget changes" do

@@ -1,6 +1,30 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.InfoTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.Info
+
+  @fixture_directory Paths.fixture("pdf_reader")
+
+  test "appends information updates to supported xref and object-stream inputs" do
+    for fixture <- [
+          "classic-xref.pdf",
+          "xref-stream.pdf",
+          "object-stream.pdf",
+          "hybrid-xref.pdf",
+          "incremental-update.pdf"
+        ] do
+      original = File.read!(Path.join(@fixture_directory, fixture))
+      assert {:ok, updated} = Info.put(original, title: "Updated #{fixture}")
+      assert String.starts_with?(updated, original)
+      assert {:ok, %{title: "Updated " <> ^fixture}} = Info.get(updated)
+      assert {:ok, 1} = Info.page_count(updated)
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.InfoGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.Info
@@ -9,8 +33,6 @@ defmodule NativeElixirPdfUtilities.InfoTest do
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
-
-  @fixture_directory Paths.fixture("pdf_reader")
 
   setup do
     original_limits = Limits.effective()
@@ -470,22 +492,6 @@ defmodule NativeElixirPdfUtilities.InfoTest do
       assert {:ok, info} = Info.get(updated)
       assert info.creation_date == expected
       assert info.modification_date == expected
-    end
-  end
-
-  test "appends information updates to supported xref and object-stream inputs" do
-    for fixture <- [
-          "classic-xref.pdf",
-          "xref-stream.pdf",
-          "object-stream.pdf",
-          "hybrid-xref.pdf",
-          "incremental-update.pdf"
-        ] do
-      original = File.read!(Path.join(@fixture_directory, fixture))
-      assert {:ok, updated} = Info.put(original, title: "Updated #{fixture}")
-      assert String.starts_with?(updated, original)
-      assert {:ok, %{title: "Updated " <> ^fixture}} = Info.get(updated)
-      assert {:ok, 1} = Info.page_count(updated)
     end
   end
 

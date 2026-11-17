@@ -1,10 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedDocumentRenderingTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf
-  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Font, PdfWriter}
-  alias NativeElixirPdfUtilities.{Text, Forms, Limits}
-  alias NativeElixirPdfUtilities.Validators.WriterValidator
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, PdfWriter}
+  alias NativeElixirPdfUtilities.{Text, Forms}
 
   test "validated math processing instructions preserve original token boundaries and ActualText" do
     html =
@@ -149,73 +148,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedDocumentRenderingTest do
     assert {:ok, child_text} = Text.extract(child_pdf, layout: false)
     assert child_text =~ "Child legend"
     assert length(Regex.scan(~r{ re W n}, child_pdf)) >= 2
-  end
-
-  test "nested glyph transport rejects private fields malformed GIDs transformed bounds and box budgets" do
-    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
-    assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
-
-    text = %{
-      type: :text,
-      text: "f",
-      glyph_ids: [3331],
-      x: 1,
-      y: 1,
-      width: 12,
-      height: 14,
-      font: Font.pdf_name(font),
-      font_face: font,
-      font_size: 12,
-      color: {0, 0, 0}
-    }
-
-    glyphs = %{type: :glyph_group, actual_text: "f", boxes: [text]}
-
-    inner = %{
-      type: :drawing_group,
-      width: 30,
-      height: 30,
-      transform: {1, 0, 0, 1, 5, 5},
-      clip: %{x: 0, y: 0, width: 30, height: 30},
-      boxes: [glyphs]
-    }
-
-    outer = %{inner | width: 50, height: 50, boxes: [inner]}
-    page = %{size: {100, 100}, boxes: [outer]}
-    assert {:ok, pdf} = PdfWriter.render([page])
-    assert {:ok, "f"} = Text.extract(pdf, layout: false)
-
-    for invalid <- [
-          Map.put(glyphs, :drawing_page_height, 100),
-          %{glyphs | boxes: [Map.put(text, :drawing_annotation_rect, {0, 0, 1, 1})]},
-          %{glyphs | boxes: [%{text | glyph_ids: [65_536]}]},
-          %{glyphs | boxes: [%{text | x: Limits.get(:max_numeric_magnitude)}]},
-          %{glyphs | actual_text: <<255>>},
-          %{glyphs | boxes: [%{text | type: :rect}]}
-        ] do
-      assert {:error, {:invalid_pdf_input, diagnostic}} =
-               WriterValidator.prepare(
-                 [%{page | boxes: [%{outer | boxes: [%{inner | boxes: [invalid]}]}]}],
-                 []
-               )
-
-      assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
-      assert diagnostic.reason == :invalid_pdf_input and diagnostic.message != ""
-    end
-
-    previous = Limits.effective()
-
-    try do
-      Limits.install(Map.put(previous, :max_entries, 6))
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               WriterValidator.prepare([page], [])
-
-      assert diagnostic.reason == :resource_limit_exceeded and
-               diagnostic.message =~ "max_entries"
-    after
-      Limits.install(previous)
-    end
   end
 
   test "MathML child painting and original zero-extent SVG children preserve child destinations" do
@@ -585,5 +517,80 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedDocumentRenderingTest do
     |> String.replace("<", "&lt;")
     |> String.replace(">", "&gt;")
     |> String.replace("'", "&#39;")
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedDocumentRenderingGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
+  alias NativeElixirPdfUtilities.{Text, Limits}
+  alias NativeElixirPdfUtilities.Validators.WriterValidator
+
+  test "nested glyph transport rejects private fields malformed GIDs transformed bounds and box budgets" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+    text = %{
+      type: :text,
+      text: "f",
+      glyph_ids: [3331],
+      x: 1,
+      y: 1,
+      width: 12,
+      height: 14,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 12,
+      color: {0, 0, 0}
+    }
+
+    glyphs = %{type: :glyph_group, actual_text: "f", boxes: [text]}
+
+    inner = %{
+      type: :drawing_group,
+      width: 30,
+      height: 30,
+      transform: {1, 0, 0, 1, 5, 5},
+      clip: %{x: 0, y: 0, width: 30, height: 30},
+      boxes: [glyphs]
+    }
+
+    outer = %{inner | width: 50, height: 50, boxes: [inner]}
+    page = %{size: {100, 100}, boxes: [outer]}
+    assert {:ok, pdf} = PdfWriter.render([page])
+    assert {:ok, "f"} = Text.extract(pdf, layout: false)
+
+    for invalid <- [
+          Map.put(glyphs, :drawing_page_height, 100),
+          %{glyphs | boxes: [Map.put(text, :drawing_annotation_rect, {0, 0, 1, 1})]},
+          %{glyphs | boxes: [%{text | glyph_ids: [65_536]}]},
+          %{glyphs | boxes: [%{text | x: Limits.get(:max_numeric_magnitude)}]},
+          %{glyphs | actual_text: <<255>>},
+          %{glyphs | boxes: [%{text | type: :rect}]}
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} =
+               WriterValidator.prepare(
+                 [%{page | boxes: [%{outer | boxes: [%{inner | boxes: [invalid]}]}]}],
+                 []
+               )
+
+      assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
+      assert diagnostic.reason == :invalid_pdf_input and diagnostic.message != ""
+    end
+
+    previous = Limits.effective()
+
+    try do
+      Limits.install(Map.put(previous, :max_entries, 6))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               WriterValidator.prepare([page], [])
+
+      assert diagnostic.reason == :resource_limit_exceeded and
+               diagnostic.message =~ "max_entries"
+    after
+      Limits.install(previous)
+    end
   end
 end

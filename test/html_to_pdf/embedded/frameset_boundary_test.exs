@@ -1,4 +1,99 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.Validators.{FramesetValidator}
+
+  setup do
+    limits = Limits.effective()
+
+    %{limits: limits}
+  end
+
+  test "malformed public prepared plans retain canonical diagnostics within allowed cardinality" do
+    assert {:ok, prepared} = FramesetValidator.prepare(%{"border" => "0"})
+
+    for plan <- [
+          nil,
+          %{border: false, rows: [], columns: [relative: 1.0]},
+          %{border: true, rows: [relative: 1.0], columns: [relative: 1.0]},
+          Map.merge(prepared, %{rows: [:malformed], columns: [relative: 1.0]}),
+          Map.merge(prepared, %{rows: [absolute: -1.0], columns: [relative: 1.0]}),
+          Map.merge(prepared, %{rows: [relative: 0.0], columns: [relative: 1.0]})
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               FramesetValidator.prepare_layout(plan, 150, 90)
+
+      assert diagnostic.stage == :layout and diagnostic.source == "frameset"
+      assert diagnostic.module == FramesetValidator and diagnostic.message != ""
+    end
+
+    assert {:ok, plan} = FramesetValidator.prepare(%{"border" => "0"})
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             FramesetValidator.prepare_layout(plan, -1, 90)
+
+    assert diagnostic.operation == :layout_viewport
+  end
+
+  test "legacy malformed margins recover absent hints and canonical body margins reject incomplete records" do
+    assert {:ok, frame} =
+             FramesetValidator.prepare_frame(%{"marginwidth" => "bad", "marginheight" => "-1"}, %{
+               border_enabled: true,
+               border_width: 0.0
+             })
+
+    assert frame.margins == %{horizontal: 0.0, vertical: nil}
+    assert {:ok, margins} = FramesetValidator.prepare_body_margins(frame.margins)
+    assert margins == %{top: 6.0, right: 0.0, bottom: 6.0, left: 0.0}
+
+    for margins <- [%{}, %{horizontal: 2.0}, %{horizontal: nil, vertical: nil, unexpected: 0}] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               FramesetValidator.prepare_body_margins(margins)
+
+      assert diagnostic.message =~ "horizontal and vertical hints" and diagnostic.stage == :layout
+    end
+  end
+
+  test "inactive templates and processing instructions retain navigation isolation" do
+    dom = %{
+      type: :document,
+      children: [
+        %{
+          type: :element,
+          tag: "template",
+          children: [
+            %{type: :element, tag: "form", attributes: %{"target" => "named"}, children: []}
+          ]
+        },
+        %{type: :processing_instruction, target: "retained", data: "source"},
+        %{type: :text, text: "Visible"},
+        %{type: :element, tag: "a", attributes: %{"target" => "_self"}, children: []}
+      ]
+    }
+
+    assert :ok = FramesetValidator.validate_document_navigation(dom)
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             FramesetValidator.validate_document_navigation(%{
+               type: :document,
+               children: [%{type: :unsupported}]
+             })
+
+    assert diagnostic.message =~ "canonical document nodes"
+
+    assert {:error, {:not_implemented, diagnostic}} =
+             FramesetValidator.validate_document_navigation(%{
+               type: :document,
+               children: [
+                 %{type: :element, tag: "form", attributes: %{"target" => :invalid}, children: []}
+               ]
+             })
+
+    assert diagnostic.message =~ "target navigation" and diagnostic.source == "frameset"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Frameset, ResourceContext}
@@ -52,32 +147,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
              FramesetValidator.prepare_layout(plan, 150, 90)
 
     assert malformed.message =~ "canonical nonnegative tracks"
-  end
-
-  test "malformed public prepared plans retain canonical diagnostics within allowed cardinality" do
-    assert {:ok, prepared} = FramesetValidator.prepare(%{"border" => "0"})
-
-    for plan <- [
-          nil,
-          %{border: false, rows: [], columns: [relative: 1.0]},
-          %{border: true, rows: [relative: 1.0], columns: [relative: 1.0]},
-          Map.merge(prepared, %{rows: [:malformed], columns: [relative: 1.0]}),
-          Map.merge(prepared, %{rows: [absolute: -1.0], columns: [relative: 1.0]}),
-          Map.merge(prepared, %{rows: [relative: 0.0], columns: [relative: 1.0]})
-        ] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               FramesetValidator.prepare_layout(plan, 150, 90)
-
-      assert diagnostic.stage == :layout and diagnostic.source == "frameset"
-      assert diagnostic.module == FramesetValidator and diagnostic.message != ""
-    end
-
-    assert {:ok, plan} = FramesetValidator.prepare(%{"border" => "0"})
-
-    assert {:error, {:invalid_layout, diagnostic}} =
-             FramesetValidator.prepare_layout(plan, -1, 90)
-
-    assert diagnostic.operation == :layout_viewport
   end
 
   test "attribute maps, numeric dimensions and inherited border values use shared validation", %{
@@ -141,63 +210,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FramesetBoundaryTest do
              HtmlToPdf.render("<frameset border='00'><frame></frameset>")
 
     assert diagnostic.operation == :render and diagnostic.source == "00"
-  end
-
-  test "legacy malformed margins recover absent hints and canonical body margins reject incomplete records" do
-    assert {:ok, frame} =
-             FramesetValidator.prepare_frame(%{"marginwidth" => "bad", "marginheight" => "-1"}, %{
-               border_enabled: true,
-               border_width: 0.0
-             })
-
-    assert frame.margins == %{horizontal: 0.0, vertical: nil}
-    assert {:ok, margins} = FramesetValidator.prepare_body_margins(frame.margins)
-    assert margins == %{top: 6.0, right: 0.0, bottom: 6.0, left: 0.0}
-
-    for margins <- [%{}, %{horizontal: 2.0}, %{horizontal: nil, vertical: nil, unexpected: 0}] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               FramesetValidator.prepare_body_margins(margins)
-
-      assert diagnostic.message =~ "horizontal and vertical hints" and diagnostic.stage == :layout
-    end
-  end
-
-  test "inactive templates and processing instructions retain navigation isolation" do
-    dom = %{
-      type: :document,
-      children: [
-        %{
-          type: :element,
-          tag: "template",
-          children: [
-            %{type: :element, tag: "form", attributes: %{"target" => "named"}, children: []}
-          ]
-        },
-        %{type: :processing_instruction, target: "retained", data: "source"},
-        %{type: :text, text: "Visible"},
-        %{type: :element, tag: "a", attributes: %{"target" => "_self"}, children: []}
-      ]
-    }
-
-    assert :ok = FramesetValidator.validate_document_navigation(dom)
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             FramesetValidator.validate_document_navigation(%{
-               type: :document,
-               children: [%{type: :unsupported}]
-             })
-
-    assert diagnostic.message =~ "canonical document nodes"
-
-    assert {:error, {:not_implemented, diagnostic}} =
-             FramesetValidator.validate_document_navigation(%{
-               type: :document,
-               children: [
-                 %{type: :element, tag: "form", attributes: %{"target" => :invalid}, children: []}
-               ]
-             })
-
-    assert diagnostic.message =~ "target navigation" and diagnostic.source == "frameset"
   end
 
   test "scene nesting and child limits run before malformed descendant validation", %{

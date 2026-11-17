@@ -1,20 +1,17 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
   alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout, ResourceContext}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font}
 
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
-    HtmlValidator,
-    MathLayoutValidator,
     MathTableValidator
   }
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
     {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
 
@@ -29,35 +26,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
     }
 
     {:ok, style: style, registry: registry, limits: limits}
-  end
-
-  defp element(tag, children, style, attributes \\ %{}) do
-    %{
-      type: :element,
-      namespace: :mathml,
-      tag: tag,
-      children: children,
-      style: style,
-      attributes: attributes
-    }
-  end
-
-  defp token(text, style), do: element("mn", [%{type: :text, text: text, style: style}], style)
-
-  defp cell(text, style, padding, attributes \\ %{}) do
-    element(
-      "mtd",
-      [token(text, style)],
-      Map.merge(style, %{display: :table_cell, padding: padding, text_align: :center}),
-      attributes
-    )
-  end
-
-  defp matrix(rows, style) do
-    element("mtable", Enum.map(rows, &element("mtr", &1, %{style | display: :table_row})), %{
-      style
-      | display: :inline_table
-    })
   end
 
   test "mixed authored and font-relative cell padding uses each selected final face", %{
@@ -86,6 +54,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
       assert_in_delta resolved.padding.left, 9.6, 1.0e-9
       assert resolved.padding.bottom == 3.0 and resolved.padding.right == 7.0
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout, ResourceContext}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    MathLayoutValidator,
+    MathTableValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+    style = %{
+      display: :block,
+      font_size: 20.0,
+      font_face: font,
+      color: {0, 0, 0},
+      line_height: 24.0,
+      math_style: :compact,
+      text_transform: :none
+    }
+
+    {:ok, style: style, registry: registry, limits: limits}
   end
 
   test "resolved font-relative padding is bounded after multiplication", %{style: style} do
@@ -450,5 +451,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathTableValidatorBoundariesTest do
              end)
 
     assert diagnostic.stage == :layout and diagnostic.message =~ "max_entries"
+  end
+
+  defp element(tag, children, style, attributes \\ %{}) do
+    %{
+      type: :element,
+      namespace: :mathml,
+      tag: tag,
+      children: children,
+      style: style,
+      attributes: attributes
+    }
+  end
+
+  defp token(text, style), do: element("mn", [%{type: :text, text: text, style: style}], style)
+
+  defp cell(text, style, padding, attributes \\ %{}) do
+    element(
+      "mtd",
+      [token(text, style)],
+      Map.merge(style, %{display: :table_cell, padding: padding, text_align: :center}),
+      attributes
+    )
+  end
+
+  defp matrix(rows, style) do
+    element("mtable", Enum.map(rows, &element("mtr", &1, %{style | display: :table_row})), %{
+      style
+      | display: :inline_table
+    })
   end
 end

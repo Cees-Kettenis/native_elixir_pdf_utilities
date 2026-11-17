@@ -1,15 +1,14 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterContractTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder, SvgRasterizer}
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @source "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='2'><rect width='2' height='2' fill='#112233'/><rect x='2' width='2' height='2' fill='#aabbcc'/></svg>"
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -144,6 +143,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterContractTest do
              })
 
     assert reason == diagnostic.reason and is_binary(diagnostic.message)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterContractGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer}
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  @source "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='2'><rect width='2' height='2' fill='#112233'/><rect x='2' width='2' height='2' fill='#aabbcc'/></svg>"
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
   end
 
   test "source, raster allocation and output charge their unchanged shared resource limits", %{

@@ -7,6 +7,7 @@ ExUnit.start(exclude: [:browser_parity])
 Code.require_file(Paths.support("html_tree_helpers.ex"))
 Code.require_file(Paths.support("css_styles.ex"))
 Code.require_file(Paths.support("resource_budget.ex"))
+Code.require_file(Paths.support("layout_fixture.ex"))
 
 Code.require_file(Paths.support("pdf_visual_compare.ex"))
 
@@ -15,6 +16,7 @@ Code.require_file(Paths.support("pdf_visual_compare.ex"))
 ExUnit.after_suite(fn _ ->
   NativeElixirPdfUtilities.TestSupport.ChromiumPool.stop()
   NativeElixirPdfUtilities.TestSupport.BrowserFixturePages.stop()
+  NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache.stop()
 end)
 
 Code.require_file(Paths.support("jpeg_fixture.ex"))
@@ -33,3 +35,5 @@ Code.require_file(Paths.support("cff_fixture.ex"))
 
 Code.require_file(Paths.support("font_corpus.ex"))
 NativeElixirPdfUtilities.TestSupport.FontCorpus.prepare!()
+
+{:ok, _} = NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache.start()

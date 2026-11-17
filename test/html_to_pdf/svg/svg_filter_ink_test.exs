@@ -3,7 +3,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("svg_public_workflow.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFilterInkTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
 
   test "generated and constant effect outputs do not claim unrelated original glyphs" do

@@ -1,26 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TableWidthWorkTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
-  alias NativeElixirPdfUtilities.Limits
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
-
-  test "spanning fixed table preferences share the existing table work allowance" do
-    html =
-      "<table style='table-layout:fixed;width:120pt'><tr>" <>
-        String.duplicate("<td colspan=8 style='width:40pt'></td>", 3) <> "</tr></table>"
-
-    assert {:ok, _} = HtmlToPdf.render(html, system_font_discovery: false)
-    Limits.install(%{Limits.effective() | max_work: 75})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
-  end
 
   test "spanning width updates avoid repeated linked-list prefix copies" do
     reductions =
@@ -41,5 +22,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TableWidthWorkTest do
 
     [small, large] = reductions
     assert large < small * 9, inspect(reductions)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TableWidthWorkGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
+  end
+
+  test "spanning fixed table preferences share the existing table work allowance" do
+    html =
+      "<table style='table-layout:fixed;width:120pt'><tr>" <>
+        String.duplicate("<td colspan=8 style='width:40pt'></td>", 3) <> "</tr></table>"
+
+    assert {:ok, _} = HtmlToPdf.render(html, system_font_discovery: false)
+    Limits.install(%{Limits.effective() | max_work: 75})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 end

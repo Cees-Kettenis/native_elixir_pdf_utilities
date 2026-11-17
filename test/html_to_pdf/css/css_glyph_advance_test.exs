@@ -1,16 +1,12 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGlyphAdvanceTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
-  alias NativeElixirPdfUtilities.{Limits, Text}
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.{Text}
   @font Paths.fixture("html_to_pdf/browser_parity/assets/cjk-ruby-fixture.ttf")
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
     {:ok, registry} =
       Font.load_registry(
         fonts: [%{family: "CJK Ruby Fixture", path: @font}],
@@ -57,32 +53,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGlyphAdvanceTest do
     end
   end
 
-  test "cached glyph plans still charge work and respect existing cache byte limits", %{cjk: font} do
-    Font.with_measurement_cache(fn ->
-      plan = Font.css_glyph_advances("東京", font, 12)
-      limits = Limits.effective()
-      Limits.install(%{limits | max_work: 1})
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlValidator.with_render_budget(fn -> Font.css_glyph_advances("東京", font, 12) end)
-
-      assert diagnostic.stage == :layout
-      assert diagnostic.message =~ "max_work"
-      Limits.install(limits)
-      assert Font.css_glyph_advances("東京", font, 12) == plan
-    end)
-
-    Limits.install(%{
-      Limits.effective()
-      | max_cache_bytes: 1,
-        max_entries: 1
-    })
-
-    Font.with_measurement_cache(fn ->
-      assert Font.css_glyph_advances("東京", font, 12) == Font.css_glyph_advances("東京", font, 12)
-    end)
-  end
-
   test "ordinary CSS paint supplies the measured advance through TJ without changing CID design widths",
        %{cjk: font} do
     box = %{
@@ -107,5 +77,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGlyphAdvanceTest do
     assert {:ok, math_pdf} = PdfWriter.render([%{size: {200, 100}, boxes: [explicit]}])
     refute math_pdf =~ "-0.0019"
     assert {:ok, "東京"} = Text.extract(math_pdf, layout: false)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGlyphAdvanceGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font}
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  @font Paths.fixture("html_to_pdf/browser_parity/assets/cjk-ruby-fixture.ttf")
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    {:ok, registry} =
+      Font.load_registry(
+        fonts: [%{family: "CJK Ruby Fixture", path: @font}],
+        system_font_discovery: false
+      )
+
+    {:ok, _, cjk} = Font.resolve("CJK Ruby Fixture", 400, :normal, registry)
+    {:ok, _, latin} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    {:ok, cjk: cjk, latin: latin}
+  end
+
+  test "cached glyph plans still charge work and respect existing cache byte limits", %{cjk: font} do
+    Font.with_measurement_cache(fn ->
+      plan = Font.css_glyph_advances("東京", font, 12)
+      limits = Limits.effective()
+      Limits.install(%{limits | max_work: 1})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlValidator.with_render_budget(fn -> Font.css_glyph_advances("東京", font, 12) end)
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.message =~ "max_work"
+      Limits.install(limits)
+      assert Font.css_glyph_advances("東京", font, 12) == plan
+    end)
+
+    Limits.install(%{
+      Limits.effective()
+      | max_cache_bytes: 1,
+        max_entries: 1
+    })
+
+    Font.with_measurement_cache(fn ->
+      assert Font.css_glyph_advances("東京", font, 12) == Font.css_glyph_advances("東京", font, 12)
+    end)
   end
 end

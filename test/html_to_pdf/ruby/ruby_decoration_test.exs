@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyDecorationTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
 
   test "Ruby bases retain ancestor decorations while default annotations start a separate scope" do

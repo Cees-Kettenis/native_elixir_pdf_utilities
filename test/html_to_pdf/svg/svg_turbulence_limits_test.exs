@@ -1,20 +1,13 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTurbulenceLimitsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer
 
   alias NativeElixirPdfUtilities.Validators.{
-    LimitsValidator,
     SvgFilterValidator,
     SvgStyleValidator
   }
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
 
   test "default and bounded octave counts remain admitted" do
     for attributes <- [
@@ -27,35 +20,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTurbulenceLimitsTest do
         ] do
       assert :ok = SvgFilterValidator.validate_source_attributes("feTurbulence", attributes)
     end
-  end
-
-  test "the configured ceiling applies before converter rounding and can be raised" do
-    assert {:ok, limits} = LimitsValidator.validate(max_entries: 2)
-    Limits.install(limits)
-
-    assert :ok =
-             SvgFilterValidator.validate_source_attributes("feTurbulence", %{"numOctaves" => "2"})
-
-    for value <- ["2.01", "3", "1000000000"] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               SvgFilterValidator.validate_source_attributes("feTurbulence", %{
-                 "numOctaves" => value
-               })
-
-      assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.operation == :prepare and diagnostic.module == SvgFilterValidator
-      assert diagnostic.source == "feTurbulence"
-      assert diagnostic.message =~ "max_entries (2)"
-      assert diagnostic.message =~ value and diagnostic.message =~ "reduce numOctaves"
-    end
-
-    assert {:ok, limits} = LimitsValidator.validate(max_entries: 32)
-    Limits.install(limits)
-
-    assert :ok =
-             SvgFilterValidator.validate_source_attributes("feTurbulence", %{
-               "numOctaves" => "32"
-             })
   end
 
   test "malformed and nonfinite counts cannot fall through to the converter" do
@@ -123,5 +87,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTurbulenceLimitsTest do
     assert {:ok, pdf} = HtmlToPdf.render(svg, system_font_discovery: false)
     assert pdf =~ "/Subtype /Image"
     assert {:ok, <<137, 80, 78, 71, _rest::binary>>} = SvgRasterizer.rasterize(svg, [], nil)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTurbulenceLimitsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    LimitsValidator,
+    SvgFilterValidator
+  }
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
+  end
+
+  test "the configured ceiling applies before converter rounding and can be raised" do
+    assert {:ok, limits} = LimitsValidator.validate(max_entries: 2)
+    Limits.install(limits)
+
+    assert :ok =
+             SvgFilterValidator.validate_source_attributes("feTurbulence", %{"numOctaves" => "2"})
+
+    for value <- ["2.01", "3", "1000000000"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               SvgFilterValidator.validate_source_attributes("feTurbulence", %{
+                 "numOctaves" => value
+               })
+
+      assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.operation == :prepare and diagnostic.module == SvgFilterValidator
+      assert diagnostic.source == "feTurbulence"
+      assert diagnostic.message =~ "max_entries (2)"
+      assert diagnostic.message =~ value and diagnostic.message =~ "reduce numOctaves"
+    end
+
+    assert {:ok, limits} = LimitsValidator.validate(max_entries: 32)
+    Limits.install(limits)
+
+    assert :ok =
+             SvgFilterValidator.validate_source_attributes("feTurbulence", %{
+               "numOctaves" => "32"
+             })
   end
 end

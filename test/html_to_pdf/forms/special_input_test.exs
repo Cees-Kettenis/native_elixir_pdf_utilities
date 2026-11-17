@@ -1,8 +1,8 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{ColorArtwork, HtmlParser, Layout, PdfWriter, Style}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.{FormValidator, HtmlFormValidator, HtmlValidator}
@@ -355,6 +355,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputTest do
       end
     end
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SpecialInputGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
+  @image Paths.fixture("html_to_pdf/browser_parity/assets/iframe-bars.png")
 
   test "image decoding and source-byte ceilings retain shared actionable failures" do
     assert {:error, {reason, diagnostic}} =

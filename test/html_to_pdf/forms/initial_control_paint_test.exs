@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialControlPaintTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, PdfWriter}
   alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
 

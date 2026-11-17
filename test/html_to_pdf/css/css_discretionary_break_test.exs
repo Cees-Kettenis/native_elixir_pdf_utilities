@@ -1,8 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, Layout, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlLineBreakValidator, HtmlValidator}
-  alias NativeElixirPdfUtilities.Limits
 
   test "an entirely invisible discretionary source keeps its destination and logical text" do
     html = "<p id='hidden'>&#x200b;</p><p><a href='#hidden'>Jump</a></p>"
@@ -23,39 +22,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
     assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
     assert text == "Jump"
     assert pdf =~ "/Dest"
-  end
-
-  test "transparent source boundaries propagate the shared work budget diagnostic" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(
-               "<p>office<span>&shy;</span>word</p>",
-               system_font_discovery: false
-             )
-
-    assert diagnostic.stage == :html
-    assert diagnostic.operation == :render
-    assert diagnostic.message =~ "max_work"
-  end
-
-  test "styled line-boundary exhaustion retains the shared work budget diagnostic" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_work: 230})
-
-    html =
-      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}p{margin:0}</style>" <>
-        "<p style='width:25pt'><span style='color:red'>alpha</span><i>beta</i></p>"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
-
-    assert diagnostic.stage == :html
-    assert diagnostic.operation == :render
-    assert diagnostic.message =~ "max_work"
   end
 
   test "a break after an atomic inline box does not select an earlier soft hyphen" do
@@ -115,56 +81,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
     assert Font.supports_text?(face, "\u2010")
     assert {:ok, ["co\u00AD", "operate"]} = HtmlLineBreakValidator.segments("co\u00ADoperate")
     assert Font.text_width("co\u00ADoperate", face, 12) == Font.text_width("cooperate", face, 12)
-  end
-
-  test "display-plan failures use diagnostics and the shared work budget" do
-    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
-    assert {:ok, _, face} = Font.resolve("DejaVu Sans", 400, :normal, registry)
-
-    for {text, option} <- [{nil, false}, {<<255>>, false}, {"word", :invalid}] do
-      assert {:error, {:invalid_layout, diagnostic}} =
-               HtmlLineBreakValidator.display_plan(text, face, option)
-
-      assert diagnostic.stage == :layout
-      assert diagnostic.operation == :line_break
-      assert diagnostic.message =~ "UTF-8" or diagnostic.message =~ "boolean"
-
-      assert {:error, {:invalid_layout, ^diagnostic}} =
-               HtmlLineBreakValidator.display_text(text, face, option)
-    end
-
-    assert {:error, {:invalid_layout, diagnostic}} =
-             HtmlLineBreakValidator.display_plan("co\u00AD", nil, true)
-
-    assert diagnostic.message =~ "selected font"
-
-    assert {:error, {:invalid_layout, invalid}} =
-             HtmlLineBreakValidator.transparent_format_boundary?("word", <<255>>)
-
-    assert invalid.operation == :line_break and invalid.message =~ "UTF-8"
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    # The public pipeline admits source scanning against the same work ceiling.
-    Limits.install(Map.put(limits, :max_work, 116))
-
-    assert {:error, {:resource_limit_exceeded, paint}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render("<p style='margin:0'>word</p>",
-               system_font_discovery: false
-             )
-
-    assert paint.stage == :html and paint.operation == :render
-    assert paint.message =~ "max_work"
-
-    Limits.install(Map.put(limits, :max_work, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlLineBreakValidator.display_plan("word", face)
-
-    assert diagnostic.stage == :layout
-    assert diagnostic.message =~ "max_work"
-
-    assert {:error, {:resource_limit_exceeded, ^diagnostic}} =
-             HtmlLineBreakValidator.display_text("word", face)
   end
 
   test "ordinary soft wraps paint Unicode hyphens and preserve exact source selection" do
@@ -255,5 +171,95 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakTest do
       %{type: :glyph_group, boxes: children} -> texts(children)
       _ -> []
     end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font}
+  alias NativeElixirPdfUtilities.Validators.{HtmlLineBreakValidator}
+  alias NativeElixirPdfUtilities.Limits
+
+  test "transparent source boundaries propagate the shared work budget diagnostic" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<p>office<span>&shy;</span>word</p>",
+               system_font_discovery: false
+             )
+
+    assert diagnostic.stage == :html
+    assert diagnostic.operation == :render
+    assert diagnostic.message =~ "max_work"
+  end
+
+  test "styled line-boundary exhaustion retains the shared work budget diagnostic" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_work: 230})
+
+    html =
+      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}p{margin:0}</style>" <>
+        "<p style='width:25pt'><span style='color:red'>alpha</span><i>beta</i></p>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :html
+    assert diagnostic.operation == :render
+    assert diagnostic.message =~ "max_work"
+  end
+
+  test "display-plan failures use diagnostics and the shared work budget" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    assert {:ok, _, face} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    for {text, option} <- [{nil, false}, {<<255>>, false}, {"word", :invalid}] do
+      assert {:error, {:invalid_layout, diagnostic}} =
+               HtmlLineBreakValidator.display_plan(text, face, option)
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.operation == :line_break
+      assert diagnostic.message =~ "UTF-8" or diagnostic.message =~ "boolean"
+
+      assert {:error, {:invalid_layout, ^diagnostic}} =
+               HtmlLineBreakValidator.display_text(text, face, option)
+    end
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             HtmlLineBreakValidator.display_plan("co\u00AD", nil, true)
+
+    assert diagnostic.message =~ "selected font"
+
+    assert {:error, {:invalid_layout, invalid}} =
+             HtmlLineBreakValidator.transparent_format_boundary?("word", <<255>>)
+
+    assert invalid.operation == :line_break and invalid.message =~ "UTF-8"
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    # The public pipeline admits source scanning against the same work ceiling.
+    Limits.install(Map.put(limits, :max_work, 116))
+
+    assert {:error, {:resource_limit_exceeded, paint}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p style='margin:0'>word</p>",
+               system_font_discovery: false
+             )
+
+    assert paint.stage == :html and paint.operation == :render
+    assert paint.message =~ "max_work"
+
+    Limits.install(Map.put(limits, :max_work, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlLineBreakValidator.display_plan("word", face)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.message =~ "max_work"
+
+    assert {:error, {:resource_limit_exceeded, ^diagnostic}} =
+             HtmlLineBreakValidator.display_text("word", face)
   end
 end

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImageLinksTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, SvgScene, PngDecoder, PdfWriter}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgConverterValidator}
 

@@ -1,7 +1,7 @@
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontOutlineStructureTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.TrueTypeGlyph

@@ -1,22 +1,13 @@
 defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
-  alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
-  alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.CssValueValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "text alignment match-parent resolves start and end using the parent's direction" do
     for {direction, alignment, expected} <- [
@@ -89,72 +80,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
     end
 
     assert :error = CssValueValidator.validate_resolved(context, "vertical-align", "bananas")
-  end
-
-  test "authored values validate without resolving fonts, assets or files" do
-    traced = [
-      {Font, :load_registry, 1},
-      {Font, :resolve, 4},
-      {AssetLoader, :resolve, 4},
-      {File, :read, 1}
-    ]
-
-    Enum.each(traced, fn {module, _, _} -> Code.ensure_loaded!(module) end)
-    Enum.each(traced, fn mfa -> assert :erlang.trace_pattern(mfa, true, [:local]) == 1 end)
-
-    task =
-      Task.async(fn ->
-        receive do
-          :validate ->
-            assert :ok = CssValueValidator.validate_declarations("")
-
-            assert :ok =
-                     CssValueValidator.validate_declarations(
-                       "font-family: Missing; background-image:url('/missing.png'); display:grid; grid-template-columns:repeat(2, 1fr); border:1pt solid currentColor"
-                     )
-
-            assert {:ok, _prepared} =
-                     CssParser.prepare_stylesheet(
-                       "@font-face{font-family: Missing;src:url('/missing.ttf')}p{font-family:Missing;background-image:url('/missing.png')}"
-                     )
-
-            assert {:ok, _prepared} = CssParser.prepare_stylesheet("")
-
-            context = %{
-              color: {0, 0, 0},
-              font_size: 12.0,
-              _root_font_size: 12.0,
-              _custom_properties: %{"--family" => "Missing"}
-            }
-
-            budget = HtmlValidator.new_css_budget()
-
-            assert {:ok, inherited} =
-                     CssValueValidator.validate_declarations_in_context(
-                       "font-family:var(--family);--image:url('/missing.png')",
-                       context,
-                       budget
-                     )
-
-            assert {:ok, _} =
-                     CssValueValidator.validate_cascade(
-                       inherited,
-                       [{"background-image", "var(--image)"}],
-                       budget
-                     )
-
-            :ok
-        end
-      end)
-
-    try do
-      :erlang.trace(task.pid, true, [:call])
-      send(task.pid, :validate)
-      assert :ok = Task.await(task)
-      refute_receive {:trace, _, :call, _}
-    after
-      Enum.each(traced, &:erlang.trace_pattern(&1, false, [:local]))
-    end
   end
 
   test "strict value failures retain authored declarations and locations" do
@@ -239,48 +164,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
       assert diagnostic.source == "background-image"
       assert diagnostic.message =~ "Active URL"
     end
-  end
-
-  test "value and source complexity use unchanged shared Limits and cumulative reservations" do
-    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssValueValidator.validate_declarations("grid-template-columns:repeat(2, 1fr)")
-
-    assert diagnostic.message =~ "grid"
-
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 2))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssValueValidator.validate_declarations("--unused:abc")
-
-    assert diagnostic.message =~ "max_input_bytes"
-
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 100))
-    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 5))
-    budget = HtmlValidator.new_css_budget()
-    assert :ok = CssValueValidator.validate_declarations("--x:abc", budget)
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssValueValidator.validate_declarations("--x:abc", budget)
-
-    assert diagnostic.message =~ "max_decoded_bytes"
-
-    Limits.install(
-      Map.put(Limits.effective(), :max_decoded_bytes, Limits.defaults().max_decoded_bytes)
-    )
-
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1_000))
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 20))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               assert :ok = CssValueValidator.validate_declarations("color:red")
-               assert :ok = CssValueValidator.validate_declarations("color:red")
-               CssValueValidator.validate_declarations("color:red")
-             end)
-
-    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "normalized raw declarations share custom, variable and malformed-input policy" do
@@ -551,6 +434,131 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorTest do
              )
 
     assert diagnostic.operation == :parse and diagnostic.source == "<template for='a'>"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.CssValueValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.AssetLoader
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.CssValueValidator
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "authored values validate without resolving fonts, assets or files" do
+    traced = [
+      {Font, :load_registry, 1},
+      {Font, :resolve, 4},
+      {AssetLoader, :resolve, 4},
+      {File, :read, 1}
+    ]
+
+    Enum.each(traced, fn {module, _, _} -> Code.ensure_loaded!(module) end)
+    Enum.each(traced, fn mfa -> assert :erlang.trace_pattern(mfa, true, [:local]) == 1 end)
+
+    task =
+      Task.async(fn ->
+        receive do
+          :validate ->
+            assert :ok = CssValueValidator.validate_declarations("")
+
+            assert :ok =
+                     CssValueValidator.validate_declarations(
+                       "font-family: Missing; background-image:url('/missing.png'); display:grid; grid-template-columns:repeat(2, 1fr); border:1pt solid currentColor"
+                     )
+
+            assert {:ok, _prepared} =
+                     CssParser.prepare_stylesheet(
+                       "@font-face{font-family: Missing;src:url('/missing.ttf')}p{font-family:Missing;background-image:url('/missing.png')}"
+                     )
+
+            assert {:ok, _prepared} = CssParser.prepare_stylesheet("")
+
+            context = %{
+              color: {0, 0, 0},
+              font_size: 12.0,
+              _root_font_size: 12.0,
+              _custom_properties: %{"--family" => "Missing"}
+            }
+
+            budget = HtmlValidator.new_css_budget()
+
+            assert {:ok, inherited} =
+                     CssValueValidator.validate_declarations_in_context(
+                       "font-family:var(--family);--image:url('/missing.png')",
+                       context,
+                       budget
+                     )
+
+            assert {:ok, _} =
+                     CssValueValidator.validate_cascade(
+                       inherited,
+                       [{"background-image", "var(--image)"}],
+                       budget
+                     )
+
+            :ok
+        end
+      end)
+
+    try do
+      :erlang.trace(task.pid, true, [:call])
+      send(task.pid, :validate)
+      assert :ok = Task.await(task)
+      refute_receive {:trace, _, :call, _}
+    after
+      Enum.each(traced, &:erlang.trace_pattern(&1, false, [:local]))
+    end
+  end
+
+  test "value and source complexity use unchanged shared Limits and cumulative reservations" do
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssValueValidator.validate_declarations("grid-template-columns:repeat(2, 1fr)")
+
+    assert diagnostic.message =~ "grid"
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 2))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssValueValidator.validate_declarations("--unused:abc")
+
+    assert diagnostic.message =~ "max_input_bytes"
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 100))
+    Limits.install(Map.put(Limits.effective(), :max_decoded_bytes, 5))
+    budget = HtmlValidator.new_css_budget()
+    assert :ok = CssValueValidator.validate_declarations("--x:abc", budget)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssValueValidator.validate_declarations("--x:abc", budget)
+
+    assert diagnostic.message =~ "max_decoded_bytes"
+
+    Limits.install(
+      Map.put(Limits.effective(), :max_decoded_bytes, Limits.defaults().max_decoded_bytes)
+    )
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1_000))
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 20))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               assert :ok = CssValueValidator.validate_declarations("color:red")
+               assert :ok = CssValueValidator.validate_declarations("color:red")
+               CssValueValidator.validate_declarations("color:red")
+             end)
+
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "overflow clip math preserves the shared resource-limit diagnostic" do

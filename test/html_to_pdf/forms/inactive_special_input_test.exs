@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InactiveSpecialInputTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
   alias NativeElixirPdfUtilities.Pdf.Reader
@@ -100,6 +100,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InactiveSpecialInputTest do
       assert diagnostic.source == source
     end
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.InactiveSpecialInputGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  @opts [
+    forms: :interactive,
+    system_font_discovery: false,
+    fonts: [
+      %{family: "Arial", path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf")},
+      %{family: "DejaVu Sans", path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf")}
+    ]
+  ]
 
   test "font-configured browser input cleans its temporary source sibling after Chromium failure" do
     alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare

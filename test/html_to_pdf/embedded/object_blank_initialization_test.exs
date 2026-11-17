@@ -1,15 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectBlankInitializationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, ResourceContext}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ObjectValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "object MIME hints distinguish document initialization from absent-data fallback" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
@@ -125,6 +119,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectBlankInitializationTest do
       refute pdf =~ "/AcroForm"
       refute_received {:resolved, _}
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ObjectBlankInitializationGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, ResourceContext}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "blank source validation and the shared child-depth ceiling fail without fallback" do

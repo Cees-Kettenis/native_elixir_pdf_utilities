@@ -1,15 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.TestSupport.{CffFixture, Paths}
   alias NativeElixirPdfUtilities.Validators.CffCharstringValidator
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
 
   test "real font programs retain independently measured advances and cubic bounds" do
     data = File.read!(Paths.fixture("fonts/cff-static-sans.cff"))
@@ -61,6 +54,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringTest do
 
       assert actual.commands == commands, vector["name"]
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CffCharstringGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.TestSupport.{CffFixture}
+  alias NativeElixirPdfUtilities.Validators.CffCharstringValidator
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
   end
 
   test "arithmetic, storage, logic and stack operators feed the same outline state" do

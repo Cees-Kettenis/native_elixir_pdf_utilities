@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineFragmentAllocationTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{FontFallback, HtmlParser, Layout, Style}
 
   test "ordinary and atomic styled text share Chromium's final fragment allocation" do

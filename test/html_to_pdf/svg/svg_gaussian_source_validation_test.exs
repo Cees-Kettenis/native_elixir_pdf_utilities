@@ -1,15 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGaussianSourceValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgFilterValidator, SvgStyleValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "Gaussian source admits its default and one or two bounded nonnegative deviations" do
     for attrs <- [
@@ -70,20 +64,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGaussianSourceValidationTest do
              SvgFilterValidator.validate_source_attributes(nil, [])
   end
 
-  test "Gaussian scalars use the existing central numeric magnitude bound" do
-    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 2))
-
-    assert :ok =
-             SvgFilterValidator.validate_source_attributes("feGaussianBlur", %{
-               "stdDeviation" => "2 0"
-             })
-
-    assert {:error, {:invalid_document, _}} =
-             SvgFilterValidator.validate_source_attributes("feGaussianBlur", %{
-               "stdDeviation" => "2.1"
-             })
-  end
-
   test "qualified lookalike attributes do not replace the Gaussian parameter" do
     assert {:ok, []} =
              SvgStyleValidator.presentation_declarations(%{
@@ -142,5 +122,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGaussianSourceValidationTest do
 
     assert {:ok, _} =
              NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer.rasterize(qualified, [], nil)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGaussianSourceValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.Validators.{SvgFilterValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "Gaussian scalars use the existing central numeric magnitude bound" do
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 2))
+
+    assert :ok =
+             SvgFilterValidator.validate_source_attributes("feGaussianBlur", %{
+               "stdDeviation" => "2 0"
+             })
+
+    assert {:error, {:invalid_document, _}} =
+             SvgFilterValidator.validate_source_attributes("feGaussianBlur", %{
+               "stdDeviation" => "2.1"
+             })
   end
 end

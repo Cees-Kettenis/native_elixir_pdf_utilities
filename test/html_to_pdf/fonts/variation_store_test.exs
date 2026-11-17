@@ -1,19 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.VariationStoreTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.Limits
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Validators.{
-    VariationStoreValidator,
-    FontVariationValidator,
-    GvarValidator,
-    Cff2FontValidator
+    VariationStoreValidator
   }
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
 
   test "region products, mixed-width rows, map formats and CFF2 blends agree with hand-computed values" do
     data =
@@ -134,6 +124,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariationStoreTest do
     for {values, index} <- [{[], 0}, {[1, 0.5], 0}, {[1], 0}, {[1], 1}] do
       assert {:error, {:invalid_font, _}} = VariationStoreValidator.blend(values, store, index)
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.VariationStoreGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+
+  alias NativeElixirPdfUtilities.Validators.{
+    VariationStoreValidator,
+    FontVariationValidator,
+    GvarValidator,
+    Cff2FontValidator
+  }
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
   end
 
   test "all variation consumers reject improper coordinates and reserve work before allocating maps" do

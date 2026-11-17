@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, Text}
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     Font,
@@ -12,7 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
     Style
   }
 
-  alias NativeElixirPdfUtilities.Pdf.{FormWriter, IncrementalWriter, Reader}
+  alias NativeElixirPdfUtilities.Pdf.{FormWriter, Reader}
 
   alias NativeElixirPdfUtilities.Validators.{
     EmbeddedFormValidator,
@@ -24,9 +24,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
   }
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
     assert {:ok, tree} =
              HtmlParser.parse_detailed("""
              <body style="margin:0">
@@ -44,52 +41,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
     assert {:ok, background} = PdfWriter.render(cleaned, forms: :static)
     assert {:ok, context} = Reader.read_validated(background)
     {:ok, fields: fields, context: context}
-  end
-
-  test "affine source appearances retain late serialization failures in an active render scope",
-       %{fields: fields} do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-      assert {:ok, descriptor} = EmbeddedFormValidator.issue(context, fields)
-      Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               EmbeddedFormValidator.compose_affine(
-                 descriptor,
-                 {1, 0, 0, 1, 0, 0},
-                 {0, 0, 200, 120},
-                 nil
-               )
-
-      assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.stage)
-    end)
-  end
-
-  test "text appearance projection preserves nested output exhaustion", %{fields: fields} do
-    field = Enum.find(fields, &(&1.type == :text))
-    [left, bottom, right, top] = field.rect
-
-    projected =
-      FormAppearanceValidator.project_field(
-        field,
-        {1, 0, 0, 1, 0, 0},
-        [[{left, bottom}, {right, bottom}, {right, top}, {left, top}]],
-        {left, bottom, right, top}
-      )
-
-    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
-
-    assert :checked =
-             HtmlValidator.with_render_budget(fn ->
-               assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                        FormAppearanceValidator.appearance(
-                          projected,
-                          projected.source_editor,
-                          "Changed"
-                        )
-
-               assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.operation)
-               :checked
-             end)
   end
 
   test "unscoped prepared text uses a local frame for portable original-font filling", %{
@@ -218,33 +169,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
     assert projected.widget.rect == widget.rect
   end
 
-  test "external password AP masking rejects rendered work exhaustion", %{
-    fields: fields,
-    context: context
-  } do
-    assert {:ok, pdf} = FormWriter.create(context, fields)
-    assert {:ok, reader} = Reader.read_validated(pdf)
-    assert {:ok, %{fields: [field | _]}} = FormValidator.inspect_document(reader)
-    [widget] = field.widgets
-    {:ref, {id, generation}} = field.ref
-    {:ref, {widget_id, widget_generation}} = widget.ref
-
-    assert {:ok, external} =
-             IncrementalWriter.write(reader, [
-               {id, generation, {:value, Map.put(field.dictionary, "Ff", 8192)}},
-               {widget_id, widget_generation,
-                {:value, Map.delete(widget.dictionary, "NEPUSourceEditor")}}
-             ])
-
-    assert :ok = Limits.install(%{Limits.effective() | max_output_bytes: 2})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             Forms.fill(external, %{"editor" => "Changed"})
-
-    assert diagnostic.source == "editor" and diagnostic.operation == :fill
-    assert diagnostic.message =~ "aggregate text or widget count limit"
-  end
-
   test "grouped native glyph button states extract their selected characters", %{
     fields: fields
   } do
@@ -277,5 +201,126 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionTest do
     field = Enum.find(fields, &(&1.type == :text))
     [_, background] = FormWriter.appearance_frames(%{field | appearance: appearance})
     assert background.boxes == []
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceProjectionGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Forms, Limits}
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    HtmlParser,
+    Layout,
+    Pagination,
+    PdfWriter,
+    ResourceContext,
+    Style
+  }
+
+  alias NativeElixirPdfUtilities.Pdf.{FormWriter, IncrementalWriter, Reader}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    EmbeddedFormValidator,
+    FormAppearanceValidator,
+    FormValidator,
+    HtmlFormValidator,
+    HtmlValidator,
+    WriterValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    assert {:ok, tree} =
+             HtmlParser.parse_detailed("""
+             <body style="margin:0">
+             <input name="editor" value="Original" style="display:block;font-family:DejaVu Sans">
+             <input type="radio" name="pick" value="a" checked>
+             <input type="radio" name="pick" value="b">
+             </body>
+             """)
+
+    assert {:ok, styled} = Style.compute_detailed(tree)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 120}, margin: 10)
+    assert {:ok, pages} = Pagination.paginate(layout)
+    assert {:ok, prepared} = WriterValidator.prepare(pages, [])
+    assert {:ok, cleaned, fields} = HtmlFormValidator.prepare(prepared.pages, forms: :interactive)
+    assert {:ok, background} = PdfWriter.render(cleaned, forms: :static)
+    assert {:ok, context} = Reader.read_validated(background)
+    {:ok, fields: fields, context: context}
+  end
+
+  test "affine source appearances retain late serialization failures in an active render scope",
+       %{fields: fields} do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      assert {:ok, descriptor} = EmbeddedFormValidator.issue(context, fields)
+      Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               EmbeddedFormValidator.compose_affine(
+                 descriptor,
+                 {1, 0, 0, 1, 0, 0},
+                 {0, 0, 200, 120},
+                 nil
+               )
+
+      assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.stage)
+    end)
+  end
+
+  test "text appearance projection preserves nested output exhaustion", %{fields: fields} do
+    field = Enum.find(fields, &(&1.type == :text))
+    [left, bottom, right, top] = field.rect
+
+    projected =
+      FormAppearanceValidator.project_field(
+        field,
+        {1, 0, 0, 1, 0, 0},
+        [[{left, bottom}, {right, bottom}, {right, top}, {left, top}]],
+        {left, bottom, right, top}
+      )
+
+    Limits.install(Map.put(Limits.effective(), :max_output_bytes, 3_000))
+
+    assert :checked =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        FormAppearanceValidator.appearance(
+                          projected,
+                          projected.source_editor,
+                          "Changed"
+                        )
+
+               assert diagnostic.message =~ "max_output_bytes" and is_atom(diagnostic.operation)
+               :checked
+             end)
+  end
+
+  test "external password AP masking rejects rendered work exhaustion", %{
+    fields: fields,
+    context: context
+  } do
+    assert {:ok, pdf} = FormWriter.create(context, fields)
+    assert {:ok, reader} = Reader.read_validated(pdf)
+    assert {:ok, %{fields: [field | _]}} = FormValidator.inspect_document(reader)
+    [widget] = field.widgets
+    {:ref, {id, generation}} = field.ref
+    {:ref, {widget_id, widget_generation}} = widget.ref
+
+    assert {:ok, external} =
+             IncrementalWriter.write(reader, [
+               {id, generation, {:value, Map.put(field.dictionary, "Ff", 8192)}},
+               {widget_id, widget_generation,
+                {:value, Map.delete(widget.dictionary, "NEPUSourceEditor")}}
+             ])
+
+    assert :ok = Limits.install(%{Limits.effective() | max_output_bytes: 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Forms.fill(external, %{"editor" => "Changed"})
+
+    assert diagnostic.source == "editor" and diagnostic.operation == :fill
+    assert diagnostic.message =~ "aggregate text or widget count limit"
   end
 end

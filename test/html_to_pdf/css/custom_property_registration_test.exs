@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CustomPropertyRegistrationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
   alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator
 

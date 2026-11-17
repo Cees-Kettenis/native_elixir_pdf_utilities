@@ -1,13 +1,12 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.BoxPaintTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Pagination, Style}
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
 
   alias NativeElixirPdfUtilities.Validators.{
     CssBorderImageValidator,
-    CssBoxPaintValidator,
-    WriterValidator
+    CssBoxPaintValidator
   }
 
   test "nine border image patches keep corner colors, independent edges, center fill and outsets" do
@@ -189,39 +188,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BoxPaintTest do
     assert :error == CssBoxPaintValidator.prepare(style, "other", "none")
   end
 
-  test "border repetition and shadow rasters consume existing shared resource budgets" do
-    previous = Limits.effective()
-
-    try do
-      Limits.install(Map.put(previous, :max_raster_pixels, 1))
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlToPdf.render(
-                 "<div style='width:30pt;height:20pt;box-shadow:2pt 2pt 4pt red'>P</div>",
-                 system_font_discovery: false
-               )
-
-      assert diagnostic.message =~ "max_raster_pixels"
-    after
-      Limits.install(previous)
-    end
-
-    assert {:error, {_, %{stage: :pdf}}} =
-             WriterValidator.validate_native_boxes([
-               %{
-                 type: :text,
-                 x: 0,
-                 y: 0,
-                 font: "Helvetica",
-                 font_size: 12,
-                 text: "bad",
-                 color: {0, 0, 0},
-                 text_stroke_width: -1,
-                 text_stroke_color: {0, 0, 0}
-               }
-             ])
-  end
-
   test "owner property registries remain admitted by the shared cascade" do
     alias NativeElixirPdfUtilities.Validators.{
       CssBackgroundValidator,
@@ -264,42 +230,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BoxPaintTest do
              )
   end
 
-  test "generated gradient and repetition failures retain actionable shared budget diagnostics" do
-    previous = Limits.effective()
-
-    for {property, value} <- [{:max_raster_pixels, 1}, {:max_raster_work, 1}] do
-      assert {:ok, dom} =
-               HtmlParser.parse(
-                 "<div style='width:20pt;height:20pt;background-image:linear-gradient(red,blue)'></div>"
-               )
-
-      assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
-
-      try do
-        Limits.install(Map.put(previous, property, value))
-        assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
-        assert diagnostic.source == "CSS gradient"
-      after
-        Limits.install(previous)
-      end
-    end
-
-    assert {:ok, dom} =
-             HtmlParser.parse(
-               "<div style='width:20pt;height:20pt;background:image(red) 0 0/1pt 1pt repeat'></div>"
-             )
-
-    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
-
-    try do
-      Limits.install(Map.put(previous, :max_entries, 50))
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
-      assert diagnostic.message =~ "tile count"
-    after
-      Limits.install(previous)
-    end
-  end
-
   test "blur spread and synthetic oblique text retain paint and extraction without extra fonts" do
     alias NativeElixirPdfUtilities.TestSupport.Paths
 
@@ -336,13 +266,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BoxPaintTest do
     top_right = Enum.find(patches, &(&1.clip.x == 20 and &1.clip.y == 140))
     assert_in_delta top_right.x, 20 - 20 / 3, 0.000001
     assert_in_delta top_right.width, 80 / 3, 0.000001
-  end
-
-  defp layout(html, opts \\ []) do
-    assert {:ok, dom} = HtmlParser.parse(html)
-    assert {:ok, styled} = Style.compute(dom, Keyword.put(opts, :system_font_discovery, false))
-    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
-    {styled, layout}
   end
 
   test "inline decorations and image borders share continuous strips without requiring a background image" do
@@ -399,57 +322,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BoxPaintTest do
              )
   end
 
-  test "calculated paint geometry rejects excessive used values through the shared diagnostics contract" do
-    for html <- [
-          "<div style='width:200pt;height:20pt;background:red;border-radius:calc(4000000000%) / 2pt'></div>",
-          "<img src=tile style='width:200pt;height:20pt;border-radius:calc(4000000000%) / 2pt'>",
-          "<div style='width:200pt;height:20pt;border:1pt solid transparent;border-image:url(tile) 1 / calc(4000000000%)'></div>"
-        ] do
-      png = PngFixture.build(4, 4, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
-
-      assert {:error, {_, %{stage: stage, message: message}}} =
-               HtmlToPdf.render(html,
-                 assets: %{"tile" => {:bytes, png}},
-                 system_font_discovery: false
-               )
-
-      assert stage in [:style, :layout]
-      assert is_binary(message)
-    end
-
-    {:ok, dom} =
-      HtmlParser.parse(
-        "<div style='width:20pt;height:20pt;border:2pt solid transparent;border-image:linear-gradient(red,blue) 20 / 2pt'></div>"
-      )
-
-    {:ok, styled} = Style.compute(dom, system_font_discovery: false)
-    previous = Limits.effective()
-
-    try do
-      Limits.install(Map.put(previous, :max_raster_pixels, 1))
-
-      assert {:error, {:resource_limit_exceeded, %{source: "CSS gradient"}}} =
-               Layout.layout(styled)
-    after
-      Limits.install(previous)
-    end
-
-    {:ok, dom} =
-      HtmlParser.parse(
-        "<div style='width:20pt;height:20pt;background-image:image(red);background-size:.001pt 1pt'></div>"
-      )
-
-    {:ok, styled} = Style.compute(dom, system_font_discovery: false)
-
-    try do
-      Limits.install(Map.put(previous, :max_entries, 50))
-      assert {:error, {:resource_limit_exceeded, %{message: message}}} = Layout.layout(styled)
-      assert message =~ "tile count"
-    after
-      Limits.install(previous)
-    end
-  end
-
   test "unapplied corner declarations retain parsed physical pairs without an element default" do
     alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
 
@@ -499,6 +371,144 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BoxPaintTest do
       assert diagnostic.module == NativeElixirPdfUtilities.Validators.CssMathValidator
       assert diagnostic.source == "calc(4000000000%)"
       assert diagnostic.message =~ "CSS calculation"
+    end
+  end
+
+  defp layout(html, opts \\ []) do
+    assert {:ok, dom} = HtmlParser.parse(html)
+    assert {:ok, styled} = Style.compute(dom, Keyword.put(opts, :system_font_discovery, false))
+    assert {:ok, layout} = Layout.layout(styled, page_size: {200, 150}, margin: 0)
+    {styled, layout}
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.BoxPaintGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+
+  alias NativeElixirPdfUtilities.Validators.{
+    WriterValidator
+  }
+
+  test "border repetition and shadow rasters consume existing shared resource budgets" do
+    previous = Limits.effective()
+
+    try do
+      Limits.install(Map.put(previous, :max_raster_pixels, 1))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render(
+                 "<div style='width:30pt;height:20pt;box-shadow:2pt 2pt 4pt red'>P</div>",
+                 system_font_discovery: false
+               )
+
+      assert diagnostic.message =~ "max_raster_pixels"
+    after
+      Limits.install(previous)
+    end
+
+    assert {:error, {_, %{stage: :pdf}}} =
+             WriterValidator.validate_native_boxes([
+               %{
+                 type: :text,
+                 x: 0,
+                 y: 0,
+                 font: "Helvetica",
+                 font_size: 12,
+                 text: "bad",
+                 color: {0, 0, 0},
+                 text_stroke_width: -1,
+                 text_stroke_color: {0, 0, 0}
+               }
+             ])
+  end
+
+  test "generated gradient and repetition failures retain actionable shared budget diagnostics" do
+    previous = Limits.effective()
+
+    for {property, value} <- [{:max_raster_pixels, 1}, {:max_raster_work, 1}] do
+      assert {:ok, dom} =
+               HtmlParser.parse(
+                 "<div style='width:20pt;height:20pt;background-image:linear-gradient(red,blue)'></div>"
+               )
+
+      assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+
+      try do
+        Limits.install(Map.put(previous, property, value))
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
+        assert diagnostic.source == "CSS gradient"
+      after
+        Limits.install(previous)
+      end
+    end
+
+    assert {:ok, dom} =
+             HtmlParser.parse(
+               "<div style='width:20pt;height:20pt;background:image(red) 0 0/1pt 1pt repeat'></div>"
+             )
+
+    assert {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+
+    try do
+      Limits.install(Map.put(previous, :max_entries, 50))
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Layout.layout(styled)
+      assert diagnostic.message =~ "tile count"
+    after
+      Limits.install(previous)
+    end
+  end
+
+  test "calculated paint geometry rejects excessive used values through the shared diagnostics contract" do
+    for html <- [
+          "<div style='width:200pt;height:20pt;background:red;border-radius:calc(4000000000%) / 2pt'></div>",
+          "<img src=tile style='width:200pt;height:20pt;border-radius:calc(4000000000%) / 2pt'>",
+          "<div style='width:200pt;height:20pt;border:1pt solid transparent;border-image:url(tile) 1 / calc(4000000000%)'></div>"
+        ] do
+      png = PngFixture.build(4, 4, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
+
+      assert {:error, {_, %{stage: stage, message: message}}} =
+               HtmlToPdf.render(html,
+                 assets: %{"tile" => {:bytes, png}},
+                 system_font_discovery: false
+               )
+
+      assert stage in [:style, :layout]
+      assert is_binary(message)
+    end
+
+    {:ok, dom} =
+      HtmlParser.parse(
+        "<div style='width:20pt;height:20pt;border:2pt solid transparent;border-image:linear-gradient(red,blue) 20 / 2pt'></div>"
+      )
+
+    {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+    previous = Limits.effective()
+
+    try do
+      Limits.install(Map.put(previous, :max_raster_pixels, 1))
+
+      assert {:error, {:resource_limit_exceeded, %{source: "CSS gradient"}}} =
+               Layout.layout(styled)
+    after
+      Limits.install(previous)
+    end
+
+    {:ok, dom} =
+      HtmlParser.parse(
+        "<div style='width:20pt;height:20pt;background-image:image(red);background-size:.001pt 1pt'></div>"
+      )
+
+    {:ok, styled} = Style.compute(dom, system_font_discovery: false)
+
+    try do
+      Limits.install(Map.put(previous, :max_entries, 50))
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} = Layout.layout(styled)
+      assert message =~ "tile count"
+    after
+      Limits.install(previous)
     end
   end
 end

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.CssScalarUnitsTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
   alias NativeElixirPdfUtilities.Validators.{CssMathValidator, HtmlValidator}

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, Style}
 
@@ -8,8 +8,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     HtmlValidator,
     TemplatePatchValidator
   }
-
-  alias NativeElixirPdfUtilities.Limits
 
   test "first tree-order marker uses exact XML name values without changing the tree" do
     source =
@@ -134,40 +132,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     end
   end
 
-  test "live parser snapshots prove earlier ownership and absence of future candidates" do
-    :erlang.trace_pattern({HtmlTree, :insert, 4}, true, [:local])
-    on_exit(fn -> :erlang.trace_pattern({HtmlTree, :insert, 4}, false, [:local]) end)
-
-    source =
-      "<head><?marker name='head'></head><body><div><?start name='A'>" <>
-        "<p>Old</p><?end></div><?boundary><?marker name='future'><p>Future</p></body>"
-
-    task =
-      Task.async(fn ->
-        receive do
-          :parse -> HtmlParser.parse_document_detailed(source)
-        end
-      end)
-
-    :erlang.trace(task.pid, true, [:call])
-    send(task.pid, :parse)
-    assert {:ok, _document} = Task.await(task)
-
-    assert_receive {:trace, _, :call,
-                    {HtmlTree, :insert,
-                     [tree, body, %{type: :processing_instruction, target: "boundary"}, nil]}}
-
-    assert tree.nodes[body].tag == "body"
-    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, body, "head")
-    assert tree.nodes[target.parent].tag == "head"
-    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, body, "A")
-    [old] = target.removed
-    assert tree.nodes[old].parent_id == target.parent
-    assert HtmlTree.fetch(tree, old).children |> hd() |> Map.fetch!(:text) == "Old"
-    assert {:ok, nil} = HtmlTreeValidator.prepare_content_patch(tree, body, "future")
-    refute Enum.any?(tree.nodes, fn {_id, node} -> Map.get(node, :text) == "Future" end)
-  end
-
   test "foreign elements named body or template do not acquire HTML scope rules" do
     tree = HtmlTree.new(%{text: "", line: 1, column: 1})
     {tree, parent} = HtmlTree.insert(tree, tree.root, %{type: :element, tag: "div", children: []})
@@ -212,37 +176,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     end
   end
 
-  test "lookup and sibling range scans consume cumulative shared work before traversal" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
-    assert {:ok, document} =
-             HtmlParser.parse_detailed(
-               "<?start name='A'>" <> String.duplicate("<p>Old</p>", 30) <> "<?end>"
-             )
-
-    tree = HtmlTree.from_document(document)
-    Limits.install(%{limits | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
-
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
-
-    Limits.install(%{limits | max_work: 1000})
-    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
-    assert length(target.removed) == 30
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.reserve_render_resource(:max_work, 950, :html)
-               HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
-             end)
-
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.module == HtmlValidator
-  end
-
   test "direct parsing still denies replacement while the renderer prepares supported source" do
     source = "<?marker name='A'><template for='A'><p>Replacement</p></template>"
     assert {:error, {:unsupported_html, diagnostic}} = HtmlParser.parse_document_detailed(source)
@@ -253,70 +186,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     # The earlier marker is in the implied head. Its non-painted insertion
     # remains distinct from body range replacement, covered by execution tests.
     assert {:error, {:no_extractable_text, _}} = NativeElixirPdfUtilities.Text.extract(pdf)
-  end
-
-  test "parser plans the original earlier range at the opening token before the public source gate" do
-    source =
-      "<head><?marker name='H'></head><body><?start name='A'><p style='width:bananas'>Old</p><?end><template for='A'><p>New</p></template><?marker name='Future'></body>"
-
-    traces = [
-      {TemplatePatchValidator, :with_insertion_context, 5},
-      {HtmlTree, :begin_content_patch, 2},
-      {HtmlTree, :adopt_content_patch, 2},
-      {HtmlTree, :finish_content_patch, 1}
-    ]
-
-    Enum.each(traces, &:erlang.trace_pattern(&1, true, [:local]))
-
-    task =
-      Task.async(fn ->
-        receive do
-          :parse -> HtmlParser.parse_document_detailed(source)
-        end
-      end)
-
-    try do
-      :erlang.trace(task.pid, true, [:call])
-      send(task.pid, :parse)
-      assert {:error, {:unsupported_html, diagnostic}} = Task.await(task)
-      assert diagnostic.stage == :html and diagnostic.operation == :parse
-
-      assert diagnostic.module == TemplatePatchValidator and
-               diagnostic.source == "<template for='A'>"
-
-      assert diagnostic.message =~ "matched earlier body range with 1 original subtree"
-      assert diagnostic.message =~ "original_source_policy"
-      assert diagnostic.message =~ "selected_fonts_and_metrics"
-      assert diagnostic.message =~ "active_resource_authorization_and_contents"
-
-      assert_receive {:trace, _, :call,
-                      {TemplatePatchValidator, :with_insertion_context,
-                       [tree, parent, "A", origin, _]}}
-
-      assert tree.nodes[parent].tag == "body"
-      assert origin.source.text == "<template for='A'>"
-      assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, parent, "A")
-      [old] = target.removed
-      assert tree.nodes[old].attributes["style"] == "width:bananas"
-      assert HtmlTree.fetch(tree, old).children |> hd() |> Map.fetch!(:text) == "Old"
-
-      refute Enum.any?(tree.nodes, fn {_, node} ->
-               node[:text] == "New" or node[:data] == "name='Future'"
-             end)
-
-      refute_receive {:trace, _, :call, {HtmlTree, :begin_content_patch, _}}
-      refute_receive {:trace, _, :call, {HtmlTree, :adopt_content_patch, _}}
-      refute_receive {:trace, _, :call, {HtmlTree, :finish_content_patch, _}}
-
-      assert {:error, {:invalid_css, rendered}} =
-               NativeElixirPdfUtilities.HtmlToPdf.render(source)
-
-      assert rendered.stage == :css and rendered.source == "width:bananas"
-      assert rendered.operation == :source_style_contexts
-      assert rendered.line == 1 and rendered.column == 65
-    after
-      Enum.each(traces, &:erlang.trace_pattern(&1, false, [:local]))
-    end
   end
 
   test "missing empty and future targets remain inert-fallback plans with precise original diagnostics" do
@@ -576,63 +445,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     assert transaction.inserted == [replacement.node_id, nested.node_id]
   end
 
-  test "marker-only and unmatched-end transactions keep source identities and reject stale or cyclic adoption" do
-    for marker <- ["<?marker name='A'>", "<?start name='A'><p>Old</p>"] do
-      assert {:ok, dom} =
-               HtmlParser.parse_detailed("<div>#{marker}</div><template><p>New</p></template>")
-
-      tree = HtmlTree.from_document(dom)
-      [div, template] = dom.children
-      [replacement] = template.content.children
-      assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
-      assert {:ok, transaction} = HtmlTree.begin_content_patch(tree, target)
-
-      assert {:error, {:invalid_document, _}} =
-               HtmlTree.adopt_content_patch(transaction, [div.node_id])
-
-      assert {:error, {:invalid_document, _}} =
-               HtmlTree.adopt_content_patch(transaction, [target.start])
-
-      assert {:error, {:invalid_document, _}} =
-               HtmlTree.adopt_content_patch(transaction, [
-                 replacement.node_id,
-                 replacement.node_id
-               ])
-
-      assert {:error, {:invalid_document, _}} =
-               HtmlTree.adopt_content_patch(transaction, [make_ref()])
-
-      active_tree = transaction.tree
-      detached = put_in(active_tree.nodes[replacement.node_id].parent_id, nil)
-      transaction = %{transaction | tree: detached}
-      assert {:ok, transaction} = HtmlTree.adopt_content_patch(transaction, [replacement.node_id])
-      assert {:ok, active} = HtmlTree.finish_content_patch(transaction)
-      assert [adopted] = HtmlTree.fetch(active, div.node_id).children
-      assert adopted.node_id == replacement.node_id
-
-      assert {:error, {:invalid_document, _}} =
-               HtmlTree.finish_content_patch(%{transaction | tree: active})
-
-      assert {:error, {:invalid_document, _}} =
-               HtmlTree.begin_content_patch(tree, %{target | removed: [make_ref()]})
-    end
-
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    assert {:ok, dom} = HtmlParser.parse_detailed("<?marker name='A'>")
-    tree = HtmlTree.from_document(dom)
-    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
-    Limits.install(%{limits | max_work: 0})
-    assert {:error, {:resource_limit_exceeded, _}} = HtmlTree.begin_content_patch(tree, target)
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             TemplatePatchValidator.with_parser_invocation(dom.source.text, fn _ ->
-               TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", %{}, fn _ ->
-                 :bad
-               end)
-             end)
-  end
-
   test "invocation plans retain distinct body-to-head and foreign insertion parents" do
     token = "<template for='A'>"
 
@@ -739,5 +551,205 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorTest do
     }
 
     {source, dom, tree, origin}
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlTreeValidator,
+    HtmlValidator,
+    TemplatePatchValidator
+  }
+
+  alias NativeElixirPdfUtilities.Limits
+
+  test "live parser snapshots prove earlier ownership and absence of future candidates" do
+    :erlang.trace_pattern({HtmlTree, :insert, 4}, true, [:local])
+    on_exit(fn -> :erlang.trace_pattern({HtmlTree, :insert, 4}, false, [:local]) end)
+
+    source =
+      "<head><?marker name='head'></head><body><div><?start name='A'>" <>
+        "<p>Old</p><?end></div><?boundary><?marker name='future'><p>Future</p></body>"
+
+    task =
+      Task.async(fn ->
+        receive do
+          :parse -> HtmlParser.parse_document_detailed(source)
+        end
+      end)
+
+    :erlang.trace(task.pid, true, [:call])
+    send(task.pid, :parse)
+    assert {:ok, _document} = Task.await(task)
+
+    assert_receive {:trace, _, :call,
+                    {HtmlTree, :insert,
+                     [tree, body, %{type: :processing_instruction, target: "boundary"}, nil]}}
+
+    assert tree.nodes[body].tag == "body"
+    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, body, "head")
+    assert tree.nodes[target.parent].tag == "head"
+    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, body, "A")
+    [old] = target.removed
+    assert tree.nodes[old].parent_id == target.parent
+    assert HtmlTree.fetch(tree, old).children |> hd() |> Map.fetch!(:text) == "Old"
+    assert {:ok, nil} = HtmlTreeValidator.prepare_content_patch(tree, body, "future")
+    refute Enum.any?(tree.nodes, fn {_id, node} -> Map.get(node, :text) == "Future" end)
+  end
+
+  test "lookup and sibling range scans consume cumulative shared work before traversal" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    assert {:ok, document} =
+             HtmlParser.parse_detailed(
+               "<?start name='A'>" <> String.duplicate("<p>Old</p>", 30) <> "<?end>"
+             )
+
+    tree = HtmlTree.from_document(document)
+    Limits.install(%{limits | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+
+    Limits.install(%{limits | max_work: 1000})
+    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+    assert length(target.removed) == 30
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.reserve_render_resource(:max_work, 950, :html)
+               HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+             end)
+
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.module == HtmlValidator
+  end
+
+  test "parser plans the original earlier range at the opening token before the public source gate" do
+    source =
+      "<head><?marker name='H'></head><body><?start name='A'><p style='width:bananas'>Old</p><?end><template for='A'><p>New</p></template><?marker name='Future'></body>"
+
+    traces = [
+      {TemplatePatchValidator, :with_insertion_context, 5},
+      {HtmlTree, :begin_content_patch, 2},
+      {HtmlTree, :adopt_content_patch, 2},
+      {HtmlTree, :finish_content_patch, 1}
+    ]
+
+    Enum.each(traces, &:erlang.trace_pattern(&1, true, [:local]))
+
+    task =
+      Task.async(fn ->
+        receive do
+          :parse -> HtmlParser.parse_document_detailed(source)
+        end
+      end)
+
+    try do
+      :erlang.trace(task.pid, true, [:call])
+      send(task.pid, :parse)
+      assert {:error, {:unsupported_html, diagnostic}} = Task.await(task)
+      assert diagnostic.stage == :html and diagnostic.operation == :parse
+
+      assert diagnostic.module == TemplatePatchValidator and
+               diagnostic.source == "<template for='A'>"
+
+      assert diagnostic.message =~ "matched earlier body range with 1 original subtree"
+      assert diagnostic.message =~ "original_source_policy"
+      assert diagnostic.message =~ "selected_fonts_and_metrics"
+      assert diagnostic.message =~ "active_resource_authorization_and_contents"
+
+      assert_receive {:trace, _, :call,
+                      {TemplatePatchValidator, :with_insertion_context,
+                       [tree, parent, "A", origin, _]}}
+
+      assert tree.nodes[parent].tag == "body"
+      assert origin.source.text == "<template for='A'>"
+      assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, parent, "A")
+      [old] = target.removed
+      assert tree.nodes[old].attributes["style"] == "width:bananas"
+      assert HtmlTree.fetch(tree, old).children |> hd() |> Map.fetch!(:text) == "Old"
+
+      refute Enum.any?(tree.nodes, fn {_, node} ->
+               node[:text] == "New" or node[:data] == "name='Future'"
+             end)
+
+      refute_receive {:trace, _, :call, {HtmlTree, :begin_content_patch, _}}
+      refute_receive {:trace, _, :call, {HtmlTree, :adopt_content_patch, _}}
+      refute_receive {:trace, _, :call, {HtmlTree, :finish_content_patch, _}}
+
+      assert {:error, {:invalid_css, rendered}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render(source)
+
+      assert rendered.stage == :css and rendered.source == "width:bananas"
+      assert rendered.operation == :source_style_contexts
+      assert rendered.line == 1 and rendered.column == 65
+    after
+      Enum.each(traces, &:erlang.trace_pattern(&1, false, [:local]))
+    end
+  end
+
+  test "marker-only and unmatched-end transactions keep source identities and reject stale or cyclic adoption" do
+    for marker <- ["<?marker name='A'>", "<?start name='A'><p>Old</p>"] do
+      assert {:ok, dom} =
+               HtmlParser.parse_detailed("<div>#{marker}</div><template><p>New</p></template>")
+
+      tree = HtmlTree.from_document(dom)
+      [div, template] = dom.children
+      [replacement] = template.content.children
+      assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+      assert {:ok, transaction} = HtmlTree.begin_content_patch(tree, target)
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [div.node_id])
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [target.start])
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [
+                 replacement.node_id,
+                 replacement.node_id
+               ])
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.adopt_content_patch(transaction, [make_ref()])
+
+      active_tree = transaction.tree
+      detached = put_in(active_tree.nodes[replacement.node_id].parent_id, nil)
+      transaction = %{transaction | tree: detached}
+      assert {:ok, transaction} = HtmlTree.adopt_content_patch(transaction, [replacement.node_id])
+      assert {:ok, active} = HtmlTree.finish_content_patch(transaction)
+      assert [adopted] = HtmlTree.fetch(active, div.node_id).children
+      assert adopted.node_id == replacement.node_id
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.finish_content_patch(%{transaction | tree: active})
+
+      assert {:error, {:invalid_document, _}} =
+               HtmlTree.begin_content_patch(tree, %{target | removed: [make_ref()]})
+    end
+
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    assert {:ok, dom} = HtmlParser.parse_detailed("<?marker name='A'>")
+    tree = HtmlTree.from_document(dom)
+    assert {:ok, target} = HtmlTreeValidator.prepare_content_patch(tree, tree.root, "A")
+    Limits.install(%{limits | max_work: 0})
+    assert {:error, {:resource_limit_exceeded, _}} = HtmlTree.begin_content_patch(tree, target)
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             TemplatePatchValidator.with_parser_invocation(dom.source.text, fn _ ->
+               TemplatePatchValidator.with_insertion_context(tree, tree.root, "A", %{}, fn _ ->
+                 :bad
+               end)
+             end)
   end
 end

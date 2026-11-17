@@ -1,4 +1,37 @@
 defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+  alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, Reader}
+  alias NativeElixirPdfUtilities.Validators.{PdfFormValidator}
+
+  setup do
+    # Use the genuine writer/reader/incremental interfaces to retain valid xrefs.
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 60}, boxes: []}], compress_streams: false)
+    assert {:ok, context} = Reader.read_validated(pdf)
+    {:ok, context: context}
+  end
+
+  test "nonpositive imported dimensions retain the ordinary invalid-source diagnostic", %{
+    context: context
+  } do
+    [page] = context.pages
+    {id, generation} = page.ref
+
+    for box <- [[0, 0, 0, 60], [0, 0, 100, 0], [0, 0, -1, 60]] do
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(page.dictionary, "MediaBox", box)}}
+               ])
+
+      assert {:error, {:invalid_pdf_input, diagnostic}} = PdfFormValidator.prepare_source(source)
+      assert diagnostic.stage == :pdf and diagnostic.source == "PDF Form source"
+      assert diagnostic.message =~ "bounded dimensions"
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
@@ -84,24 +117,6 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
 
     assert diagnostic.message =~ "normalization" and
              diagnostic.message =~ "max_numeric_token_bytes"
-  end
-
-  test "nonpositive imported dimensions retain the ordinary invalid-source diagnostic", %{
-    context: context
-  } do
-    [page] = context.pages
-    {id, generation} = page.ref
-
-    for box <- [[0, 0, 0, 60], [0, 0, 100, 0], [0, 0, -1, 60]] do
-      assert {:ok, source} =
-               IncrementalWriter.write(context, [
-                 {id, generation, {:value, Map.put(page.dictionary, "MediaBox", box)}}
-               ])
-
-      assert {:error, {:invalid_pdf_input, diagnostic}} = PdfFormValidator.prepare_source(source)
-      assert diagnostic.stage == :pdf and diagnostic.source == "PDF Form source"
-      assert diagnostic.message =~ "bounded dimensions"
-    end
   end
 
   test "standalone imports share parsing and object-stream decoding with later Contents decoding" do

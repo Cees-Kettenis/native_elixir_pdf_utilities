@@ -1,6 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.{CssColorValidator, HtmlFormValidator, HtmlValidator}
 
@@ -152,42 +151,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputTest do
     assert_in_delta b, 30 / 255, 0.000001
   end
 
-  test "native color calculation budget failures remain actionable public diagnostics" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<input type=color value='rgb(calc(1 * 10) 20 30)'>",
-               forms: :static
-             )
-
-    assert diagnostic.stage == :html and diagnostic.module == HtmlValidator
-    assert diagnostic.message =~ "max_work"
-    refute Map.has_key?(diagnostic, :source)
-  end
-
-  test "shared math depth exhaustion is recoverable and source-specific" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_depth: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<input type=color value='rgb(calc(calc(10)) 20 30)'>",
-               forms: :static
-             )
-
-    assert diagnostic.stage == :html
-    assert diagnostic.message =~ "max_depth"
-    refute Map.has_key?(diagnostic, :source)
-    Limits.install(previous)
-
-    assert {:ok, state} =
-             HtmlFormValidator.prepare_initial_color(%{"value" => "rgb(calc(10) 20 30)"})
-
-    assert state.value == "#0a141e"
-  end
-
   test "color calculations cannot acquire lengths or cancel dimensional products" do
     alias NativeElixirPdfUtilities.Validators.CssMathValidator
     assert :error = CssMathValidator.evaluate_color_component("calc(1ex / 1ex)")
@@ -234,5 +197,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputTest do
 
     assert {:ok, 16.0, %{length: 1}} = CssMathValidator.evaluate("1pc", environment)
     assert {:ok, 20.0, %{length: 1}} = CssMathValidator.evaluate("1em", environment)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
+
+  test "native color calculation budget failures remain actionable public diagnostics" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(%{previous | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<input type=color value='rgb(calc(1 * 10) 20 30)'>",
+               forms: :static
+             )
+
+    assert diagnostic.stage == :html and diagnostic.module == HtmlValidator
+    assert diagnostic.message =~ "max_work"
+    refute Map.has_key?(diagnostic, :source)
+  end
+
+  test "shared math depth exhaustion is recoverable and source-specific" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(%{previous | max_depth: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<input type=color value='rgb(calc(calc(10)) 20 30)'>",
+               forms: :static
+             )
+
+    assert diagnostic.stage == :html
+    assert diagnostic.message =~ "max_depth"
+    refute Map.has_key?(diagnostic, :source)
+    Limits.install(previous)
+
+    assert {:ok, state} =
+             HtmlFormValidator.prepare_initial_color(%{"value" => "rgb(calc(10) 20 30)"})
+
+    assert state.value == "#0a141e"
   end
 end

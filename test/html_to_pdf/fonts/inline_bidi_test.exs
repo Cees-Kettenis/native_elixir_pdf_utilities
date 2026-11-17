@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineBidiTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{InlineBidi, UnicodeBidi, HtmlParser, Style}
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
 
@@ -100,26 +100,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineBidiTest do
     assert Enum.map(latin.bidi_characters, & &1.level) == [0, 0, 0]
   end
 
-  test "font work exhausted by a line-advance callback retains its resource diagnostic" do
-    limits = NativeElixirPdfUtilities.Limits.effective()
-    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    style = %{direction: :rtl}
-    assert {:ok, runs} = InlineBidi.prepare([%{text: "אב", style: style}], style)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 3})
-
-    assert {:render_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}} =
-             catch_throw(
-               InlineBidi.position(runs, 0, fn _ ->
-                 send(self(), :line_advance_called)
-                 NativeElixirPdfUtilities.Validators.FontValidator.reserve(:max_work, 2)
-                 1
-               end)
-             )
-
-    assert_received :line_advance_called
-    assert diagnostic.stage == :font and diagnostic.message =~ "max_work"
-  end
-
   test "all unicode-bidi values share CSS grammar, remain non-inherited and survive all" do
     initial = CssCascadeValidator.initial(%{})
 
@@ -170,5 +150,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineBidiTest do
     [c, b, a] = letters
     assert c.x < b.x and b.x < a.x
     assert {:ok, %{levels: [1, 1]}} = UnicodeBidi.resolve("אב", :rtl)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineBidiGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{InlineBidi}
+
+  test "font work exhausted by a line-advance callback retains its resource diagnostic" do
+    limits = NativeElixirPdfUtilities.Limits.effective()
+    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
+    style = %{direction: :rtl}
+    assert {:ok, runs} = InlineBidi.prepare([%{text: "אב", style: style}], style)
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 3})
+
+    assert {:render_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}} =
+             catch_throw(
+               InlineBidi.position(runs, 0, fn _ ->
+                 send(self(), :line_advance_called)
+                 NativeElixirPdfUtilities.Validators.FontValidator.reserve(:max_work, 2)
+                 1
+               end)
+             )
+
+    assert_received :line_advance_called
+    assert diagnostic.stage == :font and diagnostic.message =~ "max_work"
   end
 end

@@ -2,11 +2,83 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixtu
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font}
+  alias NativeElixirPdfUtilities.TestSupport.{FontFixture}
+  alias NativeElixirPdfUtilities.Validators.{BitmapFontValidator, FontValidator}
+
+  test "vertical bitmap glyphs preserve the page clip outside their glyph transform" do
+    source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
+    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
+    clip = %{x: 5.0, y: 5.0, width: 30.0, height: 30.0}
+
+    box = %{
+      type: :text,
+      text: "H",
+      x: 10,
+      y: 20,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 15,
+      color: {0, 0, 0},
+      glyph_basis: {0, 1, -1, 0},
+      clip: clip
+    }
+
+    assert {:ok, %{pages: [%{boxes: boxes}]}} =
+             NativeElixirPdfUtilities.Validators.ColorFontValidator.prepare(
+               %{color_fonts?: true, pages: [%{size: {80, 60}, boxes: [box]}]},
+               []
+             )
+
+    assert hd(boxes) == %{type: :actual_text_start, text: "H"}
+    assert List.last(boxes) == %{type: :actual_text_end}
+    [outer, rotation] = Enum.filter(boxes, &(&1.type == :drawing_group_start))
+    assert outer.clip == clip
+    assert outer.transform == {1, 0, 0, 1, 0, 0}
+    assert {0, 1, -1, 0, _, _} = rotation.transform
+    image = Enum.find(boxes, &(&1.type == :image))
+    assert image.type == :image and image.width > 0 and image.height > 0
+    assert Map.get(image, :clip) == nil
+    assert rotation.clip == nil
+  end
+
+  test "sbix ownership, duplicate cycles and encoding errors cannot reach image decoding" do
+    source = File.read!(FontCorpus.path("selected-sbix.ttf"))
+    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Sbix", data: source}])
+    {_scaler, tables} = FontFixture.tables(source)
+    data = tables["sbix"]
+    <<first::32>> = binary_part(data, 8, 4)
+    <<glyph::32>> = binary_part(data, first + 4 + 2 * 4, 4)
+    <<dupe::32>> = binary_part(data, first + 4 + 4 * 4, 4)
+
+    for {offset, bytes} <- [
+          {0, <<2::16>>},
+          {2, <<0::16>>},
+          {8, <<0::32>>},
+          {first, <<0::16>>},
+          {first + 4, <<0::32>>},
+          {first + glyph + 4, "tiff"},
+          {first + dupe + 8, <<4::16>>},
+          {first + dupe + 8, <<65535::16>>}
+        ] do
+      changed = FontFixture.rebuild(source, %{"sbix" => FontFixture.replace(data, offset, bytes)})
+      assert {:error, {_, diagnostic}} = BitmapFontValidator.prepare(%{font | data: changed})
+      assert diagnostic.stage == :font
+      assert diagnostic.message != ""
+    end
+
+    assert {:ok, _, _} = FontValidator.prepare_table_directory(source)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
   alias NativeElixirPdfUtilities.TestSupport.{FontFixture, PngFixture, Paths}
-  alias NativeElixirPdfUtilities.Validators.{BitmapFontValidator, FontValidator}
+  alias NativeElixirPdfUtilities.Validators.{BitmapFontValidator}
 
   test "all CBLC index forms and applicable CBDT PNG/BGRA metrics agree with original one-pixel drawings" do
     source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
@@ -54,42 +126,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
         assert {:ok, "H"} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
       end
     end
-  end
-
-  test "vertical bitmap glyphs preserve the page clip outside their glyph transform" do
-    source = File.read!(FontCorpus.path("selected-cbdt.ttf"))
-    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
-    clip = %{x: 5.0, y: 5.0, width: 30.0, height: 30.0}
-
-    box = %{
-      type: :text,
-      text: "H",
-      x: 10,
-      y: 20,
-      font: Font.pdf_name(font),
-      font_face: font,
-      font_size: 15,
-      color: {0, 0, 0},
-      glyph_basis: {0, 1, -1, 0},
-      clip: clip
-    }
-
-    assert {:ok, %{pages: [%{boxes: boxes}]}} =
-             NativeElixirPdfUtilities.Validators.ColorFontValidator.prepare(
-               %{color_fonts?: true, pages: [%{size: {80, 60}, boxes: [box]}]},
-               []
-             )
-
-    assert hd(boxes) == %{type: :actual_text_start, text: "H"}
-    assert List.last(boxes) == %{type: :actual_text_end}
-    [outer, rotation] = Enum.filter(boxes, &(&1.type == :drawing_group_start))
-    assert outer.clip == clip
-    assert outer.transform == {1, 0, 0, 1, 0, 0}
-    assert {0, 1, -1, 0, _, _} = rotation.transform
-    image = Enum.find(boxes, &(&1.type == :image))
-    assert image.type == :image and image.width > 0 and image.height > 0
-    assert Map.get(image, :clip) == nil
-    assert rotation.clip == nil
   end
 
   test "bitmap header, directory, sparse index, metrics and payload failures retain source diagnostics" do
@@ -176,34 +212,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BitmapFontStructureTest do
              )
 
     assert {:error, {:invalid_document, _}} = BitmapFontValidator.prepare(%{font | data: <<>>})
-  end
-
-  test "sbix ownership, duplicate cycles and encoding errors cannot reach image decoding" do
-    source = File.read!(FontCorpus.path("selected-sbix.ttf"))
-    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Sbix", data: source}])
-    {_scaler, tables} = FontFixture.tables(source)
-    data = tables["sbix"]
-    <<first::32>> = binary_part(data, 8, 4)
-    <<glyph::32>> = binary_part(data, first + 4 + 2 * 4, 4)
-    <<dupe::32>> = binary_part(data, first + 4 + 4 * 4, 4)
-
-    for {offset, bytes} <- [
-          {0, <<2::16>>},
-          {2, <<0::16>>},
-          {8, <<0::32>>},
-          {first, <<0::16>>},
-          {first + 4, <<0::32>>},
-          {first + glyph + 4, "tiff"},
-          {first + dupe + 8, <<4::16>>},
-          {first + dupe + 8, <<65535::16>>}
-        ] do
-      changed = FontFixture.rebuild(source, %{"sbix" => FontFixture.replace(data, offset, bytes)})
-      assert {:error, {_, diagnostic}} = BitmapFontValidator.prepare(%{font | data: changed})
-      assert diagnostic.stage == :font
-      assert diagnostic.message != ""
-    end
-
-    assert {:ok, _, _} = FontValidator.prepare_table_directory(source)
   end
 
   test "JPEG strikes, BGRA transparency and dimensions share the public writer diagnostics" do

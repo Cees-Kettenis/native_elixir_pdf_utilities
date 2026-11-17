@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialNumberTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Forms, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Forms, Text}
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     HtmlParser,
@@ -11,12 +11,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialNumberTest do
   }
 
   alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "number sanitation preserves valid authored lexical values and sanitizes invalid ones" do
     for {authored, expected} <- [
@@ -478,6 +472,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialNumberTest do
         do: assert(Enum.map(fields, & &1.value) == ["42.5", "123"]),
         else: assert(fields == [])
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialNumberGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "shared numeric token and geometry limits report actionable public failures" do

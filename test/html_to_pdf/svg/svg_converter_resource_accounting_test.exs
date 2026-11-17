@@ -3,15 +3,15 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder, SvgRasterizer}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer}
   alias NativeElixirPdfUtilities.Validators.SvgValidator
-  alias NativeElixirPdfUtilities.TestSupport.{JpegFixture, PngFixture}
+  alias NativeElixirPdfUtilities.TestSupport.{PngFixture}
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     png = PngFixture.build(2, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
 
     %{
@@ -36,19 +36,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
       assert diagnostic.line == 1
       assert String.downcase(diagnostic.message) =~ "entity"
     end
-  end
-
-  test "viewport re-encoding remains inside the cumulative source budget", %{limits: limits} do
-    source = "<svg width='10' height='20'><rect width='10' height='20'/></svg>"
-    Limits.install(%{limits | max_input_bytes: byte_size(source) * 2})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             SvgRasterizer.rasterize(source, [width: 20, height: 10], nil)
-
-    assert diagnostic.stage == :style
-    assert diagnostic.source == "SVG"
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "arc rotation requires a separator before its first flag" do
@@ -80,6 +67,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingTest 
       assert diagnostic.source == "SVG" and diagnostic.line == 1
       assert diagnostic.message =~ "DTD"
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterResourceAccountingGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder, SvgRasterizer}
+  alias NativeElixirPdfUtilities.TestSupport.{JpegFixture, PngFixture}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    png = PngFixture.build(2, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
+
+    %{
+      limits: limits,
+      context: %{
+        mode: :reference,
+        resources: %{"svg-resource:logo" => %{data: png, media_type: "image/png"}}
+      }
+    }
+  end
+
+  test "viewport re-encoding remains inside the cumulative source budget", %{limits: limits} do
+    source = "<svg width='10' height='20'><rect width='10' height='20'/></svg>"
+    Limits.install(%{limits | max_input_bytes: byte_size(source) * 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgRasterizer.rasterize(source, [width: 20, height: 10], nil)
+
+    assert diagnostic.stage == :style
+    assert diagnostic.source == "SVG"
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "standalone referenced PNG bytes obey the existing decoded-image ceiling", %{

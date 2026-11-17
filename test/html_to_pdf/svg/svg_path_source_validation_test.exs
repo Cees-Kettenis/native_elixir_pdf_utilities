@@ -3,17 +3,11 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("svg_converted_image.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
   alias NativeElixirPdfUtilities.Validators.SvgSceneValidator
   alias NativeElixirPdfUtilities.TestSupport.SvgConvertedImage
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "original malformed path inputs fail source admission instead of parser recovery" do
     for d <- ["L1 2", "L 1 2", "M1 2 L3", "M 0 0 A 10 10 0 2 0 20 20", "M1e999 0"] do
@@ -160,6 +154,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationTest do
     end
   end
 
+  test "arc geometry requires whitespace or a comma before its first flag" do
+    assert {:error, {:invalid_document, diagnostic}} =
+             SvgSceneValidator.validate_node(%{
+               tag: "path",
+               attributes: %{"d" => "M0 0A1 2 010 20"},
+               children: []
+             })
+
+    assert diagnostic.source == "path d"
+    assert diagnostic.message =~ "complete commands"
+  end
+
+  test "pathLength belongs to geometry elements and requires nonnegative numbers" do
+    assert {:error, {:invalid_document, placement}} =
+             SvgSceneValidator.validate_node(%{
+               tag: "g",
+               attributes: %{"pathLength" => "10"},
+               children: []
+             })
+
+    assert placement.source == "g pathLength"
+    assert placement.message =~ "SVG pathLength belongs to geometry"
+
+    assert {:error, {:invalid_document, sign}} =
+             SvgSceneValidator.validate_node(%{
+               tag: "path",
+               attributes: %{"d" => "M0 0", "pathLength" => "-1"},
+               children: []
+             })
+
+    assert sign.source == "path pathLength"
+    assert sign.message =~ "SVG pathLength requires a finite nonnegative number"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.Validators.SvgSceneValidator
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
   test "path source syntax uses existing numeric and path byte ceilings without new work counters" do
     Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 10))
 
@@ -201,39 +242,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgPathSourceValidationTest do
                attributes: %{"d" => nil},
                children: []
              })
-  end
-
-  test "arc geometry requires whitespace or a comma before its first flag" do
-    assert {:error, {:invalid_document, diagnostic}} =
-             SvgSceneValidator.validate_node(%{
-               tag: "path",
-               attributes: %{"d" => "M0 0A1 2 010 20"},
-               children: []
-             })
-
-    assert diagnostic.source == "path d"
-    assert diagnostic.message =~ "complete commands"
-  end
-
-  test "pathLength belongs to geometry elements and requires nonnegative numbers" do
-    assert {:error, {:invalid_document, placement}} =
-             SvgSceneValidator.validate_node(%{
-               tag: "g",
-               attributes: %{"pathLength" => "10"},
-               children: []
-             })
-
-    assert placement.source == "g pathLength"
-    assert placement.message =~ "SVG pathLength belongs to geometry"
-
-    assert {:error, {:invalid_document, sign}} =
-             SvgSceneValidator.validate_node(%{
-               tag: "path",
-               attributes: %{"d" => "M0 0", "pathLength" => "-1"},
-               children: []
-             })
-
-    assert sign.source == "path pathLength"
-    assert sign.message =~ "SVG pathLength requires a finite nonnegative number"
   end
 end

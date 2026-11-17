@@ -1,4 +1,24 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPaintGeometryTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
+
+  @tag :math_paint_correction
+  test "the unchanged original out-of-page prescribed box returns an actionable failure instead of invisible Unicode" do
+    html =
+      "<!doctype html><html><head><style>@page{size:120pt 120pt;margin:0}html,body{margin:0;padding:0;font-family:DejaVu Sans;font-size:12pt}</style></head><body>Before <math style='font-size:36pt'><mpadded width='10pt' height='5pt' depth='0pt' lspace='140pt'><mn>7</mn></mpadded></math> end.</body></html>"
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             HtmlToPdf.render(html, system_font_discovery: false)
+
+    assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
+    assert diagnostic.source == "math"
+    assert diagnostic.message =~ "156.704"
+    assert diagnostic.message =~ "selected-font paint"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPaintGeometryGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
@@ -128,20 +148,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutPaintGeometryTest do
 
     assert diagnostic.message =~ "max_work"
     assert diagnostic.operation == :measure_math
-  end
-
-  @tag :math_paint_correction
-  test "the unchanged original out-of-page prescribed box returns an actionable failure instead of invisible Unicode" do
-    html =
-      "<!doctype html><html><head><style>@page{size:120pt 120pt;margin:0}html,body{margin:0;padding:0;font-family:DejaVu Sans;font-size:12pt}</style></head><body>Before <math style='font-size:36pt'><mpadded width='10pt' height='5pt' depth='0pt' lspace='140pt'><mn>7</mn></mpadded></math> end.</body></html>"
-
-    assert {:error, {:invalid_layout, diagnostic}} =
-             HtmlToPdf.render(html, system_font_discovery: false)
-
-    assert diagnostic.stage == :layout and diagnostic.operation == :measure_math
-    assert diagnostic.source == "math"
-    assert diagnostic.message =~ "156.704"
-    assert diagnostic.message =~ "selected-font paint"
   end
 
   @tag :math_paint_correction

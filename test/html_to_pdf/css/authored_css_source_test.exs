@@ -1,7 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Style}
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -10,12 +9,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     CssReferenceValidator,
     HtmlValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "all media rules retain repeated original declaration spans across comments" do
     css =
@@ -268,34 +261,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     end
   end
 
-  test "authored source work stays in the enclosing invocation budget" do
-    css = "p{color:red}"
-    assert {:ok, _} = CssParser.prepare_source_stylesheet(css)
-
-    Limits.install(
-      Map.put(
-        Limits.effective(),
-        :max_input_bytes,
-        byte_size(css) + byte_size("color:red")
-      )
-    )
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               assert {:ok, _} = CssParser.prepare_source_stylesheet(css)
-               CssParser.prepare_source_stylesheet(css)
-             end)
-
-    assert diagnostic.message =~ "max_input_bytes"
-    assert diagnostic.stage == :css
-    Limits.install(Map.put(Limits.effective(), :max_work, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssParser.prepare_source_stylesheet(css)
-
-    assert diagnostic.message =~ "max_work"
-  end
-
   test "superseded supported font values use the existing responsible descriptor rules" do
     for {property, bad, good} <- [
           {"font-family", "''", "X"},
@@ -507,6 +472,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceTest do
     [record] = result.source_obligations.inline |> Map.values() |> List.flatten()
     assert hd(record.references).source.text == ~S|u\72l(&quot;/missing.png&quot;)|
     assert hd(result.source_obligations.declaration_contexts).status == :unresolved
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.AuthoredCssSourceGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssReferenceValidator,
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "authored source work stays in the enclosing invocation budget" do
+    css = "p{color:red}"
+    assert {:ok, _} = CssParser.prepare_source_stylesheet(css)
+
+    Limits.install(
+      Map.put(
+        Limits.effective(),
+        :max_input_bytes,
+        byte_size(css) + byte_size("color:red")
+      )
+    )
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:ok, _} = CssParser.prepare_source_stylesheet(css)
+               CssParser.prepare_source_stylesheet(css)
+             end)
+
+    assert diagnostic.message =~ "max_input_bytes"
+    assert diagnostic.stage == :css
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssParser.prepare_source_stylesheet(css)
+
+    assert diagnostic.message =~ "max_work"
   end
 
   test "source reference failures use grapheme columns and share cumulative pre-scan limits" do

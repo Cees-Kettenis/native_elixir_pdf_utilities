@@ -4,7 +4,7 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgGradientModesTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   test "print direct gradients preserve independent alpha while filter input retains declared interpolation" do
     source =

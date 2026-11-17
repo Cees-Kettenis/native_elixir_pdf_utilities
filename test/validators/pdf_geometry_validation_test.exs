@@ -1,4 +1,16 @@
 defmodule NativeElixirPdfUtilities.Validators.PdfGeometryValidationTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
+
+  test "affine composition retains exact integer cancellation without early float conversion" do
+    value = 9_007_199_254_740_993
+
+    assert [1, 0, 0, 1, 0, 3] ==
+             PdfValidator.multiply_matrices([1, 0, 0, 1, value, 1], [1, 0, 0, 1, -value, 2])
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.PdfGeometryValidationGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.PdfValidator
@@ -25,12 +37,5 @@ defmodule NativeElixirPdfUtilities.Validators.PdfGeometryValidationTest do
              PdfValidator.validate_geometry_numbers([0.001])
 
     assert diagnostic.message =~ "max_numeric_token_bytes"
-  end
-
-  test "affine composition retains exact integer cancellation without early float conversion" do
-    value = 9_007_199_254_740_993
-
-    assert [1, 0, 0, 1, 0, 3] ==
-             PdfValidator.multiply_matrices([1, 0, 0, 1, value, 1], [1, 0, 0, 1, -value, 2])
   end
 end

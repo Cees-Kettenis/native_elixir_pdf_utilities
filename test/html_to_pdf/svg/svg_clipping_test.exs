@@ -5,13 +5,15 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
+  alias NativeElixirPdfUtilities.{Limits, Text}
+
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -26,9 +28,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
     assert text =~ "Clip artwork survived"
     assert pdf =~ "/Subtype /Image"
   end
-
-  alias NativeElixirPdfUtilities.Validators.{SvgValidator}
-  alias NativeElixirPdfUtilities.{Limits, Text}
 
   test "host cascade composes local clip references with inherited clip rules" do
     html =
@@ -121,27 +120,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
 
     assert binary_part(image.data, 0, 3) == <<0, 0, 255>>
     assert :binary.at(image.alpha_data, 20 * 40 + 20) == 0
-  end
-
-  test("linked clipping cycles and expanded work cannot bypass shared limits", %{limits: _limits}) do
-    assert {:error, {:invalid_document, %{message: message}}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(
-               "<svg width='40' height='40'><defs><clipPath id='a' clip-path='url(#b)'><rect width='10' height='10'/></clipPath><clipPath id='b' clip-path='url(#a)'><circle r='10'/></clipPath></defs><rect width='20' height='20' clip-path='url(#a)'/></svg>"
-             )
-
-    assert message =~ "cycle"
-
-    source =
-      "<svg width='40' height='40'><defs><clipPath id='a'><path d='M0 0H30V30H0Z'/></clipPath><clipPath id='b' clip-path='url(#a)'><path d='M0 0H30V30H0Z'/></clipPath></defs><rect width='40' height='40' clip-path='url(#b)'/></svg>"
-
-    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
-
-    assert {:error, {:resource_limit_exceeded, %{message: _message}}} =
-             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(
-               source,
-               [width: 40, height: 40],
-               %{mode: :inline}
-             )
   end
 
   test "malformed definitions and wrong local targets use shared diagnostics" do
@@ -274,6 +252,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingTest do
              NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(
                png_pdf,
                false
+             )
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClippingGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{SvgValidator}
+  alias NativeElixirPdfUtilities.{Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
+  end
+
+  test("linked clipping cycles and expanded work cannot bypass shared limits", %{limits: _limits}) do
+    assert {:error, {:invalid_document, %{message: message}}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<svg width='40' height='40'><defs><clipPath id='a' clip-path='url(#b)'><rect width='10' height='10'/></clipPath><clipPath id='b' clip-path='url(#a)'><circle r='10'/></clipPath></defs><rect width='20' height='20' clip-path='url(#a)'/></svg>"
+             )
+
+    assert message =~ "cycle"
+
+    source =
+      "<svg width='40' height='40'><defs><clipPath id='a'><path d='M0 0H30V30H0Z'/></clipPath><clipPath id='b' clip-path='url(#a)'><path d='M0 0H30V30H0Z'/></clipPath></defs><rect width='40' height='40' clip-path='url(#b)'/></svg>"
+
+    Limits.install(Map.put(Limits.effective(), :max_entries, 1))
+
+    assert {:error, {:resource_limit_exceeded, %{message: _message}}} =
+             NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.pdf(
+               source,
+               [width: 40, height: 40],
+               %{mode: :inline}
              )
   end
 

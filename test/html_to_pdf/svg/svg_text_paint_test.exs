@@ -5,18 +5,18 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPaintTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
 
+  alias NativeElixirPdfUtilities.{Limits}
+
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
     %{limits: limits, data: data}
   end
-
-  alias NativeElixirPdfUtilities.{Limits}
 
   test "HTML enclosing link retains the same text plan when fill is a server" do
     html =
@@ -47,6 +47,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPaintTest do
 
     assert {:error, {:no_extractable_text, _}} =
              NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPaintGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Pdf.Reader
+
+  alias NativeElixirPdfUtilities.{Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    %{limits: limits, data: data}
   end
 
   test("overlapping opaque bands keep source painter order and charge their emitted paths", %{

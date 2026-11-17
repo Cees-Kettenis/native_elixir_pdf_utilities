@@ -1,44 +1,9 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ConstraintStateTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
-
-  test "URL and pattern constraint preparation retain the shared input-byte diagnostic" do
-    alias NativeElixirPdfUtilities.Limits
-    alias NativeElixirPdfUtilities.Validators.{HtmlConstraintValidator, HtmlValidator}
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_input_bytes: 4})
-
-    for {type, attributes, value, source} <- [
-          {"url", %{}, "https://example.test", "input/url"},
-          {"text", %{"pattern" => "[ABCDE]"}, "A", "input/pattern"}
-        ] do
-      ref = make_ref()
-
-      item = %{
-        ref: ref,
-        tag: "input",
-        input_type: type,
-        attributes: attributes,
-        owner: nil,
-        scope: make_ref(),
-        in_datalist: false
-      }
-
-      state = %{disabled: false, value: value}
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlValidator.with_render_budget(fn ->
-                 HtmlConstraintValidator.prepare_initial_states(%{ref => state}, [item])
-               end)
-
-      assert diagnostic.stage == :html and diagnostic.operation == :initial_form_value
-      assert diagnostic.source == source and diagnostic.message =~ "max_input_bytes"
-    end
-  end
 
   test "initial email type mismatch follows ASCII HTML grammar and multiple token sanitation" do
     for {value, extra, mismatch} <- [
@@ -288,22 +253,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ConstraintStateTest do
     end
   end
 
-  test "public pattern exhaustion is actionable rather than an invented mismatch" do
-    previous = NativeElixirPdfUtilities.Limits.effective()
-    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(previous) end)
-    NativeElixirPdfUtilities.Limits.install(%{previous | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render("<input pattern='[a-z]+' value=abc>",
-               forms: :static
-             )
-
-    assert diagnostic.stage == :html and diagnostic.operation == :render
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-    refute Map.has_key?(diagnostic, :source)
-    assert diagnostic.message =~ "max_work"
-  end
-
   test "form ownership and fieldset ancestry aggregate only candidate failures" do
     states =
       initial(
@@ -414,5 +363,60 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ConstraintStateTest do
       &(get_in(&1, [:attributes, "id"]) != nil and Map.has_key?(&1, :_initial_form_state))
     )
     |> Map.new(&{&1.attributes["id"], &1._initial_form_state})
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ConstraintStateGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  test "URL and pattern constraint preparation retain the shared input-byte diagnostic" do
+    alias NativeElixirPdfUtilities.Limits
+    alias NativeElixirPdfUtilities.Validators.{HtmlConstraintValidator, HtmlValidator}
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_input_bytes: 4})
+
+    for {type, attributes, value, source} <- [
+          {"url", %{}, "https://example.test", "input/url"},
+          {"text", %{"pattern" => "[ABCDE]"}, "A", "input/pattern"}
+        ] do
+      ref = make_ref()
+
+      item = %{
+        ref: ref,
+        tag: "input",
+        input_type: type,
+        attributes: attributes,
+        owner: nil,
+        scope: make_ref(),
+        in_datalist: false
+      }
+
+      state = %{disabled: false, value: value}
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlValidator.with_render_budget(fn ->
+                 HtmlConstraintValidator.prepare_initial_states(%{ref => state}, [item])
+               end)
+
+      assert diagnostic.stage == :html and diagnostic.operation == :initial_form_value
+      assert diagnostic.source == source and diagnostic.message =~ "max_input_bytes"
+    end
+  end
+
+  test "public pattern exhaustion is actionable rather than an invented mismatch" do
+    previous = NativeElixirPdfUtilities.Limits.effective()
+    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(previous) end)
+    NativeElixirPdfUtilities.Limits.install(%{previous | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<input pattern='[a-z]+' value=abc>",
+               forms: :static
+             )
+
+    assert diagnostic.stage == :html and diagnostic.operation == :render
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
+    refute Map.has_key?(diagnostic, :source)
+    assert diagnostic.message =~ "max_work"
   end
 end

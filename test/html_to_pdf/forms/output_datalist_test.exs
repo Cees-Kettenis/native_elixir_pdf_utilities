@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.{FormValidator, HtmlFormValidator, HtmlValidator}
@@ -480,20 +480,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistTest do
              Enum.find(all_nodes(dom.children), &(&1.attributes["id"] == "choices")).node_id
   end
 
-  test "semantic descendant work uses the shared cumulative tree budget" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_work: 20})
-    assert Limits.get(:max_work) == 20
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.descendant_text_content([%{type: :text, text: "abcdefghij"}])
-             end)
-
-    assert diagnostic.stage == :style and diagnostic.message =~ "max_work"
-  end
-
   defp initial_nodes(html) do
     assert {:ok, dom} = HtmlParser.parse_detailed(html)
     HtmlFormValidator.prepare_initial_nodes(dom.children)
@@ -507,4 +493,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistTest do
 
   defp node(nodes, id),
     do: Enum.find(all_nodes(nodes), &(Map.get(&1, :attributes, %{})["id"] == id))
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.OutputDatalistGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  test "semantic descendant work uses the shared cumulative tree budget" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(%{previous | max_work: 20})
+    assert Limits.get(:max_work) == 20
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.descendant_text_content([%{type: :text, text: "abcdefghij"}])
+             end)
+
+    assert diagnostic.stage == :style and diagnostic.message =~ "max_work"
+  end
 end

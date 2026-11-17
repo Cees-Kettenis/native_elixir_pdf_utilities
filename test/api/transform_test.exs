@@ -1,6 +1,66 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.TransformTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.Info
+  alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Split
+  alias NativeElixirPdfUtilities.Text
+  alias NativeElixirPdfUtilities.Transform
+
+  @fixture_directory Paths.fixture("pdf_transforms")
+
+  test "rejects malformed PDF inputs through the shared diagnostic contract" do
+    for result <- [
+          Transform.pick_pages(:invalid, [1]),
+          Transform.delete_pages("not a PDF", [1]),
+          Transform.rotate_pages("not a PDF", 90),
+          Split.by_page(:invalid),
+          Split.by_ranges("not a PDF", [1..1]),
+          Split.after_page("not a PDF", 1)
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = result
+      assert diagnostic.module in [Transform, Split]
+      assert is_atom(diagnostic.operation)
+    end
+  end
+
+  test "regresses assembled multi-page document content, geometry, and rotation" do
+    source = File.read!(Path.join(@fixture_directory, "assembled-multi-page.pdf"))
+
+    assert {:ok, {packet, final_page}} = Split.after_page(source, 3)
+    assert {:ok, "Invoice\nLabel\nReport"} = Text.extract(packet, layout: false)
+    assert {:ok, "Statement"} = Text.extract(final_page, layout: false)
+
+    assert {:ok, reordered} = Transform.pick_pages(source, [4, 2, 1])
+    assert {:ok, "Statement\nLabel\nInvoice"} = Text.extract(reordered, layout: false)
+    assert {:ok, sizes} = Info.page_sizes(reordered)
+
+    assert Enum.map(sizes, &{&1.width, &1.height, &1.rotation}) == [
+             {612.0, 792.0, 0},
+             {300.0, 200.0, 0},
+             {612.0, 792.0, 0}
+           ]
+  end
+
+  test "regresses transforms applied to realistic merged and nested-page-tree fixtures" do
+    assembled = File.read!(Path.join(@fixture_directory, "assembled-multi-page.pdf"))
+    report = File.read!(Path.join(@fixture_directory, "nested-multi-page-report.pdf"))
+
+    assert {:ok, merged} = Merge.merge([report, assembled])
+    assert {:ok, selected} = Transform.pick_pages(merged, [7, 1..2, 5])
+    assert {:ok, "Statement\nCover\nDetail\nLabel"} = Text.extract(selected, layout: false)
+    refute selected =~ "Summary"
+    refute selected =~ "Invoice"
+    refute selected =~ "Report"
+    assert {:ok, %{pages: pages}} = Reader.read(selected)
+    assert length(pages) == 4
+  end
+end
+
+defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.Info
@@ -12,8 +72,6 @@ defmodule NativeElixirPdfUtilities.TransformTest do
   alias NativeElixirPdfUtilities.Transform
   alias NativeElixirPdfUtilities.Validators.SplitValidator
   alias NativeElixirPdfUtilities.Validators.TransformValidator
-
-  @fixture_directory Paths.fixture("pdf_transforms")
 
   setup do
     original_limits = Limits.effective()
@@ -278,21 +336,6 @@ defmodule NativeElixirPdfUtilities.TransformTest do
              SplitValidator.prepare_after_page(context, 1)
 
     assert diagnostic.message =~ "split output count"
-  end
-
-  test "rejects malformed PDF inputs through the shared diagnostic contract" do
-    for result <- [
-          Transform.pick_pages(:invalid, [1]),
-          Transform.delete_pages("not a PDF", [1]),
-          Transform.rotate_pages("not a PDF", 90),
-          Split.by_page(:invalid),
-          Split.by_ranges("not a PDF", [1..1]),
-          Split.after_page("not a PDF", 1)
-        ] do
-      assert {:error, {:invalid_pdf_input, diagnostic}} = result
-      assert diagnostic.module in [Transform, Split]
-      assert is_atom(diagnostic.operation)
-    end
   end
 
   test "handles empty documents and validates internal preparation contexts" do
@@ -666,38 +709,6 @@ defmodule NativeElixirPdfUtilities.TransformTest do
     Limits.install(%{original | max_entries: 1})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Split.by_ranges(source, [1..1])
     assert diagnostic.message =~ "max_entries"
-  end
-
-  test "regresses assembled multi-page document content, geometry, and rotation" do
-    source = File.read!(Path.join(@fixture_directory, "assembled-multi-page.pdf"))
-
-    assert {:ok, {packet, final_page}} = Split.after_page(source, 3)
-    assert {:ok, "Invoice\nLabel\nReport"} = Text.extract(packet, layout: false)
-    assert {:ok, "Statement"} = Text.extract(final_page, layout: false)
-
-    assert {:ok, reordered} = Transform.pick_pages(source, [4, 2, 1])
-    assert {:ok, "Statement\nLabel\nInvoice"} = Text.extract(reordered, layout: false)
-    assert {:ok, sizes} = Info.page_sizes(reordered)
-
-    assert Enum.map(sizes, &{&1.width, &1.height, &1.rotation}) == [
-             {612.0, 792.0, 0},
-             {300.0, 200.0, 0},
-             {612.0, 792.0, 0}
-           ]
-  end
-
-  test "regresses transforms applied to realistic merged and nested-page-tree fixtures" do
-    assembled = File.read!(Path.join(@fixture_directory, "assembled-multi-page.pdf"))
-    report = File.read!(Path.join(@fixture_directory, "nested-multi-page-report.pdf"))
-
-    assert {:ok, merged} = Merge.merge([report, assembled])
-    assert {:ok, selected} = Transform.pick_pages(merged, [7, 1..2, 5])
-    assert {:ok, "Statement\nCover\nDetail\nLabel"} = Text.extract(selected, layout: false)
-    refute selected =~ "Summary"
-    refute selected =~ "Invoice"
-    refute selected =~ "Report"
-    assert {:ok, %{pages: pages}} = Reader.read(selected)
-    assert length(pages) == 4
   end
 
   defp link_target_pages(pdf, page_number) do

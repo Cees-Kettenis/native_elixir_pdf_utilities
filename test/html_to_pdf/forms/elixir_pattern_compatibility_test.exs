@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ElixirPatternCompatibilityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Validators.HtmlPatternValidator
 
   test "Unicode-v sets retain character and finite-string set semantics" do

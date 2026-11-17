@@ -1,20 +1,13 @@
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("open_type_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TextShapingTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, TextShaper}
-  alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.TestSupport.{OpenTypeFixture, Paths}
+  alias NativeElixirPdfUtilities.TestSupport.{Paths}
   alias NativeElixirPdfUtilities.TestSupport.OpenTypeFixture, as: Fixture
 
   import NativeElixirPdfUtilities.TestSupport.OpenTypeFixture,
     only: [join: 2, words: 1, coverage: 1]
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "physical face admission shares metadata variants and rechecks every edited metric" do
     alias NativeElixirPdfUtilities.Validators.{FontValidator, ResourceBudgetValidator}
@@ -477,6 +470,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextShapingTest do
     assert shaped.text == "\uFE0FA" and shaped.advance == 500
   end
 
+  test "edited nominal glyphs, malformed metrics and missing visible output return font diagnostics" do
+    alias NativeElixirPdfUtilities.Validators.TextShapingValidator
+    font = Fixture.font()
+    assert TextShapingValidator.required?(Map.put(font, :shaping_language, 123), "A")
+
+    assert {:error, {:invalid_font, diagnostic}} =
+             TextShaper.shape("A", put_in(font, [:cmap, ?A], 64))
+
+    assert diagnostic.stage == :font and diagnostic.operation == :shape_text
+    assert diagnostic.message =~ "nominal glyph"
+    assert {:error, {:invalid_font, diagnostic}} = TextShaper.shape("A", %{font | widths: [:bad]})
+    assert diagnostic.message =~ "valid selected font metrics"
+    assert {:ok, uncovered} = TextShaper.shape("a", font)
+
+    assert {:error, {:unsupported_glyph, diagnostic}} =
+             TextShapingValidator.validate_visible_glyphs(uncovered.glyphs)
+
+    assert diagnostic.stage == :font and diagnostic.operation == :shape_text
+    assert diagnostic.message =~ "uncovered shaping cluster"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TextShapingGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{TextShaper}
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.TestSupport.{OpenTypeFixture}
+  alias NativeElixirPdfUtilities.TestSupport.OpenTypeFixture, as: Fixture
+
+  import NativeElixirPdfUtilities.TestSupport.OpenTypeFixture,
+    only: [join: 2, words: 1, coverage: 1]
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
   test "cyclic positioning and excessive attachment depth return recoverable font diagnostics" do
     cursive =
       join(
@@ -505,27 +536,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextShapingTest do
              TextShaper.shape("ABC", font, features: %{"test" => 1})
 
     assert diagnostic.stage == :font and diagnostic.message =~ "max_depth"
-  end
-
-  test "edited nominal glyphs, malformed metrics and missing visible output return font diagnostics" do
-    alias NativeElixirPdfUtilities.Validators.TextShapingValidator
-    font = Fixture.font()
-    assert TextShapingValidator.required?(Map.put(font, :shaping_language, 123), "A")
-
-    assert {:error, {:invalid_font, diagnostic}} =
-             TextShaper.shape("A", put_in(font, [:cmap, ?A], 64))
-
-    assert diagnostic.stage == :font and diagnostic.operation == :shape_text
-    assert diagnostic.message =~ "nominal glyph"
-    assert {:error, {:invalid_font, diagnostic}} = TextShaper.shape("A", %{font | widths: [:bad]})
-    assert diagnostic.message =~ "valid selected font metrics"
-    assert {:ok, uncovered} = TextShaper.shape("a", font)
-
-    assert {:error, {:unsupported_glyph, diagnostic}} =
-             TextShapingValidator.validate_visible_glyphs(uncovered.glyphs)
-
-    assert diagnostic.stage == :font and diagnostic.operation == :shape_text
-    assert diagnostic.message =~ "uncovered shaping cluster"
   end
 
   test "invalid inputs and exhausted shaping limits return recoverable diagnostics" do

@@ -1,14 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TextItemizationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeTextData
   alias NativeElixirPdfUtilities.Validators.TextItemizationValidator, as: Itemization
-  alias NativeElixirPdfUtilities.Limits
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "combining marks and supplementary emoji retain scalar owners across inline pieces" do
     pieces = [
@@ -161,6 +154,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextItemizationTest do
              Itemization.prepare([%{text: "a", language: "not a tag"}])
 
     assert {:ok, %{runs: [%{language: ""}]}} = Itemization.prepare("a", "")
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TextItemizationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Validators.TextItemizationValidator, as: Itemization
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "input and cluster allocation charge the shared shaping allowances" do

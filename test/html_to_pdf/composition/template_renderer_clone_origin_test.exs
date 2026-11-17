@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.Validators.TemplateRendererCloneOriginTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   Code.require_file(Paths.support("png_fixture.ex"))
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, ResourceContext, Style}

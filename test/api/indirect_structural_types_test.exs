@@ -1,4 +1,86 @@
 defmodule NativeElixirPdfUtilities.IndirectStructuralTypesTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{Info, Limits, Merge, Transform}
+  alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, Reader}
+  alias NativeElixirPdfUtilities.TestSupport.Paths
+
+  setup do
+    limits = Limits.effective()
+
+    pdf = File.read!(Paths.fixture("pdf_transforms/nested-multi-page-report.pdf"))
+    assert {:ok, context} = Reader.read_validated(pdf)
+    %{pdf: pdf, context: context, limits: limits}
+  end
+
+  test "selection rejects dependencies on indirect Page objects outside the page tree", %{
+    context: context
+  } do
+    [first | _] = context.pages
+    next = context.document.trailer["Size"]
+    {id, generation} = first.ref
+
+    for type <- [{:name, "Page"}, {:ref, {next + 1, 0}}] do
+      assert {:ok, pdf} =
+               IncrementalWriter.write(context, [
+                 {id, generation,
+                  {:value, Map.put(first.dictionary, "Extra", {:ref, {next, 0}})}},
+                 {next, 0, {:value, %{"Type" => type}}},
+                 {next + 1, 0, {:value, {:name, "Page"}}}
+               ])
+
+      assert {:error, {:unsupported_pdf_feature, diagnostic}} = Transform.pick_pages(pdf, [1])
+      assert diagnostic.stage == :page_dependencies
+      assert diagnostic.module == Transform
+      assert diagnostic.operation == :pick_pages
+      assert diagnostic.message =~ "not selected"
+    end
+  end
+
+  test "invalid resolved types and unresolved chains retain actionable public diagnostics", %{
+    context: context
+  } do
+    next = context.document.trailer["Size"]
+    [page | _] = context.pages
+
+    for ref <- [context.catalog_ref, context.page_tree_ref, page.ref] do
+      {id, generation} = ref
+      dictionary = context.document.objects[ref].value
+      changed = {id, generation, {:value, Map.put(dictionary, "Type", {:ref, {next, 0}})}}
+
+      for {objects, stage, message} <- [
+            {[], :resolution, "missing"},
+            {[{next, 0, {:value, {:ref, {next, 0}}}}], :resolution, "cycle"},
+            {[{next, 0, {:value, 42}}], :page_tree, "malformed"},
+            {[{next, 0, {:value, nil}}], :page_tree, "malformed"}
+          ] do
+        assert {:ok, pdf} = IncrementalWriter.write(context, [changed | objects])
+
+        for {module, operation, run} <- [
+              {Reader, :read, &Reader.read/1},
+              {Info, :page_count, &Info.page_count/1},
+              {Merge, :merge, &Merge.merge([&1])},
+              {Transform, :pick_pages, &Transform.pick_pages(&1, [1])}
+            ] do
+          assert {:error, {:invalid_pdf_input, diagnostic}} = run.(pdf)
+          assert diagnostic.stage == stage
+          assert diagnostic.reason == :invalid_pdf_input
+          assert diagnostic.module == module
+          assert diagnostic.operation == operation
+
+          expected =
+            if stage == :page_tree and ref != context.catalog_ref,
+              do: "invalid Type",
+              else: message
+
+          assert diagnostic.message =~ expected
+        end
+      end
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.IndirectStructuralTypesGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{Info, Limits, Merge, Split, Stamp, Text, Transform}
@@ -106,72 +188,6 @@ defmodule NativeElixirPdfUtilities.IndirectStructuralTypesTest do
     assert {:ok, output} = Transform.pick_pages(pdf, [1])
     assert {:ok, %{pages: [page]}} = Reader.read_validated(output)
     refute Map.has_key?(page.dictionary, "Annots")
-  end
-
-  test "selection rejects dependencies on indirect Page objects outside the page tree", %{
-    context: context
-  } do
-    [first | _] = context.pages
-    next = context.document.trailer["Size"]
-    {id, generation} = first.ref
-
-    for type <- [{:name, "Page"}, {:ref, {next + 1, 0}}] do
-      assert {:ok, pdf} =
-               IncrementalWriter.write(context, [
-                 {id, generation,
-                  {:value, Map.put(first.dictionary, "Extra", {:ref, {next, 0}})}},
-                 {next, 0, {:value, %{"Type" => type}}},
-                 {next + 1, 0, {:value, {:name, "Page"}}}
-               ])
-
-      assert {:error, {:unsupported_pdf_feature, diagnostic}} = Transform.pick_pages(pdf, [1])
-      assert diagnostic.stage == :page_dependencies
-      assert diagnostic.module == Transform
-      assert diagnostic.operation == :pick_pages
-      assert diagnostic.message =~ "not selected"
-    end
-  end
-
-  test "invalid resolved types and unresolved chains retain actionable public diagnostics", %{
-    context: context
-  } do
-    next = context.document.trailer["Size"]
-    [page | _] = context.pages
-
-    for ref <- [context.catalog_ref, context.page_tree_ref, page.ref] do
-      {id, generation} = ref
-      dictionary = context.document.objects[ref].value
-      changed = {id, generation, {:value, Map.put(dictionary, "Type", {:ref, {next, 0}})}}
-
-      for {objects, stage, message} <- [
-            {[], :resolution, "missing"},
-            {[{next, 0, {:value, {:ref, {next, 0}}}}], :resolution, "cycle"},
-            {[{next, 0, {:value, 42}}], :page_tree, "malformed"},
-            {[{next, 0, {:value, nil}}], :page_tree, "malformed"}
-          ] do
-        assert {:ok, pdf} = IncrementalWriter.write(context, [changed | objects])
-
-        for {module, operation, run} <- [
-              {Reader, :read, &Reader.read/1},
-              {Info, :page_count, &Info.page_count/1},
-              {Merge, :merge, &Merge.merge([&1])},
-              {Transform, :pick_pages, &Transform.pick_pages(&1, [1])}
-            ] do
-          assert {:error, {:invalid_pdf_input, diagnostic}} = run.(pdf)
-          assert diagnostic.stage == stage
-          assert diagnostic.reason == :invalid_pdf_input
-          assert diagnostic.module == module
-          assert diagnostic.operation == operation
-
-          expected =
-            if stage == :page_tree and ref != context.catalog_ref,
-              do: "invalid Type",
-              else: message
-
-          assert diagnostic.message =~ expected
-        end
-      end
-    end
   end
 
   test "type reference chains use the existing bounded resolver", %{

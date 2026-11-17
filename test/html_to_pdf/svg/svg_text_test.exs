@@ -5,13 +5,13 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
     %{limits: limits, data: data}
   end
@@ -91,18 +91,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
     assert coverage(painted_image(hidden)) == 0
   end
 
-  defp painted_image(html) do
-    NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.render(html)
-  end
-
-  defp coverage(image) do
-    NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.coverage(image)
-  end
-
-  defp source(content) do
-    "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='50'>#{content}</svg>"
-  end
-
   test(
     "selected alias transports exact authorized bytes and real CID glyphs for multibyte and ligature clusters",
     %{data: data}
@@ -175,6 +163,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
       assert diagnostic.message =~ property
       assert diagnostic.message =~ invalid
     end
+  end
+
+  defp painted_image(html) do
+    NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.render(html)
+  end
+
+  defp coverage(image) do
+    NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.coverage(image)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    %{limits: limits, data: data}
   end
 
   test("raw inline aliases diagnose missing coverage and never use another supplied face", %{
@@ -303,5 +311,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextTest do
     refute pdf =~ "/Subtype /Link"
     assert :ok = NativeElixirPdfUtilities.TestSupport.SvgPublicWorkflow.assert_image(pdf, false)
     assert {:ok, _doc} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+  end
+
+  defp source(content) do
+    "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='50'>#{content}</svg>"
   end
 end

@@ -1,7 +1,6 @@
 defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidatorTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   alias NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator, as: PI
 
@@ -234,6 +233,14 @@ defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidatorTest
     data = "name='" <> String.duplicate("&amp;", 6000) <> "'"
     assert PI.attributes(%{node | data: data}) == {:ok, %{"name" => String.duplicate("&", 6000)}}
   end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.ProcessingInstructionValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.ProcessingInstructionValidator, as: PI
 
   test "malformed data, name lookup and transport scans consume shared work before parsing" do
     limits = Limits.effective()

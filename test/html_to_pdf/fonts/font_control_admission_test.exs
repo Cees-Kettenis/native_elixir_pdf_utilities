@@ -1,9 +1,9 @@
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, FontFallback, HtmlParser, Style, CssParser}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Selection
   alias NativeElixirPdfUtilities.TestSupport.{FontFixture}
@@ -16,12 +16,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlAdmissionTest do
     FontRenderingValidator,
     WriterValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "font-face auto instances, metric descriptors and malformed controls use one grammar" do
     for declaration <- [

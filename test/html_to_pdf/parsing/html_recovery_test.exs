@@ -1,19 +1,13 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlRecoveryTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import NativeElixirPdfUtilities.HtmlTreeHelpers
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.TestSupport.Paths
   alias NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "default parsing diagnoses omitted paragraph list and container ends" do
     for {html, tag} <- [
@@ -224,6 +218,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlRecoveryTest do
     assert {:error, {:invalid_options, diagnostic}} = HtmlToPdf.render("", html_recovery: :yes)
     assert diagnostic.stage == :options and diagnostic.operation == :render
     assert diagnostic.message =~ "html_recovery must be a boolean"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlRecoveryGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "recovery still enforces nesting budgets before preparing recovered output" do

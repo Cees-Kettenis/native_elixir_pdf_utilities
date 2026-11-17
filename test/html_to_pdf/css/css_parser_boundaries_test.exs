@@ -1,7 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Style}
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -9,12 +8,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
     CssColorValidator,
     HtmlValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "comments cannot create property, identifier, dimension, hash or function tokens" do
     for declaration <- ["co/**/lor:red", "--cu/**/stom:1pt"] do
@@ -248,37 +241,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
     end
   end
 
-  test "min depth is checked before recursion through applied and authored declarations" do
-    Limits.install(Map.put(Limits.effective(), :max_depth, 4))
-
-    assert {:ok, {:css_size_math, _}} =
-             HtmlValidator.parse_css_size(
-               String.duplicate("min(", 4) <> "1pt" <> String.duplicate(")", 4)
-             )
-
-    nested = String.duplicate("min(", 100) <> "1pt" <> String.duplicate(")", 100)
-
-    assert {:error, {:resource_limit_exceeded, detail}} =
-             HtmlValidator.with_render_budget(fn -> HtmlValidator.parse_css_size(nested) end)
-
-    assert detail.message =~ "max_depth"
-
-    for selector <- ["p", ".absent"], media <- ["print", "screen"] do
-      css = "@media #{media}{#{selector}{width:#{nested}}}"
-      assert {:ok, dom} = HtmlParser.parse_document_detailed("<p>Text</p>")
-
-      assert {:error, {:resource_limit_exceeded, detail}} =
-               Style.with_source_style_contexts(dom, [css], HtmlValidator.new_css_budget(), fn _,
-                                                                                               _,
-                                                                                               _ ->
-                 :ok
-               end)
-
-      assert detail.message =~ "max_depth"
-      assert detail.stage == :css and detail.reason == :resource_limit_exceeded
-    end
-  end
-
   test "nested minmax is rejected as a leaf while ordinary tracks remain supported" do
     nested = String.duplicate("minmax(1pt,", 100) <> "1fr" <> String.duplicate(")", 100)
 
@@ -315,5 +277,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesTest do
              )
 
     assert {:ok, _} = Style.compute_detailed(dom)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserBoundariesGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "min depth is checked before recursion through applied and authored declarations" do
+    Limits.install(Map.put(Limits.effective(), :max_depth, 4))
+
+    assert {:ok, {:css_size_math, _}} =
+             HtmlValidator.parse_css_size(
+               String.duplicate("min(", 4) <> "1pt" <> String.duplicate(")", 4)
+             )
+
+    nested = String.duplicate("min(", 100) <> "1pt" <> String.duplicate(")", 100)
+
+    assert {:error, {:resource_limit_exceeded, detail}} =
+             HtmlValidator.with_render_budget(fn -> HtmlValidator.parse_css_size(nested) end)
+
+    assert detail.message =~ "max_depth"
+
+    for selector <- ["p", ".absent"], media <- ["print", "screen"] do
+      css = "@media #{media}{#{selector}{width:#{nested}}}"
+      assert {:ok, dom} = HtmlParser.parse_document_detailed("<p>Text</p>")
+
+      assert {:error, {:resource_limit_exceeded, detail}} =
+               Style.with_source_style_contexts(dom, [css], HtmlValidator.new_css_budget(), fn _,
+                                                                                               _,
+                                                                                               _ ->
+                 :ok
+               end)
+
+      assert detail.message =~ "max_depth"
+      assert detail.stage == :css and detail.reason == :resource_limit_exceeded
+    end
   end
 end

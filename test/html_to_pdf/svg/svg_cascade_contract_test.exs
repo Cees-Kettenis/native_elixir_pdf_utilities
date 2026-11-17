@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCascadeContractTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgViewport}
   alias NativeElixirPdfUtilities.Validators.{SvgStyleValidator, SvgViewportValidator}
 

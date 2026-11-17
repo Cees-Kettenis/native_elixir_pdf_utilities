@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialSelectTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   import Bitwise
   alias NativeElixirPdfUtilities.{HtmlToPdf, Forms, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, PdfWriter}

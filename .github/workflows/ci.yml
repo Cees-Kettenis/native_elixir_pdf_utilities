@@ -39,9 +39,11 @@ jobs:
       matrix: ${{ fromJSON(needs.runtime-matrix.outputs.jobs) }}
     container:
       image: ${{ matrix.image }}
+      options: --tmpfs /browser-profiles:rw,noexec,nosuid,size=128m,mode=1777
     env:
       MIX_ENV: test
       CHROMIUM_BIN: /usr/bin/chromium
+      CHROMIUM_PROFILE_ROOT: /browser-profiles
     steps:
       - uses: actions/checkout@v6
 
@@ -58,6 +60,30 @@ jobs:
           for tool in chromium pdftoppm pdftotext pdffonts fc-match; do
             command -v "$tool"
           done
+
+      - name: Identify browser toolchain
+        id: browser-toolchain
+        if: matrix.suite == 'parity'
+        shell: bash
+        env:
+          JOB_CONTAINER_ID: ${{ job.container.id }}
+        run: |
+          image_id="$(curl --fail --silent --show-error --unix-socket /var/run/docker.sock "http://localhost/containers/${JOB_CONTAINER_ID}/json" |
+            elixir -e 'image = IO.read(:stdio, :eof) |> :json.decode() |> Map.fetch!("Image"); true = Regex.match?(~r/^sha256:[a-f0-9]{64}$/, image); IO.write(image)')"
+          echo "BROWSER_PARITY_TOOLCHAIN=${image_id}" >> "${GITHUB_ENV}"
+          echo "BROWSER_PARITY_CACHE=${GITHUB_WORKSPACE}/.quality/browser-reference-cache/elixir-${{ matrix.elixir }}" >> "${GITHUB_ENV}"
+          echo "cache-key=${image_id#sha256:}" >> "${GITHUB_OUTPUT}"
+
+      # Entries verify source bytes, resources, fonts and rendering options again
+      # after restoration. The test cache evicts entries above 64 MiB per runtime.
+      - name: Restore browser references
+        if: matrix.suite == 'parity'
+        uses: actions/cache@v5
+        with:
+          path: .quality/browser-reference-cache/elixir-${{ matrix.elixir }}
+          key: browser-references-v1-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-${{ github.sha }}
+          restore-keys: |
+            browser-references-v1-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-
 
       - name: Restore Mix and Dialyzer caches
         uses: actions/cache@v5
@@ -158,6 +184,7 @@ jobs:
         run: |
           mkdir -p .quality/browser-parity
           mix run --no-start --no-compile scripts/browser-parity-report.exs .quality/browser-parity > .quality/browser-parity/report.json
+          elixir -e 'report = File.read!(".quality/browser-parity/report.json") |> :json.decode(); IO.puts("Browser reference cache: #{inspect(report["reference_cache"])}")' | tee -a "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload browser parity telemetry
         if: always() && matrix.suite == 'parity'

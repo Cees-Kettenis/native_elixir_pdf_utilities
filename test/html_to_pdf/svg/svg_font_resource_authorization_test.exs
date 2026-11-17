@@ -1,14 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFontResourceAuthorizationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgRasterizer}
   alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator}
   alias NativeElixirPdfUtilities.Limits
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "SVG image paints with the explicitly authorized independent font bytes and does not request another resource" do
     font = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
@@ -66,6 +60,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFontResourceAuthorizationTest do
 
     assert image.style.image.data == decoded.data
     assert Enum.any?(for(<<r, g, b <- decoded.data>>, do: {r, g, b}), &(&1 == {255, 255, 255}))
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFontResourceAuthorizationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer}
+  alias NativeElixirPdfUtilities.Validators.{FontValidator}
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "selected image font transport retains canonical failures and shared source byte limits" do

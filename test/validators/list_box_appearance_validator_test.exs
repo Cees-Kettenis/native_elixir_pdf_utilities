@@ -1,18 +1,16 @@
 defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   alias NativeElixirPdfUtilities.Validators.{
     FormAppearanceValidator,
-    FormInspectionValidator,
     FormValidator,
     ListBoxAppearanceValidator
   }
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
 
     assert {:ok, pdf} =
              HtmlToPdf.render(
@@ -63,40 +61,6 @@ defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidatorTest do
     end
   end
 
-  test "canonical rows use the same validator and admit their aggregate bounds", %{
-    editor: editor,
-    wire: wire,
-    document: document,
-    limits: limits
-  } do
-    [row | _] = editor.listbox.rows
-
-    for model <- [
-          :bad,
-          %{rows: :bad},
-          %{rows: [Map.delete(row, :height)]},
-          %{rows: [%{row | color: :bad}]},
-          %{rows: [%{row | color: {2, 0, 0}}]}
-        ] do
-      assert {:error, {:unsupported_form, _}} = ListBoxAppearanceValidator.validate(model)
-    end
-
-    Limits.install(%{limits | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FormAppearanceValidator.prepare(document, wire)
-
-    assert diagnostic.message =~ "max_entries"
-    Limits.install(%{limits | max_decoded_bytes: 1})
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             ListBoxAppearanceValidator.validate(editor.listbox)
-
-    FormInspectionValidator.with_scope(document, fn ->
-      assert {:ok, nil} = ListBoxAppearanceValidator.decode(nil)
-    end)
-  end
-
   test "source painting rejects missing fonts and inconsistent row indices", %{
     editor: editor,
     field: field
@@ -141,6 +105,76 @@ defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidatorTest do
     assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.PdfWriter.render([frame])
     assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
     assert text =~ "Alpha" and text =~ "Beta"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.ListBoxAppearanceValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Pdf.Reader
+
+  alias NativeElixirPdfUtilities.Validators.{
+    FormAppearanceValidator,
+    FormInspectionValidator,
+    FormValidator,
+    ListBoxAppearanceValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<select name=choice size=3 style='font-family:DejaVu Sans'><option value=a selected>Alpha</option><option value=b>Beta</option></select>",
+               system_font_discovery: false
+             )
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, %{fields: [field]}} = FormValidator.inspect_document(context)
+    [widget] = field.widgets
+
+    %{
+      document: context.document,
+      field: field,
+      editor: widget.source_editor,
+      wire: widget.dictionary["NEPUSourceEditor"],
+      limits: limits
+    }
+  end
+
+  test "canonical rows use the same validator and admit their aggregate bounds", %{
+    editor: editor,
+    wire: wire,
+    document: document,
+    limits: limits
+  } do
+    [row | _] = editor.listbox.rows
+
+    for model <- [
+          :bad,
+          %{rows: :bad},
+          %{rows: [Map.delete(row, :height)]},
+          %{rows: [%{row | color: :bad}]},
+          %{rows: [%{row | color: {2, 0, 0}}]}
+        ] do
+      assert {:error, {:unsupported_form, _}} = ListBoxAppearanceValidator.validate(model)
+    end
+
+    Limits.install(%{limits | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FormAppearanceValidator.prepare(document, wire)
+
+    assert diagnostic.message =~ "max_entries"
+    Limits.install(%{limits | max_decoded_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             ListBoxAppearanceValidator.validate(editor.listbox)
+
+    FormInspectionValidator.with_scope(document, fn ->
+      assert {:ok, nil} = ListBoxAppearanceValidator.decode(nil)
+    end)
   end
 
   test "projected list box failures retain the shared resource diagnostic", %{

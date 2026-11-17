@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedFormStateTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlComposition, HtmlParser}
   alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
 
@@ -136,6 +136,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedFormStateTest do
     refute find(nodes, "light")._initial_form_state.disabled
   end
 
+  defp prepared(html) do
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, composition} = HtmlComposition.compose(dom)
+
+    HtmlValidator.with_render_budget(fn ->
+      HtmlFormValidator.prepare_composed_initial_nodes(
+        dom,
+        composition.roots,
+        composition.composed.children,
+        %{}
+      )
+    end)
+  end
+
+  defp find(nodes, id) do
+    Enum.find_value(nodes, fn node ->
+      if Map.get(node, :attributes, %{})["id"] == id,
+        do: node,
+        else: find(Map.get(node, :children, []), id)
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedFormStateGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlComposition, HtmlParser}
+  alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
+
   test "logical forest traversal consumes the existing cumulative tree budget" do
     assert {:ok, dom} =
              HtmlParser.parse_detailed(
@@ -159,27 +187,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ComposedFormStateTest do
 
     assert diagnostic.stage == :html
     assert diagnostic.message =~ "max_work"
-  end
-
-  defp prepared(html) do
-    assert {:ok, dom} = HtmlParser.parse_detailed(html)
-    assert {:ok, composition} = HtmlComposition.compose(dom)
-
-    HtmlValidator.with_render_budget(fn ->
-      HtmlFormValidator.prepare_composed_initial_nodes(
-        dom,
-        composition.roots,
-        composition.composed.children,
-        %{}
-      )
-    end)
-  end
-
-  defp find(nodes, id) do
-    Enum.find_value(nodes, fn node ->
-      if Map.get(node, :attributes, %{})["id"] == id,
-        do: node,
-        else: find(Map.get(node, :children, []), id)
-    end)
   end
 end

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorPaintGraphTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
   alias NativeElixirPdfUtilities.Validators.{ColrFontValidator, ColrPaintValidator}

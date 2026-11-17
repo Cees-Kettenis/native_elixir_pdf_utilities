@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry

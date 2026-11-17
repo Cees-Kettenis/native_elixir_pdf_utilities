@@ -1,7 +1,395 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.FontValidator
+
+  test "design outline measurements use the selected bytefont, including true empty glyphs" do
+    assert {:ok, [face]} =
+             Font.load_configured_faces([
+               %{family: "DesignBounds", data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf")}
+             ])
+
+    box = %{text: "A", font_face: face, font_size: 12, x: 30, y: 45}
+    assert {:ok, {top, bottom}} = FontValidator.prepare_text_ink_bounds(box)
+
+    assert {:ok, {left, rectangle_bottom, right, rectangle_top}} =
+             FontValidator.prepare_text_ink_rectangle(box)
+
+    assert left < right and bottom < top
+    assert rectangle_bottom == bottom and rectangle_top == top
+    assert {:ok, nil} = FontValidator.prepare_text_ink_rectangle(%{box | text: " "})
+    assert {:ok, nil} = FontValidator.prepare_text_ink_bounds(%{box | text: " "})
+
+    assert {:ok, {_, _, spaced_right, _}} =
+             FontValidator.prepare_text_ink_rectangle(%{box | text: "A A"})
+
+    assert spaced_right > right
+
+    limit = Limits.get(:max_numeric_magnitude)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FontValidator.prepare_text_ink_rectangle(%{box | x: limit})
+
+    assert diagnostic.operation == :measure_child
+    assert diagnostic.source == "A"
+    assert diagnostic.message =~ "max_numeric_magnitude"
+
+    for invalid <- [Map.put(box, :glyph_ids, [0]), %{box | text: <<255>>}, %{box | x: "invalid"}] do
+      assert {:error, {reason, diagnostic}} = FontValidator.prepare_text_ink_rectangle(invalid)
+      assert reason in [:invalid_document, :invalid_encoding]
+      assert diagnostic.reason == reason
+      assert diagnostic.stage == :font
+      assert diagnostic.message != ""
+    end
+
+    for invalid <- [
+          %{},
+          %{box | font_face: Map.delete(face, :widths)},
+          %{box | font_face: %{face | widths: []}},
+          Map.put(box, :glyph_ids, [face.cmap[?A] | :invalid])
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               FontValidator.prepare_text_ink_rectangle(invalid)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.operation == :measure_child
+    end
+
+    assert {:error, {:invalid_document, diagnostic}} = FontValidator.prepare_glyph_bounds(nil)
+    assert diagnostic.operation == :glyph_bounds
+
+    assert {:error, {_, diagnostic}} =
+             FontValidator.prepare_text_ink_rectangle(%{box | font_face: %{face | data: <<0>>}})
+
+    assert diagnostic.operation == :glyph_bounds
+  end
+
+  test "CSS advances and design widths keep separate cache plans and font byte identities" do
+    bytes = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
+    mono = File.read!("priv/fonts/dejavu/DejaVuSansMono.ttf")
+
+    assert {:ok, [first, second]} =
+             Font.load_configured_faces([
+               %{family: "SharedAlias", data: bytes},
+               %{family: "SharedAlias", data: mono}
+             ])
+
+    text = "AVffi"
+    first_width = Font.css_text_width(text, first, 9)
+    second_width = Font.css_text_width(text, second, 9)
+    design_width = Font.text_width(text, first, 9)
+    assert first_width != second_width
+
+    Font.with_measurement_cache(fn ->
+      assert Font.css_glyph_advances("", first, 9) == []
+      assert Font.css_text_width(text, first, 9) == first_width
+      assert is_list(Font.css_glyph_advances(text, first, 9))
+      assert Font.css_text_width(text, first, 9) == first_width
+      assert Font.text_width(text, first, 9) == design_width
+      assert Font.css_text_width(text, second, 9) == second_width
+      assert Font.css_text_width(text, first, 9) == first_width
+    end)
+  end
+
+  test "TrueType preparation owns binary input validation" do
+    assert :error = FontValidator.prepare_ttf(nil)
+    assert :error = FontValidator.prepare_ttf(123)
+    assert :error = FontValidator.prepare_ttf(<<0, 1, 2>>)
+
+    data =
+      File.read!(
+        Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu/DejaVuSans.ttf")
+      )
+
+    assert {:ok, metrics} = FontValidator.prepare_ttf(data)
+    assert metrics.units_per_em == 2048
+    assert metrics.cmap[?A] > 0
+    assert metrics.widths != []
+  end
+
+  test "bundled monospace faces load on demand with deterministic metrics" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    refute Enum.any?(registry.embedded, &(&1.family == "DejaVu Sans Mono"))
+
+    for {weight, style} <- [{400, :normal}, {700, :normal}, {400, :italic}, {700, :italic}] do
+      assert {:ok, _, font} = Font.resolve("DejaVu Sans Mono", weight, style, registry)
+      assert font.family == "DejaVu Sans Mono"
+      assert font.source == :bundled
+      assert font.weight == weight
+      assert font.style == style
+      assert Font.text_width("iii", font, 10) == Font.text_width("WWW", font, 10)
+    end
+
+    assert {:ok, _, mono} = Font.resolve("monospace", 400, :normal, registry)
+    assert mono.family == "DejaVu Sans Mono"
+  end
+
+  test "high glyph indexes use constant-time widths during repeated text measurement" do
+    font = %{
+      type: :embedded,
+      units_per_em: 1000,
+      cmap: %{?A => 65_534, ?B => 65_535},
+      widths: List.duplicate(600, 65_535),
+      default_width: 700
+    }
+
+    text = String.duplicate("A", 2000)
+    {:reductions, before_work} = Process.info(self(), :reductions)
+    assert Font.text_width(text, font, 10) == 12_000.0
+    {:reductions, after_work} = Process.info(self(), :reductions)
+    # A linked-list lookup per character needs over 100 million reductions here.
+    assert after_work - before_work < 1_000_000
+    assert Font.text_width("B", font, 10) == 7.0
+  end
+
+  test "resolve discovers installed generic families without rewriting the CSS family" do
+    assert {:ok, registry} = Font.load_registry([])
+
+    for family <- ["sans-serif", "serif", "monospace", "system-ui"] do
+      assert {:ok, [^family], font} = Font.resolve(family, 400, :normal, registry)
+      assert font.type == :embedded
+      assert font.source == :system
+    end
+
+    assert {:ok, ["Helvetica"], font} = Font.resolve("Helvetica", 400, :normal, registry)
+    assert font.type == :embedded
+
+    assert {:ok, ["sans-serif"], emphasized} =
+             Font.resolve("sans-serif", 700, :italic, registry)
+
+    assert emphasized.type == :embedded
+    assert emphasized.source == :system
+    assert emphasized.weight >= 600
+  end
+
+  test "load_registry includes bundled fallback faces and discovers installed fonts on demand" do
+    assert {:ok, registry} = Font.load_registry([])
+
+    assert Enum.map(registry.fallback, &{&1.family, &1.weight, &1.style}) == [
+             {"DejaVu Sans", 400, :normal},
+             {"DejaVu Sans", 700, :normal},
+             {"DejaVu Sans", 400, :italic},
+             {"DejaVu Sans", 700, :italic}
+           ]
+
+    assert {:ok, ["DejaVu Sans"], bundled} =
+             Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    assert bundled.type == :embedded
+    assert bundled.source == :bundled
+    assert is_binary(bundled.data)
+
+    assert Enum.all?(registry.embedded, &(&1.family == "DejaVu Sans"))
+    assert {:ok, ["sans-serif"], system_font} = Font.resolve("sans-serif", 400, :normal, registry)
+    assert system_font.type == :embedded
+    assert system_font.source == :system
+
+    assert {:ok, disabled_registry} = Font.load_registry(system_font_discovery: false)
+
+    assert {:ok, ["sans-serif"], disabled_fallback} =
+             Font.resolve("sans-serif", 400, :normal, disabled_registry)
+
+    assert disabled_fallback.family == "DejaVu Sans"
+    assert disabled_fallback.source == :bundled
+
+    assert {:ok, ["A Font That Is Not Installed 123"], missing_fallback} =
+             Font.resolve("A Font That Is Not Installed 123", 400, :normal, registry)
+
+    assert missing_fallback.family == "DejaVu Sans"
+    assert missing_fallback.source == :bundled
+  end
+
+  test "supports_text validates built-in and embedded glyph coverage" do
+    built_in = %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"}
+
+    assert Font.supports_text?(built_in, "ASCII ~")
+    refute Font.supports_text?(built_in, "ASCII\n")
+    refute Font.supports_text?(built_in, "café")
+    refute Font.supports_text?(built_in, <<255>>)
+
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _families, embedded} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    assert Font.supports_text?(embedded, "café © α €")
+    refute Font.supports_text?(embedded, "漢")
+    refute Font.supports_text?(embedded, <<255>>)
+    refute Font.supports_text?(%{type: :unknown}, "ASCII")
+  end
+
+  test "actual three-map encodings retain legacy ligatures without overriding explicit metadata" do
+    encoding = %{
+      codepoint_to_cid: %{99 => 3, 101 => 4, 111 => 1, 64259 => 2},
+      cid_to_gid: %{1 => 82, 2 => 5044, 3 => 70, 4 => 72},
+      cid_to_unicode: %{1 => 111, 2 => 64259, 3 => 99, 4 => 101}
+    }
+
+    assert Font.encode_embedded_text("office", encoding) == "0001000200030004"
+    assert Font.encode_embedded_text("oﬃce", encoding) == "0001000200030004"
+
+    mixed = %{
+      encoding
+      | codepoint_to_cid: Map.merge(encoding.codepoint_to_cid, %{?f => 5, ?i => 6})
+    }
+
+    unshaped = "000100050005000600030004"
+    assert Font.encode_embedded_text("office", mixed, 4) == unshaped
+    assert Font.encode_embedded_text("office", Map.put(mixed, :latin_ligatures, %{})) == unshaped
+
+    assert Font.encode_embedded_text(
+             "office",
+             Map.put(mixed, :latin_ligatures, %{"ffi" => 0xFB03})
+           ) ==
+             "0001000200030004"
+  end
+
+  test "nonzero letter spacing preserves individual glyphs in measurement and encoding" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    # GSUB can form ligatures even without Unicode presentation cmap entries.
+    # Disable them explicitly for the comparison with nonzero tracking.
+    without_ligatures =
+      %{
+        font
+        | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
+      }
+      |> Map.put(:feature_plan, %{features: %{"liga" => 0, "clig" => 0}})
+
+    for spacing <- [4, -1] do
+      assert Font.shape_ligatures("ffi file", font, spacing) == "ffi file"
+
+      assert Font.text_width("ffi file", font, 20, spacing) ==
+               Font.text_width("ffi file", without_ligatures, 20)
+
+      encoding = Font.pdf_encoding([{"ffi", spacing}], font)
+      assert Map.has_key?(encoding.codepoint_to_cid, ?f)
+      assert Map.has_key?(encoding.codepoint_to_cid, ?i)
+      refute Map.has_key?(encoding.codepoint_to_cid, 0xFB03)
+    end
+
+    mixed = Font.pdf_encoding([{"ffi", 4}, "ffi"], font)
+    assert Map.has_key?(mixed.codepoint_to_cid, ?f)
+    assert Map.has_key?(mixed.codepoint_to_cid, 0xFB03)
+  end
+
+  test "encoding accepts original ligature text with either a font or a prepared encoding" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    for text <- ["ffi", "office file", "fluff afflict", "ﬃ"], spacing <- [0, 4] do
+      encoding = Font.pdf_encoding([{text, spacing}], font)
+
+      expected =
+        text
+        |> Font.shape_ligatures(font, spacing)
+        |> String.to_charlist()
+        |> Enum.map_join(fn codepoint ->
+          Base.encode16(<<Map.fetch!(encoding.codepoint_to_cid, codepoint)::16>>)
+        end)
+
+      assert Font.encode_embedded_text(text, font, spacing) == expected
+      assert Font.encode_embedded_text(text, encoding, spacing) == expected
+    end
+
+    encoding = Font.pdf_encoding(["ffi"], font)
+    assert Font.encode_embedded_text("ffi", font) == "0001"
+    assert Font.encode_embedded_text("ffi", encoding) == "0001"
+
+    mixed = Font.pdf_encoding(["ffi", {"ffi", 4}], font)
+    assert Font.encode_embedded_text("ffi", mixed, 4) == "000200020003"
+  end
+
+  test "embedded fonts shape Latin ligatures before measuring and encoding" do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 700, :normal, registry)
+
+    assert Font.shape_ligatures("Office file flow", font) == "Oﬃce ﬁle ﬂow"
+    assert Font.text_width("Officer", font, 9) == Font.text_width("Oﬃcer", font, 9)
+
+    encoding = Font.pdf_encoding(["Officer"], font)
+    assert Map.has_key?(encoding.codepoint_to_cid, 0xFB03)
+    refute Map.has_key?(encoding.codepoint_to_cid, ?f)
+
+    without_ligatures = %{
+      font
+      | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
+    }
+
+    assert Font.shape_ligatures("Office file", without_ligatures) == "Office file"
+  end
+
+  test "ligature shaping preserves replacement order and unavailable glyphs" do
+    font = %{
+      cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 3, 0xFB03 => 4, 0xFB04 => 5},
+      latin_ligatures: %{
+        "ff" => 0xFB00,
+        "fi" => 0xFB01,
+        "fl" => 0xFB02,
+        "ffi" => 0xFB03,
+        "ffl" => 0xFB04
+      }
+    }
+
+    original = "é ffi ffl ff fi fl 中文"
+
+    assert Font.shape_ligatures(original, font) == "é ﬃ ﬄ ﬀ ﬁ ﬂ 中文"
+
+    partial = %{font | cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 0}}
+    assert Font.shape_ligatures(original, partial) == "é ﬀi ﬀl ﬀ ﬁ fl 中文"
+    assert Font.shape_ligatures(original, %{font | cmap: %{}}) == original
+
+    for spacing <- [-1, 1] do
+      assert Font.shape_ligatures(original, font, spacing) == original
+    end
+  end
+
+  test "selected Mono cmap ligatures stay inactive without a Latin liga feature" do
+    mono_path =
+      Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu/DejaVuSansMono.ttf")
+
+    assert {:ok, registry} =
+             Font.load_registry(
+               fonts: [%{family: "Selected Mono", path: mono_path}],
+               system_font_discovery: false
+             )
+
+    assert {:ok, _, mono} = Font.resolve("Selected Mono", 400, :normal, registry)
+    assert Map.fetch!(mono.cmap, 0xFB01) > 0
+    assert mono.latin_ligatures == %{}
+    assert Font.shape_ligatures("No file chosen", mono) == "No file chosen"
+    encoding = Font.pdf_encoding(["file"], mono)
+    refute Map.has_key?(encoding.codepoint_to_cid, 0xFB01)
+    assert Font.text_width("file", mono, 10.5) == 4 * Font.text_width("f", mono, 10.5)
+    assert String.length(Font.encode_embedded_text("file", encoding)) == 16
+
+    assert {:ok, _, sans} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    assert sans.latin_ligatures["fi"] == 0xFB01
+    assert Font.shape_ligatures("file", sans) == "ﬁle"
+    refute Font.shape_ligatures("file", Map.delete(sans, :latin_ligatures)) == "ﬁle"
+  end
+
+  test "load_registry and the HTML facade reject malformed zero-table fonts without crashing" do
+    path = Path.join(System.tmp_dir!(), "native-elixir-pdf-zero-table-font.ttf")
+    File.write!(path, <<0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>)
+
+    assert Font.load_registry(fonts: [%{family: "Bad", path: path}]) == :error
+
+    assert {:error,
+            {:invalid_document, %{stage: :style, reason: :invalid_document, operation: :render}}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render("<p>hello</p>",
+               fonts: [%{family: "Bad", path: path}]
+             )
+  after
+    File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-zero-table-font.ttf"))
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FontGlobalStateTest do
+  use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf
@@ -396,117 +784,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
       assert diagnostic.stage == :limits
       assert diagnostic.message =~ "max_work"
     end
-  end
-
-  test "design outline measurements use the selected bytefont, including true empty glyphs" do
-    assert {:ok, [face]} =
-             Font.load_configured_faces([
-               %{family: "DesignBounds", data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf")}
-             ])
-
-    box = %{text: "A", font_face: face, font_size: 12, x: 30, y: 45}
-    assert {:ok, {top, bottom}} = FontValidator.prepare_text_ink_bounds(box)
-
-    assert {:ok, {left, rectangle_bottom, right, rectangle_top}} =
-             FontValidator.prepare_text_ink_rectangle(box)
-
-    assert left < right and bottom < top
-    assert rectangle_bottom == bottom and rectangle_top == top
-    assert {:ok, nil} = FontValidator.prepare_text_ink_rectangle(%{box | text: " "})
-    assert {:ok, nil} = FontValidator.prepare_text_ink_bounds(%{box | text: " "})
-
-    assert {:ok, {_, _, spaced_right, _}} =
-             FontValidator.prepare_text_ink_rectangle(%{box | text: "A A"})
-
-    assert spaced_right > right
-
-    limit = Limits.get(:max_numeric_magnitude)
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FontValidator.prepare_text_ink_rectangle(%{box | x: limit})
-
-    assert diagnostic.operation == :measure_child
-    assert diagnostic.source == "A"
-    assert diagnostic.message =~ "max_numeric_magnitude"
-
-    for invalid <- [Map.put(box, :glyph_ids, [0]), %{box | text: <<255>>}, %{box | x: "invalid"}] do
-      assert {:error, {reason, diagnostic}} = FontValidator.prepare_text_ink_rectangle(invalid)
-      assert reason in [:invalid_document, :invalid_encoding]
-      assert diagnostic.reason == reason
-      assert diagnostic.stage == :font
-      assert diagnostic.message != ""
-    end
-
-    for invalid <- [
-          %{},
-          %{box | font_face: Map.delete(face, :widths)},
-          %{box | font_face: %{face | widths: []}},
-          Map.put(box, :glyph_ids, [face.cmap[?A] | :invalid])
-        ] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               FontValidator.prepare_text_ink_rectangle(invalid)
-
-      assert diagnostic.stage == :font
-      assert diagnostic.operation == :measure_child
-    end
-
-    assert {:error, {:invalid_document, diagnostic}} = FontValidator.prepare_glyph_bounds(nil)
-    assert diagnostic.operation == :glyph_bounds
-
-    assert {:error, {_, diagnostic}} =
-             FontValidator.prepare_text_ink_rectangle(%{box | font_face: %{face | data: <<0>>}})
-
-    assert diagnostic.operation == :glyph_bounds
-  end
-
-  test "CSS advances and design widths keep separate cache plans and font byte identities" do
-    bytes = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
-    mono = File.read!("priv/fonts/dejavu/DejaVuSansMono.ttf")
-
-    assert {:ok, [first, second]} =
-             Font.load_configured_faces([
-               %{family: "SharedAlias", data: bytes},
-               %{family: "SharedAlias", data: mono}
-             ])
-
-    text = "AVffi"
-    first_width = Font.css_text_width(text, first, 9)
-    second_width = Font.css_text_width(text, second, 9)
-    design_width = Font.text_width(text, first, 9)
-    assert first_width != second_width
-
-    Font.with_measurement_cache(fn ->
-      assert Font.css_glyph_advances("", first, 9) == []
-      assert Font.css_text_width(text, first, 9) == first_width
-      assert is_list(Font.css_glyph_advances(text, first, 9))
-      assert Font.css_text_width(text, first, 9) == first_width
-      assert Font.text_width(text, first, 9) == design_width
-      assert Font.css_text_width(text, second, 9) == second_width
-      assert Font.css_text_width(text, first, 9) == first_width
-    end)
-  end
-
-  defp family_name_table(records) do
-    {headers, bytes, _} =
-      Enum.reduce(records, {<<>>, <<>>, 0}, fn {platform, encoding, language, id, text},
-                                               {headers, bytes, offset} ->
-        header =
-          <<platform::16, encoding::16, language::16, id::16, byte_size(text)::16, offset::16>>
-
-        {headers <> header, bytes <> text, offset + byte_size(text)}
-      end)
-
-    <<0::16, length(records)::16, 6 + length(records) * 12::16, headers::binary, bytes::binary>>
-  end
-
-  defp pair_position_table(subtable, type) do
-    scripts = <<1::16, "latn", 8::16, 4::16, 0::16, 0::16, 0xFFFF::16, 1::16, 0::16>>
-    features = <<1::16, "kern", 8::16, 0::16, 1::16, 0::16>>
-    lookups = <<1::16, 4::16, type::16, 0::16, 1::16, 8::16, subtable::binary>>
-
-    <<1::16, 0::16, 10::16, 10 + byte_size(scripts)::16,
-      10 + byte_size(scripts) + byte_size(features)::16, scripts::binary, features::binary,
-      lookups::binary>>
   end
 
   describe "selected mathematical glyph measurement" do
@@ -2996,57 +3273,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
              })
   end
 
-  test "TrueType preparation owns binary input validation" do
-    assert :error = FontValidator.prepare_ttf(nil)
-    assert :error = FontValidator.prepare_ttf(123)
-    assert :error = FontValidator.prepare_ttf(<<0, 1, 2>>)
-
-    data =
-      File.read!(
-        Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu/DejaVuSans.ttf")
-      )
-
-    assert {:ok, metrics} = FontValidator.prepare_ttf(data)
-    assert metrics.units_per_em == 2048
-    assert metrics.cmap[?A] > 0
-    assert metrics.widths != []
-  end
-
-  test "bundled monospace faces load on demand with deterministic metrics" do
-    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
-    refute Enum.any?(registry.embedded, &(&1.family == "DejaVu Sans Mono"))
-
-    for {weight, style} <- [{400, :normal}, {700, :normal}, {400, :italic}, {700, :italic}] do
-      assert {:ok, _, font} = Font.resolve("DejaVu Sans Mono", weight, style, registry)
-      assert font.family == "DejaVu Sans Mono"
-      assert font.source == :bundled
-      assert font.weight == weight
-      assert font.style == style
-      assert Font.text_width("iii", font, 10) == Font.text_width("WWW", font, 10)
-    end
-
-    assert {:ok, _, mono} = Font.resolve("monospace", 400, :normal, registry)
-    assert mono.family == "DejaVu Sans Mono"
-  end
-
-  test "high glyph indexes use constant-time widths during repeated text measurement" do
-    font = %{
-      type: :embedded,
-      units_per_em: 1000,
-      cmap: %{?A => 65_534, ?B => 65_535},
-      widths: List.duplicate(600, 65_535),
-      default_width: 700
-    }
-
-    text = String.duplicate("A", 2000)
-    {:reductions, before_work} = Process.info(self(), :reductions)
-    assert Font.text_width(text, font, 10) == 12_000.0
-    {:reductions, after_work} = Process.info(self(), :reductions)
-    # A linked-list lookup per character needs over 100 million reductions here.
-    assert after_work - before_work < 1_000_000
-    assert Font.text_width("B", font, 10) == 7.0
-  end
-
   test "short low-index text avoids scanning the entire font and high-index scans share a budget" do
     font = %{
       type: :embedded,
@@ -3420,63 +3646,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.load_registry(fonts: [%{family: "Missing source"}]) == :error
   end
 
-  test "resolve discovers installed generic families without rewriting the CSS family" do
-    assert {:ok, registry} = Font.load_registry([])
-
-    for family <- ["sans-serif", "serif", "monospace", "system-ui"] do
-      assert {:ok, [^family], font} = Font.resolve(family, 400, :normal, registry)
-      assert font.type == :embedded
-      assert font.source == :system
-    end
-
-    assert {:ok, ["Helvetica"], font} = Font.resolve("Helvetica", 400, :normal, registry)
-    assert font.type == :embedded
-
-    assert {:ok, ["sans-serif"], emphasized} =
-             Font.resolve("sans-serif", 700, :italic, registry)
-
-    assert emphasized.type == :embedded
-    assert emphasized.source == :system
-    assert emphasized.weight >= 600
-  end
-
-  test "load_registry includes bundled fallback faces and discovers installed fonts on demand" do
-    assert {:ok, registry} = Font.load_registry([])
-
-    assert Enum.map(registry.fallback, &{&1.family, &1.weight, &1.style}) == [
-             {"DejaVu Sans", 400, :normal},
-             {"DejaVu Sans", 700, :normal},
-             {"DejaVu Sans", 400, :italic},
-             {"DejaVu Sans", 700, :italic}
-           ]
-
-    assert {:ok, ["DejaVu Sans"], bundled} =
-             Font.resolve("DejaVu Sans", 400, :normal, registry)
-
-    assert bundled.type == :embedded
-    assert bundled.source == :bundled
-    assert is_binary(bundled.data)
-
-    assert Enum.all?(registry.embedded, &(&1.family == "DejaVu Sans"))
-    assert {:ok, ["sans-serif"], system_font} = Font.resolve("sans-serif", 400, :normal, registry)
-    assert system_font.type == :embedded
-    assert system_font.source == :system
-
-    assert {:ok, disabled_registry} = Font.load_registry(system_font_discovery: false)
-
-    assert {:ok, ["sans-serif"], disabled_fallback} =
-             Font.resolve("sans-serif", 400, :normal, disabled_registry)
-
-    assert disabled_fallback.family == "DejaVu Sans"
-    assert disabled_fallback.source == :bundled
-
-    assert {:ok, ["A Font That Is Not Installed 123"], missing_fallback} =
-             Font.resolve("A Font That Is Not Installed 123", 400, :normal, registry)
-
-    assert missing_fallback.family == "DejaVu Sans"
-    assert missing_fallback.source == :bundled
-  end
-
   test "fallback_faces prefers configured families and matches weight and style" do
     font_path = ttf_font_path!()
 
@@ -3507,23 +3676,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert Font.fallback_faces(%{embedded: []}, 400, :normal) == []
   end
 
-  test "supports_text validates built-in and embedded glyph coverage" do
-    built_in = %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"}
-
-    assert Font.supports_text?(built_in, "ASCII ~")
-    refute Font.supports_text?(built_in, "ASCII\n")
-    refute Font.supports_text?(built_in, "café")
-    refute Font.supports_text?(built_in, <<255>>)
-
-    assert {:ok, registry} = Font.load_registry([])
-    assert {:ok, _families, embedded} = Font.resolve("DejaVu Sans", 400, :normal, registry)
-
-    assert Font.supports_text?(embedded, "café © α €")
-    refute Font.supports_text?(embedded, "漢")
-    refute Font.supports_text?(embedded, <<255>>)
-    refute Font.supports_text?(%{type: :unknown}, "ASCII")
-  end
-
   test "text_width and embedded text encoding use TTF cmap and hmtx data" do
     font_path = ttf_font_path!()
 
@@ -3542,133 +3694,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert encoding.cid_to_gid == %{1 => shared_glyph, 2 => shared_glyph}
     assert encoding.cid_to_unicode == %{1 => ?A, 2 => ?B}
     assert Font.encode_embedded_text("AB", encoding) == "00010002"
-  end
-
-  test "actual three-map encodings retain legacy ligatures without overriding explicit metadata" do
-    encoding = %{
-      codepoint_to_cid: %{99 => 3, 101 => 4, 111 => 1, 64259 => 2},
-      cid_to_gid: %{1 => 82, 2 => 5044, 3 => 70, 4 => 72},
-      cid_to_unicode: %{1 => 111, 2 => 64259, 3 => 99, 4 => 101}
-    }
-
-    assert Font.encode_embedded_text("office", encoding) == "0001000200030004"
-    assert Font.encode_embedded_text("oﬃce", encoding) == "0001000200030004"
-
-    mixed = %{
-      encoding
-      | codepoint_to_cid: Map.merge(encoding.codepoint_to_cid, %{?f => 5, ?i => 6})
-    }
-
-    unshaped = "000100050005000600030004"
-    assert Font.encode_embedded_text("office", mixed, 4) == unshaped
-    assert Font.encode_embedded_text("office", Map.put(mixed, :latin_ligatures, %{})) == unshaped
-
-    assert Font.encode_embedded_text(
-             "office",
-             Map.put(mixed, :latin_ligatures, %{"ffi" => 0xFB03})
-           ) ==
-             "0001000200030004"
-  end
-
-  test "nonzero letter spacing preserves individual glyphs in measurement and encoding" do
-    assert {:ok, registry} = Font.load_registry([])
-    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
-
-    # GSUB can form ligatures even without Unicode presentation cmap entries.
-    # Disable them explicitly for the comparison with nonzero tracking.
-    without_ligatures =
-      %{
-        font
-        | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
-      }
-      |> Map.put(:feature_plan, %{features: %{"liga" => 0, "clig" => 0}})
-
-    for spacing <- [4, -1] do
-      assert Font.shape_ligatures("ffi file", font, spacing) == "ffi file"
-
-      assert Font.text_width("ffi file", font, 20, spacing) ==
-               Font.text_width("ffi file", without_ligatures, 20)
-
-      encoding = Font.pdf_encoding([{"ffi", spacing}], font)
-      assert Map.has_key?(encoding.codepoint_to_cid, ?f)
-      assert Map.has_key?(encoding.codepoint_to_cid, ?i)
-      refute Map.has_key?(encoding.codepoint_to_cid, 0xFB03)
-    end
-
-    mixed = Font.pdf_encoding([{"ffi", 4}, "ffi"], font)
-    assert Map.has_key?(mixed.codepoint_to_cid, ?f)
-    assert Map.has_key?(mixed.codepoint_to_cid, 0xFB03)
-  end
-
-  test "encoding accepts original ligature text with either a font or a prepared encoding" do
-    assert {:ok, registry} = Font.load_registry([])
-    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
-
-    for text <- ["ffi", "office file", "fluff afflict", "ﬃ"], spacing <- [0, 4] do
-      encoding = Font.pdf_encoding([{text, spacing}], font)
-
-      expected =
-        text
-        |> Font.shape_ligatures(font, spacing)
-        |> String.to_charlist()
-        |> Enum.map_join(fn codepoint ->
-          Base.encode16(<<Map.fetch!(encoding.codepoint_to_cid, codepoint)::16>>)
-        end)
-
-      assert Font.encode_embedded_text(text, font, spacing) == expected
-      assert Font.encode_embedded_text(text, encoding, spacing) == expected
-    end
-
-    encoding = Font.pdf_encoding(["ffi"], font)
-    assert Font.encode_embedded_text("ffi", font) == "0001"
-    assert Font.encode_embedded_text("ffi", encoding) == "0001"
-
-    mixed = Font.pdf_encoding(["ffi", {"ffi", 4}], font)
-    assert Font.encode_embedded_text("ffi", mixed, 4) == "000200020003"
-  end
-
-  test "embedded fonts shape Latin ligatures before measuring and encoding" do
-    assert {:ok, registry} = Font.load_registry([])
-    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 700, :normal, registry)
-
-    assert Font.shape_ligatures("Office file flow", font) == "Oﬃce ﬁle ﬂow"
-    assert Font.text_width("Officer", font, 9) == Font.text_width("Oﬃcer", font, 9)
-
-    encoding = Font.pdf_encoding(["Officer"], font)
-    assert Map.has_key?(encoding.codepoint_to_cid, 0xFB03)
-    refute Map.has_key?(encoding.codepoint_to_cid, ?f)
-
-    without_ligatures = %{
-      font
-      | cmap: Map.drop(font.cmap, [0xFB00, 0xFB01, 0xFB02, 0xFB03, 0xFB04])
-    }
-
-    assert Font.shape_ligatures("Office file", without_ligatures) == "Office file"
-  end
-
-  test "ligature shaping preserves replacement order and unavailable glyphs" do
-    font = %{
-      cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 3, 0xFB03 => 4, 0xFB04 => 5},
-      latin_ligatures: %{
-        "ff" => 0xFB00,
-        "fi" => 0xFB01,
-        "fl" => 0xFB02,
-        "ffi" => 0xFB03,
-        "ffl" => 0xFB04
-      }
-    }
-
-    original = "é ffi ffl ff fi fl 中文"
-
-    assert Font.shape_ligatures(original, font) == "é ﬃ ﬄ ﬀ ﬁ ﬂ 中文"
-
-    partial = %{font | cmap: %{0xFB00 => 1, 0xFB01 => 2, 0xFB02 => 0}}
-    assert Font.shape_ligatures(original, partial) == "é ﬀi ﬀl ﬀ ﬁ fl 中文"
-    assert Font.shape_ligatures(original, %{font | cmap: %{}}) == original
-
-    for spacing <- [-1, 1] do
-      assert Font.shape_ligatures(original, font, spacing) == original
-    end
   end
 
   test "Latin GSUB rejection preserves diagnostics and extension/filtering contracts" do
@@ -3709,31 +3734,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert diagnostic.operation == :font_ligatures
     assert diagnostic.source == "selected font GSUB table"
     assert diagnostic.message =~ "truncated table"
-  end
-
-  test "selected Mono cmap ligatures stay inactive without a Latin liga feature" do
-    mono_path =
-      Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu/DejaVuSansMono.ttf")
-
-    assert {:ok, registry} =
-             Font.load_registry(
-               fonts: [%{family: "Selected Mono", path: mono_path}],
-               system_font_discovery: false
-             )
-
-    assert {:ok, _, mono} = Font.resolve("Selected Mono", 400, :normal, registry)
-    assert Map.fetch!(mono.cmap, 0xFB01) > 0
-    assert mono.latin_ligatures == %{}
-    assert Font.shape_ligatures("No file chosen", mono) == "No file chosen"
-    encoding = Font.pdf_encoding(["file"], mono)
-    refute Map.has_key?(encoding.codepoint_to_cid, 0xFB01)
-    assert Font.text_width("file", mono, 10.5) == 4 * Font.text_width("f", mono, 10.5)
-    assert String.length(Font.encode_embedded_text("file", encoding)) == 16
-
-    assert {:ok, _, sans} = Font.resolve("DejaVu Sans", 400, :normal, registry)
-    assert sans.latin_ligatures["fi"] == 0xFB01
-    assert Font.shape_ligatures("file", sans) == "ﬁle"
-    refute Font.shape_ligatures("file", Map.delete(sans, :latin_ligatures)) == "ﬁle"
   end
 
   test "load_registry skips an empty preferred cmap subtable" do
@@ -3961,21 +3961,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     File.rm(bad_range_path)
   end
 
-  test "load_registry and the HTML facade reject malformed zero-table fonts without crashing" do
-    path = Path.join(System.tmp_dir!(), "native-elixir-pdf-zero-table-font.ttf")
-    File.write!(path, <<0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>>)
-
-    assert Font.load_registry(fonts: [%{family: "Bad", path: path}]) == :error
-
-    assert {:error,
-            {:invalid_document, %{stage: :style, reason: :invalid_document, operation: :render}}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render("<p>hello</p>",
-               fonts: [%{family: "Bad", path: path}]
-             )
-  after
-    File.rm(Path.join(System.tmp_dir!(), "native-elixir-pdf-zero-table-font.ttf"))
-  end
-
   test "rejects fonts whose OS/2 metadata prohibits outline embedding" do
     restricted_font =
       valid_tables()
@@ -4040,6 +4025,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert {:ok, ["Legacy Sans"],
             %{family: "Legacy Sans", embedding_flags: 0, variable_font?: false}} =
              Font.resolve(["Legacy Sans"], 400, :normal, registry)
+  end
+
+  defp family_name_table(records) do
+    {headers, bytes, _} =
+      Enum.reduce(records, {<<>>, <<>>, 0}, fn {platform, encoding, language, id, text},
+                                               {headers, bytes, offset} ->
+        header =
+          <<platform::16, encoding::16, language::16, id::16, byte_size(text)::16, offset::16>>
+
+        {headers <> header, bytes <> text, offset + byte_size(text)}
+      end)
+
+    <<0::16, length(records)::16, 6 + length(records) * 12::16, headers::binary, bytes::binary>>
+  end
+
+  defp pair_position_table(subtable, type) do
+    scripts = <<1::16, "latn", 8::16, 4::16, 0::16, 0::16, 0xFFFF::16, 1::16, 0::16>>
+    features = <<1::16, "kern", 8::16, 0::16, 1::16, 0::16>>
+    lookups = <<1::16, 4::16, type::16, 0::16, 1::16, 8::16, subtable::binary>>
+
+    <<1::16, 0::16, 10::16, 10 + byte_size(scripts)::16,
+      10 + byte_size(scripts) + byte_size(features)::16, scripts::binary, features::binary,
+      lookups::binary>>
   end
 
   defp ttf_font_path! do

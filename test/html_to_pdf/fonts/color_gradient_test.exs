@@ -1,20 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorGradientTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
-  alias NativeElixirPdfUtilities.{Limits, Text}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PngDecoder, PdfWriter}
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Validators.{
-    ColrGradientValidator,
-    ColrPaintValidator,
-    HtmlValidator
+    ColrGradientValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "OpenType radial cone equations select the largest valid root for growing, shrinking and negative circles" do
     # OpenType 1.9.1 COLR, Radial gradients: solve |p-c(t)|²=r(t)²,
@@ -70,6 +59,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorGradientTest do
     assert ColrGradientValidator.sample([{0.5, red}, {0.5, blue}], 0.25, 0) == red
     assert ColrGradientValidator.sample([{0.5, red}, {0.5, blue}], 0.75, 0) == blue
     assert ColrGradientValidator.sample([{0.5, red}, {0.5, blue}], 0.75, 1) == {0, 0, 0, 0}
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorGradientGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
+  alias NativeElixirPdfUtilities.{Limits, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PngDecoder, PdfWriter}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    ColrGradientValidator,
+    ColrPaintValidator,
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "radial PNG samples and nested color artwork retain alpha, resources and extraction" do

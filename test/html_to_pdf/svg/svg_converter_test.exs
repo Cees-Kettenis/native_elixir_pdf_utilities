@@ -1,29 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, SvgScene, PngDecoder}
   alias NativeElixirPdfUtilities.Validators.{SvgConverterValidator, HtmlValidator}
-  alias NativeElixirPdfUtilities.Limits
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
-
-  test "the existing converter produces PNG pixels from complete SVG" do
-    source =
-      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='4'><rect width='8' height='4' fill='red'/></svg>"
-
-    before = Path.wildcard(Path.join(System.tmp_dir!(), "nepu-svg-#{System.pid()}-*"))
-    assert {:ok, png} = SvgRasterizer.rasterize(source, [], nil)
-    assert <<137, 80, 78, 71, 13, 10, 26, 10, _::binary>> = png
-
-    assert {:ok, %{format: :png, width_px: 8, height_px: 4, data: rgb}} =
-             PngDecoder.decode(png, nil, false)
-
-    assert rgb == :binary.copy(<<255, 0, 0>>, 32)
-    assert Path.wildcard(Path.join(System.tmp_dir!(), "nepu-svg-#{System.pid()}-*")) == before
-  end
 
   test "approved text bytes reach the converter without rereading their original path" do
     data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
@@ -83,18 +61,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
     assert {:error, {:invalid_options, _}} = SvgRasterizer.rasterize("bad", [], nil, [], :unbound)
   end
 
-  test "converter allocation retains the canonical SVG raster and surface limits" do
-    source =
-      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='4'><rect width='8' height='4'/></svg>"
-
-    Limits.install(%{Limits.effective() | max_raster_pixels: 8})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             SvgRasterizer.rasterize(source, [], nil)
-
-    assert diagnostic.message =~ "pixel"
-  end
-
   test "inline host CSS is extracted then embedded as a raster image" do
     source =
       "<svg width='8' height='4'><style>rect{fill:blue}</style><rect width='8' height='4'/></svg>"
@@ -144,6 +110,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterTest do
       assert diagnostic.source == "SVG"
       assert diagnostic.message =~ message
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, PngDecoder}
+  alias NativeElixirPdfUtilities.Validators.{SvgConverterValidator}
+  alias NativeElixirPdfUtilities.Limits
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "the existing converter produces PNG pixels from complete SVG" do
+    source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='4'><rect width='8' height='4' fill='red'/></svg>"
+
+    before = Path.wildcard(Path.join(System.tmp_dir!(), "nepu-svg-#{System.pid()}-*"))
+    assert {:ok, png} = SvgRasterizer.rasterize(source, [], nil)
+    assert <<137, 80, 78, 71, 13, 10, 26, 10, _::binary>> = png
+
+    assert {:ok, %{format: :png, width_px: 8, height_px: 4, data: rgb}} =
+             PngDecoder.decode(png, nil, false)
+
+    assert rgb == :binary.copy(<<255, 0, 0>>, 32)
+    assert Path.wildcard(Path.join(System.tmp_dir!(), "nepu-svg-#{System.pid()}-*")) == before
+  end
+
+  test "converter allocation retains the canonical SVG raster and surface limits" do
+    source =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='4'><rect width='8' height='4'/></svg>"
+
+    Limits.install(%{Limits.effective() | max_raster_pixels: 8})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             SvgRasterizer.rasterize(source, [], nil)
+
+    assert diagnostic.message =~ "pixel"
   end
 
   test "font staging failures surface recoverable diagnostics when snapshots cannot be written" do

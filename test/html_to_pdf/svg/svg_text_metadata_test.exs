@@ -5,10 +5,39 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextMetadataTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Limits}
+
+  setup do
+    limits = Limits.effective()
+
+    %{limits: limits}
+  end
+
+  test "descriptive metadata within visible text never changes converter pixels" do
+    html =
+      "<svg width=200 height=50><text y=25><title>Title only</title><desc>Description only</desc>Visible Ω<tspan>!</tspan></text></svg>"
+
+    image = NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.render(html)
+
+    without_metadata =
+      html
+      |> String.replace("<title>Title only</title>", "")
+      |> String.replace("<desc>Description only</desc>", "")
+
+    reference = NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.render(without_metadata)
+    assert image == reference
+    assert NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.coverage(image) > 20
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextMetadataGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgScene}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 
   setup do
     limits = Limits.effective()
@@ -39,22 +68,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextMetadataTest do
     assert {:ok, scene} = SvgScene.prepare(svg, HtmlValidator.new_image_budget())
     assert length(scene.selected_fonts) == 2
   end
-
-  test "descriptive metadata within visible text never changes converter pixels" do
-    html =
-      "<svg width=200 height=50><text y=25><title>Title only</title><desc>Description only</desc>Visible Ω<tspan>!</tspan></text></svg>"
-
-    image = NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.render(html)
-
-    without_metadata =
-      html
-      |> String.replace("<title>Title only</title>", "")
-      |> String.replace("<desc>Description only</desc>", "")
-
-    reference = NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.render(without_metadata)
-    assert image == reference
-    assert NativeElixirPdfUtilities.TestSupport.SvgConvertedImage.coverage(image) > 20
-  end
-
-  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
 end

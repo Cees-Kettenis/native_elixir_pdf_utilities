@@ -5,18 +5,18 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPositionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgScene}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
 
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits, data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf")}
   end
-
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   test "honest host preparation binds identical attributes to their distinct inherited font contexts" do
     html =
@@ -56,6 +56,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPositionTest do
 
     assert {:error, {:no_extractable_text, _}} =
              NativeElixirPdfUtilities.Text.extract(pdf, layout: false)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgTextPositionGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits, data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf")}
   end
 
   test(

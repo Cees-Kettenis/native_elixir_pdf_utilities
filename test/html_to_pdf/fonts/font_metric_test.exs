@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontMetricTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
@@ -10,12 +10,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontMetricTest do
     FontValidator,
     HtmlValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "all supported font aspects use physical metrics or defined missing-glyph defaults" do
     data = File.read!(FontCorpus.path("selected-variable.ttf"))

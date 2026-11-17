@@ -1,21 +1,17 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
-  alias NativeElixirPdfUtilities.HtmlToPdf.Font.{Cff, Sfnt}
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font.{Cff}
   alias NativeElixirPdfUtilities.TestSupport.{CffFixture, Paths}
 
   alias NativeElixirPdfUtilities.Validators.{
     CffCharstringValidator,
-    CffFontValidator,
-    CffSubsetValidator,
     FontValidator
   }
 
   setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
     data = File.read!(Paths.fixture("fonts/cff-static-sans.otf"))
     {:ok, [font]} = Font.load_configured_faces([%{family: "Cff", data: data}])
     %{data: data, font: font}
@@ -76,41 +72,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
     end
   end
 
-  test "font licensing controls full embedding and prohibits restricted or bitmap-only sources",
-       %{data: data} do
-    for {flags, permitted} <- [{0x0100, true}, {0x0002, false}, {0x0200, false}] do
-      changed =
-        rebuild(data, "OS/2", fn bytes ->
-          <<before::binary-size(8), _::16, rest::binary>> = bytes
-          <<before::binary, flags::16, rest::binary>>
-        end)
-
-      if permitted do
-        assert {:ok, [font]} = Font.load_configured_faces([%{family: "Cff", data: changed}])
-        assert {:ok, embedded, false} = Cff.subset(font, [font.cmap[?H]], true)
-        assert {:ok, face} = CffFontValidator.prepare(embedded, 5)
-        assert tuple_size(face.charstrings) == 5
-
-        assert {:ok, pdf} =
-                 HtmlToPdf.render("<p style='font-family:Cff'>H</p>",
-                   fonts: [%{family: "Cff", data: changed}],
-                   system_font_discovery: false,
-                   compress_streams: false
-                 )
-
-        refute pdf =~ ~r"/BaseFont /[A-Z]{6}\+"
-      else
-        assert {:error, {:invalid_document, %{stage: :font, message: message}}} =
-                 HtmlToPdf.render("<p>H</p>", fonts: [%{family: "Cff", data: changed}])
-
-        assert message =~ "does not permit outline embedding"
-
-        assert {:error, {:invalid_document, %{stage: :font}}} =
-                 Cff.subset(%{data: changed, family: "Cff"}, [3], true)
-      end
-    end
-  end
-
   test "CFF cubic contours retain all control points in typography outline commands" do
     program = <<139, 139, 21, 239, 239, 239, 39, 239, 139, 8, 14>>
     data = CffFixture.face_fixture(glyph_count: 1, charstrings: [program])
@@ -146,6 +107,101 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
     for units <- [0, :bad, 16385] do
       assert {:error, {:invalid_font, %{source: "CFF metrics"}}} =
                CffCharstringValidator.prepare_metrics(data, 1, units)
+    end
+  end
+
+  test "the public writer uses actual CFF bytes and returns malformed-source diagnostics even without subsetting",
+       %{font: font} do
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+
+    for face <- [
+          Map.delete(font, :outline_format),
+          Map.put(font, :outline_format, :caller_annotation)
+        ] do
+      box = %{
+        type: :text,
+        text: "H",
+        x: 10,
+        y: 20,
+        font: Font.pdf_name(font),
+        font_face: face,
+        font_size: 20,
+        color: {0, 0, 0}
+      }
+
+      assert {:ok, pdf} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [box]}], subset_fonts: false)
+
+      assert pdf =~ "/Subtype /CIDFontType0C"
+      assert {:ok, "H"} = Text.extract(pdf, layout: false)
+      box = %{box | font_face: %{face | data: <<"OTTO", 0>>}}
+
+      assert {:error, {:invalid_font, diagnostic}} =
+               PdfWriter.render([%{size: {100, 100}, boxes: [box]}], subset_fonts: false)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.operation == :prepare_table_directory
+      assert diagnostic.source == "TrueType table directory"
+      assert diagnostic.message =~ "sfnt"
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font.{Cff, Sfnt}
+  alias NativeElixirPdfUtilities.TestSupport.{CffFixture, Paths}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CffCharstringValidator,
+    CffFontValidator,
+    CffSubsetValidator,
+    FontValidator
+  }
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    data = File.read!(Paths.fixture("fonts/cff-static-sans.otf"))
+    {:ok, [font]} = Font.load_configured_faces([%{family: "Cff", data: data}])
+    %{data: data, font: font}
+  end
+
+  test "font licensing controls full embedding and prohibits restricted or bitmap-only sources",
+       %{data: data} do
+    for {flags, permitted} <- [{0x0100, true}, {0x0002, false}, {0x0200, false}] do
+      changed =
+        rebuild(data, "OS/2", fn bytes ->
+          <<before::binary-size(8), _::16, rest::binary>> = bytes
+          <<before::binary, flags::16, rest::binary>>
+        end)
+
+      if permitted do
+        assert {:ok, [font]} = Font.load_configured_faces([%{family: "Cff", data: changed}])
+        assert {:ok, embedded, false} = Cff.subset(font, [font.cmap[?H]], true)
+        assert {:ok, face} = CffFontValidator.prepare(embedded, 5)
+        assert tuple_size(face.charstrings) == 5
+
+        assert {:ok, pdf} =
+                 HtmlToPdf.render("<p style='font-family:Cff'>H</p>",
+                   fonts: [%{family: "Cff", data: changed}],
+                   system_font_discovery: false,
+                   compress_streams: false
+                 )
+
+        refute pdf =~ ~r"/BaseFont /[A-Z]{6}\+"
+      else
+        assert {:error, {:invalid_document, %{stage: :font, message: message}}} =
+                 HtmlToPdf.render("<p>H</p>", fonts: [%{family: "Cff", data: changed}])
+
+        assert message =~ "does not permit outline embedding"
+
+        assert {:error, {:invalid_document, %{stage: :font}}} =
+                 Cff.subset(%{data: changed, family: "Cff"}, [3], true)
+      end
     end
   end
 
@@ -290,42 +346,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffEmbeddingTest do
              )
 
     assert decoded[5] == [-2.25, 1.0e20, 0.001, 0.0]
-  end
-
-  test "the public writer uses actual CFF bytes and returns malformed-source diagnostics even without subsetting",
-       %{font: font} do
-    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
-
-    for face <- [
-          Map.delete(font, :outline_format),
-          Map.put(font, :outline_format, :caller_annotation)
-        ] do
-      box = %{
-        type: :text,
-        text: "H",
-        x: 10,
-        y: 20,
-        font: Font.pdf_name(font),
-        font_face: face,
-        font_size: 20,
-        color: {0, 0, 0}
-      }
-
-      assert {:ok, pdf} =
-               PdfWriter.render([%{size: {100, 100}, boxes: [box]}], subset_fonts: false)
-
-      assert pdf =~ "/Subtype /CIDFontType0C"
-      assert {:ok, "H"} = Text.extract(pdf, layout: false)
-      box = %{box | font_face: %{face | data: <<"OTTO", 0>>}}
-
-      assert {:error, {:invalid_font, diagnostic}} =
-               PdfWriter.render([%{size: {100, 100}, boxes: [box]}], subset_fonts: false)
-
-      assert diagnostic.stage == :font
-      assert diagnostic.operation == :prepare_table_directory
-      assert diagnostic.source == "TrueType table directory"
-      assert diagnostic.message =~ "sfnt"
-    end
   end
 
   defp rebuild(data, tag, change) do

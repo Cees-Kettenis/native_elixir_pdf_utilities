@@ -1,25 +1,11 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.TestSupport.Paths
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-  end
-
-  defp measured(html) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
-      with {:ok, dom} <- HtmlParser.parse_detailed(html),
-           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
-        {:ok, node.style._math_box}
-      end
-    end)
-  end
 
   test "CSS-visible annotation owners use their CSS box exactly once" do
     for tag <- ~w(annotation annotation-xml) do
@@ -141,26 +127,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
     assert diagnostic.message =~ "containing mtable"
   end
 
-  test "CSS-constrained annotations retain shared diagnostics and atomic overflow policy" do
-    assert {:error, {:invalid_layout, diagnostic}} =
-             HtmlToPdf.render("""
-             <math><annotation style="display:inline-block;width:900pt;height:24pt">Too wide</annotation></math>
-             """)
-
-    assert diagnostic.stage == :layout
-    assert diagnostic.source == "math"
-    assert diagnostic.message =~ "atomic MathML equation"
-
-    Limits.install(Map.put(Limits.effective(), :max_work, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(
-               "<math><mtext><span>Before<math><mn>23</mn></math></span></mtext></math>"
-             )
-
-    assert diagnostic.message =~ "max_work"
-  end
-
   test "context boundaries depend on original namespaces and token integration" do
     for tag <- ~w(mi mn mo ms mtext annotation annotation-xml),
         do:
@@ -210,5 +176,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationTest do
     refute text =~ "Hidden alternative"
     assert {:ok, [field]} = Forms.fields(pdf)
     assert field.name == "answer" and field.value == "Initial"
+  end
+
+  defp measured(html) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _ ->
+      with {:ok, dom} <- HtmlParser.parse_detailed(html),
+           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
+        {:ok, node.style._math_box}
+      end
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutIntegrationGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+  end
+
+  test "CSS-constrained annotations retain shared diagnostics and atomic overflow policy" do
+    assert {:error, {:invalid_layout, diagnostic}} =
+             HtmlToPdf.render("""
+             <math><annotation style="display:inline-block;width:900pt;height:24pt">Too wide</annotation></math>
+             """)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.source == "math"
+    assert diagnostic.message =~ "atomic MathML equation"
+
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(
+               "<math><mtext><span>Before<math><mn>23</mn></math></span></mtext></math>"
+             )
+
+    assert diagnostic.message =~ "max_work"
   end
 end

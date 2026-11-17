@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDimensionsInlinePaddingTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Style}
   alias NativeElixirPdfUtilities.Validators.{CssMathValidator, CssSizingValidator, HtmlValidator}

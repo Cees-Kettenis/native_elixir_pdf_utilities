@@ -1,4 +1,24 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssVariableLimitsTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  test "missing, cyclic and inherited invalid properties remain invalid" do
+    assert {:ok, properties} =
+             HtmlValidator.compute_custom_properties(%{
+               "--a" => "var(--b)",
+               "--b" => "var(--a)",
+               "--c" => nil,
+               "--d" => "var(--missing)",
+               "--e" => "var(--d)"
+             })
+
+    assert Enum.all?(properties, fn {_name, value} -> is_nil(value) end)
+    assert :error = HtmlValidator.resolve_css_variables("var(--a)", properties, %{})
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssVariableLimitsGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.HtmlToPdf
@@ -117,20 +137,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssVariableLimitsTest do
              HtmlValidator.compute_custom_properties(properties)
 
     assert diagnostic.message =~ "max_work"
-  end
-
-  test "missing, cyclic and inherited invalid properties remain invalid" do
-    assert {:ok, properties} =
-             HtmlValidator.compute_custom_properties(%{
-               "--a" => "var(--b)",
-               "--b" => "var(--a)",
-               "--c" => nil,
-               "--d" => "var(--missing)",
-               "--e" => "var(--d)"
-             })
-
-    assert Enum.all?(properties, fn {_name, value} -> is_nil(value) end)
-    assert :error = HtmlValidator.resolve_css_variables("var(--a)", properties, %{})
   end
 
   test "shared dependencies consume their computed byte budget only once" do

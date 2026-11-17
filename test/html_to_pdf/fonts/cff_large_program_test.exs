@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CffLargeProgramTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
@@ -92,6 +92,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffLargeProgramTest do
 
     assert length(programs) == 1
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CffLargeProgramGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Validators.{CffCharstringValidator}
 
   test "expanded programs retain arithmetic operands and fixed CFF 1 program capacities" do
     alias NativeElixirPdfUtilities.HtmlToPdf.Font.Cff

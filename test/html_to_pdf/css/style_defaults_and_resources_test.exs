@@ -1,9 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleDefaultsAndResourcesTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
-  alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgValidator}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
 
   @opts [system_font_discovery: false, forms: :static]
 
@@ -64,6 +63,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleDefaultsAndResourcesTest do
     assert list.style.list_style_image.width == 6.0
     assert list.style.list_style_image.height == 4.5
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleDefaultsAndResourcesGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, SvgValidator}
+
+  @opts [system_font_discovery: false, forms: :static]
 
   test "dimension preparation keeps the nested raster budget diagnostic" do
     source = "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6'/>"

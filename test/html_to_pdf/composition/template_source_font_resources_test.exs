@@ -1,20 +1,16 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
 
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
-    HtmlValidator,
     TemplateExecutionValidator
   }
 
   @opts [system_font_discovery: false, compress_streams: false]
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
     bytes =
       File.read!(
         Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu/DejaVuSansMono.ttf")
@@ -143,26 +139,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
     assert_receive {:resolved_original, "https://fonts.example/original/provided-original.ttf"}
   end
 
-  test "original font preparation and active preparation share the font candidate ceiling", %{
-    bytes: bytes
-  } do
-    html =
-      "<body><?start name='A'><style>@media screen{@font-face{font-family:OriginalInactive;src:url('provided-original.ttf')}}</style><p>Old</p><?end?><template for='A'><p>Good</p></template></body>"
-
-    Limits.install(%{Limits.effective() | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(
-               html,
-               Keyword.put(@opts, :assets, %{"provided-original.ttf" => {:bytes, bytes}})
-             )
-
-    assert diagnostic.stage == :html
-    assert diagnostic.message =~ "max_entries"
-    assert diagnostic.operation == :render and diagnostic.module == HtmlValidator
-    assert Process.get({FontValidator, :budget}) == nil
-  end
-
   test "equal configured CSS keeps each file's resolution base", %{bytes: bytes} do
     root =
       Path.join(System.tmp_dir!(), "original-font-context-#{System.unique_integer([:positive])}")
@@ -192,5 +168,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesTest do
     assert {:error, {:invalid_document, diagnostic}} = HtmlToPdf.render(html, opts)
     assert diagnostic.stage == :font
     assert diagnostic.source == "src:url('same.ttf')"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFontResourcesGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    FontValidator,
+    HtmlValidator
+  }
+
+  @opts [system_font_discovery: false, compress_streams: false]
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    bytes =
+      File.read!(
+        Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu/DejaVuSansMono.ttf")
+      )
+
+    %{bytes: bytes}
+  end
+
+  test "original font preparation and active preparation share the font candidate ceiling", %{
+    bytes: bytes
+  } do
+    html =
+      "<body><?start name='A'><style>@media screen{@font-face{font-family:OriginalInactive;src:url('provided-original.ttf')}}</style><p>Old</p><?end?><template for='A'><p>Good</p></template></body>"
+
+    Limits.install(%{Limits.effective() | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(
+               html,
+               Keyword.put(@opts, :assets, %{"provided-original.ttf" => {:bytes, bytes}})
+             )
+
+    assert diagnostic.stage == :html
+    assert diagnostic.message =~ "max_entries"
+    assert diagnostic.operation == :render and diagnostic.module == HtmlValidator
+    assert Process.get({FontValidator, :budget}) == nil
   end
 end

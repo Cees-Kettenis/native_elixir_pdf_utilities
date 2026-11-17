@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
@@ -71,32 +71,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
       assert Enum.any?(last.boxes, &(Map.get(&1, :text) == "After"))
       refute Enum.any?(first.boxes, &(Map.get(&1, :text) == "After"))
     end
-  end
-
-  test "root end-padding markers use the existing cumulative layout and writer budgets" do
-    alias NativeElixirPdfUtilities.Limits
-    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-
-    assert {:ok, dom} =
-             HtmlParser.parse_detailed(
-               "<body style='margin:0;padding:12pt'><p style=margin:0>Body</p></body>"
-             )
-
-    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
-    assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
-    assert Enum.any?(layout.boxes, &(Map.get(&1, :role) == :block_end_padding))
-    assert {:ok, pages} = Pagination.paginate(layout)
-    count = Enum.sum(Enum.map(pages, &length(&1.boxes)))
-    Limits.install(%{previous | max_entries: count - 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
-    assert diagnostic.stage == :writer and diagnostic.message =~ "max_entries"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             Layout.layout(styled, page_size: {100, 100}, margin: 0)
-
-    assert diagnostic.message =~ "max_entries", inspect(diagnostic)
   end
 
   test "empty hidden and absolute-only root bodies do not attach padding to positioned paint" do
@@ -1018,5 +992,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
       },
       extra
     )
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+  alias NativeElixirPdfUtilities.HtmlToPdf.Layout
+  alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
+  alias NativeElixirPdfUtilities.HtmlToPdf.Style
+
+  test "root end-padding markers use the existing cumulative layout and writer budgets" do
+    alias NativeElixirPdfUtilities.Limits
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<body style='margin:0;padding:12pt'><p style=margin:0>Body</p></body>"
+             )
+
+    assert {:ok, styled} = Style.compute_detailed(dom, system_font_discovery: false)
+    assert {:ok, layout} = Layout.layout(styled, page_size: {100, 100}, margin: 0)
+    assert Enum.any?(layout.boxes, &(Map.get(&1, :role) == :block_end_padding))
+    assert {:ok, pages} = Pagination.paginate(layout)
+    count = Enum.sum(Enum.map(pages, &length(&1.boxes)))
+    Limits.install(%{previous | max_entries: count - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
+    assert diagnostic.stage == :writer and diagnostic.message =~ "max_entries"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             Layout.layout(styled, page_size: {100, 100}, margin: 0)
+
+    assert diagnostic.message =~ "max_entries", inspect(diagnostic)
   end
 end

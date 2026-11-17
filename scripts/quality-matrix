@@ -166,6 +166,26 @@ trap 'exit 143' TERM
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 log_root=".quality/logs/${run_id}"
 mkdir -p "${log_root}" || exit 2
+# Fixed local artifact policy: the current run and four newest previous runs.
+# The coordinator lock is held before pruning; runtime and reference caches live
+# outside logs/. Only recognized, real run directories belong to this cleanup.
+previous_runs=()
+for path in .quality/logs/*; do
+  [[ -d "${path}" && ! -L "${path}" && "${path}" != "${log_root}" ]] || continue
+  name="${path##*/}"
+  [[ "${name}" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]] || continue
+  previous_runs+=("${path}")
+done
+if ((${#previous_runs[@]} > 4)); then
+  mapfile -t previous_runs < <(printf '%s\n' "${previous_runs[@]}" | LC_ALL=C sort)
+  for ((index=0; index<${#previous_runs[@]}-4; index++)); do
+    rm -rf -- "${previous_runs[index]}" || {
+      echo "QUALITY_MATRIX_ERROR artifact_cleanup_failed=${previous_runs[index]}" >&2
+      exit 2
+    }
+    printf 'QUALITY_MATRIX_RETENTION removed=%s\n' "${previous_runs[index]}"
+  done
+fi
 snapshot="${repository_root}/${log_root}/source.tar"
 # Git lists modified tracked and non-ignored untracked files. Omit deleted paths;
 # never copy caches, ignored work records or another runtime's writable outputs.
@@ -203,10 +223,12 @@ run_container() {
   local -a pipeline_status
   docker run --rm --name "${name}" \
     --user "$(id -u):$(id -g)" \
+    --tmpfs /browser-profiles:rw,noexec,nosuid,size=128m,mode=1777 \
     --mount "type=bind,source=${workspace},target=/workspace" \
     --mount "type=bind,source=${repository_root}/.quality,target=/workspace/.quality" \
     --workdir /workspace \
     --env CHROMIUM_BIN=/usr/bin/chromium --env MIX_ENV=test \
+    --env CHROMIUM_PROFILE_ROOT=/browser-profiles \
     --env "HEX_HOME=/workspace/.quality/elixir-${version}/hex" \
     --env "HOME=/workspace/.quality/elixir-${version}/home" \
     --env "MIX_BUILD_PATH=/workspace/.quality/elixir-${version}/build" \
@@ -214,6 +236,8 @@ run_container() {
     --env "MIX_HOME=/workspace/.quality/elixir-${version}/mix" \
     --env "XDG_CACHE_HOME=/workspace/.quality/elixir-${version}/cache" \
     --env PERFORMANCE_BASELINE_REPORT \
+    --env BROWSER_PARITY_CACHE \
+    --env "BROWSER_PARITY_TOOLCHAIN=${image_id}" \
     --env "PERFORMANCE_BASELINE_KEY=${PERFORMANCE_BASELINE_KEY:-elixir-${version}.json}" \
     "${image_id}" bash scripts/quality-matrix --runtime "${version}" "${canonical}" "${run_id}" "${phase}" \
     2>&1 | tee "${log_dir}/container-${phase}.log"

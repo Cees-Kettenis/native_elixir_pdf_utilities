@@ -1,6 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageCssPrintCanvasTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.Limits
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, PdfWriter, PngDecoder}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, WriterValidator}
 
@@ -39,6 +38,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageCssPrintCanvasTest do
     assert canvas.clip == %{x: 25.0, y: 25.0, width: 100.0, height: 50.0}
     assert canvas.height == 155
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageCssPrintCanvasGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{PdfWriter, PngDecoder}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  @png Base.decode64!(
+         "iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
+       )
 
   test "a CSS source transform exceeding the configured PDF magnitude returns diagnostics" do
     limits = Limits.effective()

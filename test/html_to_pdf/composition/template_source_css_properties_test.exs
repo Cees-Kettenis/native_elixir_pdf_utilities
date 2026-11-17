@@ -1,8 +1,9 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
+  # Concurrent execution produced intermittent control-PDF byte differences.
   use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
   @opts [system_font_discovery: false, compress_streams: false]
@@ -43,6 +44,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     {"list-style-position", "inside"},
     {"grid-template-columns", "repeat(2, minmax(1em, 1fr))"},
     {"grid-template-rows", "2rem auto"}
+  ]
+  @invalid_cases [
+    {"accent-color", "invalid-color"},
+    {"border-color", "red blue green yellow black"},
+    {"border-top-color", "invalid-color"},
+    {"border-right-color", "invalid-color"},
+    {"border-bottom-color", "invalid-color"},
+    {"border-left-color", "invalid-color"},
+    {"text-decoration-color", "invalid-color"},
+    {"letter-spacing", "25%"},
+    {"line-height", "-2"},
+    {"vertical-align", "2bananas"},
+    {"font-weight", "1001"},
+    {"font-style", "oblique 100deg"},
+    {"text-decoration", "underline underline"},
+    {"text-decoration-line", "underline none"},
+    {"text-decoration-style", "unknown"},
+    {"text-decoration-thickness", "-1em"},
+    {"background-size", "2px 3px 4px"},
+    {"background-repeat", "repeat-unknown"},
+    {"border", "thin medium solid"},
+    {"border-top", "transparent red"},
+    {"border-right", "solid dashed"},
+    {"border-bottom", "1% solid"},
+    {"border-left", "2bananas solid"},
+    {"top", "calc(1px + 1deg)"},
+    {"right", "2bananas"},
+    {"bottom", "unknown(1px)"},
+    {"left", "25deg"},
+    {"quotes", "'['"},
+    {"content", "attr()"},
+    {"counter-reset", "chapter 1 2"},
+    {"counter-increment", "chapter 1.5"},
+    {"list-style", "square circle"},
+    {"list-style-type", "unknown"},
+    {"list-style-position", "middle"},
+    {"grid-template-columns", "minmax(1fr, 2fr)"},
+    {"grid-template-rows", "repeat(0, 1pt)"}
   ]
   for {property, value} <- @cases do
     @tag :source_property_batch_original
@@ -89,44 +128,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     assert Enum.all?(records, &(&1.selection.basis == :inactive_media))
   end
 
-  @invalid_cases [
-    {"accent-color", "invalid-color"},
-    {"border-color", "red blue green yellow black"},
-    {"border-top-color", "invalid-color"},
-    {"border-right-color", "invalid-color"},
-    {"border-bottom-color", "invalid-color"},
-    {"border-left-color", "invalid-color"},
-    {"text-decoration-color", "invalid-color"},
-    {"letter-spacing", "25%"},
-    {"line-height", "-2"},
-    {"vertical-align", "2bananas"},
-    {"font-weight", "1001"},
-    {"font-style", "oblique 100deg"},
-    {"text-decoration", "underline underline"},
-    {"text-decoration-line", "underline none"},
-    {"text-decoration-style", "unknown"},
-    {"text-decoration-thickness", "-1em"},
-    {"background-size", "2px 3px 4px"},
-    {"background-repeat", "repeat-unknown"},
-    {"border", "thin medium solid"},
-    {"border-top", "transparent red"},
-    {"border-right", "solid dashed"},
-    {"border-bottom", "1% solid"},
-    {"border-left", "2bananas solid"},
-    {"top", "calc(1px + 1deg)"},
-    {"right", "2bananas"},
-    {"bottom", "unknown(1px)"},
-    {"left", "25deg"},
-    {"quotes", "'['"},
-    {"content", "attr()"},
-    {"counter-reset", "chapter 1 2"},
-    {"counter-increment", "chapter 1.5"},
-    {"list-style", "square circle"},
-    {"list-style-type", "unknown"},
-    {"list-style-position", "middle"},
-    {"grid-template-columns", "minmax(1fr, 2fr)"},
-    {"grid-template-rows", "repeat(0, 1pt)"}
-  ]
   for {property, value} <- @invalid_cases do
     test "inactive malformed #{property} has actionable exact source diagnostics" do
       declaration = unquote(property) <> ":" <> unquote(value)
@@ -245,23 +246,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     assert align.geometry.units == ["rem"]
   end
 
-  test "unapplied grid grammar uses canonical cardinality limits and exact original diagnostic coordinates" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    declaration = "grid-template-columns:repeat(1001,1em)"
-
-    html =
-      "<style>@media screen{p{#{declaration}}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
-
-    Limits.install(Map.put(limits, :max_entries, 1000))
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, @opts)
-    assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.source == declaration
-    assert diagnostic.line == 1 and diagnostic.column == 24
-    assert diagnostic.operation == :source_style_contexts
-    assert diagnostic.message =~ "grid track"
-  end
-
   test "new source token operations consume the supplied shared CSS budget without resetting it" do
     css =
       ".absent{content:attr(title);font-weight:var(--weight,700);list-style:inside square;quotes:'[' ']'}"
@@ -313,5 +297,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
       )
 
     assert stats.scripting == :disabled and stats.page_count == 1
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  @opts [system_font_discovery: false, compress_streams: false]
+  test "unapplied grid grammar uses canonical cardinality limits and exact original diagnostic coordinates" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    declaration = "grid-template-columns:repeat(1001,1em)"
+
+    html =
+      "<style>@media screen{p{#{declaration}}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
+
+    Limits.install(Map.put(limits, :max_entries, 1000))
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.stage == :limits and diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.source == declaration
+    assert diagnostic.line == 1 and diagnostic.column == 24
+    assert diagnostic.operation == :source_style_contexts
+    assert diagnostic.message =~ "grid track"
   end
 end

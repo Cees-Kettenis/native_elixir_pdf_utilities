@@ -1,8 +1,8 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
-  use ExUnit.Case
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     HtmlParser,
@@ -388,18 +388,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
              HtmlFormValidator.prepare([%{page | boxes: boxes}], forms: :interactive)
   end
 
-  test "existing numeric and layout budgets return public Range diagnostics" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_numeric_token_bytes, 4))
-    assert Limits.get(:max_numeric_token_bytes) == 4
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<input type=range value=12345>", forms: :static)
-
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_numeric_token_bytes"
-  end
-
   test "datalist range ticks use exact bounds and authored step base without selecting suggestions" do
     NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
       [html_recovery: true],
@@ -619,6 +607,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlTest do
         assert diagnostic.message =~ "artwork" and diagnostic.message =~ "forms: :static"
       end
     )
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.RangeControlGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  test "existing numeric and layout budgets return public Range diagnostics" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(Map.put(previous, :max_numeric_token_bytes, 4))
+    assert Limits.get(:max_numeric_token_bytes) == 4
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<input type=range value=12345>", forms: :static)
+
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_numeric_token_bytes"
   end
 
   test "tick numeric work observes the existing public shared budget" do

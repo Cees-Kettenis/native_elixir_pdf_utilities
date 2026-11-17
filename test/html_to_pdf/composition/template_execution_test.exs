@@ -1,10 +1,10 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   Code.require_file(Paths.support("png_fixture.ex"))
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, ResourceContext}
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -406,26 +406,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     assert diagnostic.message =~ "original byte offset"
   end
 
-  test "a changed preparation policy cannot activate even with permissive counters" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
-
-    html =
-      "<body><?start name='A'><img src='pixel.png'><?end?><template for='A'><p>Good</p></template></body>"
-
-    opts =
-      Keyword.put(@opts, :asset_resolver, fn _ ->
-        Limits.install(Map.update!(limits, :max_numeric_magnitude, &(&1 + 1)))
-        {:ok, png}
-      end)
-
-    assert {:error, {:invalid_document, diagnostic}} = HtmlToPdf.render(html, opts)
-    assert diagnostic.operation == :parse and diagnostic.source == "template execution"
-    assert diagnostic.message =~ "preparation configuration"
-    assert Process.get({TemplateExecutionValidator, :execution}) == nil
-  end
-
   test "original selected glyph failure cannot disappear with a removed range" do
     html =
       "<body><?start name='A'><p>\u{10FFFF}</p><?end?><template for='A'><p>Good</p></template></body>"
@@ -447,20 +427,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
              HtmlToPdf.render(html, Keyword.put(@opts, :assets, %{"lazy.png" => {:bytes, png}}))
 
     assert {:ok, "Good"} = Text.extract(pdf)
-  end
-
-  test "execution reuses the same input charge while charging both parser passes' work" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    html = "<body><?marker name='A'><template for='A'><p>Bounded</p></template></body>"
-    assert {:ok, registry} = NativeElixirPdfUtilities.HtmlToPdf.Font.load_registry(@opts)
-    font_bytes = Enum.sum(Enum.map(registry.embedded, &byte_size(&1.data)))
-    Limits.install(Map.put(limits, :max_input_bytes, font_bytes + byte_size(html)))
-    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
-    Limits.install(limits)
-    assert {:ok, text} = Text.extract(pdf)
-    assert text =~ "Bounded"
-    assert TemplateExecutionValidator.source_charge(html) == byte_size(html)
   end
 
   test "an inert base cannot lend its future resolution to original fragment validation" do
@@ -594,5 +560,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
     end
 
     assert Process.get(execution_key) == nil
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionGlobalStateTest do
+  use ExUnit.Case, async: false
+  Code.require_file(Paths.support("png_fixture.ex"))
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    TemplateExecutionValidator
+  }
+
+  @opts [system_font_discovery: false, compress_streams: false]
+
+  test "a changed preparation policy cannot activate even with permissive counters" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
+
+    html =
+      "<body><?start name='A'><img src='pixel.png'><?end?><template for='A'><p>Good</p></template></body>"
+
+    opts =
+      Keyword.put(@opts, :asset_resolver, fn _ ->
+        Limits.install(Map.update!(limits, :max_numeric_magnitude, &(&1 + 1)))
+        {:ok, png}
+      end)
+
+    assert {:error, {:invalid_document, diagnostic}} = HtmlToPdf.render(html, opts)
+    assert diagnostic.operation == :parse and diagnostic.source == "template execution"
+    assert diagnostic.message =~ "preparation configuration"
+    assert Process.get({TemplateExecutionValidator, :execution}) == nil
+  end
+
+  test "execution reuses the same input charge while charging both parser passes' work" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    html = "<body><?marker name='A'><template for='A'><p>Bounded</p></template></body>"
+    assert {:ok, registry} = NativeElixirPdfUtilities.HtmlToPdf.Font.load_registry(@opts)
+    font_bytes = Enum.sum(Enum.map(registry.embedded, &byte_size(&1.data)))
+    Limits.install(Map.put(limits, :max_input_bytes, font_bytes + byte_size(html)))
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    Limits.install(limits)
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "Bounded"
+    assert TemplateExecutionValidator.source_charge(html) == byte_size(html)
   end
 end

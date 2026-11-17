@@ -1,4 +1,270 @@
 defmodule NativeElixirPdfUtilities.FormValidatorTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf}
+  alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+  alias NativeElixirPdfUtilities.Pdf.{Reader, IncrementalWriter}
+  alias NativeElixirPdfUtilities.Validators.{FormValidator, HtmlFormValidator}
+
+  test "HTML fields reject reserved radio states, duplicate choices and repeated furniture" do
+    for html <- [
+          "<input type='radio' value='Off'>",
+          "<input type='radio' value=''>",
+          "<select><option value='a'>A</option><option value='a'>B</option></select>"
+        ] do
+      assert {:error, {:invalid_form, %{stage: :forms}}} = HtmlToPdf.render("<div>#{html}</div>")
+    end
+
+    control = %{
+      id: make_ref(),
+      order: [0],
+      tag: "input",
+      attributes: %{},
+      children: [],
+      initial_state: %{owner: nil, checked: false, disabled: false, value: ""}
+    }
+
+    page = %{size: {200, 200}, boxes: [%{form_control: control}]}
+
+    assert {:error, {:unsupported_form, %{message: message}}} =
+             HtmlFormValidator.prepare([page, page], [])
+
+    assert message =~ "repeat"
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<p>No control</p><div style='break-before:page'><input></div>")
+
+    assert {:ok, [%{name: "TEXT_2_1"}]} = Forms.fields(pdf)
+  end
+
+  test "low-level writer rejects missing or malformed initial HTML control state" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+
+    box = %{
+      type: :rect,
+      x: 10,
+      y: 10,
+      width: 20,
+      height: 20,
+      fill_color: nil,
+      stroke_color: {0, 0, 0},
+      stroke_width: 1,
+      border_radius: 0
+    }
+
+    control = %{id: make_ref(), order: [0], tag: "input", attributes: %{}, children: []}
+
+    for state <- [
+          :missing,
+          %{},
+          %{checked: false, owner: nil},
+          %{checked: false, owner: nil, disabled: "yes"},
+          %{checked: "yes", owner: nil, disabled: false},
+          %{checked: false, owner: "form", disabled: false}
+        ],
+        mode <- [:static, :interactive] do
+      control = if state == :missing, do: control, else: Map.put(control, :initial_state, state)
+      page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
+      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], forms: mode)
+      assert diagnostic.stage == :forms and diagnostic.reason == :invalid_form
+      assert diagnostic.source == "initial_state"
+      assert diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "validated initial"
+    end
+
+    for selection <- [
+          :missing,
+          %{},
+          %{choices: "wrong", value: nil},
+          %{choices: [], value: 42},
+          %{choices: [%{}], value: nil},
+          %{choices: [%{value: "a", label: nil, selected: true}], value: "a"},
+          %{choices: [%{value: "a", label: "A", selected: "yes"}], value: "a"}
+        ] do
+      state = %{checked: false, owner: nil, disabled: false}
+      state = if selection == :missing, do: state, else: Map.put(state, :selection, selection)
+      control = %{control | tag: "select"} |> Map.put(:initial_state, state)
+      page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
+      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], [])
+      assert diagnostic.stage == :forms and diagnostic.source == "initial_state"
+      assert diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "selection state"
+    end
+  end
+
+  test "transported HTML controls diagnose unsupported field kinds in both form modes" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+
+    box = %{
+      type: :rect,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      fill_color: nil,
+      stroke_color: {0, 0, 0},
+      stroke_width: 1,
+      border_radius: 0
+    }
+
+    control = %{
+      id: make_ref(),
+      order: [0],
+      tag: "input",
+      children: [],
+      initial_state: %{owner: nil, checked: false, disabled: false, value: ""}
+    }
+
+    for type <- ~w(date range color file image button submit reset hidden),
+        mode <- [:static, :interactive] do
+      page = %{
+        size: {100, 100},
+        boxes: [Map.put(box, :form_control, Map.put(control, :attributes, %{"type" => type}))]
+      }
+
+      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], forms: mode)
+      assert diagnostic.stage == :forms and diagnostic.operation == :write_pdf
+      assert diagnostic.source == "initial_state" and diagnostic.message =~ "validated initial"
+    end
+  end
+
+  test "flatten follows each page's annotation order across nested fields and repeated widgets" do
+    pdf = overlapping_widgets_pdf()
+    {:ok, context} = Reader.read_validated(pdf)
+    {:ok, form} = FormValidator.inspect_document(context)
+
+    for selected <- [:all, ["group.blue", "group.red"], ["group.red"], ["group.blue"]] do
+      fields = Enum.filter(form.fields, &(selected == :all or &1.name in selected))
+      widgets = fields |> Enum.flat_map(& &1.widgets) |> Map.new(&{&1.ref, &1})
+
+      assert {:ok, placements} = FormValidator.prepare_flatten(context, fields)
+
+      expected =
+        Enum.flat_map(context.pages, fn page ->
+          {:ok, annots} = Reader.resolve(context.document, page.dictionary["Annots"])
+          Enum.filter(annots, &Map.has_key?(widgets, &1))
+        end)
+
+      assert Enum.map(placements, & &1.widget.ref) == expected
+      assert {:ok, flat} = Forms.flatten(pdf, fields: selected)
+      {:ok, flattened} = Reader.read_validated(flat)
+
+      for {page, original} <- Enum.zip(flattened.pages, context.pages) do
+        {:ok, annots} = Reader.resolve(context.document, original.dictionary["Annots"])
+        assert page.dictionary["Annots"] == Enum.reject(annots, &Map.has_key?(widgets, &1))
+        {:ok, resources} = Reader.dictionary(flattened.document, page.resources)
+        {:ok, xobjects} = Reader.dictionary(flattened.document, resources["XObject"])
+
+        {:ok, contents} =
+          NativeElixirPdfUtilities.Validators.PdfValidator.content_references(
+            flattened.document,
+            page.dictionary
+          )
+
+        {:ok, commands} = Reader.decoded_stream(flattened.document, List.last(contents))
+
+        painted =
+          Regex.scan(~r/\/(NEPUForm\d+) Do/, commands, capture: :all_but_first)
+          |> Enum.map(fn [name] -> Map.fetch!(xobjects, name) end)
+
+        expected =
+          annots
+          |> Enum.filter(&Map.has_key?(widgets, &1))
+          |> Enum.map(&widgets[&1].ap["N"])
+
+        assert painted == expected
+      end
+    end
+  end
+
+  defp overlapping_widgets_pdf() do
+    {:ok, pdf} = PdfWriter.render(List.duplicate(%{size: {100.0, 100.0}, boxes: []}, 2))
+    {:ok, context} = Reader.read_validated(pdf)
+    next = context.document.trailer["Size"]
+    ref = fn offset -> {:ref, {next + offset, 0}} end
+    {catalog_id, catalog_gen} = context.catalog_ref
+
+    fields = [
+      {next, 0, {:value, %{"T" => {:string, "group"}, "Kids" => [ref.(1), ref.(2)]}}},
+      {next + 1, 0,
+       {:value,
+        %{
+          "Parent" => ref.(0),
+          "FT" => {:name, "Tx"},
+          "T" => {:string, "red"},
+          "Kids" => [ref.(3), ref.(4)]
+        }}},
+      {next + 2, 0,
+       {:value,
+        %{
+          "Parent" => ref.(0),
+          "FT" => {:name, "Tx"},
+          "T" => {:string, "blue"},
+          "Kids" => [ref.(5), ref.(6)]
+        }}}
+    ]
+
+    widgets =
+      for {offset, parent, appearance} <- [{3, 1, 7}, {4, 1, 7}, {5, 2, 8}, {6, 2, 8}] do
+        {next + offset, 0,
+         {:value,
+          %{
+            "Type" => {:name, "Annot"},
+            "Subtype" => {:name, "Widget"},
+            "Parent" => ref.(parent),
+            "Rect" => [10, 10, 60, 60],
+            "F" => 4,
+            "AP" => %{"N" => ref.(appearance)}
+          }}}
+      end
+
+    appearances =
+      for {offset, color} <- [{7, "1 0 0"}, {8, "0 0 1"}] do
+        {next + offset, 0,
+         {:stream,
+          %{
+            "Type" => {:name, "XObject"},
+            "Subtype" => {:name, "Form"},
+            "BBox" => [0, 0, 50, 50],
+            "Resources" => %{}
+          }, "#{color} rg 0 0 50 50 re f"}}
+      end
+
+    # The first page reverses field order and interleaves an unrelated annotation.
+    # The second page uses an indirect Annots array in the opposite order.
+    pages =
+      Enum.zip(context.pages, [[ref.(5), ref.(9), ref.(3)], ref.(10)])
+      |> Enum.map(fn {page, annots} ->
+        {id, gen} = page.ref
+        {id, gen, {:value, Map.put(page.dictionary, "Annots", annots)}}
+      end)
+
+    {:ok, pdf} =
+      IncrementalWriter.write(
+        context,
+        fields ++
+          widgets ++
+          appearances ++
+          pages ++
+          [
+            {next + 9, 0,
+             {:value,
+              %{
+                "Type" => {:name, "Annot"},
+                "Subtype" => {:name, "Text"},
+                "Rect" => [80, 80, 90, 90],
+                "Contents" => {:string, "Keep me"}
+              }}},
+            {next + 10, 0, {:value, [ref.(4), ref.(6)]}},
+            {catalog_id, catalog_gen,
+             {:value, Map.put(context.catalog, "AcroForm", %{"Fields" => [ref.(0)]})}}
+          ]
+      )
+
+    pdf
+  end
+end
+
+defmodule NativeElixirPdfUtilities.FormValidatorGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{Forms, Limits, HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
@@ -684,128 +950,6 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     assert {:error, {:resource_limit_exceeded, _}} = Forms.fields(pdf)
   end
 
-  test "HTML fields reject reserved radio states, duplicate choices and repeated furniture" do
-    for html <- [
-          "<input type='radio' value='Off'>",
-          "<input type='radio' value=''>",
-          "<select><option value='a'>A</option><option value='a'>B</option></select>"
-        ] do
-      assert {:error, {:invalid_form, %{stage: :forms}}} = HtmlToPdf.render("<div>#{html}</div>")
-    end
-
-    control = %{
-      id: make_ref(),
-      order: [0],
-      tag: "input",
-      attributes: %{},
-      children: [],
-      initial_state: %{owner: nil, checked: false, disabled: false, value: ""}
-    }
-
-    page = %{size: {200, 200}, boxes: [%{form_control: control}]}
-
-    assert {:error, {:unsupported_form, %{message: message}}} =
-             HtmlFormValidator.prepare([page, page], [])
-
-    assert message =~ "repeat"
-
-    assert {:ok, pdf} =
-             HtmlToPdf.render("<p>No control</p><div style='break-before:page'><input></div>")
-
-    assert {:ok, [%{name: "TEXT_2_1"}]} = Forms.fields(pdf)
-  end
-
-  test "low-level writer rejects missing or malformed initial HTML control state" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
-
-    box = %{
-      type: :rect,
-      x: 10,
-      y: 10,
-      width: 20,
-      height: 20,
-      fill_color: nil,
-      stroke_color: {0, 0, 0},
-      stroke_width: 1,
-      border_radius: 0
-    }
-
-    control = %{id: make_ref(), order: [0], tag: "input", attributes: %{}, children: []}
-
-    for state <- [
-          :missing,
-          %{},
-          %{checked: false, owner: nil},
-          %{checked: false, owner: nil, disabled: "yes"},
-          %{checked: "yes", owner: nil, disabled: false},
-          %{checked: false, owner: "form", disabled: false}
-        ],
-        mode <- [:static, :interactive] do
-      control = if state == :missing, do: control, else: Map.put(control, :initial_state, state)
-      page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
-      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], forms: mode)
-      assert diagnostic.stage == :forms and diagnostic.reason == :invalid_form
-      assert diagnostic.source == "initial_state"
-      assert diagnostic.operation == :write_pdf
-      assert diagnostic.message =~ "validated initial"
-    end
-
-    for selection <- [
-          :missing,
-          %{},
-          %{choices: "wrong", value: nil},
-          %{choices: [], value: 42},
-          %{choices: [%{}], value: nil},
-          %{choices: [%{value: "a", label: nil, selected: true}], value: "a"},
-          %{choices: [%{value: "a", label: "A", selected: "yes"}], value: "a"}
-        ] do
-      state = %{checked: false, owner: nil, disabled: false}
-      state = if selection == :missing, do: state, else: Map.put(state, :selection, selection)
-      control = %{control | tag: "select"} |> Map.put(:initial_state, state)
-      page = %{size: {200, 200}, boxes: [Map.put(box, :form_control, control)]}
-      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], [])
-      assert diagnostic.stage == :forms and diagnostic.source == "initial_state"
-      assert diagnostic.operation == :write_pdf
-      assert diagnostic.message =~ "selection state"
-    end
-  end
-
-  test "transported HTML controls diagnose unsupported field kinds in both form modes" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
-
-    box = %{
-      type: :rect,
-      x: 0,
-      y: 0,
-      width: 20,
-      height: 20,
-      fill_color: nil,
-      stroke_color: {0, 0, 0},
-      stroke_width: 1,
-      border_radius: 0
-    }
-
-    control = %{
-      id: make_ref(),
-      order: [0],
-      tag: "input",
-      children: [],
-      initial_state: %{owner: nil, checked: false, disabled: false, value: ""}
-    }
-
-    for type <- ~w(date range color file image button submit reset hidden),
-        mode <- [:static, :interactive] do
-      page = %{
-        size: {100, 100},
-        boxes: [Map.put(box, :form_control, Map.put(control, :attributes, %{"type" => type}))]
-      }
-
-      assert {:error, {:invalid_form, diagnostic}} = PdfWriter.render([page], forms: mode)
-      assert diagnostic.stage == :forms and diagnostic.operation == :write_pdf
-      assert diagnostic.source == "initial_state" and diagnostic.message =~ "validated initial"
-    end
-  end
-
   test "fills repeated widgets through inherited fields and preserves unrelated annotations" do
     pdf = external_pdf()
     {:ok, context} = Reader.read_validated(pdf)
@@ -997,142 +1141,6 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
 
     assert {:error, {:invalid_form, diagnostic}} = Forms.flatten(source)
     assert diagnostic.message =~ "appearance geometry"
-  end
-
-  test "flatten follows each page's annotation order across nested fields and repeated widgets" do
-    pdf = overlapping_widgets_pdf()
-    {:ok, context} = Reader.read_validated(pdf)
-    {:ok, form} = FormValidator.inspect_document(context)
-
-    for selected <- [:all, ["group.blue", "group.red"], ["group.red"], ["group.blue"]] do
-      fields = Enum.filter(form.fields, &(selected == :all or &1.name in selected))
-      widgets = fields |> Enum.flat_map(& &1.widgets) |> Map.new(&{&1.ref, &1})
-
-      assert {:ok, placements} = FormValidator.prepare_flatten(context, fields)
-
-      expected =
-        Enum.flat_map(context.pages, fn page ->
-          {:ok, annots} = Reader.resolve(context.document, page.dictionary["Annots"])
-          Enum.filter(annots, &Map.has_key?(widgets, &1))
-        end)
-
-      assert Enum.map(placements, & &1.widget.ref) == expected
-      assert {:ok, flat} = Forms.flatten(pdf, fields: selected)
-      {:ok, flattened} = Reader.read_validated(flat)
-
-      for {page, original} <- Enum.zip(flattened.pages, context.pages) do
-        {:ok, annots} = Reader.resolve(context.document, original.dictionary["Annots"])
-        assert page.dictionary["Annots"] == Enum.reject(annots, &Map.has_key?(widgets, &1))
-        {:ok, resources} = Reader.dictionary(flattened.document, page.resources)
-        {:ok, xobjects} = Reader.dictionary(flattened.document, resources["XObject"])
-
-        {:ok, contents} =
-          NativeElixirPdfUtilities.Validators.PdfValidator.content_references(
-            flattened.document,
-            page.dictionary
-          )
-
-        {:ok, commands} = Reader.decoded_stream(flattened.document, List.last(contents))
-
-        painted =
-          Regex.scan(~r/\/(NEPUForm\d+) Do/, commands, capture: :all_but_first)
-          |> Enum.map(fn [name] -> Map.fetch!(xobjects, name) end)
-
-        expected =
-          annots
-          |> Enum.filter(&Map.has_key?(widgets, &1))
-          |> Enum.map(&widgets[&1].ap["N"])
-
-        assert painted == expected
-      end
-    end
-  end
-
-  defp overlapping_widgets_pdf() do
-    {:ok, pdf} = PdfWriter.render(List.duplicate(%{size: {100.0, 100.0}, boxes: []}, 2))
-    {:ok, context} = Reader.read_validated(pdf)
-    next = context.document.trailer["Size"]
-    ref = fn offset -> {:ref, {next + offset, 0}} end
-    {catalog_id, catalog_gen} = context.catalog_ref
-
-    fields = [
-      {next, 0, {:value, %{"T" => {:string, "group"}, "Kids" => [ref.(1), ref.(2)]}}},
-      {next + 1, 0,
-       {:value,
-        %{
-          "Parent" => ref.(0),
-          "FT" => {:name, "Tx"},
-          "T" => {:string, "red"},
-          "Kids" => [ref.(3), ref.(4)]
-        }}},
-      {next + 2, 0,
-       {:value,
-        %{
-          "Parent" => ref.(0),
-          "FT" => {:name, "Tx"},
-          "T" => {:string, "blue"},
-          "Kids" => [ref.(5), ref.(6)]
-        }}}
-    ]
-
-    widgets =
-      for {offset, parent, appearance} <- [{3, 1, 7}, {4, 1, 7}, {5, 2, 8}, {6, 2, 8}] do
-        {next + offset, 0,
-         {:value,
-          %{
-            "Type" => {:name, "Annot"},
-            "Subtype" => {:name, "Widget"},
-            "Parent" => ref.(parent),
-            "Rect" => [10, 10, 60, 60],
-            "F" => 4,
-            "AP" => %{"N" => ref.(appearance)}
-          }}}
-      end
-
-    appearances =
-      for {offset, color} <- [{7, "1 0 0"}, {8, "0 0 1"}] do
-        {next + offset, 0,
-         {:stream,
-          %{
-            "Type" => {:name, "XObject"},
-            "Subtype" => {:name, "Form"},
-            "BBox" => [0, 0, 50, 50],
-            "Resources" => %{}
-          }, "#{color} rg 0 0 50 50 re f"}}
-      end
-
-    # The first page reverses field order and interleaves an unrelated annotation.
-    # The second page uses an indirect Annots array in the opposite order.
-    pages =
-      Enum.zip(context.pages, [[ref.(5), ref.(9), ref.(3)], ref.(10)])
-      |> Enum.map(fn {page, annots} ->
-        {id, gen} = page.ref
-        {id, gen, {:value, Map.put(page.dictionary, "Annots", annots)}}
-      end)
-
-    {:ok, pdf} =
-      IncrementalWriter.write(
-        context,
-        fields ++
-          widgets ++
-          appearances ++
-          pages ++
-          [
-            {next + 9, 0,
-             {:value,
-              %{
-                "Type" => {:name, "Annot"},
-                "Subtype" => {:name, "Text"},
-                "Rect" => [80, 80, 90, 90],
-                "Contents" => {:string, "Keep me"}
-              }}},
-            {next + 10, 0, {:value, [ref.(4), ref.(6)]}},
-            {catalog_id, catalog_gen,
-             {:value, Map.put(context.catalog, "AcroForm", %{"Fields" => [ref.(0)]})}}
-          ]
-      )
-
-    pdf
   end
 
   test "expanded parent names and decoded field metadata share one inspection allowance" do

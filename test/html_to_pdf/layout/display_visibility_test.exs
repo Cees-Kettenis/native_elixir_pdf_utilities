@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.DisplayVisibilityTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Forms}
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
   alias NativeElixirPdfUtilities.Validators.CssDisplayValidator

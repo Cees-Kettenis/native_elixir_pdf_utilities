@@ -1,14 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.Limits
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{PdfWriter, ScrollbarPainter}
   alias NativeElixirPdfUtilities.Validators.{ScrollbarValidator, WriterValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "zero offset matches seven immutable e7 theme geometry cases" do
     # Captured independently by evaluating the accepted e7d261 geometry, not
@@ -99,59 +92,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
     refute Enum.any?(parts, &(&1.kind == :thumb))
   end
 
-  test "scrollbar transport rejects malformed states dimensions and offsets with diagnostics" do
-    geometry = %{
-      vertical: true,
-      horizontal: false,
-      viewport_width: 150.0,
-      viewport_height: 75.0,
-      client_width: 138.75,
-      client_height: 75.0,
-      scroll_width: 138.75,
-      scroll_height: 150.0
-    }
-
-    for invalid <- [
-          nil,
-          %{},
-          Map.put(geometry, :vertical, nil),
-          Map.put(geometry, :extra, 1),
-          Map.put(geometry, :scroll_width, 10),
-          Map.put(geometry, :scroll_offset, %{x: 0, y: 0, extra: 1}),
-          Map.put(geometry, :client_width, 151),
-          Map.put(geometry, :client_width, 140),
-          Map.put(geometry, :client_height, 76),
-          Map.put(geometry, :scroll_width, "wide"),
-          Map.put(geometry, :scroll_height, -1),
-          Map.put(geometry, :viewport_width, 1_000_000_001),
-          Map.put(geometry, :scroll_offset, %{}),
-          Map.put(geometry, :scroll_offset, %{x: -1, y: 0}),
-          Map.put(geometry, :scroll_offset, %{x: 0, y: 76})
-        ] do
-      assert {:error, {:invalid_layout, diagnostic}} = ScrollbarValidator.prepare(invalid)
-      assert diagnostic.stage == :layout and diagnostic.operation == :prepare_scrollbar
-
-      assert diagnostic.source == "scrollbar geometry" and
-               diagnostic.message =~ "finite nonnegative"
-    end
-
-    Limits.install(%{Limits.effective() | max_numeric_magnitude: 10})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             ScrollbarValidator.prepare(%{
-               vertical: true,
-               horizontal: false,
-               viewport_width: 1.0,
-               viewport_height: 1.0,
-               client_width: 0.0,
-               client_height: 1.0,
-               scroll_width: 0.0,
-               scroll_height: 1.0
-             })
-
-    assert diagnostic.message =~ "max_numeric_magnitude"
-  end
-
   test "direct clipped arrow paths preserve accepted shapes and diagnose invalid transport" do
     for {direction, path, scrollbar_path} <- [
           {:up, "0 0 m 6 0 l 3 3 l h", "-0.0001 0.0001 m 5.9999 0.0001 l 2.9999 3.0001 l h"},
@@ -211,5 +151,70 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
 
       assert message != ""
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{ScrollbarValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "scrollbar transport rejects malformed states dimensions and offsets with diagnostics" do
+    geometry = %{
+      vertical: true,
+      horizontal: false,
+      viewport_width: 150.0,
+      viewport_height: 75.0,
+      client_width: 138.75,
+      client_height: 75.0,
+      scroll_width: 138.75,
+      scroll_height: 150.0
+    }
+
+    for invalid <- [
+          nil,
+          %{},
+          Map.put(geometry, :vertical, nil),
+          Map.put(geometry, :extra, 1),
+          Map.put(geometry, :scroll_width, 10),
+          Map.put(geometry, :scroll_offset, %{x: 0, y: 0, extra: 1}),
+          Map.put(geometry, :client_width, 151),
+          Map.put(geometry, :client_width, 140),
+          Map.put(geometry, :client_height, 76),
+          Map.put(geometry, :scroll_width, "wide"),
+          Map.put(geometry, :scroll_height, -1),
+          Map.put(geometry, :viewport_width, 1_000_000_001),
+          Map.put(geometry, :scroll_offset, %{}),
+          Map.put(geometry, :scroll_offset, %{x: -1, y: 0}),
+          Map.put(geometry, :scroll_offset, %{x: 0, y: 76})
+        ] do
+      assert {:error, {:invalid_layout, diagnostic}} = ScrollbarValidator.prepare(invalid)
+      assert diagnostic.stage == :layout and diagnostic.operation == :prepare_scrollbar
+
+      assert diagnostic.source == "scrollbar geometry" and
+               diagnostic.message =~ "finite nonnegative"
+    end
+
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 10})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             ScrollbarValidator.prepare(%{
+               vertical: true,
+               horizontal: false,
+               viewport_width: 1.0,
+               viewport_height: 1.0,
+               client_width: 0.0,
+               client_height: 1.0,
+               scroll_width: 0.0,
+               scroll_height: 1.0
+             })
+
+    assert diagnostic.message =~ "max_numeric_magnitude"
   end
 end

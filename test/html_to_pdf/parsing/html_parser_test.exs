@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   import NativeElixirPdfUtilities.HtmlTreeHelpers
 
@@ -204,40 +204,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert diagnostic.source == "<p onclick='run()'>"
   end
 
-  test "processing instructions consume shared node, source, depth and tree work budgets" do
-    alias NativeElixirPdfUtilities.Limits
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    html = "<template><?marker><?end></template>"
-    Limits.install(%{limits | max_work: 3 * byte_size(html)})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
-
-    Limits.install(%{limits | max_entries: 2})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_detailed("<?marker><?end><?marker>")
-
-    assert diagnostic.message =~ "max_entries"
-
-    Limits.install(%{limits | max_input_bytes: 8})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_detailed("<?marker>")
-
-    assert diagnostic.message =~ "max_input_bytes"
-
-    Limits.install(%{limits | max_input_bytes: 8})
-    assert {:error, {:resource_limit_exceeded, _}} = HtmlParser.parse_detailed("<?marker>")
-
-    Limits.install(%{limits | max_depth: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlParser.parse_detailed("<template><div><?marker></div></template>")
-
-    assert diagnostic.message =~ "max_depth"
-  end
-
   test "legacy raw text preserves markup, entities and initial newlines after preprocessing" do
     for tag <- ["xmp", "noembed"], newline <- ["\r", "\r\n", "\n"] do
       literal =
@@ -429,44 +395,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
   end
 
-  test "raw text retains source, node and depth budgets without treating literal tags as nodes" do
-    alias NativeElixirPdfUtilities.Limits
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
-    for tag <- ~w(xmp noembed plaintext) do
-      html = "<#{tag}>é\r\n" <> String.duplicate("<img src=denied.png>&amp;", 20)
-      html = if tag == "plaintext", do: html, else: html <> "</#{tag}>"
-
-      Limits.install(%{limits | max_input_bytes: byte_size(html) - 1})
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-      assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
-
-      Limits.install(%{limits | max_input_bytes: byte_size(html) - 1})
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-      assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
-
-      Limits.install(%{limits | max_entries: if(tag == "plaintext", do: 2, else: 3)})
-      assert {:ok, %{children: [%{children: [%{type: :text}]}]}} = HtmlParser.parse_detailed(html)
-
-      Limits.install(%{limits | max_entries: 1})
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-
-      assert diagnostic.stage == :html and
-               diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-
-      assert diagnostic.message =~ "max_entries"
-
-      assert {:ok, _} = HtmlParser.parse_fragment(html, tag)
-      Limits.install(%{limits | max_depth: 1})
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlParser.parse_detailed("<div>" <> html <> "</div>")
-
-      assert diagnostic.stage == :html and diagnostic.message =~ "max_depth"
-    end
-  end
-
   test "contenteditable retains authored keywords across HTML foreign and inert content" do
     for value <- ["", "TRUE", "false", "plaintext-only", "invalid", " true ", " false ", "truſ"] do
       assert {:ok, %{children: [node]}} =
@@ -637,27 +565,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
         end
       end
     )
-  end
-
-  test "newline preprocessing accounts for caller bytes before normalization" do
-    alias NativeElixirPdfUtilities.Limits
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    html = "<p>A\r\nB</p>"
-    bytes = byte_size(html)
-    Limits.install(%{limits | max_input_bytes: bytes - 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
-    Limits.install(%{limits | max_input_bytes: bytes - 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
-
-    Limits.install(%{
-      limits
-      | max_input_bytes: bytes
-    })
-
-    assert {:ok, _} = HtmlParser.parse_detailed(html)
   end
 
   test "anchor and button fragment contexts reject interactive descendants" do
@@ -1484,213 +1391,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
           "<math><script type='application/json'/></math>"
         ] do
       assert {:error, {:unsupported_html, %{stage: :html}}} = HtmlParser.parse_detailed(html)
-    end
-  end
-
-  describe "HTML, SVG, and MathML namespaces" do
-    test "foreign elements and fragment contexts consume shared source and depth budgets" do
-      alias NativeElixirPdfUtilities.Limits
-      limits = Limits.effective()
-      on_exit(fn -> Limits.install(limits) end)
-      Limits.install(%{limits | max_depth: 2})
-
-      assert {:error, {:resource_limit_exceeded, %{stage: :html, message: message}}} =
-               HtmlParser.parse_detailed("<math><mrow><mi>x</mi></mrow></math>")
-
-      assert message =~ "max_depth"
-      Limits.install(%{limits | max_input_bytes: 18})
-
-      assert {:error, {:resource_limit_exceeded, %{stage: :html}}} =
-               HtmlParser.parse_fragment("<span>text</span>", %{
-                 namespace: :mathml,
-                 tag: "annotation-xml",
-                 attributes: %{"encoding" => "text/html"}
-               })
-    end
-
-    test "keeps nested foreign elements, self-closing flags, and adjusted SVG names" do
-      assert {:ok, %{children: [svg, math]}} =
-               HtmlParser.parse_detailed(
-                 "<svg viewBox='0 0 10 20'><lineargradient gradientUnits='userSpaceOnUse'/><clipPath><path d='M0 0'/></clipPath></svg><math><mrow><mi>x</mi><mspace width='1em'/></mrow></math>"
-               )
-
-      assert svg.namespace == :svg
-      assert svg.attributes == %{"viewBox" => "0 0 10 20"}
-
-      assert [
-               %{
-                 tag: "linearGradient",
-                 namespace: :svg,
-                 attributes: %{"gradientUnits" => "userSpaceOnUse"}
-               },
-               %{tag: "clipPath", children: [%{tag: "path", namespace: :svg}]}
-             ] = svg.children
-
-      assert math.namespace == :mathml
-
-      assert [
-               %{
-                 tag: "mrow",
-                 namespace: :mathml,
-                 children: [%{tag: "mi"}, %{tag: "mspace", children: []}]
-               }
-             ] = math.children
-    end
-
-    test "retains MathML adjustments and foreign attribute namespace identities" do
-      assert {:ok, %{children: [math, svg]}} =
-               HtmlParser.parse_detailed(
-                 "<math definitionURL='local-definition' xmlns='http://www.w3.org/1998/Math/MathML'><mi xml:lang='en'>x</mi></math><svg xmlns:xlink='http://www.w3.org/1999/xlink'><use xlink:href='#shape' xml:space='preserve'/></svg>"
-               )
-
-      assert math.attributes["definitionURL"] == "local-definition"
-
-      assert math.attribute_namespaces["xmlns"] == %{
-               prefix: nil,
-               local_name: "xmlns",
-               namespace: "http://www.w3.org/2000/xmlns/"
-             }
-
-      assert svg.attribute_namespaces["xmlns:xlink"].prefix == "xmlns"
-      assert [use] = svg.children
-
-      assert use.attribute_namespaces["xlink:href"] == %{
-               prefix: "xlink",
-               local_name: "href",
-               namespace: "http://www.w3.org/1999/xlink"
-             }
-
-      assert use.attribute_namespaces["xml:space"].namespace ==
-               "http://www.w3.org/XML/1998/namespace"
-    end
-
-    test "uses HTML integration points without treating SVG title as RCDATA" do
-      assert {:ok, %{children: [svg]}} =
-               HtmlParser.parse_detailed(
-                 "<svg><title>A &amp; <b>bold</b></title><desc><p>Description</p></desc><foreignObject><div><svg><path/></svg></div></foreignObject></svg>"
-               )
-
-      assert [title, desc, foreign] = svg.children
-
-      assert tree_content(title.children) == [
-               %{type: :text, text: "A & "},
-               %{
-                 type: :element,
-                 tag: "b",
-                 attributes: %{},
-                 children: [%{type: :text, text: "bold"}],
-                 namespace: :html,
-                 attribute_namespaces: %{}
-               }
-             ]
-
-      assert [%{tag: "p", namespace: :html}] = desc.children
-
-      assert [%{tag: "div", namespace: :html, children: [%{tag: "svg", namespace: :svg}]}] =
-               foreign.children
-    end
-
-    test "uses MathML text and annotation integration points with their exceptions" do
-      NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
-        [html_recovery: true],
-        fn ->
-          for token <- ~w(mi mo mn ms mtext) do
-            assert {:ok, %{children: [%{children: [point]}]}} =
-                     HtmlParser.parse_detailed(
-                       "<math><#{token}><span>HTML</span><mglyph/><malignmark/></#{token}></math>"
-                     )
-
-            assert [
-                     %{tag: "span", namespace: :html},
-                     %{tag: "mglyph", namespace: :mathml},
-                     %{tag: "malignmark", namespace: :mathml}
-                   ] = point.children
-          end
-
-          for encoding <- ["text/html", "APPLICATION/XHTML+XML"] do
-            assert {:ok,
-                    %{children: [%{children: [%{children: [%{tag: "p", namespace: :html}]}]}]}} =
-                     HtmlParser.parse_detailed(
-                       "<math><annotation-xml encoding='#{encoding}'><p>HTML</annotation-xml></math>"
-                     )
-          end
-
-          assert {:ok, %{children: [%{children: [annotation]}]}} =
-                   HtmlParser.parse_detailed(
-                     "<math><annotation-xml encoding='application/custom'><svg><path/></svg><unknown-math/></annotation-xml></math>"
-                   )
-
-          assert [%{tag: "svg", namespace: :svg}, %{tag: "unknown-math", namespace: :mathml}] =
-                   annotation.children
-        end
-      )
-    end
-
-    test "CDATA stays literal only in foreign content and raw text remains context dependent" do
-      assert {:ok, %{children: [svg, math]}} =
-               HtmlParser.parse_detailed(
-                 "<svg><![CDATA[<path>&amp;]]></svg><math><mtext>&amp;</mtext></math>"
-               )
-
-      assert tree_content(svg.children) == [%{type: :text, text: "<path>&amp;"}]
-      assert [%{children: [%{text: "&"}]}] = math.children
-
-      for source <- ["<![CDATA[text]]>", "<svg><![CDATA[missing</svg>", "<svg><path></svg>"] do
-        assert {:error, {:unsupported_html, %{stage: :html, line: 1}}} =
-                 HtmlParser.parse_detailed(source)
-      end
-    end
-
-    test "foreign fragments use the supplied namespace and integration attributes" do
-      assert {:ok, %{children: [%{tag: "mfrac", namespace: :mathml}]}} =
-               HtmlParser.parse_fragment("<mfrac><mi>x</mi><mn>2</mn></mfrac>", "math")
-
-      assert {:ok, %{children: [%{tag: "linearGradient", namespace: :svg}]}} =
-               HtmlParser.parse_fragment("<linearGradient/>", "SVG")
-
-      assert {:ok, %{children: [%{tag: "span", namespace: :html}]}} =
-               HtmlParser.parse_fragment("<span>HTML</span>", %{
-                 namespace: :mathml,
-                 tag: "annotation-xml",
-                 attributes: %{"encoding" => "TEXT/HTML"}
-               })
-
-      assert {:ok, %{children: [%{tag: "p", namespace: :html}]}} =
-               HtmlParser.parse_fragment("<p>HTML</p>", %{namespace: :svg, tag: "foreignObject"})
-
-      for context <- [
-            nil,
-            %{namespace: :other, tag: "svg"},
-            %{namespace: :svg, tag: "invalid tag"},
-            %{namespace: :mathml, tag: "mtext", attributes: %{bad: 1}},
-            %{namespace: :svg, tag: "g", attributes: %{"onclick" => "run()"}}
-          ] do
-        assert {:error, {:unsupported_html, %{stage: :html}}} =
-                 HtmlParser.parse_fragment("text", context)
-      end
-    end
-
-    test "policy and namespace failures keep source locations" do
-      for content <- [
-            "<svg onload='run()'/>",
-            "<svg><script/></svg>",
-            "<math><script/></math>",
-            "<svg><p>breakout</p></svg>",
-            "<svg><font color='red'/></svg>",
-            "<svg xmlns='wrong'/>",
-            "<math xmlns:xlink='wrong'/>",
-            "<svg viewBox='a' VIEWBOX='b'/>"
-          ] do
-        assert {:error, {:unsupported_html, diagnostic}} =
-                 HtmlParser.parse_detailed("<div>\n#{content}</div>")
-
-        assert diagnostic.stage == :html
-        assert diagnostic.line == 2
-        {offset, _length} = :binary.match(content, diagnostic.source)
-        assert diagnostic.column == String.length(binary_part(content, 0, offset)) + 1
-        assert is_binary(diagnostic.source)
-        assert is_binary(diagnostic.message)
-      end
     end
   end
 
@@ -3164,6 +2864,314 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
       assert diagnostic.stage == :html and diagnostic.reason == reason
       assert is_binary(diagnostic.message) and diagnostic.message != ""
       assert is_integer(diagnostic.line) and is_integer(diagnostic.column)
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  import NativeElixirPdfUtilities.HtmlTreeHelpers
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
+
+  test "processing instructions consume shared node, source, depth and tree work budgets" do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    html = "<template><?marker><?end></template>"
+    Limits.install(%{limits | max_work: 3 * byte_size(html)})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+
+    Limits.install(%{limits | max_entries: 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlParser.parse_detailed("<?marker><?end><?marker>")
+
+    assert diagnostic.message =~ "max_entries"
+
+    Limits.install(%{limits | max_input_bytes: 8})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlParser.parse_detailed("<?marker>")
+
+    assert diagnostic.message =~ "max_input_bytes"
+
+    Limits.install(%{limits | max_input_bytes: 8})
+    assert {:error, {:resource_limit_exceeded, _}} = HtmlParser.parse_detailed("<?marker>")
+
+    Limits.install(%{limits | max_depth: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlParser.parse_detailed("<template><div><?marker></div></template>")
+
+    assert diagnostic.message =~ "max_depth"
+  end
+
+  test "raw text retains source, node and depth budgets without treating literal tags as nodes" do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    for tag <- ~w(xmp noembed plaintext) do
+      html = "<#{tag}>é\r\n" <> String.duplicate("<img src=denied.png>&amp;", 20)
+      html = if tag == "plaintext", do: html, else: html <> "</#{tag}>"
+
+      Limits.install(%{limits | max_input_bytes: byte_size(html) - 1})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
+      assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
+
+      Limits.install(%{limits | max_input_bytes: byte_size(html) - 1})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
+      assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
+
+      Limits.install(%{limits | max_entries: if(tag == "plaintext", do: 2, else: 3)})
+      assert {:ok, %{children: [%{children: [%{type: :text}]}]}} = HtmlParser.parse_detailed(html)
+
+      Limits.install(%{limits | max_entries: 1})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
+
+      assert diagnostic.stage == :html and
+               diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
+
+      assert diagnostic.message =~ "max_entries"
+
+      assert {:ok, _} = HtmlParser.parse_fragment(html, tag)
+      Limits.install(%{limits | max_depth: 1})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlParser.parse_detailed("<div>" <> html <> "</div>")
+
+      assert diagnostic.stage == :html and diagnostic.message =~ "max_depth"
+    end
+  end
+
+  test "newline preprocessing accounts for caller bytes before normalization" do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    html = "<p>A\r\nB</p>"
+    bytes = byte_size(html)
+    Limits.install(%{limits | max_input_bytes: bytes - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
+    Limits.install(%{limits | max_input_bytes: bytes - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlParser.parse_detailed(html)
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_input_bytes"
+
+    Limits.install(%{
+      limits
+      | max_input_bytes: bytes
+    })
+
+    assert {:ok, _} = HtmlParser.parse_detailed(html)
+  end
+
+  describe "HTML, SVG, and MathML namespaces" do
+    test "foreign elements and fragment contexts consume shared source and depth budgets" do
+      alias NativeElixirPdfUtilities.Limits
+      limits = Limits.effective()
+      on_exit(fn -> Limits.install(limits) end)
+      Limits.install(%{limits | max_depth: 2})
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :html, message: message}}} =
+               HtmlParser.parse_detailed("<math><mrow><mi>x</mi></mrow></math>")
+
+      assert message =~ "max_depth"
+      Limits.install(%{limits | max_input_bytes: 18})
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :html}}} =
+               HtmlParser.parse_fragment("<span>text</span>", %{
+                 namespace: :mathml,
+                 tag: "annotation-xml",
+                 attributes: %{"encoding" => "text/html"}
+               })
+    end
+
+    test "keeps nested foreign elements, self-closing flags, and adjusted SVG names" do
+      assert {:ok, %{children: [svg, math]}} =
+               HtmlParser.parse_detailed(
+                 "<svg viewBox='0 0 10 20'><lineargradient gradientUnits='userSpaceOnUse'/><clipPath><path d='M0 0'/></clipPath></svg><math><mrow><mi>x</mi><mspace width='1em'/></mrow></math>"
+               )
+
+      assert svg.namespace == :svg
+      assert svg.attributes == %{"viewBox" => "0 0 10 20"}
+
+      assert [
+               %{
+                 tag: "linearGradient",
+                 namespace: :svg,
+                 attributes: %{"gradientUnits" => "userSpaceOnUse"}
+               },
+               %{tag: "clipPath", children: [%{tag: "path", namespace: :svg}]}
+             ] = svg.children
+
+      assert math.namespace == :mathml
+
+      assert [
+               %{
+                 tag: "mrow",
+                 namespace: :mathml,
+                 children: [%{tag: "mi"}, %{tag: "mspace", children: []}]
+               }
+             ] = math.children
+    end
+
+    test "retains MathML adjustments and foreign attribute namespace identities" do
+      assert {:ok, %{children: [math, svg]}} =
+               HtmlParser.parse_detailed(
+                 "<math definitionURL='local-definition' xmlns='http://www.w3.org/1998/Math/MathML'><mi xml:lang='en'>x</mi></math><svg xmlns:xlink='http://www.w3.org/1999/xlink'><use xlink:href='#shape' xml:space='preserve'/></svg>"
+               )
+
+      assert math.attributes["definitionURL"] == "local-definition"
+
+      assert math.attribute_namespaces["xmlns"] == %{
+               prefix: nil,
+               local_name: "xmlns",
+               namespace: "http://www.w3.org/2000/xmlns/"
+             }
+
+      assert svg.attribute_namespaces["xmlns:xlink"].prefix == "xmlns"
+      assert [use] = svg.children
+
+      assert use.attribute_namespaces["xlink:href"] == %{
+               prefix: "xlink",
+               local_name: "href",
+               namespace: "http://www.w3.org/1999/xlink"
+             }
+
+      assert use.attribute_namespaces["xml:space"].namespace ==
+               "http://www.w3.org/XML/1998/namespace"
+    end
+
+    test "uses HTML integration points without treating SVG title as RCDATA" do
+      assert {:ok, %{children: [svg]}} =
+               HtmlParser.parse_detailed(
+                 "<svg><title>A &amp; <b>bold</b></title><desc><p>Description</p></desc><foreignObject><div><svg><path/></svg></div></foreignObject></svg>"
+               )
+
+      assert [title, desc, foreign] = svg.children
+
+      assert tree_content(title.children) == [
+               %{type: :text, text: "A & "},
+               %{
+                 type: :element,
+                 tag: "b",
+                 attributes: %{},
+                 children: [%{type: :text, text: "bold"}],
+                 namespace: :html,
+                 attribute_namespaces: %{}
+               }
+             ]
+
+      assert [%{tag: "p", namespace: :html}] = desc.children
+
+      assert [%{tag: "div", namespace: :html, children: [%{tag: "svg", namespace: :svg}]}] =
+               foreign.children
+    end
+
+    test "uses MathML text and annotation integration points with their exceptions" do
+      NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+        [html_recovery: true],
+        fn ->
+          for token <- ~w(mi mo mn ms mtext) do
+            assert {:ok, %{children: [%{children: [point]}]}} =
+                     HtmlParser.parse_detailed(
+                       "<math><#{token}><span>HTML</span><mglyph/><malignmark/></#{token}></math>"
+                     )
+
+            assert [
+                     %{tag: "span", namespace: :html},
+                     %{tag: "mglyph", namespace: :mathml},
+                     %{tag: "malignmark", namespace: :mathml}
+                   ] = point.children
+          end
+
+          for encoding <- ["text/html", "APPLICATION/XHTML+XML"] do
+            assert {:ok,
+                    %{children: [%{children: [%{children: [%{tag: "p", namespace: :html}]}]}]}} =
+                     HtmlParser.parse_detailed(
+                       "<math><annotation-xml encoding='#{encoding}'><p>HTML</annotation-xml></math>"
+                     )
+          end
+
+          assert {:ok, %{children: [%{children: [annotation]}]}} =
+                   HtmlParser.parse_detailed(
+                     "<math><annotation-xml encoding='application/custom'><svg><path/></svg><unknown-math/></annotation-xml></math>"
+                   )
+
+          assert [%{tag: "svg", namespace: :svg}, %{tag: "unknown-math", namespace: :mathml}] =
+                   annotation.children
+        end
+      )
+    end
+
+    test "CDATA stays literal only in foreign content and raw text remains context dependent" do
+      assert {:ok, %{children: [svg, math]}} =
+               HtmlParser.parse_detailed(
+                 "<svg><![CDATA[<path>&amp;]]></svg><math><mtext>&amp;</mtext></math>"
+               )
+
+      assert tree_content(svg.children) == [%{type: :text, text: "<path>&amp;"}]
+      assert [%{children: [%{text: "&"}]}] = math.children
+
+      for source <- ["<![CDATA[text]]>", "<svg><![CDATA[missing</svg>", "<svg><path></svg>"] do
+        assert {:error, {:unsupported_html, %{stage: :html, line: 1}}} =
+                 HtmlParser.parse_detailed(source)
+      end
+    end
+
+    test "foreign fragments use the supplied namespace and integration attributes" do
+      assert {:ok, %{children: [%{tag: "mfrac", namespace: :mathml}]}} =
+               HtmlParser.parse_fragment("<mfrac><mi>x</mi><mn>2</mn></mfrac>", "math")
+
+      assert {:ok, %{children: [%{tag: "linearGradient", namespace: :svg}]}} =
+               HtmlParser.parse_fragment("<linearGradient/>", "SVG")
+
+      assert {:ok, %{children: [%{tag: "span", namespace: :html}]}} =
+               HtmlParser.parse_fragment("<span>HTML</span>", %{
+                 namespace: :mathml,
+                 tag: "annotation-xml",
+                 attributes: %{"encoding" => "TEXT/HTML"}
+               })
+
+      assert {:ok, %{children: [%{tag: "p", namespace: :html}]}} =
+               HtmlParser.parse_fragment("<p>HTML</p>", %{namespace: :svg, tag: "foreignObject"})
+
+      for context <- [
+            nil,
+            %{namespace: :other, tag: "svg"},
+            %{namespace: :svg, tag: "invalid tag"},
+            %{namespace: :mathml, tag: "mtext", attributes: %{bad: 1}},
+            %{namespace: :svg, tag: "g", attributes: %{"onclick" => "run()"}}
+          ] do
+        assert {:error, {:unsupported_html, %{stage: :html}}} =
+                 HtmlParser.parse_fragment("text", context)
+      end
+    end
+
+    test "policy and namespace failures keep source locations" do
+      for content <- [
+            "<svg onload='run()'/>",
+            "<svg><script/></svg>",
+            "<math><script/></math>",
+            "<svg><p>breakout</p></svg>",
+            "<svg><font color='red'/></svg>",
+            "<svg xmlns='wrong'/>",
+            "<math xmlns:xlink='wrong'/>",
+            "<svg viewBox='a' VIEWBOX='b'/>"
+          ] do
+        assert {:error, {:unsupported_html, diagnostic}} =
+                 HtmlParser.parse_detailed("<div>\n#{content}</div>")
+
+        assert diagnostic.stage == :html
+        assert diagnostic.line == 2
+        {offset, _length} = :binary.match(content, diagnostic.source)
+        assert diagnostic.column == String.length(binary_part(content, 0, offset)) + 1
+        assert is_binary(diagnostic.source)
+        assert is_binary(diagnostic.message)
+      end
     end
   end
 end

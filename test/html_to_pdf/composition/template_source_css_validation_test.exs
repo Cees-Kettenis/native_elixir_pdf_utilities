@@ -1,21 +1,15 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   Code.require_file(Paths.support("png_fixture.ex"))
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, TemplateExecutionValidator}
 
   @opts [system_font_discovery: false, compress_streams: false]
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "unmatched and inactive source types permit replacement without fetching dormant assets" do
     callback_owner = self()
@@ -183,6 +177,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationTest do
     assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
     assert {:ok, reference} = HtmlToPdf.render(expected, @opts)
     assert pdf == reference
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+  Code.require_file(Paths.support("png_fixture.ex"))
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
+
+  @opts [system_font_discovery: false, compress_streams: false]
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "shared source parser rejects invalid inputs and limits fallback grammar work" do

@@ -3,7 +3,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgWidgetEffectAppearanceTest do
   Code.require_file(Paths.support("svg_public_workflow.ex"))
   Code.require_file(Paths.support("png_fixture.ex"))
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   test "ancestor opacity, masks and filters preserve initial widget AP and shared sibling paint" do
     scenes = [

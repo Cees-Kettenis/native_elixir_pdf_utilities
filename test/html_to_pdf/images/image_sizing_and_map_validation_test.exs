@@ -1,6 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageSizingAndMapValidationTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Limits}
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     Font,
@@ -20,8 +19,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageSizingAndMapValidationTest do
 
   @image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
     assert {:ok, _, face} = Font.resolve("DejaVu Sans", 400, :normal, registry)
     %{style: %{font_face: face, font_size: 12.0, line_height: 15.0}}

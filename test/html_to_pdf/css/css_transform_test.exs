@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     DrawingGeometry,
@@ -15,8 +15,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
   alias NativeElixirPdfUtilities.Validators.{CssTransformValidator, HtmlValidator}
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
     {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
 
@@ -162,24 +160,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
              HtmlToPdf.render(html, page_size: {240, 180}, margin: 0, forms: :static)
 
     assert {:ok, []} = NativeElixirPdfUtilities.Forms.fields(static)
-  end
-
-  test "function work limits and invalid visible declarations use canonical diagnostics" do
-    original = Limits.effective()
-    Limits.install(%{original | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssTransformValidator.prepare("scale(2) rotate(1deg)")
-
-    assert diagnostic.message =~ "max_entries"
-
-    Limits.install(original)
-
-    assert {:error, {:invalid_css, diagnostic}} =
-             HtmlToPdf.render("<div style='transform:rotate(1)'>Invalid</div>")
-
-    assert diagnostic.stage == :css
-    assert diagnostic.source =~ "transform:rotate(1)"
   end
 
   test "table cell scopes retain one authentic widget despite separated background and content layers" do
@@ -330,37 +310,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
     assert {:ok, _} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(edited)
   end
 
-  test "transformed descendant sheets retain links and respect shared page ceilings" do
-    html =
-      File.read!(
-        "test/fixtures/html_to_pdf/browser_parity/html_css_affine_descendant_sheets.html"
-      )
-
-    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {240, 180}, margin: 12)
-    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
-
-    links =
-      for {_, %{value: %{"Subtype" => {:name, "Link"}} = link}} <- document.objects, do: link
-
-    assert [%{"QuadPoints" => points}] = links
-    assert length(points) == 8
-    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
-    assert text =~ "Source overflow"
-    clipped = String.replace(html, "background:#eef4f8", "overflow:hidden;background:#eef4f8")
-
-    assert {:ok, hidden} =
-             HtmlToPdf.render(clipped, page_size: {240, 180}, margin: 12, compress_streams: false)
-
-    refute hidden =~ "https://example.com/overflow"
-    Limits.install(Map.put(Limits.effective(), :max_pages, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render(html, page_size: {240, 180}, margin: 12)
-
-    assert diagnostic.stage == :pagination
-    assert diagnostic.message =~ "max_pages"
-  end
-
   test "checkbox, radio and unnamed text page slices retain source ownership and generated names" do
     for control <- [
           "<input type='checkbox' name='actual' checked>",
@@ -448,5 +397,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
 
     assert [[{:ref, ^second}, {:name, "XYZ"}, x, y, nil]] = destinations
     assert x >= 12 and x <= 228 and y >= 12 and y <= 168
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    Font
+  }
+
+  alias NativeElixirPdfUtilities.Validators.{CssTransformValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    style = %{
+      font_face: font,
+      font_size: 12.0,
+      line_height: 14.4,
+      _root_font_face: font,
+      _root_font_size: 12.0,
+      _root_line_height: 14.4,
+      _position_viewport: %{width: 400.0, height: 300.0}
+    }
+
+    {:ok, style: style}
+  end
+
+  test "function work limits and invalid visible declarations use canonical diagnostics" do
+    original = Limits.effective()
+    Limits.install(%{original | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssTransformValidator.prepare("scale(2) rotate(1deg)")
+
+    assert diagnostic.message =~ "max_entries"
+
+    Limits.install(original)
+
+    assert {:error, {:invalid_css, diagnostic}} =
+             HtmlToPdf.render("<div style='transform:rotate(1)'>Invalid</div>")
+
+    assert diagnostic.stage == :css
+    assert diagnostic.source =~ "transform:rotate(1)"
+  end
+
+  test "transformed descendant sheets retain links and respect shared page ceilings" do
+    html =
+      File.read!(
+        "test/fixtures/html_to_pdf/browser_parity/html_css_affine_descendant_sheets.html"
+      )
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, page_size: {240, 180}, margin: 12)
+    assert {:ok, document} = NativeElixirPdfUtilities.Pdf.Reader.read(pdf)
+
+    links =
+      for {_, %{value: %{"Subtype" => {:name, "Link"}} = link}} <- document.objects, do: link
+
+    assert [%{"QuadPoints" => points}] = links
+    assert length(points) == 8
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert text =~ "Source overflow"
+    clipped = String.replace(html, "background:#eef4f8", "overflow:hidden;background:#eef4f8")
+
+    assert {:ok, hidden} =
+             HtmlToPdf.render(clipped, page_size: {240, 180}, margin: 12, compress_streams: false)
+
+    refute hidden =~ "https://example.com/overflow"
+    Limits.install(Map.put(Limits.effective(), :max_pages, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render(html, page_size: {240, 180}, margin: 12)
+
+    assert diagnostic.stage == :pagination
+    assert diagnostic.message =~ "max_pages"
   end
 end

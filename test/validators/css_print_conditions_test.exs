@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.CssPrintConditionsTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Validators.{CssSupportsValidator, PrintMediaValidator}
 
   # Media Queries 4/5, 19 February 2026. Conditional Rules 5, 30 October 2025.

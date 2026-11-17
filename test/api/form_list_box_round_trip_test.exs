@@ -1,12 +1,12 @@
 defmodule NativeElixirPdfUtilities.FormListBoxRoundTripTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.Pdf.{Reader, IncrementalWriter}
   alias NativeElixirPdfUtilities.Validators.FormValidator
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -45,26 +45,6 @@ defmodule NativeElixirPdfUtilities.FormListBoxRoundTripTest do
     refute text =~ "Alpha"
     assert {:ok, filled} = Forms.fill(filled, %{"choice" => "b"}, appearance: :source)
     assert {:ok, _} = Forms.flatten(filled)
-  end
-
-  test "editor font serialization respects the configured decompression ratio during the complete lifecycle",
-       %{limits: limits} do
-    for ratio <- [1, 2, 100] do
-      Limits.install(%{limits | max_decompression_ratio: ratio})
-
-      assert {:ok, pdf} =
-               HtmlToPdf.render(
-                 "<input name=editor value=Initial style='font-family:DejaVu Sans'>",
-                 system_font_discovery: false
-               )
-
-      assert {:ok, [%{value: "Initial"}]} = Forms.fields(pdf)
-      assert {:ok, filled} = Forms.fill(pdf, %{"editor" => "Changed"}, appearance: :source)
-      assert {:ok, [%{value: "Changed"}]} = Forms.fields(filled)
-      assert {:ok, flat} = Forms.flatten(filled)
-      assert {:ok, text} = Text.extract(flat, layout: false)
-      assert text =~ "Changed"
-    end
   end
 
   test "older source templates reconstruct complete list rows with their original fonts" do
@@ -113,6 +93,37 @@ defmodule NativeElixirPdfUtilities.FormListBoxRoundTripTest do
     assert {:ok, filled} = Forms.fill(pdf, %{"empty" => "c"}, appearance: :source)
     assert {:ok, [%{value: "c"}]} = Forms.fields(filled)
     assert {:ok, _} = Forms.flatten(filled)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.FormListBoxRoundTripGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
+  end
+
+  test "editor font serialization respects the configured decompression ratio during the complete lifecycle",
+       %{limits: limits} do
+    for ratio <- [1, 2, 100] do
+      Limits.install(%{limits | max_decompression_ratio: ratio})
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render(
+                 "<input name=editor value=Initial style='font-family:DejaVu Sans'>",
+                 system_font_discovery: false
+               )
+
+      assert {:ok, [%{value: "Initial"}]} = Forms.fields(pdf)
+      assert {:ok, filled} = Forms.fill(pdf, %{"editor" => "Changed"}, appearance: :source)
+      assert {:ok, [%{value: "Changed"}]} = Forms.fields(filled)
+      assert {:ok, flat} = Forms.flatten(filled)
+      assert {:ok, text} = Text.extract(flat, layout: false)
+      assert text =~ "Changed"
+    end
   end
 
   test "retained row metadata is admitted during production before serialization", %{

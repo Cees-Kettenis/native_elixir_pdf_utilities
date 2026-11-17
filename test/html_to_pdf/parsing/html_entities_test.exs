@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntitiesTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntities
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlEntityData
@@ -54,6 +54,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntitiesTest do
              ) == expected
     end
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlEntitiesGlobalStateTest do
+  use ExUnit.Case, async: false
 
   test "public rendering handles huge numeric references in text and attributes" do
     alias NativeElixirPdfUtilities.HtmlToPdf

@@ -7,6 +7,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontOutlineValidator do
   }
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Outline
+  alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
+  alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
 
   @doc "Prepares a selected outline as a bounded SVG path in font design coordinates."
   @spec prepare_path(map(), non_neg_integer()) :: {:ok, binary()} | {:error, {atom(), map()}}
@@ -38,7 +40,23 @@ defmodule NativeElixirPdfUtilities.Validators.FontOutlineValidator do
           _ ->
             with {:ok, outlines} <-
                    FontValidator.memo({:color_outlines, font.data}, fn ->
-                     TrueTypeSubsetValidator.prepare_outlines(font.data)
+                     before = ResourceBudgetValidator.remaining(:max_work)
+
+                     loader = fn _ ->
+                       start = ResourceBudgetValidator.remaining(:max_work)
+
+                       with {:ok, outlines} <- TrueTypeSubsetValidator.prepare_outlines(font.data) do
+                         {:ok, {outlines, start - ResourceBudgetValidator.remaining(:max_work)}}
+                       end
+                     end
+
+                     with {:ok, {outlines, work}} <- FontCache.outlines(font.data, loader) do
+                       # A cold load already charged the caller. A cache hit must
+                       # admit the same work under this caller's current limits.
+                       charged = before - ResourceBudgetValidator.remaining(:max_work)
+                       FontValidator.reserve(:max_work, work - charged)
+                       {:ok, outlines}
+                     end
                    end) do
               {glyph, _} =
                 TrueTypeGlyphValidator.resolve(id, outlines.glyphs, %{}, MapSet.new(), 0, false)

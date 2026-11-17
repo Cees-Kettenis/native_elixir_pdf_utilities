@@ -3,14 +3,14 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackgroundTransportTest do
   Code.require_file(Paths.support("svg_public_workflow.ex"))
   Code.require_file(Paths.support("png_fixture.ex"))
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, Pagination, PdfWriter, Style}
   alias NativeElixirPdfUtilities.{Limits, Text}
 
   @checker "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='#e7edf4'/><rect width='4' height='4' fill='#bed0e2'/></svg>"
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -46,32 +46,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackgroundTransportTest do
     assert pdf =~ "/Subtype /Image"
   end
 
-  test("background rendering uses the shared input and entry budgets", %{
-    limits: limits
-  }) do
-    uri = "data:image/svg+xml;base64," <> Base.encode64(@checker)
-
-    source =
-      "<div style='width:36pt;height:24pt;background-image:url(#{uri});background-size:6pt 6pt'></div>"
-
-    Limits.install(Map.put(limits, :max_input_bytes, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(source)
-
-    assert diagnostic.message =~ "max_input_bytes"
-    assert diagnostic.stage == :html
-    assert diagnostic.reason == :resource_limit_exceeded
-    Limits.install(Map.put(limits, :max_entries, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(source)
-
-    assert diagnostic.stage == :html
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_entries"
-  end
-
   test "original nested three-page backgrounds retain native layers and retain all text" do
     source =
       File.read!(
@@ -103,5 +77,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackgroundTransportTest do
         ] do
       assert text =~ value
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgBackgroundTransportGlobalStateTest do
+  Code.require_file(Paths.support("svg_public_workflow.ex"))
+  Code.require_file(Paths.support("png_fixture.ex"))
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+
+  @checker "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='#e7edf4'/><rect width='4' height='4' fill='#bed0e2'/></svg>"
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
+  end
+
+  test("background rendering uses the shared input and entry budgets", %{
+    limits: limits
+  }) do
+    uri = "data:image/svg+xml;base64," <> Base.encode64(@checker)
+
+    source =
+      "<div style='width:36pt;height:24pt;background-image:url(#{uri});background-size:6pt 6pt'></div>"
+
+    Limits.install(Map.put(limits, :max_input_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(source)
+
+    assert diagnostic.message =~ "max_input_bytes"
+    assert diagnostic.stage == :html
+    assert diagnostic.reason == :resource_limit_exceeded
+    Limits.install(Map.put(limits, :max_entries, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(source)
+
+    assert diagnostic.stage == :html
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_entries"
   end
 end

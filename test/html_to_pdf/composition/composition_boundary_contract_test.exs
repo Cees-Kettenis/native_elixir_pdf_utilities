@@ -1,6 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionBoundaryContractTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.Limits
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, EmbeddedViewport, ResourceContext}
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -9,12 +8,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionBoundaryContractTest do
     FramesetValidator,
     HtmlValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "moving an marked source box retains its transform origin and authored quads" do
     style = %{css_transform: [{"translatex", [{:length_x, "8px"}]}]}
@@ -104,40 +97,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionBoundaryContractTest do
     end)
   end
 
-  test "frameset color and edge inheritance rejects malformed callers before layout" do
-    for {attributes, inherited} <- [{:invalid, nil}, {%{}, %{border_color: :invalid}}] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               FramesetValidator.prepare_color_hints(attributes, inherited)
-
-      assert diagnostic.stage == :layout
-      assert diagnostic.message =~ "border-color"
-    end
-
-    assert {:ok, plan} = FramesetValidator.prepare(%{"rows" => "*", "cols" => "*"})
-
-    for children <- [
-          [
-            %{
-              tag: "frameset",
-              style: %{_frameset: %{outer_edges: {true, :invalid, false, false}}}
-            }
-          ],
-          [%{tag: "div", style: %{}}]
-        ] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               FramesetValidator.prepare_children(plan, children)
-
-      assert diagnostic.message =~ "edges" or diagnostic.message =~ "edge flags"
-    end
-
-    Limits.install(%{Limits.effective() | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FramesetValidator.prepare_children(plan, [%{}, %{}])
-
-    assert diagnostic.message =~ "max_entries"
-  end
-
   test "invalid scoped viewport dimensions retain the shared actionable failure" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
       assert {:ok, surface} = EmbeddedViewport.prepare_html({:srcdoc, "<p>Actual</p>"}, context)
@@ -205,27 +164,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionBoundaryContractTest do
     end)
   end
 
-  test "furniture layout budgets retain the library diagnostic contract" do
-    Limits.install(%{Limits.effective() | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.PageFurniture.decorate(
-               [%{size: {200, 100}, boxes: []}],
-               %{
-                 type: :layout,
-                 page_size: {200, 100},
-                 margin: 20,
-                 boxes: [],
-                 content_width: 160,
-                 content_height: 60
-               },
-               page_furniture: [header: "<p>One<br>Two</p>"]
-             )
-
-    assert diagnostic.stage == :html
-    assert diagnostic.message =~ "max_entries"
-  end
-
   test "multirow legacy frames paint horizontal dividers and isolated children" do
     assert {:ok, pdf} =
              NativeElixirPdfUtilities.HtmlToPdf.render(
@@ -256,67 +194,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionBoundaryContractTest do
 
       assert {:ok, group} = EmbeddedViewport.layout(%{prepared | host: :frame}, 90, 60)
       assert Enum.any?(group.boxes, &(Map.get(&1, :role) == :frameset_canvas))
-    end)
-  end
-
-  test "frame source and scene work limits diagnose before child paint" do
-    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FramesetValidator.prepare_frame(%{"marginwidth" => "12"}, nil)
-
-    assert diagnostic.source == "12"
-    assert diagnostic.message =~ "max_numeric_token_bytes"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             FramesetValidator.prepare_frame(%{"frameborder" => "12"}, nil)
-
-    assert diagnostic.source == "12"
-    assert diagnostic.message =~ "max_numeric_token_bytes"
-    Limits.install(Limits.defaults())
-
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-      assert {:ok, dom} =
-               NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(
-                 "<frameset rows='*,*'><frame src='about:blank'><frame src='about:blank'></frameset>"
-               )
-
-      assert {:ok, tree} =
-               NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(
-                 dom,
-                 [],
-                 context.image_budget
-               )
-
-      [node] = tree.children
-
-      before =
-        Map.get(
-          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot(),
-          :max_work,
-          0
-        )
-
-      assert {:ok, _grid} = FramesetValidator.prepare_layout(node.style._frameset, 120, 90)
-
-      allocated =
-        Map.get(
-          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot(),
-          :max_work,
-          0
-        )
-
-      measured_allocation = allocated - before
-
-      Limits.install(%{
-        Limits.effective()
-        | max_work: allocated + measured_allocation + 1
-      })
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               FramesetValidator.prepare_scene(node, 120, 90, 1)
-
-      assert diagnostic.message =~ "max_work"
     end)
   end
 
@@ -381,5 +258,138 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionBoundaryContractTest do
         assert [%{type: :image, image: %{format: :png}}] = group.boxes
       end
     )
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CompositionBoundaryContractGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{ResourceContext}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    FramesetValidator,
+    HtmlValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "frameset color and edge inheritance rejects malformed callers before layout" do
+    for {attributes, inherited} <- [{:invalid, nil}, {%{}, %{border_color: :invalid}}] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               FramesetValidator.prepare_color_hints(attributes, inherited)
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.message =~ "border-color"
+    end
+
+    assert {:ok, plan} = FramesetValidator.prepare(%{"rows" => "*", "cols" => "*"})
+
+    for children <- [
+          [
+            %{
+              tag: "frameset",
+              style: %{_frameset: %{outer_edges: {true, :invalid, false, false}}}
+            }
+          ],
+          [%{tag: "div", style: %{}}]
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               FramesetValidator.prepare_children(plan, children)
+
+      assert diagnostic.message =~ "edges" or diagnostic.message =~ "edge flags"
+    end
+
+    Limits.install(%{Limits.effective() | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FramesetValidator.prepare_children(plan, [%{}, %{}])
+
+    assert diagnostic.message =~ "max_entries"
+  end
+
+  test "furniture layout budgets retain the library diagnostic contract" do
+    Limits.install(%{Limits.effective() | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.PageFurniture.decorate(
+               [%{size: {200, 100}, boxes: []}],
+               %{
+                 type: :layout,
+                 page_size: {200, 100},
+                 margin: 20,
+                 boxes: [],
+                 content_width: 160,
+                 content_height: 60
+               },
+               page_furniture: [header: "<p>One<br>Two</p>"]
+             )
+
+    assert diagnostic.stage == :html
+    assert diagnostic.message =~ "max_entries"
+  end
+
+  test "frame source and scene work limits diagnose before child paint" do
+    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FramesetValidator.prepare_frame(%{"marginwidth" => "12"}, nil)
+
+    assert diagnostic.source == "12"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             FramesetValidator.prepare_frame(%{"frameborder" => "12"}, nil)
+
+    assert diagnostic.source == "12"
+    assert diagnostic.message =~ "max_numeric_token_bytes"
+    Limits.install(Limits.defaults())
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      assert {:ok, dom} =
+               NativeElixirPdfUtilities.HtmlToPdf.HtmlParser.parse_document_detailed(
+                 "<frameset rows='*,*'><frame src='about:blank'><frame src='about:blank'></frameset>"
+               )
+
+      assert {:ok, tree} =
+               NativeElixirPdfUtilities.HtmlToPdf.Style.compute_detailed(
+                 dom,
+                 [],
+                 context.image_budget
+               )
+
+      [node] = tree.children
+
+      before =
+        Map.get(
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot(),
+          :max_work,
+          0
+        )
+
+      assert {:ok, _grid} = FramesetValidator.prepare_layout(node.style._frameset, 120, 90)
+
+      allocated =
+        Map.get(
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot(),
+          :max_work,
+          0
+        )
+
+      measured_allocation = allocated - before
+
+      Limits.install(%{
+        Limits.effective()
+        | max_work: allocated + measured_allocation + 1
+      })
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FramesetValidator.prepare_scene(node, 120, 90, 1)
+
+      assert diagnostic.message =~ "max_work"
+    end)
   end
 end

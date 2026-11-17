@@ -1,14 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, Reader}
   alias NativeElixirPdfUtilities.Validators.{FormAppearanceValidator, FormValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "ordinary editor font and style survive the existing portable template wire" do
     bytes = File.read!("priv/fonts/dejavu/DejaVuSansMono.ttf")
@@ -186,18 +180,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterTest do
     assert {:ok, nil} = FormAppearanceValidator.prepare(context.document, nil)
   end
 
-  test "embedded appearance font resource denial remains a public diagnostic" do
-    assert {:ok, pdf} =
-             HtmlToPdf.render("<input name='editor' value='Initial'>",
-               system_font_discovery: false
-             )
-
-    assert :ok = Limits.install(%{Limits.effective() | max_input_bytes: 1})
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fields(pdf)
-    assert diagnostic.operation == :fields
-    assert diagnostic.message =~ "max_input_bytes"
-  end
-
   test "legacy custom effect PDFs remain inspectable but are never executed" do
     pdf = File.read!("test/fixtures/pdf_forms/legacy-svg-radio-appearances.pdf")
     assert {:ok, [%{name: "r", type: :radio, value: "a", widgets: widgets}]} = Forms.fields(pdf)
@@ -209,6 +191,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterTest do
       assert diagnostic.message =~ "custom SVG appearance programs"
       assert diagnostic.operation in [:fill, :flatten]
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceConverterGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.Pdf.{Reader}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "embedded appearance font resource denial remains a public diagnostic" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<input name='editor' value='Initial'>",
+               system_font_discovery: false
+             )
+
+    assert :ok = Limits.install(%{Limits.effective() | max_input_bytes: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Forms.fields(pdf)
+    assert diagnostic.operation == :fields
+    assert diagnostic.message =~ "max_input_bytes"
   end
 
   test "shared source fonts keep one physical resource and admit exact field object capacity" do

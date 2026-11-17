@@ -1,21 +1,17 @@
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
-  alias NativeElixirPdfUtilities.{Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
   alias NativeElixirPdfUtilities.TestSupport.{Paths, FontFixture}
 
   alias NativeElixirPdfUtilities.Validators.{
     ColrFontValidator,
-    ColrPaintValidator,
-    SvgFontValidator
+    ColrPaintValidator
   }
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     data = File.read!(FontCorpus.path("selected-colr.ttf"))
     {:ok, [font]} = Font.load_configured_faces([%{family: "Color", data: data}])
     {:ok, font: font}
@@ -53,6 +49,142 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
       assert {:error, {:invalid_font, %{stage: :font, operation: :prepare_color_font}}} =
                ColrFontValidator.prepare(changed, font.cmap[?H], {0, 0, 0, 1})
     end
+  end
+
+  test "COLR base and clip ranges, missing deltas and no-variation sentinels preserve table ownership" do
+    data = File.read!(FontCorpus.path("selected-colr-paints.ttf"))
+    manifest = File.read!(Paths.fixture("fonts/colr-paints.json")) |> :json.decode()
+    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Paints", data: data}])
+    {_, tables} = FontFixture.tables(font.data)
+    colr = tables["COLR"]
+    <<base::32>> = binary_part(colr, 14, 4)
+    <<clips::32>> = binary_part(colr, 22, 4)
+
+    for changed <- [
+          FontFixture.replace(colr, base + 4, <<65535::16>>),
+          FontFixture.replace(colr, clips + 5, <<65535::16>>)
+        ] do
+      assert {:error, {:invalid_font, _}} =
+               ColrFontValidator.prepare(
+                 %{font | data: FontFixture.rebuild(font.data, %{"COLR" => changed})},
+                 2,
+                 {0, 0, 0, 1}
+               )
+    end
+
+    id = manifest["glyphs"]["paint3"]
+    <<count::32>> = binary_part(colr, base, 4)
+
+    records =
+      for <<glyph::16, relative::32 <- binary_part(colr, base + 4, count * 6)>>,
+        do: {glyph, base + relative}
+
+    paint = elem(Enum.find(records, &(elem(&1, 0) == id)), 1)
+
+    <<mapping::32>> = binary_part(colr, 26, 4)
+    invalid_map = FontFixture.replace(colr, mapping + 4, <<255>>)
+
+    assert {:error, {:invalid_font, _}} =
+             ColrFontValidator.prepare(
+               %{font | data: FontFixture.rebuild(font.data, %{"COLR" => invalid_map})},
+               id,
+               {0, 0, 0, 1}
+             )
+
+    for {index, expected} <- [{0xFFFFFFFF, :ok}, {0xFFFF0000, :error}] do
+      changed = FontFixture.replace(colr, paint + 5, <<index::32>>)
+
+      result =
+        ColrFontValidator.prepare(
+          %{font | data: FontFixture.rebuild(font.data, %{"COLR" => changed})},
+          id,
+          {0, 0, 0, 1}
+        )
+
+      assert elem(result, 0) == expected
+    end
+  end
+
+  test "color outline and selected metrics failures retain the admitted writer diagnostics", %{
+    font: font
+  } do
+    alias NativeElixirPdfUtilities.Validators.{ColorFontValidator, TrueTypeSubsetValidator}
+    assert {:error, {:invalid_document, _}} = TrueTypeSubsetValidator.prepare_outlines(nil)
+    {_, tables} = FontFixture.tables(font.data)
+    bytes = <<1::16, 0::32, 100::16, 100::16, 0::16, 0::16, 128, 0>>
+
+    loca =
+      <<0::32, 0::32, 0::32, byte_size(bytes)::32, byte_size(bytes)::32, byte_size(bytes)::32,
+        byte_size(bytes)::32>>
+
+    changed = %{
+      font
+      | data:
+          FontFixture.rebuild(font.data, %{
+            "glyf" => bytes,
+            "loca" => loca,
+            "head" => FontFixture.replace(tables["head"], 50, <<1::16>>)
+          })
+    }
+
+    assert {:error, {:invalid_font, _}} = TrueTypeSubsetValidator.prepare_outlines(changed.data)
+
+    assert {:error, {:invalid_font, _}} =
+             ColrPaintValidator.prepare(changed, %{
+               graph: {:glyph, font.cmap[?H], {:solid, {1, 0, 0, 1}}},
+               clip: nil
+             })
+
+    assert {:ok, %{pages: [%{boxes: [%{type: :rect}]}]}} =
+             ColorFontValidator.prepare(
+               %{color_fonts?: true, pages: [%{size: {80, 80}, boxes: [%{type: :rect}]}]},
+               []
+             )
+
+    for {source, changes} <- [
+          {"selected-colr.ttf", %{"COLR" => <<>>}},
+          {"selected-svg.ttf", %{"SVG " => <<>>}},
+          {"selected-cbdt.ttf", %{"CBLC" => <<>>}}
+        ] do
+      data = File.read!(FontCorpus.path(source))
+      assert {:ok, [font]} = Font.load_configured_faces([%{family: "Broken", data: data}])
+      font = %{font | data: FontFixture.rebuild(data, changes)}
+
+      box = %{
+        type: :text,
+        text: "H",
+        x: 10,
+        y: 20,
+        font: Font.pdf_name(font),
+        font_face: font,
+        font_size: 12,
+        color: {0, 0, 0}
+      }
+
+      assert {:error, {:invalid_font, _}} = PdfWriter.render([%{size: {80, 80}, boxes: [box]}])
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
+  alias NativeElixirPdfUtilities.{Limits, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
+  alias NativeElixirPdfUtilities.TestSupport.{FontFixture}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    ColrFontValidator,
+    ColrPaintValidator,
+    SvgFontValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    data = File.read!(FontCorpus.path("selected-colr.ttf"))
+    {:ok, [font]} = Font.load_configured_faces([%{family: "Color", data: data}])
+    {:ok, font: font}
   end
 
   test "COLR forward offsets, layers, color lines and singular transforms are validated before painting",
@@ -261,120 +393,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureTest do
 
       assert diagnostic.message =~ Atom.to_string(key)
       assert is_atom(diagnostic.stage) and is_binary(diagnostic.message)
-    end
-  end
-
-  test "COLR base and clip ranges, missing deltas and no-variation sentinels preserve table ownership" do
-    data = File.read!(FontCorpus.path("selected-colr-paints.ttf"))
-    manifest = File.read!(Paths.fixture("fonts/colr-paints.json")) |> :json.decode()
-    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Paints", data: data}])
-    {_, tables} = FontFixture.tables(font.data)
-    colr = tables["COLR"]
-    <<base::32>> = binary_part(colr, 14, 4)
-    <<clips::32>> = binary_part(colr, 22, 4)
-
-    for changed <- [
-          FontFixture.replace(colr, base + 4, <<65535::16>>),
-          FontFixture.replace(colr, clips + 5, <<65535::16>>)
-        ] do
-      assert {:error, {:invalid_font, _}} =
-               ColrFontValidator.prepare(
-                 %{font | data: FontFixture.rebuild(font.data, %{"COLR" => changed})},
-                 2,
-                 {0, 0, 0, 1}
-               )
-    end
-
-    id = manifest["glyphs"]["paint3"]
-    <<count::32>> = binary_part(colr, base, 4)
-
-    records =
-      for <<glyph::16, relative::32 <- binary_part(colr, base + 4, count * 6)>>,
-        do: {glyph, base + relative}
-
-    paint = elem(Enum.find(records, &(elem(&1, 0) == id)), 1)
-
-    <<mapping::32>> = binary_part(colr, 26, 4)
-    invalid_map = FontFixture.replace(colr, mapping + 4, <<255>>)
-
-    assert {:error, {:invalid_font, _}} =
-             ColrFontValidator.prepare(
-               %{font | data: FontFixture.rebuild(font.data, %{"COLR" => invalid_map})},
-               id,
-               {0, 0, 0, 1}
-             )
-
-    for {index, expected} <- [{0xFFFFFFFF, :ok}, {0xFFFF0000, :error}] do
-      changed = FontFixture.replace(colr, paint + 5, <<index::32>>)
-
-      result =
-        ColrFontValidator.prepare(
-          %{font | data: FontFixture.rebuild(font.data, %{"COLR" => changed})},
-          id,
-          {0, 0, 0, 1}
-        )
-
-      assert elem(result, 0) == expected
-    end
-  end
-
-  test "color outline and selected metrics failures retain the admitted writer diagnostics", %{
-    font: font
-  } do
-    alias NativeElixirPdfUtilities.Validators.{ColorFontValidator, TrueTypeSubsetValidator}
-    assert {:error, {:invalid_document, _}} = TrueTypeSubsetValidator.prepare_outlines(nil)
-    {_, tables} = FontFixture.tables(font.data)
-    bytes = <<1::16, 0::32, 100::16, 100::16, 0::16, 0::16, 128, 0>>
-
-    loca =
-      <<0::32, 0::32, 0::32, byte_size(bytes)::32, byte_size(bytes)::32, byte_size(bytes)::32,
-        byte_size(bytes)::32>>
-
-    changed = %{
-      font
-      | data:
-          FontFixture.rebuild(font.data, %{
-            "glyf" => bytes,
-            "loca" => loca,
-            "head" => FontFixture.replace(tables["head"], 50, <<1::16>>)
-          })
-    }
-
-    assert {:error, {:invalid_font, _}} = TrueTypeSubsetValidator.prepare_outlines(changed.data)
-
-    assert {:error, {:invalid_font, _}} =
-             ColrPaintValidator.prepare(changed, %{
-               graph: {:glyph, font.cmap[?H], {:solid, {1, 0, 0, 1}}},
-               clip: nil
-             })
-
-    assert {:ok, %{pages: [%{boxes: [%{type: :rect}]}]}} =
-             ColorFontValidator.prepare(
-               %{color_fonts?: true, pages: [%{size: {80, 80}, boxes: [%{type: :rect}]}]},
-               []
-             )
-
-    for {source, changes} <- [
-          {"selected-colr.ttf", %{"COLR" => <<>>}},
-          {"selected-svg.ttf", %{"SVG " => <<>>}},
-          {"selected-cbdt.ttf", %{"CBLC" => <<>>}}
-        ] do
-      data = File.read!(FontCorpus.path(source))
-      assert {:ok, [font]} = Font.load_configured_faces([%{family: "Broken", data: data}])
-      font = %{font | data: FontFixture.rebuild(data, changes)}
-
-      box = %{
-        type: :text,
-        text: "H",
-        x: 10,
-        y: 20,
-        font: Font.pdf_name(font),
-        font_face: font,
-        font_size: 12,
-        color: {0, 0, 0}
-      }
-
-      assert {:error, {:invalid_font, _}} = PdfWriter.render([%{size: {80, 80}, boxes: [box]}])
     end
   end
 

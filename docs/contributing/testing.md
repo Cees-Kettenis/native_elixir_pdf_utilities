@@ -85,6 +85,14 @@ diagnostics, with terminal colours ignored. Project and third-party warnings bot
 count. Use source paths and the dependency or PLT-build context in the stage log
 to identify their origin; a bare filename alone does not establish ownership.
 
+The local coordinator retains the current matrix run and the four newest previous
+run directories in `.quality/logs/`, including failed or interrupted attempts.
+Older runs are removed when a new run starts, after acquiring the matrix lock.
+Copy evidence elsewhere before starting another run if it needs longer retention.
+Runtime dependency/build/PLT caches, the bounded browser-reference cache and other
+local records outside those run directories are preserved. Cleanup ignores
+symlinks and directories whose names do not match the coordinator's run format.
+
 ## Publishing documentation
 
 Use the latest supported runtime when preparing a package:
@@ -203,11 +211,72 @@ comparisons retain PDFs, raster pages, readiness logs and font information.
 
 See [fixture scripts](scripts.md) for regeneration; inspect affected regions afterward.
 
-Tests that install application limits or change process-wide environment must
-run with `async: false`. Synchronize worker lifecycle assertions with messages
+Use `async: true` for independent ordinary suites. Cases in a module still run
+one at a time; other async modules can run alongside it. Keep mixed features'
+global-state cases in a separate serial module, and keep shared fixture helpers
+with their dependent cases rather than duplicating them to enable concurrency.
+
+Tests that install application limits, change process-wide environment or compare
+shared process/cache/temporary-directory inventories must run with `async: false`.
+Synchronize worker lifecycle assertions with messages
 before triggering cancellation; a longer timeout cannot fix a monitor race.
 For deadline behavior, advance an injected clock after the tested operation
 starts so browser startup speed does not determine the assertion.
+
+### Persistent Chromium references
+
+The local matrix reuses compressed browser references in
+`.quality/browser-reference-cache/elixir-<minor>/`. Each runtime has a fixed
+64 MiB retention budget. Startup removes interrupted writes; stores evict the
+least recently used entries before writing. Oversized entries are not retained.
+Use a separate directory for simultaneous independent suite processes.
+Removing this directory is safe. Set `BROWSER_PARITY_CACHE=off` for fresh captures,
+or set it to an ignored absolute directory for a separate experiment.
+
+Reuse requires `BROWSER_PARITY_TOOLCHAIN` to identify the immutable container
+image. The matrix supplies its recorded image ID. Host commands without that
+identity use fresh captures. CI reads the job container's immutable image ID
+from Docker and restores the same bounded cache in each parity job. Archives
+are keyed by runtime, image ID and commit, with earlier commits in the same
+toolchain available as a fallback. A same-commit rerun restores the exact archive;
+the entry checks below still decide whether each reference can be reused.
+
+Keys include browser HTML, source bytes, physical fonts, geometry, DPI, browser
+and rasterizer versions, locale, and a fingerprint of the fixture trees, bundled
+fonts, generated font corpus, installed `/usr/share/fonts` and
+`/usr/local/share/fonts` trees, and browser helpers. These trees are immutable
+within a suite; a new suite fingerprints them again, including added or removed
+assets. Native renderer source changes alone do not invalidate references.
+
+Only static local fixture dependencies covered by that fingerprint are eligible.
+The authored source remains part of the identity, while resource eligibility is
+checked against the final transformed browser HTML. Known local placeholder
+substitutions can therefore reuse references. Image-map navigation links are
+treated like anchor links. Base64 SVG images are checked recursively for resource
+dependencies; malformed encodings, scripts, animation and external XML declarations
+remain ineligible.
+Before storing a fresh capture, the helper also checks every observed Chromium
+request against that fingerprint and its generated capture inputs.
+Network resources, ambiguous resource syntax, external inputs and alternate
+browser executables use fresh captures. Fontconfig reuse is limited to the
+helper's exact generated declaration of fingerprinted local font directories;
+other configurations use fresh captures. Explicit
+`reference_cache: false` also disables persistence for a comparison. Browser
+lifecycle and readiness tests continue exercising fresh processes directly.
+Missing, damaged or incompatible entries regenerate the reference. Every native
+render, rasterization, comparison and scenario assertion still runs; pass/fail
+results are never cached. Prepared references retain their existing identity
+and artifact integrity checks.
+
+
+Docker matrix and CI containers put browser profiles in a dedicated 128 MiB tmpfs
+at `/browser-profiles`. This is a fixed test-infrastructure storage budget, shared
+by the fresh captures in that container. Captures still wait for real Chromium
+exit before deleting their profiles; container removal releases the tmpfs. Logs,
+PDFs and rasters remain in their normal artifact directories. Host probes use the
+OS temporary directory unless `CHROMIUM_PROFILE_ROOT` names another writable
+profile directory.
+
 
 ## Performance measurements
 

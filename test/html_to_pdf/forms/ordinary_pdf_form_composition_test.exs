@@ -1,13 +1,11 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.OrdinaryPdfFormCompositionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, FormAppearanceComposition, PdfWriter}
   alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, Reader}
   alias NativeElixirPdfUtilities.Validators.{PdfFormValidator, WriterValidator}
   alias NativeElixirPdfUtilities.{Limits, Text}
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     data = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")
     {:ok, [face]} = Font.load_configured_faces([%{family: "SourceFace", data: data}])
 

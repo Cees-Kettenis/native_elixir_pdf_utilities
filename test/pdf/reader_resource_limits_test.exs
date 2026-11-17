@@ -1,50 +1,10 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
-  alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.PdfValidator
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
-
-  test "token accounting shares byte and token budgets with individual charges" do
-    Limits.install(%{Limits.effective() | max_work: 5, max_entries: 2})
-
-    assert :ok = PdfValidator.charge_reader_token(100)
-
-    assert :ok =
-             PdfValidator.with_reader_budget(fn ->
-               :ok = PdfValidator.charge_reader_token(2)
-               :ok = PdfValidator.charge_reader_budget(:max_work, 1)
-               PdfValidator.charge_reader_token(2)
-             end)
-
-    for {bytes, key} <- [{3, :max_work}, {0, :max_entries}] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               PdfValidator.with_reader_budget(fn ->
-                 :ok = PdfValidator.charge_reader_token(2)
-                 :ok = PdfValidator.charge_reader_token(1)
-                 PdfValidator.charge_reader_token(bytes)
-               end)
-
-      assert diagnostic.stage == :limits
-      assert diagnostic.message =~ Atom.to_string(key)
-    end
-
-    Limits.install(%{Limits.effective() | max_entries: 1})
-
-    assert [{:int, 1}] =
-             PdfValidator.with_reader_budget(fn ->
-               Tokenizer.tokenize_all(Tokenizer.new("1    "))
-             end)
-  end
 
   test "resource object bodies retain streams, references and complete syntax" do
     bytes = <<0, 255, "endstream and endobj">>
@@ -103,6 +63,53 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
       assert {:error, {:invalid_pdf_input, %{stage: :object}}} =
                PdfValidator.validate_object_body(value, stream, [])
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
+  end
+
+  test "token accounting shares byte and token budgets with individual charges" do
+    Limits.install(%{Limits.effective() | max_work: 5, max_entries: 2})
+
+    assert :ok = PdfValidator.charge_reader_token(100)
+
+    assert :ok =
+             PdfValidator.with_reader_budget(fn ->
+               :ok = PdfValidator.charge_reader_token(2)
+               :ok = PdfValidator.charge_reader_budget(:max_work, 1)
+               PdfValidator.charge_reader_token(2)
+             end)
+
+    for {bytes, key} <- [{3, :max_work}, {0, :max_entries}] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               PdfValidator.with_reader_budget(fn ->
+                 :ok = PdfValidator.charge_reader_token(2)
+                 :ok = PdfValidator.charge_reader_token(1)
+                 PdfValidator.charge_reader_token(bytes)
+               end)
+
+      assert diagnostic.stage == :limits
+      assert diagnostic.message =~ Atom.to_string(key)
+    end
+
+    Limits.install(%{Limits.effective() | max_entries: 1})
+
+    assert [{:int, 1}] =
+             PdfValidator.with_reader_budget(fn ->
+               Tokenizer.tokenize_all(Tokenizer.new("1    "))
+             end)
   end
 
   test "resource object parsing shares byte, object and nested reader budgets" do
@@ -396,15 +403,6 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     assert diagnostic.message =~ "max_work"
   end
 
-  defp assert_limit(result) do
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = result
-    assert diagnostic.stage == :limits
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.operation in [:read, :tokenize_all]
-    assert diagnostic.module == Reader
-    assert is_binary(diagnostic.message)
-  end
-
   test "indirect stream lengths share their reference allowance and retain limit diagnostics" do
     limits = Limits.effective()
     stream = "<< /Length 4 0 R >>\nstream\nx\nendstream"
@@ -417,6 +415,15 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderResourceLimitsTest do
     assert diagnostic.message =~ "max_work"
     Limits.install(limits)
     assert {:ok, _} = Reader.read(pdf)
+  end
+
+  defp assert_limit(result) do
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+    assert diagnostic.stage == :limits
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.operation in [:read, :tokenize_all]
+    assert diagnostic.module == Reader
+    assert is_binary(diagnostic.message)
   end
 
   defp classic_pdf(value, extra_objects \\ []) do

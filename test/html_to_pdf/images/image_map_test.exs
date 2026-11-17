@@ -3,7 +3,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
@@ -19,80 +19,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ImageMapValidator, WriterValidator}
 
   @image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
-
-  test "polygon containment visits participate in exact cumulative geometry admission" do
-    alias NativeElixirPdfUtilities.Limits
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    area = %{identity: make_ref(), shape: :default, destination: {:uri, "https://example.com/"}}
-    model = %{identity: make_ref(), areas: [area]}
-    viewport = %{x: 0.0, y: 0.0, width: 30.0, height: 30.0}
-
-    # Four edges need six pair checks, eight level-edge visits and one
-    # four-edge containment scan. The previous accounting omitted that scan.
-    Limits.install(%{original | max_work: 18})
-
-    assert [_] =
-             HtmlValidator.with_render_budget(fn ->
-               ImageMapGeometry.regions(model, viewport, viewport)
-             end)
-
-    Limits.install(%{original | max_work: 17})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               ImageMapGeometry.regions(model, viewport, viewport)
-             end)
-
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
-
-    Limits.install(%{original | max_work: 35})
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             HtmlValidator.with_render_budget(fn ->
-               ImageMapGeometry.regions(model, viewport, viewport)
-               ImageMapGeometry.regions(model, viewport, viewport)
-             end)
-  end
-
-  test "a bounded concave contour exhausts containment work beyond its edge-pair allowance" do
-    alias NativeElixirPdfUtilities.Limits
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-
-    points =
-      for index <- 0..63 do
-        angle = index * 2 * :math.pi() / 64
-        radius = if rem(index, 2) == 0, do: 45, else: 18
-        {50 + radius * :math.cos(angle), 50 + radius * :math.sin(angle)}
-      end
-
-    area = %{
-      identity: make_ref(),
-      shape: {:poly, points},
-      destination: {:uri, "https://example.com/concave"}
-    }
-
-    model = %{identity: make_ref(), areas: [area]}
-    viewport = %{x: 0.0, y: 0.0, width: 75.0, height: 75.0}
-    Limits.install(%{original | max_work: 5_000})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               ImageMapGeometry.regions(model, viewport, viewport)
-             end)
-
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
-
-    Limits.install(%{original | max_work: 50_000})
-
-    assert [region] =
-             HtmlValidator.with_render_budget(fn ->
-               ImageMapGeometry.regions(model, viewport, viewport)
-             end)
-
-    assert length(region.link_quads) > 64
-  end
 
   test "circle approximation keeps subnormal radii and the fixed sagitta precision bounded" do
     for radius <- [5.0e-324, 1.0e-320, 1.0e-200, 0.015625, 0.015626] do
@@ -125,34 +51,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
       assert pdf =~ "/Subtype /Image"
       assert pdf =~ "https://example.com/default"
     end
-  end
-
-  test "circle plans retain work-limit diagnostics even beyond the old cancellation range" do
-    alias NativeElixirPdfUtilities.Limits
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_work, 16))
-    assert ImageMapValidator.circle_segments(1.0e-320) == 4
-    Limits.install(Map.put(original, :max_work, 15))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               ImageMapValidator.circle_segments(1.0e-320)
-             end)
-
-    assert diagnostic.stage == :layout
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_work"
-
-    Limits.install(Map.put(original, :max_numeric_magnitude, 1_000_000_000_000_000_000))
-
-    html =
-      "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='5,5,1e18' href='https://example.com/large'></map>"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :layout
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_work"
   end
 
   test "map association, permissive shapes and first-area masks use authored nodes" do
@@ -323,42 +221,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
     assert pdf =~ "/Subtype /Link" and pdf =~ "/XYZ"
   end
 
-  test "image-map resource ceilings and malformed PDF quadrilaterals use shared diagnostics" do
-    alias NativeElixirPdfUtilities.Limits
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_entries, 3))
-
-    html =
-      "<img src='#{@image}' usemap='#m'><map name=m><area coords='0,0,10,10' href='https://example.com'></map>"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
-    Limits.install(Map.put(original, :max_work, 1))
-
-    html =
-      "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='8,4,3' href='https://example.com'></map>"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
-    Limits.install(original)
-
-    malformed = %{
-      type: :link_region,
-      x: 0,
-      y: 0,
-      width: 10,
-      height: 10,
-      link_url: "https://example.com",
-      link_quads: [[{0, 0}, {10, 10}, {0, 10}, {10, 0}]]
-    }
-
-    assert {:error, {:invalid_pdf_input, diagnostic}} =
-             PdfWriter.render([%{number: 1, size: {100, 100}, boxes: [malformed]}])
-
-    assert diagnostic.stage == :pdf and diagnostic.message =~ "link_region"
-  end
-
   test "lazy maps use only the selected candidate and keep source coordinates after final flex shrink" do
     png =
       NativeElixirPdfUtilities.TestSupport.PngFixture.build(64, 32, 2, 8, 0, fn _, _ ->
@@ -399,5 +261,157 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapTest do
 
   defp quad_covers?(quad, x, y) do
     ImageMapValidator.covers?({:poly, quad}, x, y, 1000, 1000)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ImageMapGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    PdfWriter,
+    ImageMapGeometry
+  }
+
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, ImageMapValidator}
+
+  @image "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAICAIAAAB/FOjAAAAAGElEQVR4nGM4oSGHFYkELMCKGEY10EIDAJ7zhIFJAvtOAAAAAElFTkSuQmCC"
+
+  test "polygon containment visits participate in exact cumulative geometry admission" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    area = %{identity: make_ref(), shape: :default, destination: {:uri, "https://example.com/"}}
+    model = %{identity: make_ref(), areas: [area]}
+    viewport = %{x: 0.0, y: 0.0, width: 30.0, height: 30.0}
+
+    # Four edges need six pair checks, eight level-edge visits and one
+    # four-edge containment scan. The previous accounting omitted that scan.
+    Limits.install(%{original | max_work: 18})
+
+    assert [_] =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    Limits.install(%{original | max_work: 17})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
+
+    Limits.install(%{original | max_work: 35})
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+  end
+
+  test "a bounded concave contour exhausts containment work beyond its edge-pair allowance" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    points =
+      for index <- 0..63 do
+        angle = index * 2 * :math.pi() / 64
+        radius = if rem(index, 2) == 0, do: 45, else: 18
+        {50 + radius * :math.cos(angle), 50 + radius * :math.sin(angle)}
+      end
+
+    area = %{
+      identity: make_ref(),
+      shape: {:poly, points},
+      destination: {:uri, "https://example.com/concave"}
+    }
+
+    model = %{identity: make_ref(), areas: [area]}
+    viewport = %{x: 0.0, y: 0.0, width: 75.0, height: 75.0}
+    Limits.install(%{original | max_work: 5_000})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
+
+    Limits.install(%{original | max_work: 50_000})
+
+    assert [region] =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapGeometry.regions(model, viewport, viewport)
+             end)
+
+    assert length(region.link_quads) > 64
+  end
+
+  test "circle plans retain work-limit diagnostics even beyond the old cancellation range" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_work, 16))
+    assert ImageMapValidator.circle_segments(1.0e-320) == 4
+    Limits.install(Map.put(original, :max_work, 15))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               ImageMapValidator.circle_segments(1.0e-320)
+             end)
+
+    assert diagnostic.stage == :layout
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_work"
+
+    Limits.install(Map.put(original, :max_numeric_magnitude, 1_000_000_000_000_000_000))
+
+    html =
+      "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='5,5,1e18' href='https://example.com/large'></map>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :layout
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_work"
+  end
+
+  test "image-map resource ceilings and malformed PDF quadrilaterals use shared diagnostics" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_entries, 3))
+
+    html =
+      "<img src='#{@image}' usemap='#m'><map name=m><area coords='0,0,10,10' href='https://example.com'></map>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
+    Limits.install(Map.put(original, :max_work, 1))
+
+    html =
+      "<img src='#{@image}' usemap='#m'><map name=m><area shape=circle coords='8,4,3' href='https://example.com'></map>"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+    Limits.install(original)
+
+    malformed = %{
+      type: :link_region,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+      link_url: "https://example.com",
+      link_quads: [[{0, 0}, {10, 10}, {0, 10}, {10, 0}]]
+    }
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             PdfWriter.render([%{number: 1, size: {100, 100}, boxes: [malformed]}])
+
+    assert diagnostic.stage == :pdf and diagnostic.message =~ "link_region"
   end
 end

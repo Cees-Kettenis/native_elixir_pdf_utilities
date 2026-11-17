@@ -1,189 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{Hyphenator, RenderCache}
-  alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, HyphenationValidator}
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
-
-  test "pattern traversal preserves exhaustion after the word has been admitted" do
-    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
-
-    assert {:ok, dictionaries} =
-             HyphenationValidator.prepare_dictionaries(%{
-               "en" => %{patterns: ["a1b"], provenance: %{source: "Authored pattern"}}
-             })
-
-    assert {{:ok, _}, admitted} =
-             ResourceBudget.measure(:max_work, fn ->
-               HyphenationValidator.prepare_word("abcd", "en")
-             end)
-
-    Limits.install(Map.put(Limits.effective(), :max_work, admitted + 1))
-
-    assert :checked =
-             HtmlValidator.with_render_budget(fn ->
-               assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                        Hyphenator.opportunities("abcd", dictionaries, "en")
-
-               assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
-               :checked
-             end)
-  end
-
-  test "a matching dictionary with no word opportunity leaves source runs unchanged" do
-    assert {:ok, dictionaries} =
-             HyphenationValidator.prepare_dictionaries(%{
-               "en" => %{
-                 exceptions: ["hy-phen-ation"],
-                 provenance: %{source: "Authored exception"}
-               }
-             })
-
-    run = %{
-      text: "plain",
-      style: %{hyphens: :auto, _text_language: "en", _hyphenation_dictionaries: dictionaries}
-    }
-
-    assert {:ok, [^run]} = Hyphenator.prepare_runs([run])
-    Limits.install(Map.put(Limits.effective(), :max_work, 0))
-
-    assert :checked =
-             HtmlValidator.with_render_budget(fn ->
-               assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                        Hyphenator.opportunities("plain", dictionaries, "en")
-
-               assert diagnostic.message =~ "max_work"
-               :checked
-             end)
-  end
-
-  test "hyphenation zones preserve used font-unit resolution failures" do
-    alias NativeElixirPdfUtilities.Validators.{CssHyphenationValidator, CssLengthValidator}
-    assert {:ok, zone} = CssLengthValidator.prepare("calc(100 * 1em)", :margin)
-    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 1000))
-
-    line = %{
-      point: {make_ref(), 2},
-      natural_width: 10,
-      style: %{font_size: 12, hyphenate_limit_zone: zone}
-    }
-
-    assert {:render_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}} =
-             catch_throw(CssHyphenationValidator.rejected_breaks([line, nil], 200))
-
-    assert diagnostic.message =~ "max_numeric_magnitude"
-  end
-
-  test "automatic and unchanged source groups retain owners through generated and manual breaks" do
-    alias NativeElixirPdfUtilities.Validators.CssHyphenationValidator
-
-    assert {:ok, dictionaries} =
-             HyphenationValidator.prepare_dictionaries(%{
-               "en" => %{
-                 exceptions: ["hy-phen-ation"],
-                 provenance: %{source: "Authored exception"}
-               }
-             })
-
-    style = %{hyphens: :auto, _text_language: "en", _hyphenation_dictionaries: dictionaries}
-
-    source =
-      Enum.map(
-        String.codepoints("hyphenation"),
-        &%{displayed: &1, fragments: [%{owner: :word, text: &1}]}
-      )
-
-    runs = [
-      %{text: "hyphenation", style: style, source_glyph_characters: source},
-      %{text: " unchanged ", style: %{hyphens: :manual}},
-      %{text: "hy\u00ADphenation", style: style},
-      %{text: "plain", style: style},
-      %{text: "unknown", style: Map.put(style, :_text_language, "de")}
-    ]
-
-    assert {:ok, prepared} = Hyphenator.prepare_runs(runs)
-
-    assert Enum.map(prepared, & &1.text) == [
-             "hy\u00ADphen\u00ADation",
-             " unchanged ",
-             "hy\u00ADphenation",
-             "plain",
-             "unknown"
-           ]
-
-    assert Enum.filter(
-             hd(prepared).source_glyph_characters,
-             &(Map.get(hd(&1.fragments ++ [%{}]), :owner) == :word)
-           ) == source
-
-    assert Enum.all?(Enum.at(prepared, 1).hyphenation_characters, &(not &1.generated?))
-    assert Hyphenator.discard_breaks([Enum.at(runs, 1)], MapSet.new()) == [Enum.at(runs, 1)]
-    facts = [%{height: 10, break: %{point: :manual, style: %{hyphenate_limit_last: :none}}}]
-    assert CssHyphenationValidator.rejected_fragmentainer_breaks(facts, 5) == MapSet.new()
-
-    original = Limits.effective()
-
-    for {allowance, stage} <- [{1, :layout}, {byte_size("hyphenation") + 1, :css}] do
-      Limits.install(%{original | max_work: allowance})
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlValidator.with_render_budget(fn -> Hyphenator.prepare_runs([hd(runs)]) end)
-
-      assert diagnostic.stage == stage and diagnostic.message =~ "max_work"
-    end
-  end
-
-  test "typography declarations propagate numeric token limits from the shared value validators" do
-    alias NativeElixirPdfUtilities.Validators.{
-      CssTextShadowValidator,
-      CssTextSpacingValidator,
-      CssInitialLetterValidator
-    }
-
-    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 3))
-
-    for operation <- [
-          fn -> CssTextShadowValidator.prepare(%{}, "text-shadow", "123ch 1pt") end,
-          fn -> CssTextSpacingValidator.prepare(%{}, "text-indent", "123ch") end,
-          fn -> CssInitialLetterValidator.prepare(%{}, "initial-letter", "calc(1234)") end
-        ] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlValidator.with_render_budget(operation)
-
-      assert diagnostic.reason == :resource_limit_exceeded
-      assert is_atom(diagnostic.stage) and diagnostic.message =~ "max_numeric_token_bytes"
-    end
-  end
-
-  test "dictionary validation retains resource failures inside an enclosing render scope" do
-    original = Limits.effective()
-    definition = %{"en" => %{patterns: ["a1b"], provenance: %{source: "Authored"}}}
-    assert {:ok, model} = HyphenationValidator.prepare_dictionaries(definition)
-    Limits.install(Map.put(original, :max_work, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               HyphenationValidator.prepare_dictionaries(definition)
-             end)
-
-    assert diagnostic.message =~ "max_work"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HyphenationValidator.validate_prepared(model)
-
-    assert diagnostic.message =~ "max_work"
-    Limits.install(Map.put(original, :max_entries, 1))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HyphenationValidator.validate_prepared(Map.put(model, "de", model["en"]))
-
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_entries"
-  end
+  alias NativeElixirPdfUtilities.Validators.{HyphenationValidator}
 
   test "Liang maximum weights, odd boundaries and start/end anchors have independently calculated positions" do
     provenance = %{source: "Authored arithmetic patterns", version: "1"}
@@ -306,45 +124,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationTest do
     end
 
     assert {:error, {:invalid_document, _}} = Hyphenator.opportunities("word", %{}, false)
-  end
-
-  test "dictionary allocation, input bytes and matching work use central limits" do
-    valid = %{patterns: ["a1b", "b1c"], provenance: %{source: "Authored"}}
-    original = Limits.effective()
-
-    for {limit, value} <- [
-          {:max_entries, 1},
-          {:max_entries, 1},
-          {:max_input_bytes, 1},
-          {:max_entries, 1},
-          {:max_work, 1}
-        ] do
-      Limits.install(Map.put(original, limit, value))
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HyphenationValidator.prepare_dictionaries(%{"en" => valid, "de" => valid})
-
-      assert diagnostic.message =~ Atom.to_string(limit)
-    end
-
-    Limits.install(original)
-    assert {:ok, dictionaries} = HyphenationValidator.prepare_dictionaries(%{"en" => valid})
-    Limits.install(Map.put(original, :max_work, 4))
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             Hyphenator.opportunities("abcd", dictionaries, "en")
-
-    Limits.install(Map.put(original, :max_entries, 2))
-
-    assert {:error, {:resource_limit_exceeded, _}} =
-             Hyphenator.opportunities("abcd", dictionaries, "en")
-
-    Limits.install(original)
-
-    HtmlValidator.with_render_budget(fn ->
-      assert {:ok, %{breaks: [1, 2]}} =
-               Hyphenator.opportunities("abcd", dictionaries, "en")
-    end)
   end
 
   test "automatic opportunities cross spans, shape taken hyphens and retain original PDF extraction" do
@@ -633,5 +412,232 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationTest do
 
       assert CssHyphenationValidator.forbids_fragment_end?(control, boundary, page) == expected
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Hyphenator}
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, HyphenationValidator}
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
+  end
+
+  test "pattern traversal preserves exhaustion after the word has been admitted" do
+    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+
+    assert {:ok, dictionaries} =
+             HyphenationValidator.prepare_dictionaries(%{
+               "en" => %{patterns: ["a1b"], provenance: %{source: "Authored pattern"}}
+             })
+
+    assert {{:ok, _}, admitted} =
+             ResourceBudget.measure(:max_work, fn ->
+               HyphenationValidator.prepare_word("abcd", "en")
+             end)
+
+    Limits.install(Map.put(Limits.effective(), :max_work, admitted + 1))
+
+    assert :checked =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        Hyphenator.opportunities("abcd", dictionaries, "en")
+
+               assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
+               :checked
+             end)
+  end
+
+  test "a matching dictionary with no word opportunity leaves source runs unchanged" do
+    assert {:ok, dictionaries} =
+             HyphenationValidator.prepare_dictionaries(%{
+               "en" => %{
+                 exceptions: ["hy-phen-ation"],
+                 provenance: %{source: "Authored exception"}
+               }
+             })
+
+    run = %{
+      text: "plain",
+      style: %{hyphens: :auto, _text_language: "en", _hyphenation_dictionaries: dictionaries}
+    }
+
+    assert {:ok, [^run]} = Hyphenator.prepare_runs([run])
+    Limits.install(Map.put(Limits.effective(), :max_work, 0))
+
+    assert :checked =
+             HtmlValidator.with_render_budget(fn ->
+               assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                        Hyphenator.opportunities("plain", dictionaries, "en")
+
+               assert diagnostic.message =~ "max_work"
+               :checked
+             end)
+  end
+
+  test "hyphenation zones preserve used font-unit resolution failures" do
+    alias NativeElixirPdfUtilities.Validators.{CssHyphenationValidator, CssLengthValidator}
+    assert {:ok, zone} = CssLengthValidator.prepare("calc(100 * 1em)", :margin)
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 1000))
+
+    line = %{
+      point: {make_ref(), 2},
+      natural_width: 10,
+      style: %{font_size: 12, hyphenate_limit_zone: zone}
+    }
+
+    assert {:render_resource_limit, {:error, {:resource_limit_exceeded, diagnostic}}} =
+             catch_throw(CssHyphenationValidator.rejected_breaks([line, nil], 200))
+
+    assert diagnostic.message =~ "max_numeric_magnitude"
+  end
+
+  test "automatic and unchanged source groups retain owners through generated and manual breaks" do
+    alias NativeElixirPdfUtilities.Validators.CssHyphenationValidator
+
+    assert {:ok, dictionaries} =
+             HyphenationValidator.prepare_dictionaries(%{
+               "en" => %{
+                 exceptions: ["hy-phen-ation"],
+                 provenance: %{source: "Authored exception"}
+               }
+             })
+
+    style = %{hyphens: :auto, _text_language: "en", _hyphenation_dictionaries: dictionaries}
+
+    source =
+      Enum.map(
+        String.codepoints("hyphenation"),
+        &%{displayed: &1, fragments: [%{owner: :word, text: &1}]}
+      )
+
+    runs = [
+      %{text: "hyphenation", style: style, source_glyph_characters: source},
+      %{text: " unchanged ", style: %{hyphens: :manual}},
+      %{text: "hy\u00ADphenation", style: style},
+      %{text: "plain", style: style},
+      %{text: "unknown", style: Map.put(style, :_text_language, "de")}
+    ]
+
+    assert {:ok, prepared} = Hyphenator.prepare_runs(runs)
+
+    assert Enum.map(prepared, & &1.text) == [
+             "hy\u00ADphen\u00ADation",
+             " unchanged ",
+             "hy\u00ADphenation",
+             "plain",
+             "unknown"
+           ]
+
+    assert Enum.filter(
+             hd(prepared).source_glyph_characters,
+             &(Map.get(hd(&1.fragments ++ [%{}]), :owner) == :word)
+           ) == source
+
+    assert Enum.all?(Enum.at(prepared, 1).hyphenation_characters, &(not &1.generated?))
+    assert Hyphenator.discard_breaks([Enum.at(runs, 1)], MapSet.new()) == [Enum.at(runs, 1)]
+    facts = [%{height: 10, break: %{point: :manual, style: %{hyphenate_limit_last: :none}}}]
+    assert CssHyphenationValidator.rejected_fragmentainer_breaks(facts, 5) == MapSet.new()
+
+    original = Limits.effective()
+
+    for {allowance, stage} <- [{1, :layout}, {byte_size("hyphenation") + 1, :css}] do
+      Limits.install(%{original | max_work: allowance})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlValidator.with_render_budget(fn -> Hyphenator.prepare_runs([hd(runs)]) end)
+
+      assert diagnostic.stage == stage and diagnostic.message =~ "max_work"
+    end
+  end
+
+  test "typography declarations propagate numeric token limits from the shared value validators" do
+    alias NativeElixirPdfUtilities.Validators.{
+      CssTextShadowValidator,
+      CssTextSpacingValidator,
+      CssInitialLetterValidator
+    }
+
+    Limits.install(Map.put(Limits.effective(), :max_numeric_token_bytes, 3))
+
+    for operation <- [
+          fn -> CssTextShadowValidator.prepare(%{}, "text-shadow", "123ch 1pt") end,
+          fn -> CssTextSpacingValidator.prepare(%{}, "text-indent", "123ch") end,
+          fn -> CssInitialLetterValidator.prepare(%{}, "initial-letter", "calc(1234)") end
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlValidator.with_render_budget(operation)
+
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert is_atom(diagnostic.stage) and diagnostic.message =~ "max_numeric_token_bytes"
+    end
+  end
+
+  test "dictionary validation retains resource failures inside an enclosing render scope" do
+    original = Limits.effective()
+    definition = %{"en" => %{patterns: ["a1b"], provenance: %{source: "Authored"}}}
+    assert {:ok, model} = HyphenationValidator.prepare_dictionaries(definition)
+    Limits.install(Map.put(original, :max_work, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HyphenationValidator.prepare_dictionaries(definition)
+             end)
+
+    assert diagnostic.message =~ "max_work"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HyphenationValidator.validate_prepared(model)
+
+    assert diagnostic.message =~ "max_work"
+    Limits.install(Map.put(original, :max_entries, 1))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HyphenationValidator.validate_prepared(Map.put(model, "de", model["en"]))
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_entries"
+  end
+
+  test "dictionary allocation, input bytes and matching work use central limits" do
+    valid = %{patterns: ["a1b", "b1c"], provenance: %{source: "Authored"}}
+    original = Limits.effective()
+
+    for {limit, value} <- [
+          {:max_entries, 1},
+          {:max_entries, 1},
+          {:max_input_bytes, 1},
+          {:max_entries, 1},
+          {:max_work, 1}
+        ] do
+      Limits.install(Map.put(original, limit, value))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HyphenationValidator.prepare_dictionaries(%{"en" => valid, "de" => valid})
+
+      assert diagnostic.message =~ Atom.to_string(limit)
+    end
+
+    Limits.install(original)
+    assert {:ok, dictionaries} = HyphenationValidator.prepare_dictionaries(%{"en" => valid})
+    Limits.install(Map.put(original, :max_work, 4))
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             Hyphenator.opportunities("abcd", dictionaries, "en")
+
+    Limits.install(Map.put(original, :max_entries, 2))
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             Hyphenator.opportunities("abcd", dictionaries, "en")
+
+    Limits.install(original)
+
+    HtmlValidator.with_render_budget(fn ->
+      assert {:ok, %{breaks: [1, 2]}} =
+               Hyphenator.opportunities("abcd", dictionaries, "en")
+    end)
   end
 end

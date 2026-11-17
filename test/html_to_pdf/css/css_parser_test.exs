@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.Validators.CssSelectorValidator
@@ -270,52 +270,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert [selector] = rule.selectors
     assert selector.specificity == {0, 1, 1}
     assert {:ok, [_]} = CssParser.parse("p:only-child, p:only-of-type {color:red}")
-  end
-
-  test "positional selector arguments diagnose invalid grammar and excessive integers" do
-    for expression <- [
-          "",
-          "3 n",
-          "+ 2n",
-          "+ 2",
-          "+ n",
-          "3n + -6",
-          "1.0n",
-          "1e2",
-          "٢n",
-          "n 2",
-          "odd+1",
-          "\u00A02n",
-          "n+1\u00A0"
-        ] do
-      assert {:error, :invalid_css} =
-               CssSelectorValidator.parse("p:nth-child(" <> expression <> ")")
-
-      assert {:ok, []} = CssParser.parse_detailed("p:nth-child(" <> expression <> "){color:red}")
-    end
-
-    for expression <- ["4294967296n", "-4294967296", "n+4294967296"] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               CssParser.parse_detailed("p:nth-of-type(" <> expression <> "){color:red}")
-
-      assert diagnostic.stage == :css
-      assert diagnostic.message =~ "max_numeric_magnitude"
-      assert diagnostic.source == expression
-      assert diagnostic.operation == :parse
-    end
-
-    alias NativeElixirPdfUtilities.Limits
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_numeric_token_bytes: 3})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssParser.parse_detailed("p:nth-last-child(1234){color:red}")
-
-    assert diagnostic.stage == :css
-    assert diagnostic.message =~ "max_numeric_token_bytes"
-    assert diagnostic.source == "1234"
-    assert diagnostic.operation == :parse
   end
 
   test "prepared stylesheets retain page options, font faces and ordered rules" do
@@ -1113,5 +1067,58 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert {:ok, [rule]} = CssParser.parse("input:enabled { color:blue; }")
     assert hd(rule.selectors).specificity == {0, 1, 1}
     assert hd(hd(rule.selectors).parts).pseudo_classes == [:enabled]
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
+  alias NativeElixirPdfUtilities.Validators.CssSelectorValidator
+
+  test "positional selector arguments diagnose invalid grammar and excessive integers" do
+    for expression <- [
+          "",
+          "3 n",
+          "+ 2n",
+          "+ 2",
+          "+ n",
+          "3n + -6",
+          "1.0n",
+          "1e2",
+          "٢n",
+          "n 2",
+          "odd+1",
+          "\u00A02n",
+          "n+1\u00A0"
+        ] do
+      assert {:error, :invalid_css} =
+               CssSelectorValidator.parse("p:nth-child(" <> expression <> ")")
+
+      assert {:ok, []} = CssParser.parse_detailed("p:nth-child(" <> expression <> "){color:red}")
+    end
+
+    for expression <- ["4294967296n", "-4294967296", "n+4294967296"] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               CssParser.parse_detailed("p:nth-of-type(" <> expression <> "){color:red}")
+
+      assert diagnostic.stage == :css
+      assert diagnostic.message =~ "max_numeric_magnitude"
+      assert diagnostic.source == expression
+      assert diagnostic.operation == :parse
+    end
+
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_numeric_token_bytes: 3})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssParser.parse_detailed("p:nth-last-child(1234){color:red}")
+
+    assert diagnostic.stage == :css
+    assert diagnostic.message =~ "max_numeric_token_bytes"
+    assert diagnostic.source == "1234"
+    assert diagnostic.operation == :parse
   end
 end

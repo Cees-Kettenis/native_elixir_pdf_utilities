@@ -1,22 +1,10 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
-
-  defp measured(html, constraints \\ %{}) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-      with {:ok, dom} <- HtmlParser.parse_detailed(html),
-           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, [], context.image_budget) do
-        before = ResourceContext.current()
-        result = Layout.measure_child(node, context, constraints)
-        assert ResourceContext.current() == before
-        result
-      end
-    end)
-  end
 
   test "typographic endpoints retain occupied source fragments independently of relative paint" do
     for offset <- [0, 7] do
@@ -363,40 +351,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
              measured("<span>Text</span>", %{unsupported_glyphs: :invalid})
   end
 
-  test "outline ink validation diagnoses malformed text transport and budgets" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.Font
-    alias NativeElixirPdfUtilities.Validators.FontValidator
-    {:ok, registry} = Font.load_registry(system_font_discovery: false)
-    {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
-    box = %{text: "A", font_face: font, font_size: 12, y: 0.0}
-    assert {:ok, {top, bottom}} = FontValidator.prepare_text_ink_bounds(box)
-    assert top > bottom
-    assert {:ok, nil} = FontValidator.prepare_text_ink_bounds(%{box | text: " "})
-
-    assert {:error, {_, diagnostic}} =
-             FontValidator.prepare_text_ink_bounds(%{box | font_face: %{font | data: <<0>>}})
-
-    assert diagnostic.stage == :font
-
-    for invalid <- [
-          nil,
-          %{},
-          %{box | text: <<255>>},
-          Map.put(box, :glyph_ids, [0]),
-          Map.put(box, :glyph_ids, nil),
-          Map.put(box, :glyph_ids, []),
-          %{box | font_size: -1}
-        ] do
-      assert {:error, {_, diagnostic}} = FontValidator.prepare_text_ink_bounds(invalid)
-      assert diagnostic.stage == :font and diagnostic.operation == :measure_child
-    end
-
-    limits = NativeElixirPdfUtilities.Limits.effective()
-    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
-    assert {:error, {:resource_limit_exceeded, _}} = FontValidator.prepare_text_ink_bounds(box)
-  end
-
   test "block, flex and grid children use their existing layout and atomic baselines" do
     for display <- ["block", "flex", "grid"] do
       assert {:ok, child} =
@@ -633,41 +587,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
     end)
   end
 
-  test "measurement catches font budgets at its own API boundary without resetting the scope" do
-    limits = NativeElixirPdfUtilities.Limits.effective()
-    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-      {:ok, dom} = HtmlParser.parse_detailed("<span>Budget</span>")
-      {:ok, %{children: [node]}} = Style.compute_detailed(dom)
-      NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               Layout.measure_child(node, context)
-
-      assert diagnostic.stage in [:layout, :font]
-      assert diagnostic.reason == :resource_limit_exceeded
-      assert diagnostic.message =~ "max_work"
-      assert ResourceContext.current() == context
-      send(self(), :returned_after_child_budget)
-    end)
-
-    assert_received :returned_after_child_budget
-  end
-
-  test "native paint validation returns resource diagnostics outside a document scope" do
-    limits = NativeElixirPdfUtilities.Limits.effective()
-    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_entries: 0})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes([
-               %{type: :unknown}
-             ])
-
-    assert diagnostic.stage == :writer
-  end
-
   test "invalid context, styled input and measurement constraints return diagnostics" do
     assert {:error, {_, diagnostic}} = Layout.measure_child(%{}, nil, %{})
     assert diagnostic.stage == :resource
@@ -735,5 +654,98 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildTest do
       assert {:error, {:unsupported_html, diagnostic}} = Layout.measure_child(invalid, context)
       assert diagnostic.message =~ "shared layout adapter"
     end)
+  end
+
+  defp measured(html, constraints \\ %{}) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      with {:ok, dom} <- HtmlParser.parse_detailed(html),
+           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, [], context.image_budget) do
+        before = ResourceContext.current()
+        result = Layout.measure_child(node, context, constraints)
+        assert ResourceContext.current() == before
+        result
+      end
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasuredChildGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, ResourceContext, Style}
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+  test "outline ink validation diagnoses malformed text transport and budgets" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Font
+    alias NativeElixirPdfUtilities.Validators.FontValidator
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    box = %{text: "A", font_face: font, font_size: 12, y: 0.0}
+    assert {:ok, {top, bottom}} = FontValidator.prepare_text_ink_bounds(box)
+    assert top > bottom
+    assert {:ok, nil} = FontValidator.prepare_text_ink_bounds(%{box | text: " "})
+
+    assert {:error, {_, diagnostic}} =
+             FontValidator.prepare_text_ink_bounds(%{box | font_face: %{font | data: <<0>>}})
+
+    assert diagnostic.stage == :font
+
+    for invalid <- [
+          nil,
+          %{},
+          %{box | text: <<255>>},
+          Map.put(box, :glyph_ids, [0]),
+          Map.put(box, :glyph_ids, nil),
+          Map.put(box, :glyph_ids, []),
+          %{box | font_size: -1}
+        ] do
+      assert {:error, {_, diagnostic}} = FontValidator.prepare_text_ink_bounds(invalid)
+      assert diagnostic.stage == :font and diagnostic.operation == :measure_child
+    end
+
+    limits = NativeElixirPdfUtilities.Limits.effective()
+    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
+    assert {:error, {:resource_limit_exceeded, _}} = FontValidator.prepare_text_ink_bounds(box)
+  end
+
+  test "measurement catches font budgets at its own API boundary without resetting the scope" do
+    limits = NativeElixirPdfUtilities.Limits.effective()
+    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      {:ok, dom} = HtmlParser.parse_detailed("<span>Budget</span>")
+      {:ok, %{children: [node]}} = Style.compute_detailed(dom)
+      # Prepare optional OpenType admission before exhausting the allowance so
+      # cache warmth cannot move this failure into language validation.
+      assert {:ok, _} =
+               NativeElixirPdfUtilities.HtmlToPdf.FontCache.ascii_layout(node.style.font_face)
+
+      NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               Layout.measure_child(node, context)
+
+      assert diagnostic.stage in [:layout, :font]
+      assert diagnostic.reason == :resource_limit_exceeded
+      assert diagnostic.message =~ "max_work"
+      assert ResourceContext.current() == context
+      send(self(), :returned_after_child_budget)
+    end)
+
+    assert_received :returned_after_child_budget
+  end
+
+  test "native paint validation returns resource diagnostics outside a document scope" do
+    limits = NativeElixirPdfUtilities.Limits.effective()
+    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_entries: 0})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.Validators.WriterValidator.validate_native_boxes([
+               %{type: :unknown}
+             ])
+
+    assert diagnostic.stage == :writer
   end
 end

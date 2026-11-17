@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceResourceContextTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.Validators.TemplateExecutionValidator
   Code.require_file(Paths.support("png_fixture.ex"))
@@ -173,6 +173,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceResourceContextTest d
     assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
     assert {:ok, "Replacement"} = Text.extract(pdf)
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceResourceContextGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
+  alias NativeElixirPdfUtilities.Validators.TemplateExecutionValidator
+  Code.require_file(Paths.support("png_fixture.ex"))
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+  @opts [system_font_discovery: false, compress_streams: false, forms: :static]
 
   test "dormant image occurrences still consume the shared image budget on reuse" do
     alias NativeElixirPdfUtilities.Limits

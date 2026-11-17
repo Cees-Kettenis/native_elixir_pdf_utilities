@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleDeclarationOwnershipTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.CssValueValidator

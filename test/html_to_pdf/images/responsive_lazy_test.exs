@@ -3,7 +3,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveLazyTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Validators.ResponsiveImageValidator
 

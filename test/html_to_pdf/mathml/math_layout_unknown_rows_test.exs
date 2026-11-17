@@ -1,24 +1,70 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout}
+  alias NativeElixirPdfUtilities.Validators.{MathLayoutValidator}
+
+  test "unknown row source identity and selected-font Unicode stay original" do
+    html =
+      "<math><equation-data id='authored' data-value='original'><mn>αβ12</mn></equation-data></math>"
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    [unknown] = hd(dom.children).children
+    assert unknown.namespace == :mathml and unknown.tag == "equation-data"
+    assert unknown.attributes == %{"id" => "authored", "data-value" => "original"}
+    assert unknown.node_id != unknown.parent_id
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, "αβ12"} = Text.extract(pdf, layout: false)
+  end
+
+  test "detached Core table nodes cannot bypass semantic authority through unknown rows" do
+    for tag <-
+          ~w(mtr mtd) do
+      assert {:error, {:unsupported_html, diagnostic}} =
+               HtmlToPdf.render("<math><equation-data><#{tag}/></equation-data></math>")
+
+      assert diagnostic.stage == :layout and diagnostic.source == tag
+      assert diagnostic.reason == :unsupported_html and diagnostic.module == MathLayoutValidator
+      assert diagnostic.operation == :measure_math
+    end
+  end
+
+  test "malformed direct unknown element names return shared input diagnostics" do
+    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+    style = %{display: :block, font_size: 12, font_face: font, color: {0, 0, 0}, line_height: 18}
+
+    for tag <- [nil, :unknown, %{}, "", "two names", "1unknown", "bad/name", <<255>>] do
+      node = %{
+        type: :element,
+        namespace: :mathml,
+        tag: tag,
+        attributes: %{},
+        style: style,
+        children: []
+      }
+
+      assert {:error, {reason, diagnostic}} = MathLayout.measure(node)
+      assert diagnostic.reason == reason and diagnostic.operation == :measure_math
+      assert diagnostic.stage == :layout and diagnostic.module == MathLayoutValidator
+      assert diagnostic.message =~ "tag names"
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.TestSupport.MathPaintGeometry
-  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, MathLayout, ResourceContext, Style}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
 
   setup do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     :ok
-  end
-
-  defp styled_math(html) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
-      with {:ok, dom} <- HtmlParser.parse_detailed(html),
-           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
-        {:ok, node.style._math_box}
-      end
-    end)
   end
 
   test "unknown MathML names use mrow glyph and intrinsic geometry" do
@@ -72,31 +118,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
     end
   end
 
-  test "unknown row source identity and selected-font Unicode stay original" do
-    html =
-      "<math><equation-data id='authored' data-value='original'><mn>αβ12</mn></equation-data></math>"
-
-    assert {:ok, dom} = HtmlParser.parse_detailed(html)
-    [unknown] = hd(dom.children).children
-    assert unknown.namespace == :mathml and unknown.tag == "equation-data"
-    assert unknown.attributes == %{"id" => "authored", "data-value" => "original"}
-    assert unknown.node_id != unknown.parent_id
-    assert {:ok, pdf} = HtmlToPdf.render(html)
-    assert {:ok, "αβ12"} = Text.extract(pdf, layout: false)
-  end
-
-  test "detached Core table nodes cannot bypass semantic authority through unknown rows" do
-    for tag <-
-          ~w(mtr mtd) do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               HtmlToPdf.render("<math><equation-data><#{tag}/></equation-data></math>")
-
-      assert diagnostic.stage == :layout and diagnostic.source == tag
-      assert diagnostic.reason == :unsupported_html and diagnostic.module == MathLayoutValidator
-      assert diagnostic.operation == :measure_math
-    end
-  end
-
   test "Chromium Math rows discard character data while owner boxes paint once" do
     for tag <- ["mrow", "equation-data"],
         css <- [
@@ -133,28 +154,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
     end
   end
 
-  test "malformed direct unknown element names return shared input diagnostics" do
-    assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
-    assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
-    style = %{display: :block, font_size: 12, font_face: font, color: {0, 0, 0}, line_height: 18}
-
-    for tag <- [nil, :unknown, %{}, "", "two names", "1unknown", "bad/name", <<255>>] do
-      node = %{
-        type: :element,
-        namespace: :mathml,
-        tag: tag,
-        attributes: %{},
-        style: style,
-        children: []
-      }
-
-      assert {:error, {reason, diagnostic}} = MathLayout.measure(node)
-      assert diagnostic.reason == reason and diagnostic.operation == :measure_math
-      assert diagnostic.stage == :layout and diagnostic.module == MathLayoutValidator
-      assert diagnostic.message =~ "tag names"
-    end
-  end
-
   test "unknown rows use ordinary CSS flow and retain shared font work diagnostics" do
     assert {:ok, pdf} =
              HtmlToPdf.render(
@@ -169,5 +168,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutUnknownRowsTest do
              styled_math("<math><equation-data><mn>12</mn></equation-data></math>")
 
     assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+  end
+
+  defp styled_math(html) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
+      with {:ok, dom} <- HtmlParser.parse_detailed(html),
+           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
+        {:ok, node.style._math_box}
+      end
+    end)
   end
 end

@@ -1,13 +1,10 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, FontFallback, HtmlParser, PdfWriter, Style}
   alias NativeElixirPdfUtilities.Validators.{NativeGlyphSourceValidator, WriterValidator}
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
     {:ok, [face]} =
       Font.load_configured_faces([
         %{family: "Selected", data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf")}
@@ -172,6 +169,143 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
     end
   end
 
+  test "authored link corners remain clipped to the page and nested source plane", %{
+    group: group
+  } do
+    link = %{
+      type: :link_region,
+      x: 5,
+      y: 5,
+      width: 20,
+      height: 20,
+      link_url: "https://example.test/paint",
+      link_quads: [[{5, 5}, {25, 5}, {25, 25}, {5, 25}]]
+    }
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [%{group | boxes: [link]}]}],
+               compress_streams: false
+             )
+
+    assert pdf =~ "/Subtype /Link"
+    clipped = %{group | boxes: [link]} |> Map.put(:clip, %{x: 40, y: 40, width: 10, height: 10})
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [clipped]}])
+    refute pdf =~ "/Subtype /Link"
+    affine = %{group | transform: {1, 0.2, 0.1, 1, 0, 0}, boxes: [link]}
+
+    assert {:ok, pdf} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [affine]}], compress_streams: false)
+
+    assert pdf =~ "/QuadPoints"
+  end
+
+  test "page clipping drops off-page authored corners and preserves border-box image hit areas",
+       %{group: group, text: text} do
+    link = %{
+      type: :link_region,
+      x: 110,
+      y: 10,
+      width: 20,
+      height: 20,
+      link_url: "https://example.test/outside",
+      link_quad_points: [110, 10, 130, 10, 110, 30, 130, 30]
+    }
+
+    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [link]}])
+    refute pdf =~ "/Subtype /Link"
+    assert {:ok, source} = PdfWriter.render([%{size: {60, 60}, boxes: [text]}])
+    image = %{format: :pdf_form, data: source, width_px: 1, height_px: 1}
+
+    box = %{
+      type: :image,
+      x: 5,
+      y: 5,
+      width: 20,
+      height: 20,
+      image: image,
+      link_rect: %{x: 0, y: 0, width: 40, height: 40},
+      link_url: "https://example.test/area"
+    }
+
+    for transform <- [{1, 0, 0, 1, 0, 0}, {1, 0.1, 0.1, 1, 0, 0}],
+        rounded? <- [false, true] do
+      clip = %{x: 5, y: 5, width: 20, height: 20}
+      clip = if rounded?, do: Map.put(clip, :border_radius, 2), else: clip
+      child = Map.put(box, :clip, clip)
+
+      assert {:ok, pdf} =
+               PdfWriter.render([
+                 %{size: {100, 100}, boxes: [%{group | transform: transform, boxes: [child]}]}
+               ])
+
+      assert pdf =~ "/Subtype /Link"
+    end
+  end
+
+  test "opacity paint allocation rejects a derived Form extent beyond the PDF numeric ceiling", %{
+    rect: rect
+  } do
+    box =
+      %{rect | x: Limits.get(:max_numeric_magnitude)}
+      |> Map.put(:css_border_surface, %{alpha: 1.0, clip: %{x: 0, y: 0, width: 60, height: 60}})
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
+
+    assert diagnostic.message =~ "paint group bounds"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Forms, Limits, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
+  alias NativeElixirPdfUtilities.Validators.{WriterValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    {:ok, [face]} =
+      Font.load_configured_faces([
+        %{family: "Selected", data: File.read!("priv/fonts/dejavu/DejaVuSans.ttf")}
+      ])
+
+    text = %{
+      type: :text,
+      text: "A",
+      x: 10,
+      y: 20,
+      width: 10,
+      font_size: 12,
+      font: Font.pdf_name(face),
+      font_face: face,
+      color: {0, 0, 0}
+    }
+
+    rect = %{
+      type: :rect,
+      x: 10,
+      y: 20,
+      width: 10,
+      height: 10,
+      fill_color: {1, 0, 0},
+      stroke_color: {0, 0, 0},
+      stroke_width: 1,
+      border_radius: 0
+    }
+
+    group = %{
+      type: :drawing_group,
+      width: 60,
+      height: 60,
+      transform: {1, 0, 0, 1, 0, 0},
+      boxes: []
+    }
+
+    {:ok, text: text, rect: rect, group: group}
+  end
+
   test "issued child widgets project without an explicit group clip and respect projection work limits" do
     alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, Layout, ResourceContext}
 
@@ -256,36 +390,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
     assert diagnostic.message =~ "max_output_bytes"
   end
 
-  test "authored link corners remain clipped to the page and nested source plane", %{
-    group: group
-  } do
-    link = %{
-      type: :link_region,
-      x: 5,
-      y: 5,
-      width: 20,
-      height: 20,
-      link_url: "https://example.test/paint",
-      link_quads: [[{5, 5}, {25, 5}, {25, 25}, {5, 25}]]
-    }
-
-    assert {:ok, pdf} =
-             PdfWriter.render([%{size: {100, 100}, boxes: [%{group | boxes: [link]}]}],
-               compress_streams: false
-             )
-
-    assert pdf =~ "/Subtype /Link"
-    clipped = %{group | boxes: [link]} |> Map.put(:clip, %{x: 40, y: 40, width: 10, height: 10})
-    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [clipped]}])
-    refute pdf =~ "/Subtype /Link"
-    affine = %{group | transform: {1, 0.2, 0.1, 1, 0, 0}, boxes: [link]}
-
-    assert {:ok, pdf} =
-             PdfWriter.render([%{size: {100, 100}, boxes: [affine]}], compress_streams: false)
-
-    assert pdf =~ "/QuadPoints"
-  end
-
   test "repeated affine link projection shares its bounded work meter", %{group: group} do
     alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
@@ -315,61 +419,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
       assert diagnostic.message =~ "max_work"
       Limits.install(original)
     end
-  end
-
-  test "page clipping drops off-page authored corners and preserves border-box image hit areas",
-       %{group: group, text: text} do
-    link = %{
-      type: :link_region,
-      x: 110,
-      y: 10,
-      width: 20,
-      height: 20,
-      link_url: "https://example.test/outside",
-      link_quad_points: [110, 10, 130, 10, 110, 30, 130, 30]
-    }
-
-    assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [link]}])
-    refute pdf =~ "/Subtype /Link"
-    assert {:ok, source} = PdfWriter.render([%{size: {60, 60}, boxes: [text]}])
-    image = %{format: :pdf_form, data: source, width_px: 1, height_px: 1}
-
-    box = %{
-      type: :image,
-      x: 5,
-      y: 5,
-      width: 20,
-      height: 20,
-      image: image,
-      link_rect: %{x: 0, y: 0, width: 40, height: 40},
-      link_url: "https://example.test/area"
-    }
-
-    for transform <- [{1, 0, 0, 1, 0, 0}, {1, 0.1, 0.1, 1, 0, 0}],
-        rounded? <- [false, true] do
-      clip = %{x: 5, y: 5, width: 20, height: 20}
-      clip = if rounded?, do: Map.put(clip, :border_radius, 2), else: clip
-      child = Map.put(box, :clip, clip)
-
-      assert {:ok, pdf} =
-               PdfWriter.render([
-                 %{size: {100, 100}, boxes: [%{group | transform: transform, boxes: [child]}]}
-               ])
-
-      assert pdf =~ "/Subtype /Link"
-    end
-  end
-
-  test "opacity paint allocation rejects a derived Form extent beyond the PDF numeric ceiling", %{
-    rect: rect
-  } do
-    box =
-      %{rect | x: Limits.get(:max_numeric_magnitude)}
-      |> Map.put(:css_border_surface, %{alpha: 1.0, clip: %{x: 0, y: 0, width: 60, height: 60}})
-
-    assert {:error, {:invalid_pdf_input, diagnostic}} =
-             PdfWriter.render([%{size: {100, 100}, boxes: [box]}])
-
-    assert diagnostic.message =~ "paint group bounds"
   end
 end

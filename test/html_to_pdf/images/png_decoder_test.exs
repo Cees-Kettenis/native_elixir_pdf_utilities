@@ -3,6 +3,25 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture, as: PNG
+
+  test "images with identical samples but different geometry have distinct PDF resources" do
+    a = PNG.build(2, 1, 0, 8, 0, fn _, _ -> [128] end)
+    b = PNG.build(1, 2, 0, 8, 0, fn _, _ -> [128] end)
+    c = PNG.build(1, 1, 0, 16, 0, fn _, _ -> [0x8080] end)
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<img src=\"a\"><img src=\"b\"><img src=\"c\"><img src=\"a\">",
+               assets: %{"a" => {:bytes, a}, "b" => {:bytes, b}, "c" => {:bytes, c}}
+             )
+
+    assert length(Regex.scan(~r/\/Subtype \/Image/, pdf)) == 3
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.HtmlToPdf.PngDecoder
   alias NativeElixirPdfUtilities.HtmlToPdf
@@ -161,19 +180,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderTest do
     Limits.install(%{old | max_decoded_bytes: 31})
     assert {:error, {:resource_limit_exceeded, %{message: message}}} = decode(png)
     assert message =~ "decoded image"
-  end
-
-  test "images with identical samples but different geometry have distinct PDF resources" do
-    a = PNG.build(2, 1, 0, 8, 0, fn _, _ -> [128] end)
-    b = PNG.build(1, 2, 0, 8, 0, fn _, _ -> [128] end)
-    c = PNG.build(1, 1, 0, 16, 0, fn _, _ -> [0x8080] end)
-
-    assert {:ok, pdf} =
-             HtmlToPdf.render("<img src=\"a\"><img src=\"b\"><img src=\"c\"><img src=\"a\">",
-               assets: %{"a" => {:bytes, a}, "b" => {:bytes, b}, "c" => {:bytes, c}}
-             )
-
-    assert length(Regex.scan(~r/\/Subtype \/Image/, pdf)) == 3
   end
 
   defp decode(png) do

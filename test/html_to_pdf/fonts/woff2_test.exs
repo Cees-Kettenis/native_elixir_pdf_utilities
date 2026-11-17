@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
   alias NativeElixirPdfUtilities.TestSupport.Paths
@@ -12,12 +12,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
     TrueTypeSubsetValidator,
     Woff2Validator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "transformed TrueType, literal TrueType and CFF agree with independent decoded tables, points and metrics" do
     manifest = Paths.fixture("fonts/woff2-fonts.json") |> File.read!() |> :json.decode()
@@ -86,21 +80,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
     end
   end
 
-  test "decompression and reconstruction obey shared size and work limits" do
-    input = FontCorpus.path("selected-transformed.woff2") |> File.read!()
-
-    for limit <- [:max_decoded_bytes, :max_work] do
-      limits = Limits.effective()
-      Limits.install(Map.put(limits, limit, 1))
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               FontContainerValidator.prepare(input)
-
-      assert diagnostic.message =~ Atom.to_string(limit)
-      Limits.install(limits)
-    end
-  end
-
   test "re-encoded malformed directories and transformed table streams fail at their owning boundary" do
     manifest = Paths.fixture("fonts/woff2-invalid-vectors.json") |> File.read!() |> :json.decode()
 
@@ -120,13 +99,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
 
     assert {:ok, ^expected} =
              FontContainerValidator.prepare(Base.decode64!(manifest["valid_optional_blocks"]))
-  end
-
-  defp replace(data, offset, bytes) do
-    <<before::binary-size(^offset), _old::binary-size(byte_size(^bytes)), after_bytes::binary>> =
-      data
-
-    before <> bytes <> after_bytes
   end
 
   test "collections share complete outline pairs and decode every 255UInt16 form" do
@@ -201,6 +173,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
           assert_in_delta y, ry, 1.0e-9
         end
       end
+    end
+  end
+
+  defp replace(data, offset, bytes) do
+    <<before::binary-size(^offset), _old::binary-size(byte_size(^bytes)), after_bytes::binary>> =
+      data
+
+    before <> bytes <> after_bytes
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2GlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
+  alias NativeElixirPdfUtilities.{Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    FontContainerValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "decompression and reconstruction obey shared size and work limits" do
+    input = FontCorpus.path("selected-transformed.woff2") |> File.read!()
+
+    for limit <- [:max_decoded_bytes, :max_work] do
+      limits = Limits.effective()
+      Limits.install(Map.put(limits, limit, 1))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FontContainerValidator.prepare(input)
+
+      assert diagnostic.message =~ Atom.to_string(limit)
+      Limits.install(limits)
     end
   end
 end

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.DiagnosticsTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Diagnostics
 

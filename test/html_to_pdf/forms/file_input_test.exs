@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FileInputTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, FileArtwork}
   alias NativeElixirPdfUtilities.Validators.{HtmlFileValidator, FormValidator}
   alias NativeElixirPdfUtilities.Pdf.Reader
@@ -157,23 +157,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FileInputTest do
     assert diagnostic.source == "input/file" and diagnostic.message =~ "English US"
   end
 
-  test "file artwork consumes existing text and layout budgets with recoverable diagnostics" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_output_bytes: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<p><input type=file></p>", @opts)
-
-    assert diagnostic.stage == :style and diagnostic.message =~ "max_output_bytes"
-    Limits.install(%{previous | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<p><input type=file></p>", @opts)
-
-    assert diagnostic.message =~ "max_entries", inspect(diagnostic)
-  end
-
   test "file layout rejects forged files and altered geometry with actionable failures" do
     assert {:ok, dom} = HtmlParser.parse_detailed("<input type=file>")
     assert {:ok, %{children: [node]} = styled} = Style.compute_detailed(dom, @opts)
@@ -199,5 +182,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FileInputTest do
       assert diagnostic.stage == :layout and diagnostic.source == "input/file" and
                diagnostic.message =~ "compute styles"
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FileInputGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  @opts [
+    forms: :static,
+    system_font_discovery: false,
+    fonts: [
+      %{family: "Arial", path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf")},
+      %{family: "DejaVu Sans", path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf")},
+      %{family: "DejaVu Sans Mono", path: Path.expand("priv/fonts/dejavu/DejaVuSansMono.ttf")}
+    ]
+  ]
+
+  test "file artwork consumes existing text and layout budgets with recoverable diagnostics" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(%{previous | max_output_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<p><input type=file></p>", @opts)
+
+    assert diagnostic.stage == :style and diagnostic.message =~ "max_output_bytes"
+    Limits.install(%{previous | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<p><input type=file></p>", @opts)
+
+    assert diagnostic.message =~ "max_entries", inspect(diagnostic)
   end
 end

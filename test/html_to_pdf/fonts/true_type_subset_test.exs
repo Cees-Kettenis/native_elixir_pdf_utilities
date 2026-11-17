@@ -1,4 +1,78 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
+  use ExUnit.Case, async: true
+
+  import Bitwise
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, TrueTypeSubset}
+  alias NativeElixirPdfUtilities.Validators.TrueTypeSubsetValidator
+
+  setup do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+    %{font: font}
+  end
+
+  test "keeps composite dependencies and produces a checksummed standalone font", %{font: font} do
+    glyph_id = font.cmap[?é]
+    assert {:ok, original_plan} = TrueTypeSubsetValidator.prepare(font, [glyph_id])
+    assert MapSet.subset?(MapSet.new([0, 72, 118, glyph_id]), original_plan.retained)
+
+    assert {:ok, subset} = TrueTypeSubset.subset(font, [glyph_id])
+    assert byte_size(subset) < byte_size(font.data) * 0.5
+
+    checksum =
+      for <<word::32 <- subset>>, reduce: 0 do
+        total -> total + word &&& 0xFFFF_FFFF
+      end
+
+    assert checksum == 0xB1B0_AFBA
+
+    assert {:ok, subset_plan} =
+             TrueTypeSubsetValidator.prepare(%{font | data: subset}, [glyph_id])
+
+    for component <- [72, 118, glyph_id] do
+      assert elem(subset_plan.offsets, component + 1) > elem(subset_plan.offsets, component)
+    end
+
+    assert {:ok, loaded} =
+             Font.load_registry(fonts: [%{family: "Subset Fixture", data: [subset]}])
+
+    assert {:ok, _, subset_face} = Font.resolve("Subset Fixture", 400, :normal, loaded)
+    assert subset_face.cmap[?é] == glyph_id
+  end
+
+  test "subset admission respects fixed sfnt output directory field capacities", %{font: font} do
+    <<scaler::32, count::16, _::48, rest::binary>> = font.data
+    extra = 4096 - count
+    old_directory_bytes = 12 + count * 16
+
+    records =
+      for <<tag::binary-size(4), checksum::32, offset::32,
+            length::32 <-
+              binary_part(rest, 0, count * 16)>>,
+          into: <<>> do
+        <<tag::binary, checksum::32, offset + extra * 16::32, length::32>>
+      end
+
+    custom =
+      for index <- 1..extra, into: <<>> do
+        tag = index |> Integer.to_string(36) |> String.pad_leading(4, "0")
+        <<tag::binary-size(4), 0::32, 12 + 4096 * 16::32, 0::32>>
+      end
+
+    payload =
+      binary_part(font.data, old_directory_bytes, byte_size(font.data) - old_directory_bytes)
+
+    data = <<scaler::32, 4096::16, 0::48, records::binary, custom::binary, payload::binary>>
+
+    assert {:error, {:invalid_document, %{message: message}}} =
+             TrueTypeSubsetValidator.prepare(%{font | data: data}, [0])
+
+    assert message =~ "sfnt directory field capacity"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetGlobalStateTest do
   use ExUnit.Case, async: false
 
   import Bitwise
@@ -115,35 +189,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
     assert loca_message =~ "loca"
   end
 
-  test "keeps composite dependencies and produces a checksummed standalone font", %{font: font} do
-    glyph_id = font.cmap[?é]
-    assert {:ok, original_plan} = TrueTypeSubsetValidator.prepare(font, [glyph_id])
-    assert MapSet.subset?(MapSet.new([0, 72, 118, glyph_id]), original_plan.retained)
-
-    assert {:ok, subset} = TrueTypeSubset.subset(font, [glyph_id])
-    assert byte_size(subset) < byte_size(font.data) * 0.5
-
-    checksum =
-      for <<word::32 <- subset>>, reduce: 0 do
-        total -> total + word &&& 0xFFFF_FFFF
-      end
-
-    assert checksum == 0xB1B0_AFBA
-
-    assert {:ok, subset_plan} =
-             TrueTypeSubsetValidator.prepare(%{font | data: subset}, [glyph_id])
-
-    for component <- [72, 118, glyph_id] do
-      assert elem(subset_plan.offsets, component + 1) > elem(subset_plan.offsets, component)
-    end
-
-    assert {:ok, loaded} =
-             Font.load_registry(fonts: [%{family: "Subset Fixture", data: [subset]}])
-
-    assert {:ok, _, subset_face} = Font.resolve("Subset Fixture", 400, :normal, loaded)
-    assert subset_face.cmap[?é] == glyph_id
-  end
-
   test "aliased opaque tables are admitted by padded output size before subset construction", %{
     font: font
   } do
@@ -243,36 +288,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TrueTypeSubsetTest do
       assert {:error, {:invalid_document, _}} = TrueTypeSubset.subset(%{font | data: data}, [0])
       assert {:error, {_reason, _}} = Font.load_configured_faces([%{family: "Bad", data: data}])
     end
-  end
-
-  test "subset admission respects fixed sfnt output directory field capacities", %{font: font} do
-    <<scaler::32, count::16, _::48, rest::binary>> = font.data
-    extra = 4096 - count
-    old_directory_bytes = 12 + count * 16
-
-    records =
-      for <<tag::binary-size(4), checksum::32, offset::32,
-            length::32 <-
-              binary_part(rest, 0, count * 16)>>,
-          into: <<>> do
-        <<tag::binary, checksum::32, offset + extra * 16::32, length::32>>
-      end
-
-    custom =
-      for index <- 1..extra, into: <<>> do
-        tag = index |> Integer.to_string(36) |> String.pad_leading(4, "0")
-        <<tag::binary-size(4), 0::32, 12 + 4096 * 16::32, 0::32>>
-      end
-
-    payload =
-      binary_part(font.data, old_directory_bytes, byte_size(font.data) - old_directory_bytes)
-
-    data = <<scaler::32, 4096::16, 0::48, records::binary, custom::binary, payload::binary>>
-
-    assert {:error, {:invalid_document, %{message: message}}} =
-             TrueTypeSubsetValidator.prepare(%{font | data: data}, [0])
-
-    assert message =~ "sfnt directory field capacity"
   end
 
   test "rejects malformed fonts, offsets, and glyph requests with diagnostics", %{font: font} do

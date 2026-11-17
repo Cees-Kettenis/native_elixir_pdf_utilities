@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.AffineDrawingGeometryTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{Limits, Text}
+  alias NativeElixirPdfUtilities.{Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, Font, PdfWriter}
   alias NativeElixirPdfUtilities.HtmlToPdf.{EmbeddedViewport, ResourceContext}
   alias NativeElixirPdfUtilities.Pdf.Reader
@@ -194,27 +194,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AffineDrawingGeometryTest do
     end
   end
 
-  test "affine clipping work uses shared Limits and cannot accept caller-prepared quads", %{
-    group: group,
-    image: image
-  } do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(%{original | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             PdfWriter.render([
-               %{size: {100, 100}, boxes: [%{group | transform: {1, 0.5, 0, 1, 20, 20}}]}
-             ])
-
-    assert diagnostic.message =~ "max_work"
-    Limits.install(original)
-    forged = Map.put(image, :drawing_affine_link_quads, [[{0, 0}, {20, 0}, {20, 20}, {0, 20}]])
-
-    assert {:error, {:invalid_pdf_input, _}} =
-             PdfWriter.render([%{size: {100, 100}, boxes: [forged]}])
-  end
-
   test "scoped child fragment destinations follow the first actually visible affine placement" do
     child =
       "<style>html,body{margin:0;font-size:10pt;line-height:12pt}p{margin:0}</style><p><a href='#target'>Jump</a></p><p id=target>Selected target</p>"
@@ -363,5 +342,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AffineDrawingGeometryTest do
       assert {:ok, flat} = NativeElixirPdfUtilities.Forms.flatten(pdf)
       assert {:ok, _} = Reader.read_validated(flat)
     end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.AffineDrawingGeometryGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{PdfWriter}
+
+  setup do
+    image = %{
+      type: :image,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      image: %{
+        format: :png,
+        data: <<255, 0, 0>>,
+        width_px: 1,
+        height_px: 1,
+        color_space: :device_rgb,
+        bits_per_component: 8
+      },
+      link_url: "https://example.com/affine"
+    }
+
+    group = %{
+      type: :drawing_group,
+      width: 20,
+      height: 20,
+      transform: {1, 0, 0, 1, 0, 0},
+      clip: %{x: 0, y: 0, width: 20, height: 20},
+      boxes: [image]
+    }
+
+    {:ok, image: image, group: group}
+  end
+
+  test "affine clipping work uses shared Limits and cannot accept caller-prepared quads", %{
+    group: group,
+    image: image
+  } do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(%{original | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             PdfWriter.render([
+               %{size: {100, 100}, boxes: [%{group | transform: {1, 0.5, 0, 1, 20, 20}}]}
+             ])
+
+    assert diagnostic.message =~ "max_work"
+    Limits.install(original)
+    forged = Map.put(image, :drawing_affine_link_quads, [[{0, 0}, {20, 0}, {20, 20}, {0, 20}]])
+
+    assert {:error, {:invalid_pdf_input, _}} =
+             PdfWriter.render([%{size: {100, 100}, boxes: [forged]}])
   end
 end

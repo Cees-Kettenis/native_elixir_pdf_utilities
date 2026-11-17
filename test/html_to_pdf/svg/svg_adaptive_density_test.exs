@@ -1,8 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
-  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgRasterizer}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer}
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -35,6 +35,61 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
              SvgRasterizer.rasterize_image_with_scale(@source, [scale: {:up_to, 2}], nil, [],
                system_font_discovery: false
              )
+  end
+
+  test "public image background and inline SVG paths retain large thin canvases" do
+    uri = "data:image/svg+xml;base64," <> Base.encode64(@source)
+
+    for html <- [
+          "<img src='#{uri}'>",
+          "<div style='width:100pt;height:10pt;background-image:url(#{uri});background-repeat:no-repeat'></div>",
+          @source
+        ] do
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, document} = Reader.read(pdf)
+
+      images =
+        for %{value: %{"Subtype" => {:name, "Image"}} = image} <- Map.values(document.objects),
+            do: image
+
+      assert Enum.any?(images, &(&1["Width"] == 5000 and &1["Height"] == 1))
+    end
+  end
+
+  test "embedded SVG documents preserve the baseline viewport canvas" do
+    assert {:ok, plan} =
+             SvgDocumentViewportValidator.prepare(%{
+               source_root: %{"width" => "5000", "height" => "1"},
+               root_style: %{}
+             })
+
+    assert {:ok, %{width: 5000, height: 1}} =
+             SvgDocumentViewportValidator.prepare_raster(
+               plan,
+               3750,
+               0.75,
+               HtmlValidator.new_image_budget()
+             )
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    SvgValidator
+  }
+
+  @source "<svg xmlns='http://www.w3.org/2000/svg' width='5000' height='1'><rect width='5000' height='1' fill='red'/></svg>"
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
   end
 
   test "ordinary images retain the requested density and pixel budgets can reduce it", %{
@@ -124,41 +179,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgAdaptiveDensityTest do
              Style.compute_detailed(dom, system_font_discovery: false)
 
     assert diagnostic.message =~ "max_raster_pixels"
-  end
-
-  test "public image background and inline SVG paths retain large thin canvases" do
-    uri = "data:image/svg+xml;base64," <> Base.encode64(@source)
-
-    for html <- [
-          "<img src='#{uri}'>",
-          "<div style='width:100pt;height:10pt;background-image:url(#{uri});background-repeat:no-repeat'></div>",
-          @source
-        ] do
-      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
-      assert {:ok, document} = Reader.read(pdf)
-
-      images =
-        for %{value: %{"Subtype" => {:name, "Image"}} = image} <- Map.values(document.objects),
-            do: image
-
-      assert Enum.any?(images, &(&1["Width"] == 5000 and &1["Height"] == 1))
-    end
-  end
-
-  test "embedded SVG documents preserve the baseline viewport canvas" do
-    assert {:ok, plan} =
-             SvgDocumentViewportValidator.prepare(%{
-               source_root: %{"width" => "5000", "height" => "1"},
-               root_style: %{}
-             })
-
-    assert {:ok, %{width: 5000, height: 1}} =
-             SvgDocumentViewportValidator.prepare_raster(
-               plan,
-               3750,
-               0.75,
-               HtmlValidator.new_image_budget()
-             )
   end
 
   test "actual dense allocations still obey aggregate budgets", %{limits: limits} do

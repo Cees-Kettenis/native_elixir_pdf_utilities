@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
   alias NativeElixirPdfUtilities.Pdf.Reader
@@ -13,12 +13,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
     FontVariationValidator,
     TrueTypeSubsetValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "TrueType endpoint and interior instances preserve independent points, metrics, line metrics and PDF programs" do
     input = FontCorpus.path("selected-variable.ttf") |> File.read!()
@@ -157,21 +151,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
     assert {:error, {:invalid_font, _}} = FontVariationValidator.prepare(data, %{}, -1)
   end
 
-  test "variation interpolation and reconstruction obey cumulative font work and byte allowances" do
-    data = FontCorpus.path("selected-variable.ttf") |> File.read!()
-
-    for limit <- [:max_work, :max_decoded_bytes] do
-      limits = Limits.effective()
-      Limits.install(Map.put(limits, limit, 1))
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               FontVariationValidator.prepare(data)
-
-      assert diagnostic.message =~ Atom.to_string(limit)
-      Limits.install(limits)
-    end
-  end
-
   test "gvar deltas leave point-attached composite indices unchanged" do
     component = %{xy?: false, args: {0, 1}}
     glyph = %{contours: -1, components: [component], ends: []}
@@ -225,6 +204,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontTest do
 
       {a, b} ->
         assert a == b
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.VariableFontGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
+  alias NativeElixirPdfUtilities.{Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    FontVariationValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "variation interpolation and reconstruction obey cumulative font work and byte allowances" do
+    data = FontCorpus.path("selected-variable.ttf") |> File.read!()
+
+    for limit <- [:max_work, :max_decoded_bytes] do
+      limits = Limits.effective()
+      Limits.install(Map.put(limits, limit, 1))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               FontVariationValidator.prepare(data)
+
+      assert diagnostic.message =~ Atom.to_string(limit)
+      Limits.install(limits)
     end
   end
 end

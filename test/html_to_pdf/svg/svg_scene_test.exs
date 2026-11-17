@@ -4,13 +4,17 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, SvgScene}
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, SvgScene}
+  alias NativeElixirPdfUtilities.Validators.{SvgSceneValidator}
+  alias NativeElixirPdfUtilities.{Limits, Text, Forms}
+
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -28,17 +32,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
     assert pdf =~ "https://example.test/svg-first"
     assert pdf =~ "https://example.test/svg-second"
     assert pdf =~ "/Subtype /Link"
-  end
-
-  test("converter image objects obey the shared PDF object budget", %{limits: limits}) do
-    Limits.install(Map.put(limits, :max_entries, 2))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<svg width=20 height=20><rect width=20 height=20 /></svg>")
-
-    assert diagnostic.stage == :html
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.message =~ "max_entries"
   end
 
   test "computed scene retains affine artwork and separates transparent ink from layout" do
@@ -143,10 +136,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
     assert shifted.clip == rect and shifted.boxes == [image]
     assert DrawingGeometry.translate_box(%{type: :marker}, 1, 2) == %{type: :marker}
   end
-
-  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, SvgScene}
-  alias NativeElixirPdfUtilities.Validators.{SvgSceneValidator}
-  alias NativeElixirPdfUtilities.{Limits, Text, Forms}
 
   test "public inline SVG paints shapes and retains surrounding Unicode and parent links" do
     html =
@@ -421,5 +410,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneTest do
              )
 
     assert diagnostic.message != ""
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgSceneGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  alias NativeElixirPdfUtilities.{Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
+  end
+
+  test("converter image objects obey the shared PDF object budget", %{limits: limits}) do
+    Limits.install(Map.put(limits, :max_entries, 2))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<svg width=20 height=20><rect width=20 height=20 /></svg>")
+
+    assert diagnostic.stage == :html
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.message =~ "max_entries"
   end
 end

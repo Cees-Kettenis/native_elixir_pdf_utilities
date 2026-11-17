@@ -120,6 +120,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
     compressed
   end
 
+  @doc "Reuses exact-byte TrueType outline admission and its work receipt within the existing bounded font cache."
+  @spec outlines(binary(), loader()) :: load_result()
+  def outlines(data, loader), do: fetch_value({:outlines, data}, loader)
+
   @doc "Caches the bounded default-layout analysis of an admitted physical face."
   @spec ascii_layout(map()) :: {:ok, map()} | {:error, {atom(), map()}}
   def ascii_layout(font) do
@@ -190,20 +194,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
       ])
 
     {:ok,
-     %{maximum_entries: Keyword.fetch!(options, :maximum_entries), sequence: 0, table: table}}
+     %{
+       maximum_entries: Keyword.fetch!(options, :maximum_entries),
+       sequence: 0,
+       table: table,
+       sizes: %{}
+     }}
   end
 
   @impl GenServer
-  def handle_call({:store, path, fingerprint, data, result}, _from, state) do
-    sequence = state.sequence + 1
-    :ets.insert(state.table, {path, fingerprint, data, result, sequence})
+  def handle_call(request, _from, state) do
+    {reply, state} =
+      case request do
+        {:store, path, fingerprint, data, result, bytes} ->
+          sequence = state.sequence + 1
+          # The caller sized the same entry with sequence zero. Account for
+          # integer encoding growth without copying/traversing its font data.
+          bytes = bytes + FontValidator.cache_bytes(sequence) - FontValidator.cache_bytes(0)
+          :ets.insert(state.table, {path, fingerprint, data, result, sequence})
+          {result, %{state | sequence: sequence, sizes: Map.put(state.sizes, path, bytes)}}
 
-    state.table
-    |> :ets.tab2list()
-    |> FontValidator.cache_evictions(state.maximum_entries, :max_cache_bytes)
-    |> Enum.each(&:ets.delete(state.table, &1))
+        :prune ->
+          {:ok, state}
+      end
 
-    {:reply, result, %{state | sequence: sequence}}
+    # Read only keys and insertion order. tab2list would copy every decoded
+    # glyph tree into this process merely to decide which entries to evict.
+    entries =
+      :ets.select(state.table, [{{:"$1", :_, :_, :_, :"$2"}, [], [{{:"$1", :"$2"}}]}])
+      |> Enum.map(fn {key, sequence} -> {key, Map.fetch!(state.sizes, key), sequence} end)
+
+    evicted =
+      FontValidator.cache_evictions(
+        entries,
+        state.maximum_entries,
+        :max_cache_bytes,
+        &elem(&1, 1)
+      )
+
+    Enum.each(evicted, &:ets.delete(state.table, &1))
+    sizes = Map.new(entries, fn {key, bytes, _} -> {key, bytes} end) |> Map.drop(evicted)
+    {:reply, reply, %{state | sizes: sizes}}
   end
 
   defp load(path, fingerprint, data, loader) do
@@ -229,7 +260,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
                 case result do
                   {:ok, _value} ->
-                    GenServer.call(cache, {:store, path, fingerprint, data, result}, :infinity)
+                    case FontValidator.cache_entry_size({path, fingerprint, data, result, 0}) do
+                      nil ->
+                        # Oversized values never enter the shared cache mailbox.
+                        :ok = GenServer.call(cache, :prune, :infinity)
+                        result
+
+                      bytes ->
+                        GenServer.call(
+                          cache,
+                          {:store, path, fingerprint, data, result, bytes},
+                          :infinity
+                        )
+                    end
 
                   failure ->
                     failure

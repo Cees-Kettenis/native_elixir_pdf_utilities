@@ -1,6 +1,17 @@
 defmodule NativeElixirPdfUtilities.TestSupport.PngFixture do
   @moduledoc false
 
+  @doc "Builds the shared opaque red RGB fixture with one unfiltered scanline per row."
+  @spec solid_rgb(pos_integer(), pos_integer()) :: binary()
+  def solid_rgb(width, height) do
+    row = :binary.copy(<<255, 0, 0>>, width)
+    rows = Enum.map_join(1..height, "", fn _index -> <<0>> <> row end)
+
+    <<137, 80, 78, 71, 13, 10, 26, 10>> <>
+      chunk("IHDR", <<width::32, height::32, 8, 2, 0, 0, 0>>) <>
+      chunk("IDAT", :zlib.compress(rows)) <> chunk("IEND", "")
+  end
+
   @doc false
   @spec chunk(binary(), binary()) :: binary()
   def chunk(type, data) do

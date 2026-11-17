@@ -1,9 +1,103 @@
 defmodule NativeElixirPdfUtilities.OperationTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{Operation}
+  alias NativeElixirPdfUtilities.Validators.{LimitsValidator, OperationValidator}
+
+  test "nested calls share the worker and its original deadline" do
+    owner = self()
+
+    assert {:ok, worker} =
+             Operation.run(__MODULE__, :outer, fn ->
+               outer = self()
+
+               Operation.run(__MODULE__, :inner, fn ->
+                 assert self() == outer
+                 assert self() != owner
+                 {:ok, self()}
+               end)
+             end)
+
+    refute Process.alive?(worker)
+    assert Process.get({Operation, :request}) == nil
+  end
+
+  test "worker callbacks inherit logger metadata while keeping process dictionaries isolated" do
+    marker = make_ref()
+    Logger.metadata(operation_test: marker)
+    Process.put(:caller_setting, :original)
+
+    assert {:ok, ^marker} =
+             Operation.run(__MODULE__, :callback_context, fn ->
+               assert Process.get(:caller_setting) == nil
+               Process.put(:caller_setting, :worker_value)
+               {:ok, Logger.metadata()[:operation_test]}
+             end)
+
+    assert Process.get(:caller_setting) == :original
+  end
+
+  test "GC heap kills return an honest worker diagnostic" do
+    assert {:error, {:operation_worker_failed, diagnostic}} =
+             Operation.run(__MODULE__, :heap, fn ->
+               Process.flag(:max_heap_size, %{
+                 size: 1_000,
+                 kill: true,
+                 error_logger: false,
+                 include_shared_binaries: true
+               })
+
+               Process.put(:heap, Enum.to_list(1..100_000))
+               :erlang.garbage_collect()
+             end)
+
+    assert diagnostic.stage == :limits
+    assert diagnostic.reason == :operation_worker_failed
+    assert diagnostic.operation == :heap
+    assert diagnostic.message =~ "GC-enforced"
+    assert diagnostic.message =~ "external kill"
+  end
+
+  test "programmer errors throws and explicit exits retain their semantics" do
+    assert_raise ArgumentError, "bad callback", fn ->
+      Operation.run(__MODULE__, :exception, fn -> raise ArgumentError, "bad callback" end)
+    end
+
+    assert catch_throw(Operation.run(__MODULE__, :throw, fn -> throw(:caller_throw) end)) ==
+             :caller_throw
+
+    assert catch_exit(Operation.run(__MODULE__, :exit, fn -> exit(:caller_exit) end)) ==
+             :caller_exit
+  end
+
+  test "memory checks tolerate a worker that already exited" do
+    {worker, monitor} = spawn_monitor(fn -> :ok end)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}
+    assert :ok = OperationValidator.memory(worker, OperationValidator.prepare(__MODULE__, :done))
+  end
+
+  test "operation settings accept overrides and reject nonpositive and noninteger values" do
+    for key <- [
+          :max_operation_timeout_ms,
+          :max_operation_memory_bytes,
+          :operation_memory_check_interval_ms
+        ] do
+      assert {:ok, limits} = LimitsValidator.validate([{key, 123_456}])
+      assert limits[key] == 123_456
+
+      for value <- [0, -1, :infinity, 1.5] do
+        assert {:error, message} = LimitsValidator.validate([{key, value}])
+        assert message =~ Atom.to_string(key)
+      end
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.OperationGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Info, Limits, Operation}
   alias NativeElixirPdfUtilities.TestSupport.Paths
-  alias NativeElixirPdfUtilities.Validators.{LimitsValidator, OperationValidator}
 
   setup do
     limits = Limits.effective()
@@ -201,24 +295,6 @@ defmodule NativeElixirPdfUtilities.OperationTest do
     assert_receive {:DOWN, ^monitor, :process, ^worker, _reason}
   end
 
-  test "nested calls share the worker and its original deadline" do
-    owner = self()
-
-    assert {:ok, worker} =
-             Operation.run(__MODULE__, :outer, fn ->
-               outer = self()
-
-               Operation.run(__MODULE__, :inner, fn ->
-                 assert self() == outer
-                 assert self() != owner
-                 {:ok, self()}
-               end)
-             end)
-
-    refute Process.alive?(worker)
-    assert Process.get({Operation, :request}) == nil
-  end
-
   test "observed memory includes retained off-heap binaries after execution" do
     Limits.install(Map.put(Limits.effective(), :max_operation_memory_bytes, 1_000_000))
 
@@ -250,21 +326,6 @@ defmodule NativeElixirPdfUtilities.OperationTest do
     assert diagnostic.message =~ "max_operation_memory_bytes"
   end
 
-  test "worker callbacks inherit logger metadata while keeping process dictionaries isolated" do
-    marker = make_ref()
-    Logger.metadata(operation_test: marker)
-    Process.put(:caller_setting, :original)
-
-    assert {:ok, ^marker} =
-             Operation.run(__MODULE__, :callback_context, fn ->
-               assert Process.get(:caller_setting) == nil
-               Process.put(:caller_setting, :worker_value)
-               {:ok, Logger.metadata()[:operation_test]}
-             end)
-
-    assert Process.get(:caller_setting) == :original
-  end
-
   test "multiple subbinaries count their shared backing allocation once" do
     Limits.install(Map.put(Limits.effective(), :max_operation_memory_bytes, 2_000_000))
 
@@ -275,39 +336,6 @@ defmodule NativeElixirPdfUtilities.OperationTest do
                Process.put(:slices, slices)
                {:ok, length(slices)}
              end)
-  end
-
-  test "GC heap kills return an honest worker diagnostic" do
-    assert {:error, {:operation_worker_failed, diagnostic}} =
-             Operation.run(__MODULE__, :heap, fn ->
-               Process.flag(:max_heap_size, %{
-                 size: 1_000,
-                 kill: true,
-                 error_logger: false,
-                 include_shared_binaries: true
-               })
-
-               Process.put(:heap, Enum.to_list(1..100_000))
-               :erlang.garbage_collect()
-             end)
-
-    assert diagnostic.stage == :limits
-    assert diagnostic.reason == :operation_worker_failed
-    assert diagnostic.operation == :heap
-    assert diagnostic.message =~ "GC-enforced"
-    assert diagnostic.message =~ "external kill"
-  end
-
-  test "programmer errors throws and explicit exits retain their semantics" do
-    assert_raise ArgumentError, "bad callback", fn ->
-      Operation.run(__MODULE__, :exception, fn -> raise ArgumentError, "bad callback" end)
-    end
-
-    assert catch_throw(Operation.run(__MODULE__, :throw, fn -> throw(:caller_throw) end)) ==
-             :caller_throw
-
-    assert catch_exit(Operation.run(__MODULE__, :exit, fn -> exit(:caller_exit) end)) ==
-             :caller_exit
   end
 
   test "caller death cancels its worker" do
@@ -357,27 +385,5 @@ defmodule NativeElixirPdfUtilities.OperationTest do
              end)
 
     assert diagnostic.message =~ "max_operation_timeout_ms"
-  end
-
-  test "memory checks tolerate a worker that already exited" do
-    {worker, monitor} = spawn_monitor(fn -> :ok end)
-    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}
-    assert :ok = OperationValidator.memory(worker, OperationValidator.prepare(__MODULE__, :done))
-  end
-
-  test "operation settings accept overrides and reject nonpositive and noninteger values" do
-    for key <- [
-          :max_operation_timeout_ms,
-          :max_operation_memory_bytes,
-          :operation_memory_check_interval_ms
-        ] do
-      assert {:ok, limits} = LimitsValidator.validate([{key, 123_456}])
-      assert limits[key] == 123_456
-
-      for value <- [0, -1, :infinity, 1.5] do
-        assert {:error, message} = LimitsValidator.validate([{key, value}])
-        assert message =~ Atom.to_string(key)
-      end
-    end
   end
 end

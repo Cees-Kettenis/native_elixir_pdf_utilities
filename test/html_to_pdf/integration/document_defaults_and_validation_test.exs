@@ -1,12 +1,10 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
-    EmbeddedViewport,
-    FormValueBackend,
     HtmlComposition,
     HtmlTree,
     ResourceContext,
@@ -19,19 +17,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
   alias NativeElixirPdfUtilities.Pdf.Reader
 
   alias NativeElixirPdfUtilities.Validators.{
-    EmbeddedFormValidator,
     HtmlFormValidator,
-    HtmlFormValueValidator,
     HtmlValidator,
-    TemplatePatchValidator,
-    WriterValidator
+    TemplatePatchValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "automatic and initial quotes restore quote glyphs after an ancestor suppresses them" do
     html =
@@ -123,23 +112,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
     assert :error = HtmlValidator.parse_css_shadow_selector(":host(")
   end
 
-  test "CSS size preparation distinguishes auto margins from signed and unsigned lengths" do
-    assert {:ok, :auto} = HtmlValidator.prepare_css_length_source("auto", :margin)
-
-    assert {:ok, %{value: "0"}} =
-             HtmlValidator.prepare_css_length_source("0", :margin)
-
-    assert :error = HtmlValidator.prepare_css_length_source("wat", :margin)
-    Limits.install(%{Limits.effective() | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.validate_prepared_css_size({:min, [1.0, 2.0]})
-             end)
-
-    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
-  end
-
   test "caller canvas plans reject extra properties and body-only layout keeps source background" do
     assert {:ok, dom} = HtmlParser.parse_detailed("<body style='background:#eef'>Actual</body>")
     assert {:ok, tree} = Style.compute_detailed(dom)
@@ -197,67 +169,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
              HtmlFormValidator.with_layout_mode(:static, fn -> HtmlFormValidator.layout_mode() end)
 
     assert HtmlFormValidator.layout_mode() == :interactive
-  end
-
-  test "native URL resource failures remain attributed to the caller input" do
-    Limits.install(%{Limits.effective() | max_input_bytes: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<input type=url value='https://example.test'>")
-
-    assert diagnostic.stage == :html and diagnostic.operation == :render
-    refute Map.has_key?(diagnostic, :source)
-    assert diagnostic.message =~ "max_input_bytes"
-  end
-
-  test "native replies cannot reset the cumulative compiler budget between requests" do
-    {:ok, initial} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
-
-    {:ok, :matched, %{compile: compile, matches: matches}} =
-      FormValueBackend.run(initial)
-
-    assert compile > 0
-    Limits.install(%{Limits.effective() | max_work: compile + matches})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               {:ok, one} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
-               assert {:ok, :matched} = HtmlFormValueValidator.result(FormValueBackend.run(one))
-               {:ok, two} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
-               HtmlFormValueValidator.result(FormValueBackend.run(two))
-             end)
-
-    assert diagnostic.operation == :initial_form_value and
-             diagnostic.message =~ "max_work"
-  end
-
-  test "Elixir pattern compilation enforces configured work independently of obsolete native operand bounds" do
-    Limits.install(%{Limits.effective() | max_work: 100})
-    {:ok, request} = HtmlFormValueValidator.prepare(:pattern, String.duplicate("()", 200), [""])
-    assert {:limit, :max_work} = reply = FormValueBackend.run(request)
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlFormValueValidator.result(reply)
-    assert diagnostic.message =~ "max_work"
-    assert diagnostic.operation == :initial_form_value
-  end
-
-  test "fixed OTP engine bounds diagnose valid authored patterns instead of ignoring them" do
-    Limits.install(%{
-      Limits.effective()
-      | max_input_bytes: 200_000,
-        max_work: 20_000_000
-    })
-
-    for pattern <- ["a{100000}", String.duplicate("()", 65_536)] do
-      assert {:error, {:unsupported_html, diagnostic}} =
-               NativeElixirPdfUtilities.Validators.HtmlPatternValidator.initial_pattern(pattern, [
-                 ""
-               ])
-
-      assert diagnostic.operation == :initial_form_value
-      assert diagnostic.stage == :html
-      assert diagnostic.message =~ "fixed engine bound"
-      assert diagnostic.message =~ "not an invalid authored HTML pattern"
-    end
   end
 
   test "RGB function whitespace preserves the channel and alpha values" do
@@ -510,24 +421,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
     assert HtmlValidator.document_metadata_options(dom, []) == [metadata: %{author: "Actual"}]
   end
 
-  test "CSS dependency resource failures retain the canonical originating validator diagnostic" do
-    original = Limits.effective()
-    Limits.install(%{original | max_depth: 0})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.compute_custom_properties(%{
-               "--actual" => "var(--missing,var(--other,real))"
-             })
-
-    assert diagnostic.stage == :limits and diagnostic.message =~ "max_depth"
-    Limits.install(%{original | max_numeric_token_bytes: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.prepare_css_length_source("calc(1pt)", :length)
-
-    assert diagnostic.operation == :prepare_css_calculation and diagnostic.source == "calc(1pt)"
-  end
-
   test "invalid responsive measurement and SVG reclassification reject corrupted image transport" do
     png =
       File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/initial-small.png"))
@@ -581,6 +474,180 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
            ]
 
     assert Enum.map(list._initial_form_state.suggestions, & &1.value) == ["b"]
+  end
+
+  test "already styled image hosts preserve authored dimensions when preparing skipped artwork" do
+    png =
+      File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/initial-small.png"))
+
+    assert {:ok, dom} =
+             HtmlParser.parse_detailed(
+               "<input type=image width=48 height=24 src=actual.png style='content-visibility:hidden'>"
+             )
+
+    assert {:ok, tree} =
+             Style.compute_detailed(dom, forms: :static, assets: %{"actual.png" => {:bytes, png}})
+
+    [original] = dom.children
+    [styled] = tree.children
+    assert styled.style.image_display == :inline
+    skipped = HtmlFormValidator.prepare_skipped_input_style(original, styled.style, [])
+    assert skipped.width == 36 and skipped.height == 18
+    assert skipped.display == :inline_block
+    refute Map.has_key?(skipped, :image)
+    refute Map.has_key?(skipped, :_responsive_image)
+  end
+
+  test "caller script and head noscript trees receive their original content-model diagnostics" do
+    text = %{type: :text, text: "Actual"}
+    paragraph = %{type: :element, tag: "p", attributes: %{}, children: [text]}
+
+    script = %{
+      type: :element,
+      tag: "script",
+      attributes: %{"type" => "application/json"},
+      children: [paragraph]
+    }
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             Style.compute_detailed(%{type: :document, children: [script]})
+
+    assert diagnostic.stage == :style and diagnostic.source == "script"
+    assert diagnostic.message =~ "text-only contents"
+    title = %{type: :element, tag: "title", attributes: %{}, children: [text]}
+    noscript = %{type: :element, tag: "noscript", attributes: %{}, children: [title]}
+    head = %{type: :element, tag: "head", attributes: %{}, children: [noscript]}
+    html = %{type: :element, tag: "html", attributes: %{}, children: [head]}
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             Style.compute_detailed(%{type: :document, children: [html]})
+
+    assert diagnostic.stage == :style and diagnostic.source == "noscript"
+    assert diagnostic.message =~ "head contents accept only supported style and meta"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    EmbeddedViewport,
+    FormValueBackend,
+    ResourceContext,
+    HtmlParser,
+    Layout,
+    Style
+  }
+
+  alias NativeElixirPdfUtilities.Validators.{
+    EmbeddedFormValidator,
+    HtmlFormValidator,
+    HtmlFormValueValidator,
+    HtmlValidator,
+    WriterValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "CSS size preparation distinguishes auto margins from signed and unsigned lengths" do
+    assert {:ok, :auto} = HtmlValidator.prepare_css_length_source("auto", :margin)
+
+    assert {:ok, %{value: "0"}} =
+             HtmlValidator.prepare_css_length_source("0", :margin)
+
+    assert :error = HtmlValidator.prepare_css_length_source("wat", :margin)
+    Limits.install(%{Limits.effective() | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.validate_prepared_css_size({:min, [1.0, 2.0]})
+             end)
+
+    assert diagnostic.stage == :layout and diagnostic.message =~ "max_work"
+  end
+
+  test "native URL resource failures remain attributed to the caller input" do
+    Limits.install(%{Limits.effective() | max_input_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<input type=url value='https://example.test'>")
+
+    assert diagnostic.stage == :html and diagnostic.operation == :render
+    refute Map.has_key?(diagnostic, :source)
+    assert diagnostic.message =~ "max_input_bytes"
+  end
+
+  test "native replies cannot reset the cumulative compiler budget between requests" do
+    {:ok, initial} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
+
+    {:ok, :matched, %{compile: compile, matches: matches}} =
+      FormValueBackend.run(initial)
+
+    assert compile > 0
+    Limits.install(%{Limits.effective() | max_work: compile + matches})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               {:ok, one} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
+               assert {:ok, :matched} = HtmlFormValueValidator.result(FormValueBackend.run(one))
+               {:ok, two} = HtmlFormValueValidator.prepare(:pattern, "(a)", ["a"])
+               HtmlFormValueValidator.result(FormValueBackend.run(two))
+             end)
+
+    assert diagnostic.operation == :initial_form_value and
+             diagnostic.message =~ "max_work"
+  end
+
+  test "Elixir pattern compilation enforces configured work independently of obsolete native operand bounds" do
+    Limits.install(%{Limits.effective() | max_work: 100})
+    {:ok, request} = HtmlFormValueValidator.prepare(:pattern, String.duplicate("()", 200), [""])
+    assert {:limit, :max_work} = reply = FormValueBackend.run(request)
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlFormValueValidator.result(reply)
+    assert diagnostic.message =~ "max_work"
+    assert diagnostic.operation == :initial_form_value
+  end
+
+  test "fixed OTP engine bounds diagnose valid authored patterns instead of ignoring them" do
+    Limits.install(%{
+      Limits.effective()
+      | max_input_bytes: 200_000,
+        max_work: 20_000_000
+    })
+
+    for pattern <- ["a{100000}", String.duplicate("()", 65_536)] do
+      assert {:error, {:unsupported_html, diagnostic}} =
+               NativeElixirPdfUtilities.Validators.HtmlPatternValidator.initial_pattern(pattern, [
+                 ""
+               ])
+
+      assert diagnostic.operation == :initial_form_value
+      assert diagnostic.stage == :html
+      assert diagnostic.message =~ "fixed engine bound"
+      assert diagnostic.message =~ "not an invalid authored HTML pattern"
+    end
+  end
+
+  test "CSS dependency resource failures retain the canonical originating validator diagnostic" do
+    original = Limits.effective()
+    Limits.install(%{original | max_depth: 0})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.compute_custom_properties(%{
+               "--actual" => "var(--missing,var(--other,real))"
+             })
+
+    assert diagnostic.stage == :limits and diagnostic.message =~ "max_depth"
+    Limits.install(%{original | max_numeric_token_bytes: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.prepare_css_length_source("calc(1pt)", :length)
+
+    assert diagnostic.operation == :prepare_css_calculation and diagnostic.source == "calc(1pt)"
   end
 
   test "child producer records enforce static recomputation, aggregate limits and repeated ownership" do
@@ -664,56 +731,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DocumentDefaultsAndValidationTest d
              HtmlFormValidator.prepare([%{size: layout.page_size, boxes: layout.boxes}], [])
 
     assert diagnostic.stage == :forms and diagnostic.message =~ "max_output_bytes"
-  end
-
-  test "already styled image hosts preserve authored dimensions when preparing skipped artwork" do
-    png =
-      File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/initial-small.png"))
-
-    assert {:ok, dom} =
-             HtmlParser.parse_detailed(
-               "<input type=image width=48 height=24 src=actual.png style='content-visibility:hidden'>"
-             )
-
-    assert {:ok, tree} =
-             Style.compute_detailed(dom, forms: :static, assets: %{"actual.png" => {:bytes, png}})
-
-    [original] = dom.children
-    [styled] = tree.children
-    assert styled.style.image_display == :inline
-    skipped = HtmlFormValidator.prepare_skipped_input_style(original, styled.style, [])
-    assert skipped.width == 36 and skipped.height == 18
-    assert skipped.display == :inline_block
-    refute Map.has_key?(skipped, :image)
-    refute Map.has_key?(skipped, :_responsive_image)
-  end
-
-  test "caller script and head noscript trees receive their original content-model diagnostics" do
-    text = %{type: :text, text: "Actual"}
-    paragraph = %{type: :element, tag: "p", attributes: %{}, children: [text]}
-
-    script = %{
-      type: :element,
-      tag: "script",
-      attributes: %{"type" => "application/json"},
-      children: [paragraph]
-    }
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             Style.compute_detailed(%{type: :document, children: [script]})
-
-    assert diagnostic.stage == :style and diagnostic.source == "script"
-    assert diagnostic.message =~ "text-only contents"
-    title = %{type: :element, tag: "title", attributes: %{}, children: [text]}
-    noscript = %{type: :element, tag: "noscript", attributes: %{}, children: [title]}
-    head = %{type: :element, tag: "head", attributes: %{}, children: [noscript]}
-    html = %{type: :element, tag: "html", attributes: %{}, children: [head]}
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             Style.compute_detailed(%{type: :document, children: [html]})
-
-    assert diagnostic.stage == :style and diagnostic.source == "noscript"
-    assert diagnostic.message =~ "head contents accept only supported style and meta"
   end
 
   defp with_child_fields(html, callback) do

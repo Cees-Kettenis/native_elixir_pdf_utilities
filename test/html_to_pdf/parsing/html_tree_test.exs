@@ -1,68 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, Style}
   alias NativeElixirPdfUtilities.Validators.{HtmlTreeValidator, HtmlValidator}
-  alias NativeElixirPdfUtilities.Limits
   import NativeElixirPdfUtilities.HtmlTreeHelpers
-
-  test "canonical fragment insertion parents exist at each authored token" do
-    :erlang.trace_pattern({HtmlTree, :insert, 4}, true, [:local])
-    on_exit(fn -> :erlang.trace_pattern({HtmlTree, :insert, 4}, false, [:local]) end)
-
-    source =
-      "<?root><col><?columns><col></colgroup><tr><td>A</td></tr><?rows>" <>
-        "<tr><td>B</td></tr><template><?inert><p>Future</p></template>"
-
-    task =
-      Task.async(fn ->
-        receive do
-          :parse -> HtmlParser.parse_fragment_tree_detailed(source, "TABLE")
-        end
-      end)
-
-    :erlang.trace(task.pid, true, [:call])
-    send(task.pid, :parse)
-    assert {:ok, fragment} = Task.await(task)
-    assert fragment.type == :document_fragment
-    assert fragment.source == %{text: source, line: 1, column: 1}
-    assert fragment.parent_id == nil and fragment.tree_scope_id == fragment.node_id
-    assert :ok = HtmlTreeValidator.validate_transport(fragment)
-
-    for {target, type, tag, earlier} <- [
-          {"root", :document_fragment, nil, nil},
-          {"columns", :element, "colgroup", "col"},
-          {"rows", :element, "tbody", "tr"},
-          {"inert", :document_fragment, nil, nil}
-        ] do
-      assert_receive {:trace, _, :call,
-                      {HtmlTree, :insert,
-                       [tree, parent, %{type: :processing_instruction, target: ^target}, nil]}}
-
-      owner = tree.nodes[parent]
-      assert owner.type == type and Map.get(owner, :tag) == tag
-      assert owner.document_id == fragment.document_id
-      assert tree.nodes[tree.root].type == :document_fragment
-
-      if tag do
-        assert owner.source == %{text: "", line: 1, column: 1}
-        assert owner.parent_id == fragment.node_id
-        assert owner.tree_scope_id == fragment.node_id
-        assert Enum.any?(HtmlTree.children(tree, parent), &(Map.get(&1, :tag) == earlier))
-      end
-
-      refute Enum.any?(tree.nodes, fn {_id, node} -> Map.get(node, :text) == "Future" end)
-    end
-
-    [root, columns, rows] = fragment.children
-    assert root.target == "root"
-    assert columns.tag == "colgroup" and rows.tag == "tbody"
-    [_, marker, _, template] = rows.children
-    assert marker.target == "rows"
-    assert template.content.tree_scope_id != fragment.tree_scope_id
-    assert template.content.document_id == fragment.document_id
-    assert template.content.parent_id == nil
-  end
 
   test "canonical fragments preserve original source through nested table modes" do
     NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
@@ -216,95 +157,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
     end
   end
 
-  test "canonical implied fragment parents consume shared node depth and work budgets" do
-    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
-      [html_recovery: true],
-      fn ->
-        limits = Limits.effective()
-        on_exit(fn -> Limits.install(limits) end)
-        Limits.install(%{limits | max_entries: 5})
-        assert {:ok, _fragment} = HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
-        Limits.install(%{limits | max_entries: 3})
-
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
-
-        assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
-        Limits.install(%{limits | max_depth: 2})
-
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
-
-        assert diagnostic.stage == :html and diagnostic.message =~ "max_depth"
-        Limits.install(%{limits | max_work: 1})
-
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlParser.parse_fragment_tree_detailed("<?marker>", "div")
-
-        assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
-      end
-    )
-  end
-
-  test "implied insertion parents already own earlier nodes at the next authored token" do
-    # Trace only this parsing task. A completed-DOM reconstruction cannot satisfy
-    # the snapshots captured at the PI insertion calls.
-    :erlang.trace_pattern({HtmlTree, :insert, 4}, true, [:local])
-    on_exit(fn -> :erlang.trace_pattern({HtmlTree, :insert, 4}, false, [:local]) end)
-
-    input =
-      "<?document><title>Title</title><?head></head><?between><p>Body</p>" <>
-        "<table><col><?columns><col></colgroup><tr><td>A</td></tr><?rows>" <>
-        "<tr><td>B</td></tr></table><template><?inert><p>Future</p></template>"
-
-    task =
-      Task.async(fn ->
-        receive do
-          :parse -> HtmlParser.parse_document_detailed(input)
-        end
-      end)
-
-    :erlang.trace(task.pid, true, [:call])
-    send(task.pid, :parse)
-    assert {:ok, document} = Task.await(task)
-    assert :ok = HtmlTreeValidator.validate_transport(document)
-
-    for {target, expected_type, expected_tag, earlier} <- [
-          {"document", :document, nil, nil},
-          {"head", :element, "head", "title"},
-          {"between", :element, "html", "head"},
-          {"columns", :element, "colgroup", "col"},
-          {"rows", :element, "tbody", "tr"},
-          {"inert", :document_fragment, nil, nil}
-        ] do
-      assert_receive {:trace, _, :call,
-                      {HtmlTree, :insert,
-                       [tree, parent, %{type: :processing_instruction, target: ^target}, nil]}}
-
-      owner = Map.fetch!(tree.nodes, parent)
-      assert owner.type == expected_type
-      assert Map.get(owner, :tag) == expected_tag
-
-      if expected_type == :element do
-        assert owner.source == %{text: "", line: 1, column: 1}
-        assert tree.nodes[owner.parent_id].node_id == owner.parent_id
-      end
-
-      if earlier do
-        assert Enum.any?(HtmlTree.children(tree, parent), &(Map.get(&1, :tag) == earlier))
-      end
-
-      refute Enum.any?(tree.nodes, fn {_id, node} -> Map.get(node, :text) == "Future" end)
-    end
-
-    [_, html] = document.children
-    assert [head, _, body] = html.children
-    assert head.tag == "head" and body.tag == "body"
-    assert [_, table, template] = body.children
-    assert Enum.map(table.children, & &1.tag) == ["colgroup", "tbody"]
-    assert template.content.tree_scope_id != body.tree_scope_id
-  end
-
   test "authored tokens retain original sources inside token-time implied parents" do
     NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
       [html_recovery: true],
@@ -337,43 +189,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
         assert Enum.map(List.last(legacy.children).children, & &1.tag) == ["col", "tr"]
         assert {:ok, fragment} = HtmlParser.parse_fragment("<tr><td>A", "table")
         assert hd(fragment.children).tag == "tr"
-      end
-    )
-  end
-
-  test "implied parents reserve node and depth budgets before their authored children" do
-    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
-      [html_recovery: true],
-      fn ->
-        limits = Limits.effective()
-        on_exit(fn -> Limits.install(limits) end)
-
-        Limits.install(%{limits | max_entries: 3})
-        assert {:ok, _empty_document} = HtmlParser.parse_document_detailed("")
-
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlParser.parse_document_detailed("<p>A</p>")
-
-        assert diagnostic.stage == :html
-        assert diagnostic.reason == :resource_limit_exceeded
-        assert diagnostic.message =~ "max_entries"
-
-        Limits.install(%{limits | max_depth: 2})
-        assert {:ok, _document} = HtmlParser.parse_document_detailed("")
-
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlParser.parse_document_detailed("<p>A</p>")
-
-        assert diagnostic.message =~ "max_depth"
-
-        Limits.install(%{limits | max_entries: 9})
-        assert {:ok, _document} = HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
-        Limits.install(%{limits | max_entries: 8})
-
-        assert {:error, {:resource_limit_exceeded, diagnostic}} =
-                 HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
-
-        assert diagnostic.message =~ "max_entries"
       end
     )
   end
@@ -435,56 +250,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
 
     assert footer == List.last(table.children)
     assert List.last(rows.children).node_id == Enum.at(table.children, -2).node_id
-  end
-
-  test "insertion-mode classification and preceding-node scans share the cumulative work budget" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    token = "<TITLE>"
-    Limits.install(%{limits | max_work: 2 * byte_size(token)})
-
-    assert {:imply, "html"} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.html_insertion_action(:document, token, nil, false)
-             end)
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlValidator.reserve_render_resource(:max_work, 1, :html)
-               HtmlValidator.html_insertion_action(:document, token, nil, false)
-             end)
-
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
-
-    source = %{text: "", line: 1, column: 1}
-    tree = HtmlTree.new(source)
-
-    tree =
-      Enum.reduce(1..3, tree, fn _, tree ->
-        {tree, _id} =
-          HtmlTree.insert(tree, tree.root, %{
-            type: :processing_instruction,
-            target: "marker",
-            data: "",
-            source: source
-          })
-
-        tree
-      end)
-
-    Limits.install(%{limits | max_work: 2})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlTree.last_element_tag(tree, tree.root)
-             end)
-
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
-
-    Limits.install(%{limits | max_work: 3})
-
-    assert HtmlValidator.with_render_budget(fn -> HtmlTree.last_element_tag(tree, tree.root) end) ==
-             nil
   end
 
   test "closed earlier nodes and insertion locations remain live while a later subtree is open" do
@@ -579,34 +344,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
     assert new_first.children == first.children
     assert section.source == %{text: "", line: 1, column: 1}
     assert :ok = HtmlTreeValidator.validate_transport(HtmlTree.fetch(tree, tree.root))
-  end
-
-  test "uncached implied groups still invalidate a cached ancestor with bounded accounting" do
-    assert {:ok, document} = HtmlParser.parse_detailed("<div><p>A</p></div>")
-    tree = HtmlTree.from_document(document)
-    [div] = HtmlTree.children(tree, tree.root)
-    group = %{type: :element, tag: "section", attributes: %{}, children: div.children}
-    tree = HtmlTree.replace_children(tree, div.node_id, [group])
-    [group] = HtmlTree.children(tree, div.node_id)
-    {tree, _closed} = HtmlTree.close(tree, tree.root)
-    refute Map.has_key?(tree.nodes[group.node_id], :projection)
-    refute Map.has_key?(tree.nodes[div.node_id], :projection)
-    assert Map.has_key?(tree.nodes[tree.root], :projection)
-    new = %{type: :text, text: "Inserted", source: %{text: "", line: 1, column: 1}}
-    {changed, id} = HtmlTree.insert(tree, group.node_id, new)
-
-    assert [%{children: [%{children: [_, %{node_id: ^id}]}]}] =
-             HtmlTree.children(changed, changed.root)
-
-    assert :ok = HtmlTreeValidator.validate_transport(HtmlTree.fetch(changed, changed.root))
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_work: 2})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlValidator.with_render_budget(fn -> HtmlTree.insert(tree, group.node_id, new) end)
-
-    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 
   test "all authored nodes retain original source spans and text token boundaries" do
@@ -770,6 +507,276 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
              HtmlTreeValidator.validate_node_metadata(%{
                source: %{text: :forged, line: 1, column: 1}
              })
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, Style}
+  alias NativeElixirPdfUtilities.Validators.{HtmlTreeValidator, HtmlValidator}
+  alias NativeElixirPdfUtilities.Limits
+
+  test "canonical fragment insertion parents exist at each authored token" do
+    :erlang.trace_pattern({HtmlTree, :insert, 4}, true, [:local])
+    on_exit(fn -> :erlang.trace_pattern({HtmlTree, :insert, 4}, false, [:local]) end)
+
+    source =
+      "<?root><col><?columns><col></colgroup><tr><td>A</td></tr><?rows>" <>
+        "<tr><td>B</td></tr><template><?inert><p>Future</p></template>"
+
+    task =
+      Task.async(fn ->
+        receive do
+          :parse -> HtmlParser.parse_fragment_tree_detailed(source, "TABLE")
+        end
+      end)
+
+    :erlang.trace(task.pid, true, [:call])
+    send(task.pid, :parse)
+    assert {:ok, fragment} = Task.await(task)
+    assert fragment.type == :document_fragment
+    assert fragment.source == %{text: source, line: 1, column: 1}
+    assert fragment.parent_id == nil and fragment.tree_scope_id == fragment.node_id
+    assert :ok = HtmlTreeValidator.validate_transport(fragment)
+
+    for {target, type, tag, earlier} <- [
+          {"root", :document_fragment, nil, nil},
+          {"columns", :element, "colgroup", "col"},
+          {"rows", :element, "tbody", "tr"},
+          {"inert", :document_fragment, nil, nil}
+        ] do
+      assert_receive {:trace, _, :call,
+                      {HtmlTree, :insert,
+                       [tree, parent, %{type: :processing_instruction, target: ^target}, nil]}}
+
+      owner = tree.nodes[parent]
+      assert owner.type == type and Map.get(owner, :tag) == tag
+      assert owner.document_id == fragment.document_id
+      assert tree.nodes[tree.root].type == :document_fragment
+
+      if tag do
+        assert owner.source == %{text: "", line: 1, column: 1}
+        assert owner.parent_id == fragment.node_id
+        assert owner.tree_scope_id == fragment.node_id
+        assert Enum.any?(HtmlTree.children(tree, parent), &(Map.get(&1, :tag) == earlier))
+      end
+
+      refute Enum.any?(tree.nodes, fn {_id, node} -> Map.get(node, :text) == "Future" end)
+    end
+
+    [root, columns, rows] = fragment.children
+    assert root.target == "root"
+    assert columns.tag == "colgroup" and rows.tag == "tbody"
+    [_, marker, _, template] = rows.children
+    assert marker.target == "rows"
+    assert template.content.tree_scope_id != fragment.tree_scope_id
+    assert template.content.document_id == fragment.document_id
+    assert template.content.parent_id == nil
+  end
+
+  test "canonical implied fragment parents consume shared node depth and work budgets" do
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        limits = Limits.effective()
+        on_exit(fn -> Limits.install(limits) end)
+        Limits.install(%{limits | max_entries: 5})
+        assert {:ok, _fragment} = HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
+        Limits.install(%{limits | max_entries: 3})
+
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
+
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_entries"
+        Limits.install(%{limits | max_depth: 2})
+
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_fragment_tree_detailed("<tr><td>A", "table")
+
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_depth"
+        Limits.install(%{limits | max_work: 1})
+
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_fragment_tree_detailed("<?marker>", "div")
+
+        assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+      end
+    )
+  end
+
+  test "implied insertion parents already own earlier nodes at the next authored token" do
+    # Trace only this parsing task. A completed-DOM reconstruction cannot satisfy
+    # the snapshots captured at the PI insertion calls.
+    :erlang.trace_pattern({HtmlTree, :insert, 4}, true, [:local])
+    on_exit(fn -> :erlang.trace_pattern({HtmlTree, :insert, 4}, false, [:local]) end)
+
+    input =
+      "<?document><title>Title</title><?head></head><?between><p>Body</p>" <>
+        "<table><col><?columns><col></colgroup><tr><td>A</td></tr><?rows>" <>
+        "<tr><td>B</td></tr></table><template><?inert><p>Future</p></template>"
+
+    task =
+      Task.async(fn ->
+        receive do
+          :parse -> HtmlParser.parse_document_detailed(input)
+        end
+      end)
+
+    :erlang.trace(task.pid, true, [:call])
+    send(task.pid, :parse)
+    assert {:ok, document} = Task.await(task)
+    assert :ok = HtmlTreeValidator.validate_transport(document)
+
+    for {target, expected_type, expected_tag, earlier} <- [
+          {"document", :document, nil, nil},
+          {"head", :element, "head", "title"},
+          {"between", :element, "html", "head"},
+          {"columns", :element, "colgroup", "col"},
+          {"rows", :element, "tbody", "tr"},
+          {"inert", :document_fragment, nil, nil}
+        ] do
+      assert_receive {:trace, _, :call,
+                      {HtmlTree, :insert,
+                       [tree, parent, %{type: :processing_instruction, target: ^target}, nil]}}
+
+      owner = Map.fetch!(tree.nodes, parent)
+      assert owner.type == expected_type
+      assert Map.get(owner, :tag) == expected_tag
+
+      if expected_type == :element do
+        assert owner.source == %{text: "", line: 1, column: 1}
+        assert tree.nodes[owner.parent_id].node_id == owner.parent_id
+      end
+
+      if earlier do
+        assert Enum.any?(HtmlTree.children(tree, parent), &(Map.get(&1, :tag) == earlier))
+      end
+
+      refute Enum.any?(tree.nodes, fn {_id, node} -> Map.get(node, :text) == "Future" end)
+    end
+
+    [_, html] = document.children
+    assert [head, _, body] = html.children
+    assert head.tag == "head" and body.tag == "body"
+    assert [_, table, template] = body.children
+    assert Enum.map(table.children, & &1.tag) == ["colgroup", "tbody"]
+    assert template.content.tree_scope_id != body.tree_scope_id
+  end
+
+  test "implied parents reserve node and depth budgets before their authored children" do
+    NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_options(
+      [html_recovery: true],
+      fn ->
+        limits = Limits.effective()
+        on_exit(fn -> Limits.install(limits) end)
+
+        Limits.install(%{limits | max_entries: 3})
+        assert {:ok, _empty_document} = HtmlParser.parse_document_detailed("")
+
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_document_detailed("<p>A</p>")
+
+        assert diagnostic.stage == :html
+        assert diagnostic.reason == :resource_limit_exceeded
+        assert diagnostic.message =~ "max_entries"
+
+        Limits.install(%{limits | max_depth: 2})
+        assert {:ok, _document} = HtmlParser.parse_document_detailed("")
+
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_document_detailed("<p>A</p>")
+
+        assert diagnostic.message =~ "max_depth"
+
+        Limits.install(%{limits | max_entries: 9})
+        assert {:ok, _document} = HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
+        Limits.install(%{limits | max_entries: 8})
+
+        assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                 HtmlParser.parse_document_detailed("<table><tr><td>A</table>")
+
+        assert diagnostic.message =~ "max_entries"
+      end
+    )
+  end
+
+  test "insertion-mode classification and preceding-node scans share the cumulative work budget" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    token = "<TITLE>"
+    Limits.install(%{limits | max_work: 2 * byte_size(token)})
+
+    assert {:imply, "html"} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.html_insertion_action(:document, token, nil, false)
+             end)
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlValidator.reserve_render_resource(:max_work, 1, :html)
+               HtmlValidator.html_insertion_action(:document, token, nil, false)
+             end)
+
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+
+    source = %{text: "", line: 1, column: 1}
+    tree = HtmlTree.new(source)
+
+    tree =
+      Enum.reduce(1..3, tree, fn _, tree ->
+        {tree, _id} =
+          HtmlTree.insert(tree, tree.root, %{
+            type: :processing_instruction,
+            target: "marker",
+            data: "",
+            source: source
+          })
+
+        tree
+      end)
+
+    Limits.install(%{limits | max_work: 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlTree.last_element_tag(tree, tree.root)
+             end)
+
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+
+    Limits.install(%{limits | max_work: 3})
+
+    assert HtmlValidator.with_render_budget(fn -> HtmlTree.last_element_tag(tree, tree.root) end) ==
+             nil
+  end
+
+  test "uncached implied groups still invalidate a cached ancestor with bounded accounting" do
+    assert {:ok, document} = HtmlParser.parse_detailed("<div><p>A</p></div>")
+    tree = HtmlTree.from_document(document)
+    [div] = HtmlTree.children(tree, tree.root)
+    group = %{type: :element, tag: "section", attributes: %{}, children: div.children}
+    tree = HtmlTree.replace_children(tree, div.node_id, [group])
+    [group] = HtmlTree.children(tree, div.node_id)
+    {tree, _closed} = HtmlTree.close(tree, tree.root)
+    refute Map.has_key?(tree.nodes[group.node_id], :projection)
+    refute Map.has_key?(tree.nodes[div.node_id], :projection)
+    assert Map.has_key?(tree.nodes[tree.root], :projection)
+    new = %{type: :text, text: "Inserted", source: %{text: "", line: 1, column: 1}}
+    {changed, id} = HtmlTree.insert(tree, group.node_id, new)
+
+    assert [%{children: [%{children: [_, %{node_id: ^id}]}]}] =
+             HtmlTree.children(changed, changed.root)
+
+    assert :ok = HtmlTreeValidator.validate_transport(HtmlTree.fetch(changed, changed.root))
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_work: 2})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlValidator.with_render_budget(fn -> HtmlTree.insert(tree, group.node_id, new) end)
+
+    assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
   end
 
   test "direct PI source consistency is bounded before UTF-8 and token scans" do

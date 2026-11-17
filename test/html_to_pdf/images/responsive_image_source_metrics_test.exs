@@ -3,7 +3,7 @@ alias NativeElixirPdfUtilities.TestSupport.Paths
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveImageSourceMetricsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
 
@@ -40,23 +40,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveImageSourceMetricsTest do
                     0.000001
 
     assert ResponsiveImageValidator.source_size("calc(10ch + 1cap)", measured) > ch
-  end
-
-  test "malformed size components fall through while resource failures retain diagnostics" do
-    context = %{width: 800.0, height: 600.0, density: 1.0, type: :print}
-    assert ResponsiveImageValidator.source_size("'invalid', 40px", context) == 40.0
-    assert ResponsiveImageValidator.source_size("calc(", context) == 800.0
-
-    limits = NativeElixirPdfUtilities.Limits.effective()
-    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
-    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             ResponsiveImageValidator.source_size("calc(20px + 10px)", context)
-
-    assert diagnostic.reason == :resource_limit_exceeded
-    assert diagnostic.stage == :style
-    assert diagnostic.message =~ "max_work"
   end
 
   test "styling an automatic lazy image without its resource scope returns the preparation diagnostic" do
@@ -139,5 +122,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveImageSourceMetricsTest do
       )
 
     assert stats.page_count == 1
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ResponsiveImageSourceMetricsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Validators.{
+    ResponsiveImageValidator
+  }
+
+  test "malformed size components fall through while resource failures retain diagnostics" do
+    context = %{width: 800.0, height: 600.0, density: 1.0, type: :print}
+    assert ResponsiveImageValidator.source_size("'invalid', 40px", context) == 40.0
+    assert ResponsiveImageValidator.source_size("calc(", context) == 800.0
+
+    limits = NativeElixirPdfUtilities.Limits.effective()
+    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
+    NativeElixirPdfUtilities.Limits.install(%{limits | max_work: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             ResponsiveImageValidator.source_size("calc(20px + 10px)", context)
+
+    assert diagnostic.reason == :resource_limit_exceeded
+    assert diagnostic.stage == :style
+    assert diagnostic.message =~ "max_work"
   end
 end

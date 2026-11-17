@@ -2,7 +2,7 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixtu
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("cff_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.TestSupport.{FontFixture, CffFixture}
@@ -211,6 +211,66 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
     assert {:error, {:invalid_font, _}} = Font.instance(font, %{}, 100)
   end
 
+  test "default-instance name IDs, optional PostScript names and inactive axes follow fvar's static fallback" do
+    data = File.read!(FontCorpus.path("selected-variable.ttf"))
+    {_, tables} = FontFixture.tables(data)
+    fvar = tables["fvar"]
+    <<header::binary-size(56), instances::binary>> = fvar
+    # Three 12-byte records gain the optional name field; the first is default.
+    records =
+      for <<name::16, flags::16, _weight::32, width::32 <- instances>>,
+        do: <<name::16, flags::16, 400 * 65536::32, width::32, 6::16>>
+
+    extended = FontFixture.replace(header, 14, <<14::16>>) <> IO.iodata_to_binary(records)
+
+    for name <- [2, 17] do
+      selected = FontFixture.replace(extended, 56, <<name::16>>)
+
+      assert {:ok, _, metadata} =
+               FontVariationValidator.prepare(
+                 FontFixture.rebuild(data, %{"fvar" => selected}),
+                 %{},
+                 0
+               )
+
+      assert metadata.variation_coordinates == %{"wght" => 400, "wdth" => 100}
+    end
+
+    invalid = FontFixture.replace(extended, 68, <<1::16>>)
+
+    assert {:error, {:invalid_font, _}} =
+             FontVariationValidator.prepare(FontFixture.rebuild(data, %{"fvar" => invalid}))
+
+    inactive = FontFixture.rebuild(data, %{"fvar" => FontFixture.replace(fvar, 8, <<0::16>>)})
+    assert {:ok, static, %{}} = FontVariationValidator.prepare(inactive, %{"wght" => 900})
+    {_, static_tables} = FontFixture.tables(static)
+    refute Map.has_key?(static_tables, "fvar")
+    refute Map.has_key?(static_tables, "gvar")
+    assert static_tables["glyf"] == tables["glyf"]
+    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Static", data: inactive}])
+    refute font.variable_font?
+    <<_::32, count::16, _::binary>> = inactive
+
+    head_index =
+      Enum.find(0..(count - 1), fn index ->
+        binary_part(inactive, 12 + index * 16, 4) == "head"
+      end)
+
+    missing_head = FontFixture.replace(inactive, 12 + head_index * 16, "haad")
+
+    assert {:error, {:invalid_font, %{message: message}}} =
+             FontVariationValidator.prepare(missing_head)
+
+    assert message =~ "head table"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.TestSupport.FontCorpus
+  alias NativeElixirPdfUtilities.TestSupport.{FontFixture, CffFixture}
+  alias NativeElixirPdfUtilities.Validators.FontVariationValidator
+
   test "instantiated coordinate fields, composite arguments and arithmetic failures return diagnostics" do
     limits = NativeElixirPdfUtilities.Limits.effective()
     on_exit(fn -> NativeElixirPdfUtilities.Limits.install(limits) end)
@@ -320,58 +380,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontVariationStructureTest do
              FontVariationValidator.prepare(FontFixture.rebuild(cff, changes))
 
     assert diagnostic.message =~ "finite"
-  end
-
-  test "default-instance name IDs, optional PostScript names and inactive axes follow fvar's static fallback" do
-    data = File.read!(FontCorpus.path("selected-variable.ttf"))
-    {_, tables} = FontFixture.tables(data)
-    fvar = tables["fvar"]
-    <<header::binary-size(56), instances::binary>> = fvar
-    # Three 12-byte records gain the optional name field; the first is default.
-    records =
-      for <<name::16, flags::16, _weight::32, width::32 <- instances>>,
-        do: <<name::16, flags::16, 400 * 65536::32, width::32, 6::16>>
-
-    extended = FontFixture.replace(header, 14, <<14::16>>) <> IO.iodata_to_binary(records)
-
-    for name <- [2, 17] do
-      selected = FontFixture.replace(extended, 56, <<name::16>>)
-
-      assert {:ok, _, metadata} =
-               FontVariationValidator.prepare(
-                 FontFixture.rebuild(data, %{"fvar" => selected}),
-                 %{},
-                 0
-               )
-
-      assert metadata.variation_coordinates == %{"wght" => 400, "wdth" => 100}
-    end
-
-    invalid = FontFixture.replace(extended, 68, <<1::16>>)
-
-    assert {:error, {:invalid_font, _}} =
-             FontVariationValidator.prepare(FontFixture.rebuild(data, %{"fvar" => invalid}))
-
-    inactive = FontFixture.rebuild(data, %{"fvar" => FontFixture.replace(fvar, 8, <<0::16>>)})
-    assert {:ok, static, %{}} = FontVariationValidator.prepare(inactive, %{"wght" => 900})
-    {_, static_tables} = FontFixture.tables(static)
-    refute Map.has_key?(static_tables, "fvar")
-    refute Map.has_key?(static_tables, "gvar")
-    assert static_tables["glyf"] == tables["glyf"]
-    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Static", data: inactive}])
-    refute font.variable_font?
-    <<_::32, count::16, _::binary>> = inactive
-
-    head_index =
-      Enum.find(0..(count - 1), fn index ->
-        binary_part(inactive, 12 + index * 16, 4) == "head"
-      end)
-
-    missing_head = FontFixture.replace(inactive, 12 + head_index * 16, "haad")
-
-    assert {:error, {:invalid_font, %{message: message}}} =
-             FontVariationValidator.prepare(missing_head)
-
-    assert message =~ "head table"
   end
 end

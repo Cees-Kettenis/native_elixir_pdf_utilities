@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CjkQuantizationTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, Layout, Style}
   alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlLineBreakValidator}
 

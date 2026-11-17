@@ -1,9 +1,9 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
@@ -15,24 +15,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
   }
 
   alias NativeElixirPdfUtilities.Validators.{
-    CssSizingValidator,
     CssTransformValidator,
     HtmlValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
-
-  defp source_layout(html, options) do
-    with {:ok, dom} <- HtmlParser.parse_document_detailed(html),
-         {:ok, tree} <- Style.compute_detailed(dom, system_font_discovery: false),
-         {:ok, layout} <- Layout.layout(tree, options) do
-      {:ok, layout}
-    end
-  end
 
   test "avoided empty and nonempty source blocks consume their reserved height" do
     for contents <- ["", "<p>Reserved</p>"], decoration <- ["", "background:#eee"] do
@@ -225,31 +210,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
     assert String.trim(extracted) == "After"
   end
 
-  test "root border metadata and oversized calculations return shared actionable diagnostics" do
-    edges = %{top: :solid, right: :solid, bottom: :solid, left: :solid}
-    colors = Map.new(Map.keys(edges), &{&1, {0, 0, 0}})
-    assert :ok = CssSizingValidator.validate_root(%{border_styles: edges, border_colors: colors})
-
-    for root <- [
-          %{border_styles: %{edges | top: :invalid}},
-          %{border_styles: :invalid},
-          %{border_colors: %{colors | left: :invalid}},
-          %{border_colors: :invalid},
-          %{margin: :invalid}
-        ] do
-      assert {:error, {:invalid_layout, diagnostic}} = CssSizingValidator.validate_root(root)
-      assert diagnostic.stage == :layout and diagnostic.module == CssSizingValidator
-      assert diagnostic.source == "document_root_sizing"
-    end
-
-    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 4})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssSizingValidator.prepare_math("calc(123pt)")
-
-    assert diagnostic.message =~ "max_numeric_token_bytes"
-  end
-
   test "lazy image resolution retains its surviving source viewport" do
     bytes =
       File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/iframe-bars.png"))
@@ -316,5 +276,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
 
       assert is_binary(diagnostic.message) and diagnostic.message =~ "color"
     end)
+  end
+
+  defp source_layout(html, options) do
+    with {:ok, dom} <- HtmlParser.parse_document_detailed(html),
+         {:ok, tree} <- Style.compute_detailed(dom, system_font_discovery: false),
+         {:ok, layout} <- Layout.layout(tree, options) do
+      {:ok, layout}
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssSizingValidator
+  }
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "root border metadata and oversized calculations return shared actionable diagnostics" do
+    edges = %{top: :solid, right: :solid, bottom: :solid, left: :solid}
+    colors = Map.new(Map.keys(edges), &{&1, {0, 0, 0}})
+    assert :ok = CssSizingValidator.validate_root(%{border_styles: edges, border_colors: colors})
+
+    for root <- [
+          %{border_styles: %{edges | top: :invalid}},
+          %{border_styles: :invalid},
+          %{border_colors: %{colors | left: :invalid}},
+          %{border_colors: :invalid},
+          %{margin: :invalid}
+        ] do
+      assert {:error, {:invalid_layout, diagnostic}} = CssSizingValidator.validate_root(root)
+      assert diagnostic.stage == :layout and diagnostic.module == CssSizingValidator
+      assert diagnostic.source == "document_root_sizing"
+    end
+
+    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 4})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssSizingValidator.prepare_math("calc(123pt)")
+
+    assert diagnostic.message =~ "max_numeric_token_bytes"
   end
 end

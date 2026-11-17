@@ -7,7 +7,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.CounterStyle
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   import NativeElixirPdfUtilities.HtmlTreeHelpers
 

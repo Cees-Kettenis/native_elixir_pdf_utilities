@@ -1,12 +1,12 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{PngDecoder, SvgRasterizer}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   setup do
     limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
+
     %{limits: limits}
   end
 
@@ -133,6 +133,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorTest do
     assert {:ok, png} = SvgRasterizer.rasterize(source, [], budget)
     assert {:ok, image} = PngDecoder.decode(png, budget, false)
     image
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterColorGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    %{limits: limits}
   end
 
   test("image resource restrictions and actual raster work ceilings survive native routing", %{

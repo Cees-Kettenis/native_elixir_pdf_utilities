@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
 
@@ -141,6 +141,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidatorTest do
                )
     end
   end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssValueValidator,
+    HtmlValidator
+  }
 
   test "computed source validation and supports preserve shared resource failures" do
     limits = NativeElixirPdfUtilities.Limits.effective()

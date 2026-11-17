@@ -21,7 +21,7 @@ prepare_fixture() {
   project="$directory/$1/project"
   bin="$directory/$1/bin"
   export MOCK_TRACE="$directory/$1/trace" MOCK_COUNT=3 MOCK_START_BARRIER=3 QUALITY_MATRIX_JOBS=3
-  unset MOCK_FAIL_PARITY MOCK_WARNINGS MOCK_FAIL_DIALYZER MOCK_SERIAL
+  unset MOCK_FAIL_PARITY MOCK_WARNINGS MOCK_FAIL_DIALYZER MOCK_SERIAL MOCK_CACHE_OFF
   export PATH="$bin:$original_path"
   mkdir -p "$project/scripts" "$project/ci" "$bin" "$MOCK_TRACE"
   cp "$repository_root/scripts/quality-matrix" "$project/scripts/quality-matrix"
@@ -53,6 +53,9 @@ workspace= quality= envs=()
 while (($#)); do
   case "$1" in
     --rm) shift ;;
+    --tmpfs)
+      [[ "$2" == /browser-profiles:rw,noexec,nosuid,size=128m,mode=1777 ]]
+      shift 2 ;;
     --user|--name|--workdir) shift 2 ;;
     --mount)
       source="${2#*source=}"; source="${source%,target=*}"
@@ -103,6 +106,9 @@ case "$1" in
     [[ "$(cat source.txt)" == "$MOCK_RUNTIME" ]]
     [[ -z "${MIX_TEST_PARTITION+x}" ]]
     [[ "$*" == 'test.browser_parity --warnings-as-errors' ]]
+    [[ "$BROWSER_PARITY_TOOLCHAIN" == sha256:mock ]]
+    [[ "$CHROMIUM_PROFILE_ROOT" == /browser-profiles ]]
+    if [[ "${MOCK_CACHE_OFF:-}" == true ]]; then [[ "$BROWSER_PARITY_CACHE" == off ]]; fi
     printf '%s\n' "$MOCK_RUNTIME" >> "$MOCK_TRACE/parity-invocations"
     touch "$MOCK_TRACE/done-$MOCK_RUNTIME"
     if [[ "$MOCK_RUNTIME" == "${MOCK_FAIL_PARITY:-}" ]]; then exit 3; fi ;;
@@ -175,11 +181,48 @@ done
 check test ! -e "$project/.quality/matrix.lock"
 echo 'QUALITY_MATRIX_TEST_PASS parallel_source_isolation_latest_policy_and_performance_barrier'
 
+for outcome in retention retention-after-failure; do
+  prepare_fixture "$outcome"
+  if [[ "$outcome" == retention-after-failure ]]; then export MOCK_FAIL_PARITY=1.19; fi
+  for index in {0..7}; do
+    mkdir -p "$project/.quality/logs/20000101T00000${index}Z-${index}"
+    printf 'old evidence' > "$project/.quality/logs/20000101T00000${index}Z-${index}/evidence"
+  done
+  mkdir -p "$project/.quality/logs/notes" "$project/.quality/browser-reference-cache" \
+    "$project/.quality/elixir-1.21/build" "$directory/$outcome/external"
+  printf keep > "$project/.quality/logs/notes/evidence"
+  printf keep > "$project/.quality/browser-reference-cache/reference"
+  printf keep > "$project/.quality/elixir-1.21/build/cache"
+  printf keep > "$directory/$outcome/external/evidence"
+  ln -s "$directory/$outcome/external" "$project/.quality/logs/19990101T000000Z-1"
+  run_matrix
+  if [[ "$outcome" == retention ]]; then
+    check test "$status" -eq 0
+  else
+    check test "$status" -eq 1
+  fi
+  for index in {0..3}; do
+    check test ! -e "$project/.quality/logs/20000101T00000${index}Z-${index}"
+  done
+  for index in {4..7}; do
+    check test -f "$project/.quality/logs/20000101T00000${index}Z-${index}/evidence"
+  done
+  runs=("$project"/.quality/logs/*/source.tar)
+  check test "${#runs[@]}" -eq 1
+  check test "$(cat "$project/.quality/logs/notes/evidence")" = keep
+  check test "$(cat "$project/.quality/browser-reference-cache/reference")" = keep
+  check test "$(cat "$project/.quality/elixir-1.21/build/cache")" = keep
+  check test -L "$project/.quality/logs/19990101T000000Z-1"
+  check test "$(cat "$directory/$outcome/external/evidence")" = keep
+  check test ! -e "$project/.quality/matrix.lock"
+done
+echo 'QUALITY_MATRIX_TEST_PASS five_run_retention_preserves_current_caches_and_unowned_paths_on_success_and_failure'
+
 prepare_fixture serial
-export MOCK_SERIAL=true MOCK_START_BARRIER=1 MIX_TEST_PARTITION=2
+export MOCK_SERIAL=true MOCK_START_BARRIER=1 MIX_TEST_PARTITION=2 MOCK_CACHE_OFF=true BROWSER_PARITY_CACHE=off
 unset QUALITY_MATRIX_JOBS
 run_matrix
-unset MIX_TEST_PARTITION
+unset MIX_TEST_PARTITION BROWSER_PARITY_CACHE
 check test "$status" -eq 0
 for version in 1.19 1.20 1.21; do
   check test "$(grep -Fxc "$version" "$MOCK_TRACE/parity-invocations")" -eq 1

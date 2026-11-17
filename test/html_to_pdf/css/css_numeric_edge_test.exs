@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssNumericEdgeTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.{CssMathValidator, HtmlValidator}
@@ -156,6 +156,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssNumericEdgeTest do
     assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
+  test "percentage color calculations retain their percentage scale" do
+    assert {:ok, {red, green, blue}} =
+             HtmlValidator.parse_css_color("rgb(calc(10% + 10%) 20% 30%)", nil)
+
+    assert_in_delta red, 0.2, 1.0e-6
+    assert_in_delta green, 0.2, 1.0e-6
+    assert_in_delta blue, 0.3, 1.0e-6
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssNumericEdgeGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{CssMathValidator}
+
   test "font-dependent calculations use selected initial metrics and retain loading failures" do
     environment = %{source_font_options: [system_font_discovery: false]}
     assert {:ok, value, %{length: 1}} = CssMathValidator.evaluate("1ex", environment)
@@ -171,14 +187,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssNumericEdgeTest do
     assert is_atom(diagnostic.stage)
     assert diagnostic.reason == :resource_limit_exceeded
     assert diagnostic.message =~ "max_input_bytes"
-  end
-
-  test "percentage color calculations retain their percentage scale" do
-    assert {:ok, {red, green, blue}} =
-             HtmlValidator.parse_css_color("rgb(calc(10% + 10%) 20% 30%)", nil)
-
-    assert_in_delta red, 0.2, 1.0e-6
-    assert_in_delta green, 0.2, 1.0e-6
-    assert_in_delta blue, 0.3, 1.0e-6
   end
 end

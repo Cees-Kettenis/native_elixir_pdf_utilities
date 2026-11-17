@@ -1,4 +1,43 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.Validators.{SvgParserWorkValidator, SvgValidator}
+
+  setup do
+    limits = Limits.effective()
+
+    %{limits: limits}
+  end
+
+  test "lexically invalid XML retains parser diagnostics" do
+    for source <- [
+          "<svg a",
+          "<svg a=1/>",
+          "<svg a='",
+          "<svg =''/>",
+          "<svg><",
+          "<svg><!--",
+          "<svg><![CDATA[",
+          "<?xml",
+          "</svg>",
+          "<svg a''/>"
+        ] do
+      assert :ok = SvgParserWorkValidator.validate(source)
+
+      assert {:error, {:invalid_document, diagnostic}} =
+               SvgValidator.validate_processing(source, %{mode: :image})
+
+      assert diagnostic.source == "SVG"
+    end
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             SvgValidator.validate_processing("<!DOCTYPE svg><svg/>", %{mode: :image})
+
+    assert diagnostic.message =~ "DTD"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer
@@ -199,32 +238,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkTest do
     source = "<svg>" <> String.duplicate("<g xmlns:p='urn:shared'/>", 2_000) <> "</svg>"
     Limits.install(%{limits | max_work: 1_000_000})
     assert {:ok, _} = SvgValidator.validate_processing(source, %{mode: :image})
-  end
-
-  test "lexically invalid XML retains parser diagnostics" do
-    for source <- [
-          "<svg a",
-          "<svg a=1/>",
-          "<svg a='",
-          "<svg =''/>",
-          "<svg><",
-          "<svg><!--",
-          "<svg><![CDATA[",
-          "<?xml",
-          "</svg>",
-          "<svg a''/>"
-        ] do
-      assert :ok = SvgParserWorkValidator.validate(source)
-
-      assert {:error, {:invalid_document, diagnostic}} =
-               SvgValidator.validate_processing(source, %{mode: :image})
-
-      assert diagnostic.source == "SVG"
-    end
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             SvgValidator.validate_processing("<!DOCTYPE svg><svg/>", %{mode: :image})
-
-    assert diagnostic.message =~ "DTD"
   end
 end

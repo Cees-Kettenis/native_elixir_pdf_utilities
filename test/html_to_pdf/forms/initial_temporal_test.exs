@@ -1,8 +1,8 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, PdfWriter, Style}
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -371,26 +371,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
              NativeElixirPdfUtilities.HtmlToPdf.Layout.layout(%{styled | children: [visible]})
   end
 
-  test "existing numeric token budget rejects hostile temporal strings before calendar conversion" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(Map.put(previous, :max_numeric_token_bytes, 12))
-
-    for {kind, attr, value} <- [
-          {"date", "value", "12345678-01-01"},
-          {"time", "value", "00:00:00.12345"},
-          {"month", "min", "1234567890-01"},
-          {"week", "max", "1234567890-W01"},
-          {"datetime-local", "value", "1970-01-01T00:00"}
-        ] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               HtmlToPdf.render("<input type=#{kind} #{attr}=#{value} style=display:none>")
-
-      assert diagnostic.stage == :html and diagnostic.operation == :render and
-               diagnostic.message =~ "max_numeric_token_bytes"
-    end
-  end
-
   test "temporal state selectors hide the original controls without fields or lost captions" do
     html =
       File.read!(Paths.fixture("html_to_pdf/browser_parity/html_temporal_initial_state.html"))
@@ -413,5 +393,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalTest do
 
     refute text =~ "2000-02-29"
     refute text =~ "2020-W53"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialTemporalGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  test "existing numeric token budget rejects hostile temporal strings before calendar conversion" do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    Limits.install(Map.put(previous, :max_numeric_token_bytes, 12))
+
+    for {kind, attr, value} <- [
+          {"date", "value", "12345678-01-01"},
+          {"time", "value", "00:00:00.12345"},
+          {"month", "min", "1234567890-01"},
+          {"week", "max", "1234567890-W01"},
+          {"datetime-local", "value", "1970-01-01T00:00"}
+        ] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render("<input type=#{kind} #{attr}=#{value} style=display:none>")
+
+      assert diagnostic.stage == :html and diagnostic.operation == :render and
+               diagnostic.message =~ "max_numeric_token_bytes"
+    end
   end
 end

@@ -1,12 +1,10 @@
 defmodule NativeElixirPdfUtilities.AttachmentsTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Attachments, HtmlToPdf, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Attachments, HtmlToPdf}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.MimeValidator
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     {:ok, pdf} = HtmlToPdf.render("<p>Invoice</p>")
     %{pdf: pdf}
   end
@@ -42,33 +40,6 @@ defmodule NativeElixirPdfUtilities.AttachmentsTest do
              Attachments.embed(result, [%{filename: "data.CSV", bytes: "again"}])
 
     assert message =~ "already exists"
-  end
-
-  test "validates metadata and limits", %{pdf: pdf} do
-    for attachment <- [
-          nil,
-          %{},
-          %{filename: "../a", bytes: "a"},
-          %{filename: "a", bytes: 1},
-          %{filename: "a", bytes: "a", extra: true},
-          %{filename: "a", bytes: "a", description: 1}
-        ] do
-      assert {:error, {:invalid_attachment, %{stage: :attachments, message: _}}} =
-               Attachments.embed(pdf, [attachment])
-    end
-
-    assert {:error, _} = Attachments.embed(pdf, :bad)
-    assert {:error, _} = Attachments.embed(pdf, [], unknown: true)
-
-    assert {:error, _} =
-             Attachments.embed(pdf, [%{filename: "a", bytes: "a"}, %{filename: "a", bytes: "a"}])
-
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
-
-    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
-             Attachments.embed(pdf, [%{filename: "a", bytes: "ab"}])
-
-    assert {:error, {_, %{operation: :list, module: Attachments}}} = Attachments.list("bad")
   end
 
   test "detects signatures and rejects conflicting type evidence" do
@@ -113,5 +84,44 @@ defmodule NativeElixirPdfUtilities.AttachmentsTest do
              MimeValidator.prepare(xlsx, "a.zip", "application/zip")
 
     assert {:error, _} = MimeValidator.prepare("PK\x03\x04", "a.zip", nil)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.AttachmentsGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Attachments, HtmlToPdf, Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, pdf} = HtmlToPdf.render("<p>Invoice</p>")
+    %{pdf: pdf}
+  end
+
+  test "validates metadata and limits", %{pdf: pdf} do
+    for attachment <- [
+          nil,
+          %{},
+          %{filename: "../a", bytes: "a"},
+          %{filename: "a", bytes: 1},
+          %{filename: "a", bytes: "a", extra: true},
+          %{filename: "a", bytes: "a", description: 1}
+        ] do
+      assert {:error, {:invalid_attachment, %{stage: :attachments, message: _}}} =
+               Attachments.embed(pdf, [attachment])
+    end
+
+    assert {:error, _} = Attachments.embed(pdf, :bad)
+    assert {:error, _} = Attachments.embed(pdf, [], unknown: true)
+
+    assert {:error, _} =
+             Attachments.embed(pdf, [%{filename: "a", bytes: "a"}, %{filename: "a", bytes: "a"}])
+
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 1))
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+             Attachments.embed(pdf, [%{filename: "a", bytes: "ab"}])
+
+    assert {:error, {_, %{operation: :list, module: Attachments}}} = Attachments.list("bad")
   end
 end

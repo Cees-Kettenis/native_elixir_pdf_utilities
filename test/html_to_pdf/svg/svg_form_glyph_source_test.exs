@@ -4,7 +4,7 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgFormGlyphSourceTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.{Forms, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, PdfWriter, ResourceContext}
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator}

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceGlyphAndCalculationLimitsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, ResourceContext}
@@ -91,6 +91,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceGlyphAndCalculationLimitsTest
     assert is_binary(diagnostic.source) and diagnostic.source != ""
     assert diagnostic.message =~ "original text"
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceGlyphAndCalculationLimitsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator
+  }
 
   test "public rendering retains the shared CSS calculation depth failure after source preparation" do
     limits = NativeElixirPdfUtilities.Limits.effective()

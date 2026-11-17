@@ -1,13 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutDisplayContentsTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "every Core namespace element computes contents to none before schema layout" do
     for tag <-
@@ -72,6 +66,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutDisplayContentsTest do
     assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
     assert {:ok, "Visible"} = Text.extract(pdf, layout: false)
     refute pdf =~ "missing-math-contents"
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutDisplayContentsGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
   end
 
   test "hidden Math content still consumes the ordinary document structure budget" do

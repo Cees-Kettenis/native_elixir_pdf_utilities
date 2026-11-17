@@ -1,4 +1,90 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssValueValidator,
+    HtmlCssSourceValidator,
+    HtmlValidator
+  }
+
+  test "foreign style text binds entities, CDATA and original comment boundaries" do
+    html =
+      "<svg><style>p{color:bl&#117;e}<!--gap--><![CDATA[p{width:3pt}]]></style></svg><p>Good</p>"
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
+    [entry] = provenance.embedded
+    assert {:ok, authored} = CssParser.prepare_source_stylesheet(entry.css, entry.descriptor)
+    [first, second] = authored.authored_rules
+    assert hd(first.source_declarations).source.text == "color:bl&#117;e"
+    assert hd(second.source_declarations).source.text == "width:3pt"
+    assert hd(second.source_declarations).source.offset == 51
+
+    assert hd(first.source_declarations).source.owner ==
+             hd(second.source_declarations).source.owner
+
+    html = "<svg><style>p{color:blue}<!--gap-->p{width:b&#97;nanas}</style></svg><p>Bad</p>"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
+    [entry] = provenance.embedded
+    assert {:ok, authored} = CssParser.prepare_source_stylesheet(entry.css, entry.descriptor)
+    [_, second] = authored.authored_rules
+    record = hd(second.source_declarations)
+
+    assert {:error, {:invalid_css, diagnostic}} =
+             CssValueValidator.validate_source_cascade(
+               %{_custom_properties: %{}},
+               [record],
+               HtmlValidator.new_css_budget(),
+               hd(dom.children)
+             )
+
+    assert diagnostic.source == "width:b&#97;nanas"
+    assert diagnostic.column == 38
+  end
+
+  test "empty boundaries and multibyte span validation retain original extents" do
+    assert {:ok, dom} = HtmlParser.parse_document_detailed("<p style=''>Good</p><style></style>")
+    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
+    descriptor = provenance.inline |> Map.values() |> hd()
+    assert HtmlCssSourceValidator.map_span(descriptor, 0, 0).offset == 10
+    descriptor = hd(provenance.embedded).descriptor
+    assert HtmlCssSourceValidator.map_span(descriptor, 0, 0).offset == 27
+
+    assert {:ok, dom} = HtmlParser.parse_document_detailed("<p style='--x:🙂;width:3pt'>Good</p>")
+    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
+    descriptor = provenance.inline |> Map.values() |> hd()
+    assert HtmlCssSourceValidator.map_span(descriptor, 0, 0).offset == 10
+    last = HtmlCssSourceValidator.map_span(descriptor, byte_size(descriptor.css), 0)
+    assert last.offset == 28
+
+    for descriptor <- [descriptor, HtmlCssSourceValidator.local(descriptor.css)] do
+      for {at, size} <- [{5, 0}, {5, 1}, {4, 1}, {-1, 1}, {0, -1}, {:invalid, 1}] do
+        assert {:error, {:invalid_document, diagnostic}} =
+                 HtmlValidator.with_render_budget(fn ->
+                   HtmlCssSourceValidator.map_span(descriptor, at, size)
+                 end)
+
+        assert diagnostic.stage == :html
+        assert diagnostic.reason == :invalid_document
+        assert diagnostic.module == HtmlCssSourceValidator
+        assert diagnostic.message =~ "outside"
+      end
+
+      assert HtmlCssSourceValidator.map_span(descriptor, 4, 0).length == 0
+      assert HtmlCssSourceValidator.map_span(descriptor, 4, 4).text == "🙂"
+    end
+
+    assert {:error, {:invalid_document, _}} =
+             HtmlValidator.with_render_budget(fn ->
+               HtmlCssSourceValidator.map_span(nil, 0, 0)
+             end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
@@ -469,42 +555,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert diagnostic.line == 2 and diagnostic.column == 41
   end
 
-  test "foreign style text binds entities, CDATA and original comment boundaries" do
-    html =
-      "<svg><style>p{color:bl&#117;e}<!--gap--><![CDATA[p{width:3pt}]]></style></svg><p>Good</p>"
-
-    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
-    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
-    [entry] = provenance.embedded
-    assert {:ok, authored} = CssParser.prepare_source_stylesheet(entry.css, entry.descriptor)
-    [first, second] = authored.authored_rules
-    assert hd(first.source_declarations).source.text == "color:bl&#117;e"
-    assert hd(second.source_declarations).source.text == "width:3pt"
-    assert hd(second.source_declarations).source.offset == 51
-
-    assert hd(first.source_declarations).source.owner ==
-             hd(second.source_declarations).source.owner
-
-    html = "<svg><style>p{color:blue}<!--gap-->p{width:b&#97;nanas}</style></svg><p>Bad</p>"
-    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
-    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
-    [entry] = provenance.embedded
-    assert {:ok, authored} = CssParser.prepare_source_stylesheet(entry.css, entry.descriptor)
-    [_, second] = authored.authored_rules
-    record = hd(second.source_declarations)
-
-    assert {:error, {:invalid_css, diagnostic}} =
-             CssValueValidator.validate_source_cascade(
-               %{_custom_properties: %{}},
-               [record],
-               HtmlValidator.new_css_budget(),
-               hd(dom.children)
-             )
-
-    assert diagnostic.source == "width:b&#97;nanas"
-    assert diagnostic.column == 38
-  end
-
   test "forged canonical attributes, source ownership and text cannot create bound provenance" do
     html = "<!--<p style='width:3pt'>--><p style='width:3pt'>Good</p><style>p{color:blue}</style>"
     assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
@@ -702,44 +752,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
              )
 
     assert diagnostic.source == "width:bad"
-  end
-
-  test "empty boundaries and multibyte span validation retain original extents" do
-    assert {:ok, dom} = HtmlParser.parse_document_detailed("<p style=''>Good</p><style></style>")
-    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
-    descriptor = provenance.inline |> Map.values() |> hd()
-    assert HtmlCssSourceValidator.map_span(descriptor, 0, 0).offset == 10
-    descriptor = hd(provenance.embedded).descriptor
-    assert HtmlCssSourceValidator.map_span(descriptor, 0, 0).offset == 27
-
-    assert {:ok, dom} = HtmlParser.parse_document_detailed("<p style='--x:🙂;width:3pt'>Good</p>")
-    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
-    descriptor = provenance.inline |> Map.values() |> hd()
-    assert HtmlCssSourceValidator.map_span(descriptor, 0, 0).offset == 10
-    last = HtmlCssSourceValidator.map_span(descriptor, byte_size(descriptor.css), 0)
-    assert last.offset == 28
-
-    for descriptor <- [descriptor, HtmlCssSourceValidator.local(descriptor.css)] do
-      for {at, size} <- [{5, 0}, {5, 1}, {4, 1}, {-1, 1}, {0, -1}, {:invalid, 1}] do
-        assert {:error, {:invalid_document, diagnostic}} =
-                 HtmlValidator.with_render_budget(fn ->
-                   HtmlCssSourceValidator.map_span(descriptor, at, size)
-                 end)
-
-        assert diagnostic.stage == :html
-        assert diagnostic.reason == :invalid_document
-        assert diagnostic.module == HtmlCssSourceValidator
-        assert diagnostic.message =~ "outside"
-      end
-
-      assert HtmlCssSourceValidator.map_span(descriptor, 4, 0).length == 0
-      assert HtmlCssSourceValidator.map_span(descriptor, 4, 4).text == "🙂"
-    end
-
-    assert {:error, {:invalid_document, _}} =
-             HtmlValidator.with_render_budget(fn ->
-               HtmlCssSourceValidator.map_span(nil, 0, 0)
-             end)
   end
 
   test "mapping work is cumulative and exhausted before original diagnostic scans" do

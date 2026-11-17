@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssComputedLengthsTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, HtmlParser, Layout, Style}
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
@@ -416,7 +416,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssComputedLengthsTest do
       assert_in_delta Enum.find(page.spans, &(&1.text == "B")).x, 100, 0.01
     end
   end
+end
 
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssComputedLengthsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Validators.{CssLengthValidator, HtmlValidator}
+
+  # CSS Values 4, 12 March 2024, 6.1.1 and 6.1.2.
   test "numeric tokens retain per-token ceilings in positions and box lengths" do
     alias NativeElixirPdfUtilities.Limits
     alias NativeElixirPdfUtilities.Validators.CssPositionValidator

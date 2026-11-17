@@ -1,12 +1,11 @@
 defmodule NativeElixirPdfUtilities.OutlinesTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Merge
   alias NativeElixirPdfUtilities.Outlines
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
@@ -16,112 +15,8 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Split
   alias NativeElixirPdfUtilities.Transform
-  alias NativeElixirPdfUtilities.Validators.MergeValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.WriterValidator
-
-  setup do
-    original_limits = Limits.effective()
-    on_exit(fn -> Limits.install(original_limits) end)
-    :ok
-  end
-
-  test "puts, gets, replaces, and removes nested outlines" do
-    pdf = two_page_pdf()
-
-    items = [
-      %{
-        title: "Résumé",
-        page: 1,
-        view: {:xyz, nil, 90, nil},
-        open: false,
-        children: [
-          {"Fit", 1},
-          %{title: "Horizontal", page: 2, view: {:fit_h, nil}},
-          %{title: "Vertical", page: 2, view: {:fit_v, 12}},
-          %{title: "Bounded H", page: 1, view: {:fit_bh, 80}},
-          %{title: "Bounded V", page: 1, view: {:fit_bv, nil}},
-          %{title: "Rectangle", page: 2, view: {:fit_r, 0, 0, 50, 80}},
-          %{title: "Bounding box", page: 2, view: :fit_b}
-        ]
-      },
-      %{title: "Group only", page: nil, children: []}
-    ]
-
-    assert {:ok, updated} = Outlines.put(pdf, items)
-    assert {:ok, [root, group]} = Outlines.get(updated)
-    assert root.title == "Résumé"
-    assert root.open == false
-
-    assert Enum.map(root.children, & &1.view) == [
-             :fit,
-             {:fit_h, nil},
-             {:fit_v, 12},
-             {:fit_bh, 80},
-             {:fit_bv, nil},
-             {:fit_r, 0, 0, 50, 80},
-             :fit_b
-           ]
-
-    assert group.page == nil
-    assert updated =~ "/Outlines"
-
-    assert {:ok, replaced} = Outlines.put(updated, [{"Only", 2}])
-    assert {:ok, [%{title: "Only", page: 2}]} = Outlines.get(replaced)
-
-    assert {:ok, removed} = Outlines.put(replaced, [])
-    assert {:ok, []} = Outlines.get(removed)
-  end
-
-  test "normalizes a closed leaf to its only representable open state" do
-    leaf = %{title: "Leaf", page: 1, open: false, children: []}
-
-    assert {:ok, [%{open: true}]} = OutlineValidator.normalize([leaf], 1)
-    assert {:ok, updated} = Outlines.put(two_page_pdf(), [leaf])
-    assert {:ok, [%{title: "Leaf", open: true, children: []}]} = Outlines.get(updated)
-  end
-
-  test "round trips outlines at the configured maximum depth" do
-    pdf = two_page_pdf()
-    original = Limits.effective()
-
-    for max_depth <- [1, original.max_depth] do
-      Limits.install(%{original | max_depth: max_depth})
-
-      items =
-        Enum.reduce(max_depth..1//-1, [], fn depth, children ->
-          [%{title: "Level #{depth}", page: 1, children: children}]
-        end)
-
-      assert {:ok, expected} = OutlineValidator.normalize(items, 2)
-      Limits.install(original)
-      assert {:ok, updated} = Outlines.put(pdf, items)
-      assert {:ok, ^expected} = Outlines.get(updated)
-    end
-  end
-
-  test "preserves the permanent trailer identifier and updates its revision identifier" do
-    first = "00112233445566778899AABBCCDDEEFF"
-    second = "FFEEDDCCBBAA99887766554433221100"
-
-    original =
-      pdf(
-        [
-          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
-          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
-          {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"}
-        ],
-        "/ID [<#{first}> <#{second}>]"
-      )
-
-    assert {:ok, updated} = Outlines.put(original, [{"One", 1}])
-    assert {:ok, document} = Reader.read(updated)
-
-    assert [{:hex, decoded_first}, {:hex, decoded_second}] = document.trailer["ID"]
-    assert Base.encode16(decoded_first) == first
-    refute Base.encode16(decoded_second) == second
-    assert byte_size(decoded_second) == 16
-  end
 
   test "creates semantic outlines from HTML headings" do
     html = """
@@ -234,6 +129,295 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
              Outlines.detect(plain)
   end
 
+  test "preserves and remaps outlines through merge, transform, and split" do
+    assert {:ok, first} = HtmlToPdf.render("<h1>First</h1>", outlines: :headings)
+    assert {:ok, second} = HtmlToPdf.render("<h1>Second</h1>", outlines: :headings)
+    assert {:ok, merged} = Merge.merge([first, second])
+
+    assert {:ok, merged_items} = Outlines.get(merged)
+    assert Enum.map(merged_items, &{&1.title, &1.page}) == [{"First", 1}, {"Second", 2}]
+
+    assert {:ok, picked} = Transform.pick_pages(merged, [2])
+    assert {:ok, [%{title: "Second", page: 1}]} = Outlines.get(picked)
+
+    assert {:ok, [first_page, second_page]} = Split.by_page(merged)
+    assert {:ok, [%{title: "First", page: 1}]} = Outlines.get(first_page)
+    assert {:ok, [%{title: "Second", page: 1}]} = Outlines.get(second_page)
+  end
+
+  test "covers detector, HTML option, writer, and assembly edge cases" do
+    page = %{
+      size: {200.0, 100.0},
+      boxes: [
+        text_box("A long body line establishes the ordinary body size", 10, 10, 10),
+        text_box("Big", 10, 70, 20),
+        text_box("Title", 70, 70, 20)
+      ]
+    }
+
+    assert {:ok, visual_pdf} = PdfWriter.render([page])
+    assert {:ok, [%{title: "Big Title"}]} = OutlineDetector.detect(visual_pdf)
+
+    assert {:ok, empty_pdf} = PdfWriter.render([%{size: {100.0, 100.0}, boxes: []}])
+    assert {:error, {:no_outline_source, _diagnostic}} = OutlineDetector.detect(empty_pdf)
+
+    headings =
+      OutlineDetector.from_paginated_headings([
+        %{
+          size: {100.0, 100.0},
+          boxes: [
+            %{y: 10.0, height: 5.0, outline_anchor: %{title: "Height", level: 1}},
+            %{y: 20.0, line_height: 6.0, outline_anchor: %{title: "Line", level: 1}},
+            %{y: 30.0, outline_anchor: %{title: "Y", level: 1}},
+            %{outline_anchor: %{title: "Default", level: 1}}
+          ]
+        }
+      ])
+
+    assert Enum.map(headings, & &1.view) == [
+             {:fit_h, 15.0},
+             {:fit_h, 26.0},
+             {:fit_h, 30.0},
+             {:fit_h, 0.0}
+           ]
+
+    assert {:error, {:invalid_options, %{stage: :options}}} =
+             HtmlToPdf.render("<p>Body</p>", outlines: :invalid)
+
+    assert {:error, {:invalid_outlines, _diagnostic}} =
+             WriterValidator.prepare([%{size: {10, 10}, boxes: []}], outlines: :invalid)
+
+    assert {:ok, %{outlines: []}} =
+             WriterValidator.prepare([%{size: {10, 10}, boxes: []}], outlines: false)
+
+    assert {:ok, empty_assembly} = AssemblyWriter.write([])
+    assert String.starts_with?(empty_assembly, "%PDF-")
+
+    assert {:ok, dom} = HtmlParser.parse("<h1>Title</h1>")
+    assert {:ok, styled} = Style.compute(dom)
+    [heading] = styled.children
+
+    hidden_heading = put_in(heading, [:style, :display], :none)
+    assert {:ok, %{boxes: []}} = Layout.layout(%{styled | children: [hidden_heading]})
+
+    ignored_child = %{type: :element, style: %{display: :none}}
+    heading = Map.update!(heading, :children, &(&1 ++ [ignored_child]))
+    assert {:ok, %{boxes: [_first | _rest]}} = Layout.layout(%{styled | children: [heading]})
+  end
+
+  test "outline writer reports invalid prepared object and trailer values" do
+    base = %{
+      catalog: %{},
+      catalog_ref: {1, 0},
+      pages: [],
+      document: %{
+        binary: "%PDF-1.7",
+        xref_revisions: 1,
+        trailer: %{"Size" => 2, "Root" => {:ref, {1, 0}}, "Info" => {:ref, {2, 0}}},
+        xref_offset: 0
+      }
+    }
+
+    assert {:ok, increment} = OutlineWriter.write(base, [])
+    assert increment =~ "/Info 2 0 R"
+
+    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
+             OutlineWriter.write(%{base | catalog: %{"Invalid" => :atom}}, [])
+
+    invalid_trailer = put_in(base, [:document, :trailer, "Root"], :atom)
+
+    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
+             OutlineWriter.write(invalid_trailer, [])
+
+    for identifier <- [[:malformed], [{:string, "one"}, {:name, "two"}]] do
+      invalid_identifier = put_in(base, [:document, :trailer, "ID"], identifier)
+
+      assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
+               OutlineWriter.write(invalid_identifier, [])
+    end
+  end
+
+  test "wide outline trees retain ordered sibling links with linear work" do
+    build = fn count ->
+      items =
+        for index <- 1..count do
+          %{title: "Item #{index}", page: index, view: :fit, open: true, children: []}
+        end
+
+      :erlang.garbage_collect()
+      {:reductions, before_work} = Process.info(self(), :reductions)
+      built = OutlineBuilder.build(items, fn page -> {page + 10_000, 0} end, 1)
+      {:reductions, after_work} = Process.info(self(), :reductions)
+      {built, after_work - before_work}
+    end
+
+    build.(10)
+    {small, small_work} = build.(2_000)
+    {large, large_work} = build.(4_000)
+    assert large_work < small_work * 2.7
+
+    for {built, count} <- [{small, 2_000}, {large, 4_000}] do
+      assert built.next_id == count + 2
+      [{1, 0, root} | objects] = built.objects
+      assert root["Count"] == count
+      assert root["First"] == {:ref, {2, 0}}
+      assert root["Last"] == {:ref, {count + 1, 0}}
+
+      for {{id, 0, dictionary}, index} <- Enum.with_index(objects, 1) do
+        assert id == index + 1
+        assert dictionary["Parent"] == {:ref, {1, 0}}
+        assert dictionary["Dest"] == [{:ref, {index + 10_000, 0}}, {:name, "Fit"}]
+        assert dictionary["Prev"] == if(index == 1, do: nil, else: {:ref, {id - 1, 0}})
+        assert dictionary["Next"] == if(index == count, do: nil, else: {:ref, {id + 1, 0}})
+      end
+    end
+  end
+
+  test "internal outline components reject malformed prepared data" do
+    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
+             OutlineWriter.write(%{}, [])
+
+    assert OutlineBuilder.build([], fn _page -> {1, 0} end, 4) == %{
+             root_ref: nil,
+             objects: [],
+             next_id: 4
+           }
+
+    assert OutlineDetector.from_paginated_headings([
+             %{size: {100.0, 100.0}, boxes: [%{y: 20.0}]}
+           ]) == []
+
+    assert {:error, {:invalid_outlines, _diagnostic}} = OutlineValidator.normalize([], :bad)
+  end
+
+  defp text_box(text, x, y, font_size) do
+    %{
+      type: :text,
+      text: text,
+      x: x,
+      y: y,
+      font: "Helvetica",
+      font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
+      font_size: font_size,
+      color: {0, 0, 0}
+    }
+  end
+end
+
+defmodule NativeElixirPdfUtilities.OutlinesGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Outlines
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Validators.MergeValidator
+  alias NativeElixirPdfUtilities.Validators.OutlineValidator
+
+  setup do
+    original_limits = Limits.effective()
+    on_exit(fn -> Limits.install(original_limits) end)
+    :ok
+  end
+
+  test "puts, gets, replaces, and removes nested outlines" do
+    pdf = two_page_pdf()
+
+    items = [
+      %{
+        title: "Résumé",
+        page: 1,
+        view: {:xyz, nil, 90, nil},
+        open: false,
+        children: [
+          {"Fit", 1},
+          %{title: "Horizontal", page: 2, view: {:fit_h, nil}},
+          %{title: "Vertical", page: 2, view: {:fit_v, 12}},
+          %{title: "Bounded H", page: 1, view: {:fit_bh, 80}},
+          %{title: "Bounded V", page: 1, view: {:fit_bv, nil}},
+          %{title: "Rectangle", page: 2, view: {:fit_r, 0, 0, 50, 80}},
+          %{title: "Bounding box", page: 2, view: :fit_b}
+        ]
+      },
+      %{title: "Group only", page: nil, children: []}
+    ]
+
+    assert {:ok, updated} = Outlines.put(pdf, items)
+    assert {:ok, [root, group]} = Outlines.get(updated)
+    assert root.title == "Résumé"
+    assert root.open == false
+
+    assert Enum.map(root.children, & &1.view) == [
+             :fit,
+             {:fit_h, nil},
+             {:fit_v, 12},
+             {:fit_bh, 80},
+             {:fit_bv, nil},
+             {:fit_r, 0, 0, 50, 80},
+             :fit_b
+           ]
+
+    assert group.page == nil
+    assert updated =~ "/Outlines"
+
+    assert {:ok, replaced} = Outlines.put(updated, [{"Only", 2}])
+    assert {:ok, [%{title: "Only", page: 2}]} = Outlines.get(replaced)
+
+    assert {:ok, removed} = Outlines.put(replaced, [])
+    assert {:ok, []} = Outlines.get(removed)
+  end
+
+  test "normalizes a closed leaf to its only representable open state" do
+    leaf = %{title: "Leaf", page: 1, open: false, children: []}
+
+    assert {:ok, [%{open: true}]} = OutlineValidator.normalize([leaf], 1)
+    assert {:ok, updated} = Outlines.put(two_page_pdf(), [leaf])
+    assert {:ok, [%{title: "Leaf", open: true, children: []}]} = Outlines.get(updated)
+  end
+
+  test "round trips outlines at the configured maximum depth" do
+    pdf = two_page_pdf()
+    original = Limits.effective()
+
+    for max_depth <- [1, original.max_depth] do
+      Limits.install(%{original | max_depth: max_depth})
+
+      items =
+        Enum.reduce(max_depth..1//-1, [], fn depth, children ->
+          [%{title: "Level #{depth}", page: 1, children: children}]
+        end)
+
+      assert {:ok, expected} = OutlineValidator.normalize(items, 2)
+      Limits.install(original)
+      assert {:ok, updated} = Outlines.put(pdf, items)
+      assert {:ok, ^expected} = Outlines.get(updated)
+    end
+  end
+
+  test "preserves the permanent trailer identifier and updates its revision identifier" do
+    first = "00112233445566778899AABBCCDDEEFF"
+    second = "FFEEDDCCBBAA99887766554433221100"
+
+    original =
+      pdf(
+        [
+          {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+          {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+          {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] >>"}
+        ],
+        "/ID [<#{first}> <#{second}>]"
+      )
+
+    assert {:ok, updated} = Outlines.put(original, [{"One", 1}])
+    assert {:ok, document} = Reader.read(updated)
+
+    assert [{:hex, decoded_first}, {:hex, decoded_second}] = document.trailer["ID"]
+    assert Base.encode16(decoded_first) == first
+    refute Base.encode16(decoded_second) == second
+    assert byte_size(decoded_second) == 16
+  end
+
   test "rejects a detected proposal that exceeds the configured outline limit" do
     assert {:ok, pdf} =
              HtmlToPdf.render("""
@@ -254,22 +438,6 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
             {:resource_limit_exceeded,
              %{stage: :limits, operation: :automatic_outlines, module: Outlines}}} =
              Outlines.automatic(pdf)
-  end
-
-  test "preserves and remaps outlines through merge, transform, and split" do
-    assert {:ok, first} = HtmlToPdf.render("<h1>First</h1>", outlines: :headings)
-    assert {:ok, second} = HtmlToPdf.render("<h1>Second</h1>", outlines: :headings)
-    assert {:ok, merged} = Merge.merge([first, second])
-
-    assert {:ok, merged_items} = Outlines.get(merged)
-    assert Enum.map(merged_items, &{&1.title, &1.page}) == [{"First", 1}, {"Second", 2}]
-
-    assert {:ok, picked} = Transform.pick_pages(merged, [2])
-    assert {:ok, [%{title: "Second", page: 1}]} = Outlines.get(picked)
-
-    assert {:ok, [first_page, second_page]} = Split.by_page(merged)
-    assert {:ok, [%{title: "First", page: 1}]} = Outlines.get(first_page)
-    assert {:ok, [%{title: "Second", page: 1}]} = Outlines.get(second_page)
   end
 
   test "nested outline preparation shares the item count and depth ceilings" do
@@ -613,98 +781,6 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
              OutlineValidator.validate_incremental_capacity(%{}, [])
   end
 
-  test "covers detector, HTML option, writer, and assembly edge cases" do
-    page = %{
-      size: {200.0, 100.0},
-      boxes: [
-        text_box("A long body line establishes the ordinary body size", 10, 10, 10),
-        text_box("Big", 10, 70, 20),
-        text_box("Title", 70, 70, 20)
-      ]
-    }
-
-    assert {:ok, visual_pdf} = PdfWriter.render([page])
-    assert {:ok, [%{title: "Big Title"}]} = OutlineDetector.detect(visual_pdf)
-
-    assert {:ok, empty_pdf} = PdfWriter.render([%{size: {100.0, 100.0}, boxes: []}])
-    assert {:error, {:no_outline_source, _diagnostic}} = OutlineDetector.detect(empty_pdf)
-
-    headings =
-      OutlineDetector.from_paginated_headings([
-        %{
-          size: {100.0, 100.0},
-          boxes: [
-            %{y: 10.0, height: 5.0, outline_anchor: %{title: "Height", level: 1}},
-            %{y: 20.0, line_height: 6.0, outline_anchor: %{title: "Line", level: 1}},
-            %{y: 30.0, outline_anchor: %{title: "Y", level: 1}},
-            %{outline_anchor: %{title: "Default", level: 1}}
-          ]
-        }
-      ])
-
-    assert Enum.map(headings, & &1.view) == [
-             {:fit_h, 15.0},
-             {:fit_h, 26.0},
-             {:fit_h, 30.0},
-             {:fit_h, 0.0}
-           ]
-
-    assert {:error, {:invalid_options, %{stage: :options}}} =
-             HtmlToPdf.render("<p>Body</p>", outlines: :invalid)
-
-    assert {:error, {:invalid_outlines, _diagnostic}} =
-             WriterValidator.prepare([%{size: {10, 10}, boxes: []}], outlines: :invalid)
-
-    assert {:ok, %{outlines: []}} =
-             WriterValidator.prepare([%{size: {10, 10}, boxes: []}], outlines: false)
-
-    assert {:ok, empty_assembly} = AssemblyWriter.write([])
-    assert String.starts_with?(empty_assembly, "%PDF-")
-
-    assert {:ok, dom} = HtmlParser.parse("<h1>Title</h1>")
-    assert {:ok, styled} = Style.compute(dom)
-    [heading] = styled.children
-
-    hidden_heading = put_in(heading, [:style, :display], :none)
-    assert {:ok, %{boxes: []}} = Layout.layout(%{styled | children: [hidden_heading]})
-
-    ignored_child = %{type: :element, style: %{display: :none}}
-    heading = Map.update!(heading, :children, &(&1 ++ [ignored_child]))
-    assert {:ok, %{boxes: [_first | _rest]}} = Layout.layout(%{styled | children: [heading]})
-  end
-
-  test "outline writer reports invalid prepared object and trailer values" do
-    base = %{
-      catalog: %{},
-      catalog_ref: {1, 0},
-      pages: [],
-      document: %{
-        binary: "%PDF-1.7",
-        xref_revisions: 1,
-        trailer: %{"Size" => 2, "Root" => {:ref, {1, 0}}, "Info" => {:ref, {2, 0}}},
-        xref_offset: 0
-      }
-    }
-
-    assert {:ok, increment} = OutlineWriter.write(base, [])
-    assert increment =~ "/Info 2 0 R"
-
-    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
-             OutlineWriter.write(%{base | catalog: %{"Invalid" => :atom}}, [])
-
-    invalid_trailer = put_in(base, [:document, :trailer, "Root"], :atom)
-
-    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
-             OutlineWriter.write(invalid_trailer, [])
-
-    for identifier <- [[:malformed], [{:string, "one"}, {:name, "two"}]] do
-      invalid_identifier = put_in(base, [:document, :trailer, "ID"], identifier)
-
-      assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
-               OutlineWriter.write(invalid_identifier, [])
-    end
-  end
-
   test "merge remapping reserves capacity for generated outline objects" do
     original = Limits.effective()
     Limits.install(%{original | max_entries: 4})
@@ -718,59 +794,6 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
 
     assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
              MergeValidator.prepare_remapping([input], 3)
-  end
-
-  test "wide outline trees retain ordered sibling links with linear work" do
-    build = fn count ->
-      items =
-        for index <- 1..count do
-          %{title: "Item #{index}", page: index, view: :fit, open: true, children: []}
-        end
-
-      :erlang.garbage_collect()
-      {:reductions, before_work} = Process.info(self(), :reductions)
-      built = OutlineBuilder.build(items, fn page -> {page + 10_000, 0} end, 1)
-      {:reductions, after_work} = Process.info(self(), :reductions)
-      {built, after_work - before_work}
-    end
-
-    build.(10)
-    {small, small_work} = build.(2_000)
-    {large, large_work} = build.(4_000)
-    assert large_work < small_work * 2.7
-
-    for {built, count} <- [{small, 2_000}, {large, 4_000}] do
-      assert built.next_id == count + 2
-      [{1, 0, root} | objects] = built.objects
-      assert root["Count"] == count
-      assert root["First"] == {:ref, {2, 0}}
-      assert root["Last"] == {:ref, {count + 1, 0}}
-
-      for {{id, 0, dictionary}, index} <- Enum.with_index(objects, 1) do
-        assert id == index + 1
-        assert dictionary["Parent"] == {:ref, {1, 0}}
-        assert dictionary["Dest"] == [{:ref, {index + 10_000, 0}}, {:name, "Fit"}]
-        assert dictionary["Prev"] == if(index == 1, do: nil, else: {:ref, {id - 1, 0}})
-        assert dictionary["Next"] == if(index == count, do: nil, else: {:ref, {id + 1, 0}})
-      end
-    end
-  end
-
-  test "internal outline components reject malformed prepared data" do
-    assert {:error, {:invalid_pdf_input, %{stage: :incremental_write}}} =
-             OutlineWriter.write(%{}, [])
-
-    assert OutlineBuilder.build([], fn _page -> {1, 0} end, 4) == %{
-             root_ref: nil,
-             objects: [],
-             next_id: 4
-           }
-
-    assert OutlineDetector.from_paginated_headings([
-             %{size: {100.0, 100.0}, boxes: [%{y: 20.0}]}
-           ]) == []
-
-    assert {:error, {:invalid_outlines, _diagnostic}} = OutlineValidator.normalize([], :bad)
   end
 
   defp two_page_pdf do
@@ -803,19 +826,6 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
      ] ++ options.extras)
     |> Enum.sort_by(&elem(&1, 0))
     |> pdf()
-  end
-
-  defp text_box(text, x, y, font_size) do
-    %{
-      type: :text,
-      text: text,
-      x: x,
-      y: y,
-      font: "Helvetica",
-      font_face: %{type: :built_in, family: "Helvetica", pdf_name: "Helvetica"},
-      font_size: font_size,
-      color: {0, 0, 0}
-    }
   end
 
   defp pdf(objects, trailer_extra \\ "") do

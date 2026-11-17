@@ -61,7 +61,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
     Telemetry.attach(Keyword.fetch!(opts, :telemetry_context))
     owner_monitor = Process.monitor(owner)
     unique = "#{System.pid()}-#{System.unique_integer([:positive])}"
-    profile = Path.join(System.tmp_dir!(), "native-pdf-chrome-#{unique}")
+
+    profile =
+      Path.join(
+        System.get_env("CHROMIUM_PROFILE_ROOT", System.tmp_dir!()),
+        "native-pdf-chrome-#{unique}"
+      )
+
     log = Path.expand("tmp/browser_parity/.chrome/worker-#{slot}-#{unique}.log")
     File.mkdir_p!(Path.join(profile, "Default"))
     File.mkdir_p!(Path.dirname(log))

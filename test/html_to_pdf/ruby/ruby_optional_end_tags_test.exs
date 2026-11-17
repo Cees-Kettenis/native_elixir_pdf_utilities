@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RubyOptionalEndTagsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   import NativeElixirPdfUtilities.HtmlTreeHelpers
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
   alias NativeElixirPdfUtilities.Validators.HtmlValidator

@@ -1,6 +1,48 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
+  use ExUnit.Case, async: true
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font}
+
+  setup do
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+    style = %{
+      display: :block,
+      font_size: 20,
+      font_face: font,
+      color: {0, 0, 0},
+      line_height: 24,
+      math_style: :compact,
+      math_shift: :normal,
+      text_transform: :none
+    }
+
+    {:ok, font: font, style: style}
+  end
+
+  test "same-DOM script controls keep form ownership and ordinary native painting" do
+    html =
+      "<math style='font-size:18pt'><msup><mn>1</mn><mtext><input name='script-value' value='42' style='font-family:DejaVu Sans;font-size:10pt;width:24pt;height:12pt'></mtext></msup></math>"
+
+    for forms <- [:static, :interactive] do
+      assert {:ok, pdf} = HtmlToPdf.render(html, forms: forms, system_font_discovery: false)
+      assert {:ok, text} = Text.extract(pdf, layout: false)
+      assert text =~ "1"
+
+      if forms == :static do
+        assert text =~ "42"
+      else
+        assert pdf =~ "script-value" and pdf =~ "/Widget"
+      end
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsGlobalStateTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
@@ -27,64 +69,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
     }
 
     {:ok, font: font, style: style}
-  end
-
-  defp element(tag, children, style, attributes \\ %{}) do
-    %{
-      type: :element,
-      namespace: :mathml,
-      tag: tag,
-      children: children,
-      style: style,
-      attributes: attributes
-    }
-  end
-
-  defp token(text, style, tag \\ "mn") do
-    element(tag, [%{type: :text, text: text, style: style}], style)
-  end
-
-  defp rational(value) do
-    case value do
-      %{"numerator" => n, "denominator" => d} -> n / d
-      number -> number
-    end
-  end
-
-  defp source_tree(tree, style) do
-    style =
-      Map.merge(style, %{
-        font_size: rational(tree["style"]["font_size"]),
-        math_depth: tree["style"]["math_depth"],
-        math_style: String.to_existing_atom(tree["style"]["math_style"]),
-        math_shift: String.to_existing_atom(tree["style"]["math_shift"]),
-        text_transform: if(tree["tag"] == "mi", do: :math_auto, else: :none)
-      })
-
-    attributes =
-      Map.new(tree["attributes"], fn {key, value} ->
-        {key, if(key in ["width", "height", "depth"], do: value <> "pt", else: value)}
-      end)
-
-    children =
-      if Map.has_key?(tree, "text"),
-        do: [%{type: :text, text: tree["text"], style: style}],
-        else: Enum.map(tree["children"], &source_tree(&1, style))
-
-    element(tree["tag"], children, style, attributes)
-  end
-
-  defp styled_math(html) do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
-      with {:ok, dom} <- HtmlParser.parse_detailed(html),
-           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
-        {:ok, node.style._math_box}
-      end
-    end)
-  end
-
-  defp links(box) do
-    List.wrap(Map.get(box, :link_url)) ++ Enum.flat_map(Map.get(box, :boxes, []), &links/1)
   end
 
   test "all 15 original authored public equations retain their logical Unicode" do
@@ -468,23 +452,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
     assert {:ok, "⁡212345⏞"} = Text.extract(pdf, layout: false)
   end
 
-  test "same-DOM script controls keep form ownership and ordinary native painting" do
-    html =
-      "<math style='font-size:18pt'><msup><mn>1</mn><mtext><input name='script-value' value='42' style='font-family:DejaVu Sans;font-size:10pt;width:24pt;height:12pt'></mtext></msup></math>"
-
-    for forms <- [:static, :interactive] do
-      assert {:ok, pdf} = HtmlToPdf.render(html, forms: forms, system_font_discovery: false)
-      assert {:ok, text} = Text.extract(pdf, layout: false)
-      assert text =~ "1"
-
-      if forms == :static do
-        assert text =~ "42"
-      else
-        assert pdf =~ "script-value" and pdf =~ "/Widget"
-      end
-    end
-  end
-
   test "pending stretch and placement requests diagnose malformed measurement transport", c do
     node = element("mover", [token("1", c.style), token("2", c.style)], c.style)
     assert {:ok, prepared} = MathLayoutValidator.prepare_element(node, %{})
@@ -608,5 +575,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutScriptsTest do
              )
 
     assert diagnostic.stage == :html and diagnostic.message =~ "max_work"
+  end
+
+  defp element(tag, children, style, attributes \\ %{}) do
+    %{
+      type: :element,
+      namespace: :mathml,
+      tag: tag,
+      children: children,
+      style: style,
+      attributes: attributes
+    }
+  end
+
+  defp token(text, style, tag \\ "mn") do
+    element(tag, [%{type: :text, text: text, style: style}], style)
+  end
+
+  defp rational(value) do
+    case value do
+      %{"numerator" => n, "denominator" => d} -> n / d
+      number -> number
+    end
+  end
+
+  defp source_tree(tree, style) do
+    style =
+      Map.merge(style, %{
+        font_size: rational(tree["style"]["font_size"]),
+        math_depth: tree["style"]["math_depth"],
+        math_style: String.to_existing_atom(tree["style"]["math_style"]),
+        math_shift: String.to_existing_atom(tree["style"]["math_shift"]),
+        text_transform: if(tree["tag"] == "mi", do: :math_auto, else: :none)
+      })
+
+    attributes =
+      Map.new(tree["attributes"], fn {key, value} ->
+        {key, if(key in ["width", "height", "depth"], do: value <> "pt", else: value)}
+      end)
+
+    children =
+      if Map.has_key?(tree, "text"),
+        do: [%{type: :text, text: tree["text"], style: style}],
+        else: Enum.map(tree["children"], &source_tree(&1, style))
+
+    element(tree["tag"], children, style, attributes)
+  end
+
+  defp styled_math(html) do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn _context ->
+      with {:ok, dom} <- HtmlParser.parse_detailed(html),
+           {:ok, %{children: [node]}} <- Style.compute_detailed(dom, system_font_discovery: false) do
+        {:ok, node.style._math_box}
+      end
+    end)
+  end
+
+  defp links(box) do
+    List.wrap(Map.get(box, :link_url)) ++ Enum.flat_map(Map.get(box, :boxes, []), &links/1)
   end
 end

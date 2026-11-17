@@ -1,9 +1,9 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   Code.require_file(Paths.support("png_fixture.ex"))
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, Style}
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
 
@@ -13,12 +13,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
   }
 
   @opts [system_font_discovery: false, compress_streams: false]
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "removed original MathML relative and scoped variable declarations execute with selected metrics" do
     html =

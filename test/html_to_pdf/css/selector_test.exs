@@ -1,9 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Style}
   alias NativeElixirPdfUtilities.Validators.CssSelectorValidator
-  alias NativeElixirPdfUtilities.Limits
 
   # Independently authored expectations from Selectors 4, 22 January 2026,
   # sections 4, 5, 12, 13 and 15. No production-parser fixture generator.
@@ -135,17 +134,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
     assert {:ok, []} = CssParser.parse("h|p{color:red}")
     assert {:ok, [rule]} = CssParser.parse("@namespace 'urn:other'; *|p:is(.a){color:red}")
     assert hd(rule.selectors).parts |> hd() |> Map.get(:namespace, :any) == :any
-  end
-
-  test "tree selector nesting and matching obey configured resource limits" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(Map.put(limits, :max_depth, 2))
-
-    assert {:error, {:resource_limit_exceeded, %{stage: :css, message: message}}} =
-             CssParser.parse_detailed(":is(:not(:is(.a))){color:red}")
-
-    assert message =~ "max_depth"
   end
 
   test "initial link disclosure placeholder range and default states have positive and negative owners" do
@@ -354,5 +342,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
         id -> Map.put(result, id, node.style)
       end
     end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser}
+  alias NativeElixirPdfUtilities.Limits
+
+  # Independently authored expectations from Selectors 4, 22 January 2026,
+  # sections 4, 5, 12, 13 and 15. No production-parser fixture generator.
+  test "tree selector nesting and matching obey configured resource limits" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(Map.put(limits, :max_depth, 2))
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :css, message: message}}} =
+             CssParser.parse_detailed(":is(:not(:is(.a))){color:red}")
+
+    assert message =~ "max_depth"
   end
 end

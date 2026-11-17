@@ -1,17 +1,15 @@
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("open_type_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasurementBudgetTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     HtmlParser,
     Layout,
-    Pagination,
     ResourceContext,
     Style
   }
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator}
 
   test "admitted initial percentages use the initial width and font-unit failures retain their diagnostic" do
@@ -71,42 +69,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasurementBudgetTest do
     assert diagnostic.message =~ "glyf"
   end
 
-  test "initial grid and percentage wrapping preserve late calculation budget failures" do
-    alias NativeElixirPdfUtilities.HtmlToPdf.InitialLetter
-    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-
-    for {wrap, limit} <- [{"grid", :max_work}, {"calc(100000 * 100%)", :max_numeric_magnitude}] do
-      Limits.install(limits)
-
-      html =
-        "<style>p{font:12pt/16pt serif;margin:0}p::first-letter{initial-letter:3;initial-letter-wrap:#{wrap}}</style><p>Alphabet text</p>"
-
-      assert {:ok, dom} = HtmlParser.parse(html)
-
-      assert {:ok, %{children: [parent]}} =
-               Style.compute_detailed(dom, system_font_discovery: false)
-
-      operation = fn ->
-        FontValidator.with_budget(fn ->
-          HtmlValidator.with_render_budget(fn ->
-            InitialLetter.prepare_runs(parent.children, parent.style, fn _, _, _, fallback ->
-              fallback
-            end)
-          end)
-        end)
-      end
-
-      assert {:ok, _} = operation.()
-      assert {{:ok, _}, work} = ResourceBudget.measure(:max_work, operation)
-      maximum = if limit == :max_work, do: work - 1, else: 100_000
-      Limits.install(Map.put(limits, limit, maximum))
-      assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
-      assert diagnostic.stage in [:style, :layout] and diagnostic.message =~ Atom.to_string(limit)
-    end
-  end
-
   test "inline metric and text-width consumers preserve selected-font failures" do
     alias NativeElixirPdfUtilities.TestSupport.{OpenTypeFixture, PngFixture}
     font = OpenTypeFixture.font() |> Map.update!(:cmap, &Map.put(&1, ?x, 1))
@@ -146,6 +108,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasurementBudgetTest do
       assert {:error, {reason, diagnostic}} = Layout.layout(replace.(replace, styled))
       assert reason == diagnostic.reason and diagnostic.stage == :font
       assert is_atom(diagnostic.operation) and diagnostic.message != ""
+    end
+  end
+
+  test "repeated text measurement preserves positions and rechecks edited source owners" do
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
+      assert {:ok, dom} = HtmlParser.parse_detailed("<p style='margin:0'>Alpha</p>")
+
+      assert {:ok, styled} =
+               Style.compute_detailed(dom, [system_font_discovery: false], context.image_budget)
+
+      assert {:ok, original} = Layout.layout(styled, margin: 0)
+      assert {:ok, repeated} = Layout.layout(styled, margin: 0)
+
+      projection = fn layout ->
+        for box <- layout.boxes,
+            box.type == :text,
+            do: {box.text, box.x, box.y, box.width, box.font_size}
+      end
+
+      assert projection.(repeated) == projection.(original)
+      [paragraph] = styled.children
+      [text] = paragraph.children
+      changed = %{styled | children: [%{paragraph | children: [%{text | text: "Beta"}]}]}
+      assert {:ok, edited} = Layout.layout(changed, margin: 0)
+      assert [{"Beta", _, _, _, _}] = projection.(edited)
+      assert {:ok, restored} = Layout.layout(styled, margin: 0)
+      assert projection.(restored) == projection.(original)
+    end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasurementBudgetGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    HtmlParser,
+    Layout,
+    Pagination,
+    ResourceContext,
+    Style
+  }
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator}
+
+  test "initial grid and percentage wrapping preserve late calculation budget failures" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.InitialLetter
+    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    for {wrap, limit} <- [{"grid", :max_work}, {"calc(100000 * 100%)", :max_numeric_magnitude}] do
+      Limits.install(limits)
+
+      html =
+        "<style>p{font:12pt/16pt serif;margin:0}p::first-letter{initial-letter:3;initial-letter-wrap:#{wrap}}</style><p>Alphabet text</p>"
+
+      assert {:ok, dom} = HtmlParser.parse(html)
+
+      assert {:ok, %{children: [parent]}} =
+               Style.compute_detailed(dom, system_font_discovery: false)
+
+      operation = fn ->
+        FontValidator.with_budget(fn ->
+          HtmlValidator.with_render_budget(fn ->
+            InitialLetter.prepare_runs(parent.children, parent.style, fn _, _, _, fallback ->
+              fallback
+            end)
+          end)
+        end)
+      end
+
+      assert {:ok, _} = operation.()
+      assert {{:ok, _}, work} = ResourceBudget.measure(:max_work, operation)
+      maximum = if limit == :max_work, do: work - 1, else: 100_000
+      Limits.install(Map.put(limits, limit, maximum))
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+      assert diagnostic.stage in [:style, :layout] and diagnostic.message =~ Atom.to_string(limit)
     end
   end
 
@@ -437,32 +477,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MeasurementBudgetTest do
     assert diagnostic.operation == :prepare_row_page_fragment
     assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlTableValidator
     assert diagnostic.message =~ "bounded row edges"
-  end
-
-  test "repeated text measurement preserves positions and rechecks edited source owners" do
-    ResourceContext.run([], HtmlValidator.new_image_budget(), fn context ->
-      assert {:ok, dom} = HtmlParser.parse_detailed("<p style='margin:0'>Alpha</p>")
-
-      assert {:ok, styled} =
-               Style.compute_detailed(dom, [system_font_discovery: false], context.image_budget)
-
-      assert {:ok, original} = Layout.layout(styled, margin: 0)
-      assert {:ok, repeated} = Layout.layout(styled, margin: 0)
-
-      projection = fn layout ->
-        for box <- layout.boxes,
-            box.type == :text,
-            do: {box.text, box.x, box.y, box.width, box.font_size}
-      end
-
-      assert projection.(repeated) == projection.(original)
-      [paragraph] = styled.children
-      [text] = paragraph.children
-      changed = %{styled | children: [%{paragraph | children: [%{text | text: "Beta"}]}]}
-      assert {:ok, edited} = Layout.layout(changed, margin: 0)
-      assert [{"Beta", _, _, _, _}] = projection.(edited)
-      assert {:ok, restored} = Layout.layout(styled, margin: 0)
-      assert projection.(restored) == projection.(original)
-    end)
   end
 end

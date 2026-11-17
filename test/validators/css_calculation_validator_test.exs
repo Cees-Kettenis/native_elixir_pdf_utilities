@@ -1,13 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.Validators.{CssCalculationValidator, HtmlValidator}
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-  end
+  alias NativeElixirPdfUtilities.Validators.{CssCalculationValidator}
 
   test "percentage comparison retains its consumption basis" do
     assert {:ok, expression} = CssCalculationValidator.prepare("min(200%, 1em)", %{"em" => 20})
@@ -51,6 +45,72 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
     assert diagnostic.message =~ "validated expression"
   end
 
+  test "dependency discovery follows validated syntax and ignores CSS comments" do
+    assert {:ok, ["ch", "rcap"]} =
+             CssCalculationValidator.referenced_units("calc(1ch + 2rcap /* rlh */)")
+
+    assert {:ok, []} = CssCalculationValidator.referenced_units("calc(1ch +2rcap)")
+    assert {:ok, []} = CssCalculationValidator.referenced_units("invalid ch")
+  end
+
+  test "math length adapters delegate to the same shared grammar as CSS image consumers" do
+    alias NativeElixirPdfUtilities.Validators.CssMathValidator
+    assert {:ok, 32.0, %{length: 1}} = CssMathValidator.evaluate("calc(1pc + 1pc)", %{})
+
+    assert {:ok, shared} =
+             CssMathValidator.prepare_length("calc(1cqw + 1pc)", %{"cqw" => 2, "pc" => 12})
+
+    assert {:ok, ^shared} =
+             CssCalculationValidator.prepare("calc(1cqw + 1pc)", %{"cqw" => 2, "pc" => 12})
+
+    assert {:ok, 14.0} = CssCalculationValidator.resolve(shared, 0)
+    assert {:ok, ["cqw", "pc"]} = CssCalculationValidator.referenced_units("calc(1cqw + 1pc)")
+
+    assert {:ok, 48.0, %{length: 1}} =
+             CssMathValidator.evaluate("calc(3pc/* css comment */)", %{})
+  end
+
+  test "shared point scales retain typed products and dictionary-relative percentages" do
+    for {source, expected} <- [
+          {"calc(1em + 2px)", 19.5},
+          {"min(200%, 12px)", 8.0},
+          {"calc((1em - 4pt) / 2 + 3px * 2)", 11.5},
+          {"calc(1em * 2em / 4em)", 9.0},
+          {"calc(150% - 1pt)", 5.0}
+        ] do
+      assert {:ok, {:css_calculation, _} = expression} =
+               CssCalculationValidator.prepare(source, %{"em" => 18, "px" => 0.75, "pt" => 1})
+
+      assert {:ok, result} = CssCalculationValidator.resolve(expression, 4)
+      assert_in_delta result, expected, 1.0e-10
+    end
+
+    for source <- [
+          "calc(1em+2px)",
+          "calc(1em -2px)",
+          "calc(1em + 2)",
+          "calc(1em * 2px)",
+          "calc(1em / 2px)",
+          "calc(2)",
+          "min()",
+          "clamp(1em, 2em)"
+        ] do
+      assert :error = CssCalculationValidator.prepare(source, %{"em" => 18, "px" => 0.75})
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{CssCalculationValidator, HtmlValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+  end
+
   test "token bytes, cumulative work and resolved magnitude stay bounded" do
     Limits.install(
       Map.merge(Limits.effective(), %{
@@ -84,31 +144,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
     assert diagnostic.message =~ "max_numeric_magnitude"
   end
 
-  test "dependency discovery follows validated syntax and ignores CSS comments" do
-    assert {:ok, ["ch", "rcap"]} =
-             CssCalculationValidator.referenced_units("calc(1ch + 2rcap /* rlh */)")
-
-    assert {:ok, []} = CssCalculationValidator.referenced_units("calc(1ch +2rcap)")
-    assert {:ok, []} = CssCalculationValidator.referenced_units("invalid ch")
-  end
-
-  test "math length adapters delegate to the same shared grammar as CSS image consumers" do
-    alias NativeElixirPdfUtilities.Validators.CssMathValidator
-    assert {:ok, 32.0, %{length: 1}} = CssMathValidator.evaluate("calc(1pc + 1pc)", %{})
-
-    assert {:ok, shared} =
-             CssMathValidator.prepare_length("calc(1cqw + 1pc)", %{"cqw" => 2, "pc" => 12})
-
-    assert {:ok, ^shared} =
-             CssCalculationValidator.prepare("calc(1cqw + 1pc)", %{"cqw" => 2, "pc" => 12})
-
-    assert {:ok, 14.0} = CssCalculationValidator.resolve(shared, 0)
-    assert {:ok, ["cqw", "pc"]} = CssCalculationValidator.referenced_units("calc(1cqw + 1pc)")
-
-    assert {:ok, 48.0, %{length: 1}} =
-             CssMathValidator.evaluate("calc(3pc/* css comment */)", %{})
-  end
-
   test "shared depth policy and non-finite evaluation preserve failures" do
     assert {:ok, expression} = CssCalculationValidator.prepare("calc(1pt / 0)", %{"pt" => 1})
 
@@ -123,34 +158,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssCalculationValidatorTest do
              CssCalculationValidator.prepare("calc(min(max(1pt, 2pt), 3pt))", %{"pt" => 1})
 
     assert diagnostic.message =~ "max_depth"
-  end
-
-  test "shared point scales retain typed products and dictionary-relative percentages" do
-    for {source, expected} <- [
-          {"calc(1em + 2px)", 19.5},
-          {"min(200%, 12px)", 8.0},
-          {"calc((1em - 4pt) / 2 + 3px * 2)", 11.5},
-          {"calc(1em * 2em / 4em)", 9.0},
-          {"calc(150% - 1pt)", 5.0}
-        ] do
-      assert {:ok, {:css_calculation, _} = expression} =
-               CssCalculationValidator.prepare(source, %{"em" => 18, "px" => 0.75, "pt" => 1})
-
-      assert {:ok, result} = CssCalculationValidator.resolve(expression, 4)
-      assert_in_delta result, expected, 1.0e-10
-    end
-
-    for source <- [
-          "calc(1em+2px)",
-          "calc(1em -2px)",
-          "calc(1em + 2)",
-          "calc(1em * 2px)",
-          "calc(1em / 2px)",
-          "calc(2)",
-          "min()",
-          "clamp(1em, 2em)"
-        ] do
-      assert :error = CssCalculationValidator.prepare(source, %{"em" => 18, "px" => 0.75})
-    end
   end
 end

@@ -1,15 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.MathOperatorDictionary
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "pinned normative tables retain every category, axis and special entry" do
     data = MathOperatorDictionary.data()
@@ -436,6 +429,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
     assert diagnostic.source == "1ex"
   end
 
+  test "valid CSS lengths requiring unimplemented geometry diagnose instead of taking a dictionary fallback" do
+    for value <- [
+          "2vw",
+          "1cqw"
+        ] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathOperatorValidator.prepare("+", %{"lspace" => value})
+
+      assert diagnostic.stage == :layout
+      assert diagnostic.operation == :prepare_math_operator
+      assert diagnostic.source == value
+      assert diagnostic.message =~ "operator lspace"
+      assert diagnostic.message =~ "CSS"
+    end
+  end
+
+  test "Chromium ignores calculated operator attributes before metric resolution" do
+    for {value, _css_result} <- [
+          {"calc(1em + 2px)", 19.5},
+          {"min(1em, 2px)", 1.5},
+          {"max(1em, 2px)", 18},
+          {"clamp(1px, 1em, 2em)", 18},
+          {"clamp(2em, 1em, 0px)", 36},
+          {"calc((1em - 4pt) / 2 + 3px * 2)", 11.5},
+          {"calc(150% - 1pt)", 5},
+          {"min(200%, 12px)", 8},
+          {"calc(1em * 2em / 4em)", 9},
+          {"calc(1rch + 1rcap + 1rex + 1rlh + 1ric)", 52},
+          {"calc(1vw + 2vh + 1vmin + 1vmax + 1vi + 1vb)", 26}
+        ] do
+      assert {:ok, operator} =
+               MathOperatorValidator.prepare("+", %{"lspace" => value}, %{
+                 font_size: 18,
+                 root_zero_advance: 6,
+                 root_cap_height: 9,
+                 root_x_height: 5,
+                 root_line_height: 20,
+                 root_ideographic_advance: 12,
+                 viewport_width: 600,
+                 viewport_height: 200
+               })
+
+      assert_in_delta operator.lspace, 18 * 4 / 18, 1.0e-10
+    end
+  end
+
+  test "malformed and dimensionally invalid calculations use Core dictionary fallback" do
+    for value <- [
+          "calc(1em+2px)",
+          "calc(1em -2px)",
+          "calc(1em + 2)",
+          "calc(1em * 2px)",
+          "calc(1em / 2px)",
+          "calc(2)",
+          "min()",
+          "clamp(1em, 2em)",
+          "calc(1bogus + 2pt)",
+          "calc(1em) trailing",
+          "calc(1em +)"
+        ] do
+      assert {:ok, operator} = MathOperatorValidator.prepare("+", %{"lspace" => value})
+      assert_in_delta operator.lspace, 12 * 4 / 18, 1.0e-10
+    end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.MathOperatorValidator
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
   test "resource diagnostics cover text, positional work, numeric tokens and resolved spacing" do
     Limits.install(
       Map.merge(Limits.effective(), %{
@@ -509,71 +580,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathOperatorValidatorTest do
     assert diagnostic.source == "200vw"
     assert diagnostic.message =~ "operator lspace"
     assert diagnostic.message =~ "validated expression"
-  end
-
-  test "valid CSS lengths requiring unimplemented geometry diagnose instead of taking a dictionary fallback" do
-    for value <- [
-          "2vw",
-          "1cqw"
-        ] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               MathOperatorValidator.prepare("+", %{"lspace" => value})
-
-      assert diagnostic.stage == :layout
-      assert diagnostic.operation == :prepare_math_operator
-      assert diagnostic.source == value
-      assert diagnostic.message =~ "operator lspace"
-      assert diagnostic.message =~ "CSS"
-    end
-  end
-
-  test "Chromium ignores calculated operator attributes before metric resolution" do
-    for {value, _css_result} <- [
-          {"calc(1em + 2px)", 19.5},
-          {"min(1em, 2px)", 1.5},
-          {"max(1em, 2px)", 18},
-          {"clamp(1px, 1em, 2em)", 18},
-          {"clamp(2em, 1em, 0px)", 36},
-          {"calc((1em - 4pt) / 2 + 3px * 2)", 11.5},
-          {"calc(150% - 1pt)", 5},
-          {"min(200%, 12px)", 8},
-          {"calc(1em * 2em / 4em)", 9},
-          {"calc(1rch + 1rcap + 1rex + 1rlh + 1ric)", 52},
-          {"calc(1vw + 2vh + 1vmin + 1vmax + 1vi + 1vb)", 26}
-        ] do
-      assert {:ok, operator} =
-               MathOperatorValidator.prepare("+", %{"lspace" => value}, %{
-                 font_size: 18,
-                 root_zero_advance: 6,
-                 root_cap_height: 9,
-                 root_x_height: 5,
-                 root_line_height: 20,
-                 root_ideographic_advance: 12,
-                 viewport_width: 600,
-                 viewport_height: 200
-               })
-
-      assert_in_delta operator.lspace, 18 * 4 / 18, 1.0e-10
-    end
-  end
-
-  test "malformed and dimensionally invalid calculations use Core dictionary fallback" do
-    for value <- [
-          "calc(1em+2px)",
-          "calc(1em -2px)",
-          "calc(1em + 2)",
-          "calc(1em * 2px)",
-          "calc(1em / 2px)",
-          "calc(2)",
-          "min()",
-          "clamp(1em, 2em)",
-          "calc(1bogus + 2pt)",
-          "calc(1em) trailing",
-          "calc(1em +)"
-        ] do
-      assert {:ok, operator} = MathOperatorValidator.prepare("+", %{"lspace" => value})
-      assert_in_delta operator.lspace, 12 * 4 / 18, 1.0e-10
-    end
   end
 
   test "ignored calculated attributes consume no calculation budget and need no font metrics" do

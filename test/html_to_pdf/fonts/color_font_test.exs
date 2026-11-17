@@ -1,7 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
 
   alias NativeElixirPdfUtilities.Validators.{
@@ -9,12 +9,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
     ColorFontValidator,
     WriterValidator
   }
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "independent sbix and CBDT strikes select density, keep alpha and extract real selected text" do
     for file <- ["selected-sbix.ttf", "selected-cbdt.ttf", "selected-bitmap-only.ttf"] do

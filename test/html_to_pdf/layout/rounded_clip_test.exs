@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{HtmlToPdf}
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     HtmlParser,
@@ -13,12 +13,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
 
   alias NativeElixirPdfUtilities.Validators.{WriterValidator, HtmlFormValidator}
   alias NativeElixirPdfUtilities.Pdf.Reader
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "public writer prepares bounded intersected rounded clips and preserves ordinary clip bytes" do
     box = %{
@@ -125,53 +119,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
       assert diagnostic.stage == :pdf and diagnostic.operation == :write_pdf
       assert diagnostic.message =~ "inner_clip"
     end
-  end
-
-  test "nested snapping keeps exact ties and validates rounded far edges after preparation" do
-    for {value, expected} <- [{-1.125, -0.75}, {-0.375, 0.0}, {0.375, 0.75}, {1.125, 1.5}] do
-      assert PageGeometry.snap_css_pixel(value) == expected
-    end
-
-    box = %{
-      type: :rect,
-      x: 0,
-      y: 0,
-      width: 1,
-      height: 1,
-      fill_color: {1, 0, 0},
-      stroke_color: nil,
-      stroke_width: 0,
-      border_radius: 0,
-      snap_to_css_pixel_grid: true,
-      clip: %{
-        x: 0.375,
-        y: 0.375,
-        width: 1.5,
-        height: 1.5,
-        border_radius: 100,
-        inner_clip: %{x: 0.375, y: 0.375, width: 0, height: 1.5, border_radius: 2}
-      }
-    }
-
-    assert {:ok, prepared} = WriterValidator.prepare([%{size: {3, 3}, boxes: [box]}], [])
-    clip = hd(hd(prepared.pages).boxes).clip
-    assert clip.x == 0.75 and clip.y == 0.0 and clip.width == 1.5 and clip.height == 1.5
-    assert clip.border_radius == 0.75 and clip.inner_clip.border_radius == 0
-
-    Limits.install(%{Limits.effective() | max_numeric_magnitude: 1.2})
-
-    box = %{
-      box
-      | clip: %{
-          x: 0,
-          y: 0,
-          width: 1.2,
-          height: 1.2,
-          inner_clip: %{x: 0, y: 0, width: 1.2, height: 1.2}
-        }
-    }
-
-    assert {:error, {:invalid_pdf_input, _}} = PdfWriter.render([%{size: {3, 3}, boxes: [box]}])
   end
 
   test "listbox client clips include authored padding and rounded borders fill contour rings" do
@@ -410,6 +357,71 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipTest do
 
       assert {:ok, _} = PdfWriter.render(pages)
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.RoundedClipGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{
+    PdfWriter,
+    PageGeometry
+  }
+
+  alias NativeElixirPdfUtilities.Validators.{WriterValidator}
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "nested snapping keeps exact ties and validates rounded far edges after preparation" do
+    for {value, expected} <- [{-1.125, -0.75}, {-0.375, 0.0}, {0.375, 0.75}, {1.125, 1.5}] do
+      assert PageGeometry.snap_css_pixel(value) == expected
+    end
+
+    box = %{
+      type: :rect,
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      fill_color: {1, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0,
+      snap_to_css_pixel_grid: true,
+      clip: %{
+        x: 0.375,
+        y: 0.375,
+        width: 1.5,
+        height: 1.5,
+        border_radius: 100,
+        inner_clip: %{x: 0.375, y: 0.375, width: 0, height: 1.5, border_radius: 2}
+      }
+    }
+
+    assert {:ok, prepared} = WriterValidator.prepare([%{size: {3, 3}, boxes: [box]}], [])
+    clip = hd(hd(prepared.pages).boxes).clip
+    assert clip.x == 0.75 and clip.y == 0.0 and clip.width == 1.5 and clip.height == 1.5
+    assert clip.border_radius == 0.75 and clip.inner_clip.border_radius == 0
+
+    Limits.install(%{Limits.effective() | max_numeric_magnitude: 1.2})
+
+    box = %{
+      box
+      | clip: %{
+          x: 0,
+          y: 0,
+          width: 1.2,
+          height: 1.2,
+          inner_clip: %{x: 0, y: 0, width: 1.2, height: 1.2}
+        }
+    }
+
+    assert {:error, {:invalid_pdf_input, _}} = PdfWriter.render([%{size: {3, 3}, boxes: [box]}])
   end
 
   test "authored row geometry and content-box intrinsic dimensions retain ordinary layout validation" do

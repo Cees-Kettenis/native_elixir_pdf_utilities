@@ -1,9 +1,9 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextPaintTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, Font, PdfWriter}
   alias NativeElixirPdfUtilities.Validators.WriterValidator
-  alias NativeElixirPdfUtilities.{Limits, Text}
+  alias NativeElixirPdfUtilities.{Text}
 
   setup do
     assert {:ok, registry} = Font.load_registry([])
@@ -111,6 +111,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextPaintTest do
     assert point_pdf =~ "/F1 20 Tf"
     assert point_pdf =~ "43.5 157.5 Td"
     assert {:ok, "N"} = Text.extract(point_pdf, layout: false)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTextPaintGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
+  alias NativeElixirPdfUtilities.{Limits}
+
+  setup do
+    assert {:ok, registry} = Font.load_registry([])
+    assert {:ok, _, font} = Font.resolve("DejaVu Sans", 400, :normal, registry)
+
+    box = %{
+      type: :text,
+      text: "Numbered line",
+      x: 43.5,
+      y: 157.5,
+      width: 80,
+      annotation_width: 80,
+      line_height: 13.5,
+      font: Font.pdf_name(font),
+      font_face: font,
+      font_size: 10.5,
+      snap_to_css_pixel_grid: true,
+      color: {0, 0, 0}
+    }
+
+    {:ok, box: box, font: font}
   end
 
   test "source coordinate conversion honors the canonical writer numeric budget", %{box: box} do

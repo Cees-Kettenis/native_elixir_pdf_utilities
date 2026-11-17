@@ -1,11 +1,10 @@
 defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidatorTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Diagnostics, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Diagnostics}
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssImageValue, HtmlParser, Style}
 
   alias NativeElixirPdfUtilities.Validators.{
     CssImageValueValidator,
-    HtmlValidator,
     WriterValidator
   }
 
@@ -124,34 +123,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidatorTest do
              CssImageValueValidator.prepare_policy("image-resolution", "2x snap")
   end
 
-  test "hidden generated images load no assets and generated surfaces retain shared budget diagnostics" do
-    {:ok, dom} =
-      HtmlParser.parse(
-        "<div style='display:none;background-image:linear-gradient(red,blue);border-image-source:url(no-load)'></div>"
-      )
-
-    assert {:ok, _} =
-             Style.compute(dom, asset_resolver: fn _ -> flunk("hidden resource loaded") end)
-
-    previous = Limits.effective()
-
-    try do
-      Limits.install(Map.put(previous, :max_raster_pixels, 1))
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               CssImageValueValidator.reserve_surface(2, 2, 4)
-
-      assert diagnostic.message =~ "max_raster_pixels"
-    after
-      Limits.install(previous)
-    end
-
-    assert :ok =
-             HtmlValidator.with_render_budget(fn ->
-               CssImageValueValidator.reserve_surface(1, 1, 1)
-             end)
-  end
-
   test "invalid nested URLs retain source denial diagnostics across image functions" do
     for source <- [
           "image(url('javascript:run()'))",
@@ -221,5 +192,44 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidatorTest do
     refute CssImageValueValidator.valid_loaded?(%{kind: :decoded, image: %{@image | data: <<>>}})
     refute CssImageValueValidator.valid_loaded?(%{kind: :decoded, image: %{@image | width: -1}})
     refute CssImageValueValidator.valid_loaded?(%{kind: :decoded, image: %{@image | height: -1}})
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidatorGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssImageValueValidator,
+    HtmlValidator
+  }
+
+  test "hidden generated images load no assets and generated surfaces retain shared budget diagnostics" do
+    {:ok, dom} =
+      HtmlParser.parse(
+        "<div style='display:none;background-image:linear-gradient(red,blue);border-image-source:url(no-load)'></div>"
+      )
+
+    assert {:ok, _} =
+             Style.compute(dom, asset_resolver: fn _ -> flunk("hidden resource loaded") end)
+
+    previous = Limits.effective()
+
+    try do
+      Limits.install(Map.put(previous, :max_raster_pixels, 1))
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               CssImageValueValidator.reserve_surface(2, 2, 4)
+
+      assert diagnostic.message =~ "max_raster_pixels"
+    after
+      Limits.install(previous)
+    end
+
+    assert :ok =
+             HtmlValidator.with_render_budget(fn ->
+               CssImageValueValidator.reserve_surface(1, 1, 1)
+             end)
   end
 end

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssLogicalPropertiesTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.CssStyles
 
   alias NativeElixirPdfUtilities.Validators.{

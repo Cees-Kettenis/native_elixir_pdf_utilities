@@ -4,17 +4,10 @@ Code.require_file(Paths.support("svg_public_workflow.ex"))
 Code.require_file(Paths.support("png_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgDocumentSourcePrintTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Limits}
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.{ResourceContext, PdfWriter}
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "document glyphs enter the source print canvas while links retain their point bounds" do
     font = File.read!("priv/fonts/dejavu/DejaVuSans.ttf")

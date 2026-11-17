@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, HtmlTree, Style}
 
@@ -11,17 +11,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
     HtmlValidator,
     PrintMediaValidator,
     MediaConditionValidator,
-    HtmlFileValidator,
     TemplatePatchValidator
   }
 
   @opts [system_font_discovery: false, compress_streams: false]
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
-
   test "legacy inline descriptors reject invalid CSS encoding before declarations are used" do
     dom = %{
       type: :document,
@@ -34,13 +27,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
 
     assert diagnostic.stage == :style and diagnostic.source == "div" and
              diagnostic.message =~ "UTF-8"
-  end
-
-  test "inline source preparation retains a returned declaration-source limit failure" do
-    assert {:ok, dom} = HtmlParser.parse_detailed("<div style='color:red'></div>")
-    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 4))
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlCssSourceValidator.prepare(dom)
-    assert is_atom(diagnostic.stage) and diagnostic.message =~ "max_input_bytes"
   end
 
   test "authored important literals and symbolic font keywords retain exact source grammar" do
@@ -207,33 +193,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
     end
   end
 
-  test "empty file layout uses selected fonts and rejects a different input kind" do
-    fonts = [%{family: "Arial", path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf")}]
-    assert {:ok, dom} = HtmlParser.parse_detailed("<input type=file>")
-
-    assert {:ok, %{children: [node]}} =
-             Style.compute_detailed(dom, Keyword.merge(@opts, fonts: fonts, forms: :static))
-
-    assert :ok = HtmlFileValidator.validate_initial_layout(node)
-    changed = put_in(node.style._file_control.attributes["type"], "text")
-
-    assert {:error, {:invalid_layout, diagnostic}} =
-             HtmlFileValidator.validate_initial_layout(changed)
-
-    assert diagnostic.stage == :layout
-
-    Limits.install(%{Limits.effective() | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlFileValidator.prepare_display(
-               node.style,
-               node.style._file_control.initial_state,
-               node.style._file_display.button_face
-             )
-
-    assert diagnostic.reason == :resource_limit_exceeded
-  end
-
   test "superseded unsupported original font sources cannot silently use later valid bytes" do
     css = "@font-face{font-family:Original;src:local('Missing');src:url('actual.ttf')}"
     assert {:ok, sheet} = CssParser.prepare_source_stylesheet(css)
@@ -243,50 +202,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
 
     assert diagnostic.stage == :font and diagnostic.source == "src:local('Missing')"
     assert diagnostic.line == 1 and is_integer(diagnostic.column)
-  end
-
-  test "symbolic source numeric-token ceilings preserve the authored failure location" do
-    css = "font-size:123pt"
-
-    assert {:ok, [record]} =
-             CssParser.prepare_source_declarations(css, HtmlCssSourceValidator.local(css))
-
-    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 3})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             CssValueValidator.prepare_unapplied_declaration(
-               record,
-               HtmlValidator.new_css_budget()
-             )
-
-    assert diagnostic.source == css and diagnostic.line == 1 and diagnostic.column == 1
-  end
-
-  test "prepared literals and computed declarations preserve later expansion failures" do
-    css = "width:12pt"
-
-    assert {:ok, [record]} =
-             CssParser.prepare_source_declarations(css, HtmlCssSourceValidator.local(css))
-
-    original = Limits.effective()
-    Limits.install(%{original | max_decoded_bytes: 0})
-
-    assert {:error, {:resource_limit_exceeded, literal}} =
-             CssValueValidator.validate_source_literal(record, HtmlValidator.new_css_budget())
-
-    assert literal.message =~ "max_decoded_bytes"
-
-    Limits.install(%{original | max_decoded_bytes: 0})
-
-    assert {:error, {:resource_limit_exceeded, expansion}} =
-             CssValueValidator.validate_declaration(
-               %{_custom_properties: %{"--color" => "red"}},
-               {"color", "var(--color)"},
-               HtmlValidator.new_css_budget()
-             )
-
-    assert expansion.message =~ "max_decoded_bytes"
-    assert is_atom(expansion.stage)
   end
 
   test "prospective foreign style placement cannot borrow original HTML tokenizer ownership" do
@@ -338,5 +253,103 @@ defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationTest do
                  end
                )
              end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.CssSourceValidationGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser, Style}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssValueValidator,
+    HtmlCssSourceValidator,
+    HtmlValidator,
+    HtmlFileValidator
+  }
+
+  @opts [system_font_discovery: false, compress_streams: false]
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    :ok
+  end
+
+  test "inline source preparation retains a returned declaration-source limit failure" do
+    assert {:ok, dom} = HtmlParser.parse_detailed("<div style='color:red'></div>")
+    Limits.install(Map.put(Limits.effective(), :max_input_bytes, 4))
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlCssSourceValidator.prepare(dom)
+    assert is_atom(diagnostic.stage) and diagnostic.message =~ "max_input_bytes"
+  end
+
+  test "empty file layout uses selected fonts and rejects a different input kind" do
+    fonts = [%{family: "Arial", path: Path.expand("priv/fonts/dejavu/DejaVuSans.ttf")}]
+    assert {:ok, dom} = HtmlParser.parse_detailed("<input type=file>")
+
+    assert {:ok, %{children: [node]}} =
+             Style.compute_detailed(dom, Keyword.merge(@opts, fonts: fonts, forms: :static))
+
+    assert :ok = HtmlFileValidator.validate_initial_layout(node)
+    changed = put_in(node.style._file_control.attributes["type"], "text")
+
+    assert {:error, {:invalid_layout, diagnostic}} =
+             HtmlFileValidator.validate_initial_layout(changed)
+
+    assert diagnostic.stage == :layout
+
+    Limits.install(%{Limits.effective() | max_entries: 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlFileValidator.prepare_display(
+               node.style,
+               node.style._file_control.initial_state,
+               node.style._file_display.button_face
+             )
+
+    assert diagnostic.reason == :resource_limit_exceeded
+  end
+
+  test "symbolic source numeric-token ceilings preserve the authored failure location" do
+    css = "font-size:123pt"
+
+    assert {:ok, [record]} =
+             CssParser.prepare_source_declarations(css, HtmlCssSourceValidator.local(css))
+
+    Limits.install(%{Limits.effective() | max_numeric_token_bytes: 3})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             CssValueValidator.prepare_unapplied_declaration(
+               record,
+               HtmlValidator.new_css_budget()
+             )
+
+    assert diagnostic.source == css and diagnostic.line == 1 and diagnostic.column == 1
+  end
+
+  test "prepared literals and computed declarations preserve later expansion failures" do
+    css = "width:12pt"
+
+    assert {:ok, [record]} =
+             CssParser.prepare_source_declarations(css, HtmlCssSourceValidator.local(css))
+
+    original = Limits.effective()
+    Limits.install(%{original | max_decoded_bytes: 0})
+
+    assert {:error, {:resource_limit_exceeded, literal}} =
+             CssValueValidator.validate_source_literal(record, HtmlValidator.new_css_budget())
+
+    assert literal.message =~ "max_decoded_bytes"
+
+    Limits.install(%{original | max_decoded_bytes: 0})
+
+    assert {:error, {:resource_limit_exceeded, expansion}} =
+             CssValueValidator.validate_declaration(
+               %{_custom_properties: %{"--color" => "red"}},
+               {"color", "var(--color)"},
+               HtmlValidator.new_css_budget()
+             )
+
+    assert expansion.message =~ "max_decoded_bytes"
+    assert is_atom(expansion.stage)
   end
 end

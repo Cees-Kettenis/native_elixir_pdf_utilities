@@ -1,7 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.LineBreakProtocolTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator
 
   test "native break output cannot claim partial graphemes, repeated offsets or malformed flags" do
@@ -35,6 +34,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LineBreakProtocolTest do
     assert diagnostic.message =~ "UTF-8"
   end
 
+  test "code points beyond the packed line-break tables fall back to the unassigned class" do
+    # Plane 15 private use (U+F0000) has no packed index entry, so property
+    # lookup falls back and the pair automaton treats it as unassigned text.
+    assert {:ok, [{6, true}]} = HtmlLineBreakValidator.opportunities("a\u{F0000}b")
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.LineBreakProtocolGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator
+
   test "malformed preceding and discretionary inline text retain public diagnostics" do
     assert {:error, {:invalid_layout, diagnostic}} = HtmlLineBreakValidator.segments("text", nil)
     assert diagnostic.message =~ "preceding inline context"
@@ -61,11 +73,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LineBreakProtocolTest do
 
     assert diagnostic.stage == :layout
     assert diagnostic.message =~ "max_work"
-  end
-
-  test "code points beyond the packed line-break tables fall back to the unassigned class" do
-    # Plane 15 private use (U+F0000) has no packed index entry, so property
-    # lookup falls back and the pair automaton treats it as unassigned text.
-    assert {:ok, [{6, true}]} = HtmlLineBreakValidator.opportunities("a\u{F0000}b")
   end
 end

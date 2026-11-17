@@ -1,7 +1,7 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   Code.require_file(Paths.support("png_fixture.ex"))
   Code.require_file(Paths.support("svg_public_workflow.ex"))
   alias NativeElixirPdfUtilities.HtmlToPdf.{SvgRasterizer, PngDecoder}

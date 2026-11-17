@@ -2,21 +2,14 @@ Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("open_type_
 Code.require_file(NativeElixirPdfUtilities.TestSupport.Paths.support("font_fixture.ex"))
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.OpenTypeLayoutTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.HtmlToPdf.TextShaper
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.TestSupport.{FontFixture, OpenTypeFixture, Paths}
   alias NativeElixirPdfUtilities.Validators.{FontValidator, OpenTypeLayoutValidator}
   alias NativeElixirPdfUtilities.Validators.OpenTypeDataValidator, as: Data
 
   import NativeElixirPdfUtilities.TestSupport.OpenTypeFixture,
     only: [join: 2, words: 1, coverage: 1]
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "operation layout memo checks source bytes even when a face identity is reused" do
     font = OpenTypeFixture.font()

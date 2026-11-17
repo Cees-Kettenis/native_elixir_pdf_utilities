@@ -1,6 +1,139 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.Validators.TemplateRendererSourceContextTest do
+  use ExUnit.Case, async: true
+
+  Code.require_file(Paths.support("png_fixture.ex"))
+
+  alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, HtmlTree, ResourceContext}
+  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlCssSourceValidator,
+    HtmlValidator,
+    TemplateRendererContextValidator
+  }
+
+  setup do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "native-pdf-template-source-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(root)
+    png = PngFixture.build(1, 1, 2, 8, 0, fn _, _ -> [255, 0, 0] end)
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    %{
+      root: root,
+      png: png,
+      opts: [system_font_discovery: false, assets: %{"pixel.png" => {:bytes, png}}]
+    }
+  end
+
+  test "prefix ownership rejects future nodes and invalid offsets using shared diagnostics" do
+    source = "<p style='font-size:18px'>Before</p><p style='font-size:20px'>After</p>"
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(source)
+    {finish, _} = :binary.match(source, "<p style='font-size:20px'>")
+
+    assert {:error, {:invalid_document, diagnostic}} =
+             HtmlCssSourceValidator.prepare_prefix(dom, finish)
+
+    assert diagnostic.stage == :html and diagnostic.module == HtmlCssSourceValidator
+    assert diagnostic.source == "<p style='font-size:20px'>"
+    assert diagnostic.operation == :source_style_contexts
+
+    for invalid <- [-1, byte_size(source) + 1, :caller] do
+      assert {:error, {:invalid_document, invalid_diagnostic}} =
+               HtmlCssSourceValidator.prepare_prefix(dom, invalid)
+
+      assert invalid_diagnostic.message =~ "original byte offset"
+    end
+  end
+
+  test "source binding failures retain shared actionable diagnostics without issuing evidence", %{
+    root: root
+  } do
+    assert {:ok, dom} =
+             HtmlParser.parse_document_detailed("<style>p{font-size:18px}</style><p>Proof</p>")
+
+    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
+    tree = HtmlTree.from_document(dom)
+    paragraph = Enum.find(Map.values(tree.nodes), &(&1[:tag] == "p"))
+    stylesheet = Enum.find(Map.values(tree.nodes), &(&1[:tag] == "style"))
+
+    assert {:ok, prepared} =
+             NativeElixirPdfUtilities.HtmlToPdf.CssParser.prepare_stylesheet("p{font-size:18px}")
+
+    [authored] = provenance.embedded
+
+    assert {:ok, source_prepared} =
+             NativeElixirPdfUtilities.HtmlToPdf.CssParser.prepare_source_stylesheet(
+               authored.css,
+               authored.descriptor
+             )
+
+    [record] = hd(source_prepared.rules).source_declarations
+    key = {TemplateRendererContextValidator, :preparation}
+
+    ResourceContext.run(
+      [authorization_root: root],
+      HtmlValidator.new_image_budget(),
+      fn current ->
+        Process.put(key, %{
+          resource_frame: nil,
+          resource_context: current,
+          tree: tree,
+          provenance: provenance,
+          cascades: %{}
+        })
+
+        try do
+          entry = %{
+            css: authored.css,
+            __template_stylesheet_owner__: %{
+              stylesheet
+              | source: %{stylesheet.source | text: "<style forged>"}
+            }
+          }
+
+          assert {:error, {:invalid_document, owner_error}} =
+                   TemplateRendererContextValidator.bind_stylesheet(entry, prepared, nil)
+
+          assert owner_error.stage == :css and owner_error.message =~ "original HTML source owner"
+          assert owner_error.operation == :template_renderer_context
+
+          entry = %{css: authored.css, __template_stylesheet_owner__: stylesheet}
+
+          mismatch = %{
+            prepared
+            | rules: [%{hd(prepared.rules) | declarations: [{"font-size", "99px"}]}]
+          }
+
+          assert {:error, {:invalid_document, rule_error}} =
+                   TemplateRendererContextValidator.bind_stylesheet(entry, mismatch, nil)
+
+          assert rule_error.message =~ "actual prepared stylesheet cascade"
+
+          matched = %{declaration: {"font-size", "99px"}, inline: false, source_record: record}
+
+          assert {:error, {:invalid_document, declaration_error}} =
+                   TemplateRendererContextValidator.observe_cascade(paragraph, nil, [matched])
+
+          assert declaration_error.source == "font-size:18px" and declaration_error.line == 1
+          assert declaration_error.column == 10 and declaration_error.stage == :css
+          assert declaration_error.operation == :template_renderer_context
+          assert Process.get(key).cascades == %{}
+        after
+          Process.delete(key)
+        end
+      end
+    )
+  end
+end
+
+defmodule NativeElixirPdfUtilities.Validators.TemplateRendererSourceContextGlobalStateTest do
   use ExUnit.Case, async: false
 
   Code.require_file(Paths.support("png_fixture.ex"))
@@ -9,7 +142,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererSourceContextTest 
   alias NativeElixirPdfUtilities.TestSupport.PngFixture
 
   alias NativeElixirPdfUtilities.Validators.{
-    HtmlCssSourceValidator,
     HtmlValidator,
     TemplatePatchValidator,
     TemplateRendererContextValidator
@@ -216,106 +348,6 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererSourceContextTest 
              )
 
     assert Process.get({TemplateRendererContextValidator, :preparation}) == nil
-  end
-
-  test "prefix ownership rejects future nodes and invalid offsets using shared diagnostics" do
-    source = "<p style='font-size:18px'>Before</p><p style='font-size:20px'>After</p>"
-    assert {:ok, dom} = HtmlParser.parse_document_detailed(source)
-    {finish, _} = :binary.match(source, "<p style='font-size:20px'>")
-
-    assert {:error, {:invalid_document, diagnostic}} =
-             HtmlCssSourceValidator.prepare_prefix(dom, finish)
-
-    assert diagnostic.stage == :html and diagnostic.module == HtmlCssSourceValidator
-    assert diagnostic.source == "<p style='font-size:20px'>"
-    assert diagnostic.operation == :source_style_contexts
-
-    for invalid <- [-1, byte_size(source) + 1, :caller] do
-      assert {:error, {:invalid_document, invalid_diagnostic}} =
-               HtmlCssSourceValidator.prepare_prefix(dom, invalid)
-
-      assert invalid_diagnostic.message =~ "original byte offset"
-    end
-  end
-
-  test "source binding failures retain shared actionable diagnostics without issuing evidence", %{
-    root: root
-  } do
-    assert {:ok, dom} =
-             HtmlParser.parse_document_detailed("<style>p{font-size:18px}</style><p>Proof</p>")
-
-    assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)
-    tree = HtmlTree.from_document(dom)
-    paragraph = Enum.find(Map.values(tree.nodes), &(&1[:tag] == "p"))
-    stylesheet = Enum.find(Map.values(tree.nodes), &(&1[:tag] == "style"))
-
-    assert {:ok, prepared} =
-             NativeElixirPdfUtilities.HtmlToPdf.CssParser.prepare_stylesheet("p{font-size:18px}")
-
-    [authored] = provenance.embedded
-
-    assert {:ok, source_prepared} =
-             NativeElixirPdfUtilities.HtmlToPdf.CssParser.prepare_source_stylesheet(
-               authored.css,
-               authored.descriptor
-             )
-
-    [record] = hd(source_prepared.rules).source_declarations
-    key = {TemplateRendererContextValidator, :preparation}
-
-    ResourceContext.run(
-      [authorization_root: root],
-      HtmlValidator.new_image_budget(),
-      fn current ->
-        Process.put(key, %{
-          resource_frame: nil,
-          resource_context: current,
-          tree: tree,
-          provenance: provenance,
-          cascades: %{}
-        })
-
-        try do
-          entry = %{
-            css: authored.css,
-            __template_stylesheet_owner__: %{
-              stylesheet
-              | source: %{stylesheet.source | text: "<style forged>"}
-            }
-          }
-
-          assert {:error, {:invalid_document, owner_error}} =
-                   TemplateRendererContextValidator.bind_stylesheet(entry, prepared, nil)
-
-          assert owner_error.stage == :css and owner_error.message =~ "original HTML source owner"
-          assert owner_error.operation == :template_renderer_context
-
-          entry = %{css: authored.css, __template_stylesheet_owner__: stylesheet}
-
-          mismatch = %{
-            prepared
-            | rules: [%{hd(prepared.rules) | declarations: [{"font-size", "99px"}]}]
-          }
-
-          assert {:error, {:invalid_document, rule_error}} =
-                   TemplateRendererContextValidator.bind_stylesheet(entry, mismatch, nil)
-
-          assert rule_error.message =~ "actual prepared stylesheet cascade"
-
-          matched = %{declaration: {"font-size", "99px"}, inline: false, source_record: record}
-
-          assert {:error, {:invalid_document, declaration_error}} =
-                   TemplateRendererContextValidator.observe_cascade(paragraph, nil, [matched])
-
-          assert declaration_error.source == "font-size:18px" and declaration_error.line == 1
-          assert declaration_error.column == 10 and declaration_error.stage == :css
-          assert declaration_error.operation == :template_renderer_context
-          assert Process.get(key).cascades == %{}
-        after
-          Process.delete(key)
-        end
-      end
-    )
   end
 
   test "unavailable font assets propagate source diagnostics without candidate ownership",

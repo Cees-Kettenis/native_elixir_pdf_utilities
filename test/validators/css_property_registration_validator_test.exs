@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidatorTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator, as: Registration
   alias NativeElixirPdfUtilities.TestSupport.CssStyles

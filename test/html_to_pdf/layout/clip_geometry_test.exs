@@ -1,15 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.{AffineGeometry, ClipGeometry, DrawingGeometry}
   alias NativeElixirPdfUtilities.Validators.{ClipGeometryValidator, HtmlValidator}
-
-  setup do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    :ok
-  end
 
   test "rotated and reflected box matrices invert without parsing SVG source" do
     for matrix <- [{0, 2, -2, 0, 13, 5}, {-1, 0, 0, 1, 25, -7}, {1, 0.5, 2, 3, 4, 5}] do
@@ -125,11 +118,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryTest do
     end)
   end
 
-  test "inverse rejects arithmetic overflow under a deliberately expanded numeric policy" do
-    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, Integer.pow(10, 309)))
-    assert :error = AffineGeometry.inverse({1.0e308, 0, 0, 1.0e308, 0, 0})
-  end
-
   test "malformed caller clip expressions return shared diagnostics before geometric projection" do
     for expression <- [
           :invalid,
@@ -152,6 +140,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryTest do
       assert diagnostic.operation == :project
       assert diagnostic.message =~ "PDF clip"
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometryGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.HtmlToPdf.{AffineGeometry, DrawingGeometry}
+  alias NativeElixirPdfUtilities.Validators.{ClipGeometryValidator}
+
+  setup do
+    previous = Limits.effective()
+    on_exit(fn -> Limits.install(previous) end)
+    :ok
+  end
+
+  test "inverse rejects arithmetic overflow under a deliberately expanded numeric policy" do
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, Integer.pow(10, 309)))
+    assert :error = AffineGeometry.inverse({1.0e308, 0, 0, 1.0e308, 0, 0})
   end
 
   test "clip expressions use the same depth limit as drawing groups" do

@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     HtmlParser,
@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
     PrintMediaValidator
   }
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Text, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
 
   test "responsive sizes and reusable print predicates use the validated environment" do
     alias NativeElixirPdfUtilities.Validators.PrintMediaValidator
@@ -394,26 +394,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
     end)
   end
 
-  test "stylesheet media depth and source work have centralized diagnostic budgets" do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    Limits.install(Map.put(original, :max_depth, 2))
-    css = "@media print{@media print{@media print{p{color: red}}}}"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.CssParser.parse_detailed(css)
-
-    assert diagnostic.stage == :css and diagnostic.message =~ "max_depth"
-    Limits.install(Map.put(original, :max_input_bytes, 20))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.CssParser.parse_detailed(
-               "p{color: red} p{color: blue}"
-             )
-
-    assert diagnostic.stage == :css and diagnostic.message =~ "max_input_bytes"
-  end
-
   test "page defaults prepare before context and viewport-qualified page negotiation diagnoses" do
     assert {:ok, pdf} =
              HtmlToPdf.render(
@@ -591,5 +571,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionTest do
 
       assert diagnostic.stage == :resource and diagnostic.source == "../denied.ttf"
     end)
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.StylesheetSelectionGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{Limits}
+
+  test "stylesheet media depth and source work have centralized diagnostic budgets" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    Limits.install(Map.put(original, :max_depth, 2))
+    css = "@media print{@media print{@media print{p{color: red}}}}"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.CssParser.parse_detailed(css)
+
+    assert diagnostic.stage == :css and diagnostic.message =~ "max_depth"
+    Limits.install(Map.put(original, :max_input_bytes, 20))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             NativeElixirPdfUtilities.HtmlToPdf.CssParser.parse_detailed(
+               "p{color: red} p{color: blue}"
+             )
+
+    assert diagnostic.stage == :css and diagnostic.message =~ "max_input_bytes"
   end
 end

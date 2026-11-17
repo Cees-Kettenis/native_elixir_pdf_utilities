@@ -1,14 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.BrotliTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.Limits
+  use ExUnit.Case, async: true
   alias NativeElixirPdfUtilities.TestSupport.Paths
   alias NativeElixirPdfUtilities.Validators.BrotliValidator
-
-  setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    :ok
-  end
 
   test "independent Google codec and synthetic format vectors decode exactly or explain rejection" do
     vectors =
@@ -57,24 +50,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrotliTest do
       assert diagnostic.operation == :decode_brotli
       assert diagnostic.source =~ "Brotli bit"
       assert diagnostic.message != ""
-    end
-  end
-
-  test "source, decoded-size and cumulative work allowances stop decoding" do
-    for {limit, value, input, expected} <- [
-          {:max_input_bytes, 1, <<6, 0>>, 0},
-          {:max_decoded_bytes, 1, <<6>>, 2},
-          {:max_work, 1, <<6>>, 0}
-        ] do
-      original = Limits.effective()
-      Limits.install(%{original | limit => value})
-
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               BrotliValidator.decompress(input, expected)
-
-      assert diagnostic.stage == :font
-      assert diagnostic.message =~ Atom.to_string(limit)
-      Limits.install(original)
     end
   end
 end

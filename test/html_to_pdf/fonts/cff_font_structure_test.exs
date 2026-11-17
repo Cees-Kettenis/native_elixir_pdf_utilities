@@ -1,18 +1,11 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CffFontStructureTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   import NativeElixirPdfUtilities.TestSupport.CffFixture
 
-  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.TestSupport.Paths
-  alias NativeElixirPdfUtilities.Validators.{CffFontValidator, FontValidator}
-
-  setup do
-    original = Limits.effective()
-    on_exit(fn -> Limits.install(original) end)
-    :ok
-  end
+  alias NativeElixirPdfUtilities.Validators.{CffFontValidator}
 
   test "the licensed CFF corpus has independently measured bounds, metrics and raw table identity" do
     data = File.read!(Paths.fixture("fonts/cff-static-sans.cff"))
@@ -330,6 +323,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CffFontStructureTest do
       assert {:error, {:invalid_font, _}} =
                CffFontValidator.prepare(binary_part(original, 0, length), 3)
     end
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.CffFontStructureGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  import NativeElixirPdfUtilities.TestSupport.CffFixture
+
+  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Validators.{CffFontValidator, FontValidator}
+
+  setup do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    :ok
   end
 
   test "CFF work is bounded before indexing, decimal scanning or namespace expansion" do

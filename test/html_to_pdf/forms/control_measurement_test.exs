@@ -1,11 +1,11 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlMeasurementTest do
-  use ExUnit.Case, async: false
-  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text, Limits}
+  use ExUnit.Case, async: true
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Layout, ResourceContext, Style}
   alias NativeElixirPdfUtilities.Pdf.Reader
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, WriterValidator}
+  alias NativeElixirPdfUtilities.Validators.{HtmlValidator}
 
   @fixture Paths.fixture("html_to_pdf/browser_parity/html_inline_select_controls.html")
 
@@ -110,6 +110,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlMeasurementTest do
     assert text =~ "Beta" and text =~ "Plain second" and text =~ "Owned second" and
              text =~ "After row"
   end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlMeasurementGlobalStateTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text, Limits}
+  alias NativeElixirPdfUtilities.Pdf.Reader
+  alias NativeElixirPdfUtilities.Validators.{WriterValidator}
 
   test "disabled initial paint uses one isolated transparency Form and obeys shared object limits" do
     html =

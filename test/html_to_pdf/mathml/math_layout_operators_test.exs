@@ -1,15 +1,13 @@
 alias NativeElixirPdfUtilities.TestSupport.Paths
 
 defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Text}
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout}
   alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
 
   setup do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
     {:ok, registry} = Font.load_registry(system_font_discovery: false)
     {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
 
@@ -315,25 +313,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
              MathLayoutValidator.prepare_operator_stretch(hd(prepared.children), {0, 0})
 
     assert_in_delta resolved.target_ascent + resolved.target_descent, core.minsize, 1.0e-10
-  end
-
-  test "operator preferred-size and large-variant scans share the font work budget", %{
-    node: n,
-    style: style
-  } do
-    assert {:ok, vertical} = MathLayoutValidator.prepare_element(n.("mo", "(", %{}), %{})
-    sum = %{n.("mo", "∑", %{}) | style: %{style | math_style: :normal}}
-    assert {:ok, large} = MathLayoutValidator.prepare_element(sum, %{})
-    Limits.install(Map.put(Limits.effective(), :max_work, 1))
-
-    for prepared <- [vertical, large] do
-      assert {:error, {:resource_limit_exceeded, diagnostic}} =
-               MathLayoutValidator.prepare_operator_stretch(prepared, nil)
-
-      assert diagnostic.stage == :font
-      assert diagnostic.operation == :measure_math
-      assert diagnostic.message =~ "max_work"
-    end
   end
 
   test "font-relative attributes diagnose absent selected-face metric glyphs", %{
@@ -806,62 +785,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert hidden.actual_text == "!="
   end
 
-  test "operator API rejects invalid transport and reports missing required glyphs", %{
-    node: n,
-    font: font
-  } do
-    for {prepared, constraint} <- [{nil, nil}, {%{}, 1}, {%{kind: :operator}, {1, 1}}] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               MathLayoutValidator.prepare_operator_stretch(prepared, constraint)
-
-      assert diagnostic.stage == :layout and diagnostic.reason == :invalid_document
-      assert diagnostic.message =~ "validator-prepared"
-    end
-
-    assert {:ok, prepared} = MathLayoutValidator.prepare_element(n.("mo", "(", %{}), %{})
-
-    for invalid <- [{:bad, 0}, {1, 2, 3}, -1, 1.0e20] do
-      assert {:error, {:invalid_document, diagnostic}} =
-               MathLayoutValidator.prepare_operator_stretch(prepared, invalid)
-
-      assert diagnostic.message =~ "constraints"
-    end
-
-    missing = %{font | cmap: Map.delete(font.cmap, ?+)}
-    operator = n.("mo", "+", %{})
-
-    assert {:error, {:unsupported_glyph, diagnostic}} =
-             MathLayout.measure(%{
-               operator
-               | style: %{operator.style | font_face: missing},
-                 children: [
-                   %{type: :text, text: "+", style: %{operator.style | font_face: missing}}
-                 ]
-             })
-
-    assert diagnostic.source == "+" and diagnostic.operation == :measure_math
-    assert diagnostic.message =~ "no usable glyph"
-
-    for unit <- ["vw", "cqw"] do
-      assert {:ok, pdf} = HtmlToPdf.render("<math><mo minsize='2#{unit}'>(</mo></math>")
-      assert byte_size(pdf) > 0
-    end
-
-    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 100))
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>")
-
-    assert diagnostic.reason == :resource_limit_exceeded
-
-    # A bounded explicit media context also reaches the operator's own limit,
-    # rather than stopping at the derived page viewport's numeric reservation.
-    assert {:error, {:resource_limit_exceeded, operator_diagnostic}} =
-             HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>", print_viewport: {80, 80})
-
-    assert operator_diagnostic.message =~ "max_numeric_magnitude"
-  end
-
   test "public operators use caller font bytes and diagnose missing glyphs or MATH data" do
     bytes = File.read!(Paths.project("priv/fonts/stix/STIXTwoMath-Regular.ttf"))
 
@@ -972,5 +895,129 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsTest do
     assert math.style._math_box.core_operator.lspace == 12
     assert {:ok, zero} = MathLayout.glyph("0", math.style._root_font_face, 12)
     assert_in_delta math.style._math_box.core_operator.rspace, zero.width, 1.0e-10
+  end
+end
+
+defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayoutOperatorsGlobalStateTest do
+  use ExUnit.Case, async: false
+
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.HtmlToPdf.{Font, MathLayout}
+  alias NativeElixirPdfUtilities.Validators.MathLayoutValidator
+
+  setup do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    {:ok, registry} = Font.load_registry(system_font_discovery: false)
+    {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
+
+    style = %{
+      display: :block,
+      font_size: 20,
+      font_face: font,
+      color: {0, 0, 0},
+      line_height: 24,
+      math_style: :compact,
+      text_transform: :none
+    }
+
+    node = fn tag, text, attributes ->
+      %{
+        type: :element,
+        namespace: :mathml,
+        tag: tag,
+        attributes: attributes,
+        style: style,
+        children: [%{type: :text, text: text, style: style}]
+      }
+    end
+
+    row = fn children ->
+      %{
+        type: :element,
+        namespace: :mathml,
+        tag: "mrow",
+        attributes: %{},
+        style: style,
+        children: children
+      }
+    end
+
+    {:ok, font: font, style: style, node: node, row: row}
+  end
+
+  test "operator preferred-size and large-variant scans share the font work budget", %{
+    node: n,
+    style: style
+  } do
+    assert {:ok, vertical} = MathLayoutValidator.prepare_element(n.("mo", "(", %{}), %{})
+    sum = %{n.("mo", "∑", %{}) | style: %{style | math_style: :normal}}
+    assert {:ok, large} = MathLayoutValidator.prepare_element(sum, %{})
+    Limits.install(Map.put(Limits.effective(), :max_work, 1))
+
+    for prepared <- [vertical, large] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               MathLayoutValidator.prepare_operator_stretch(prepared, nil)
+
+      assert diagnostic.stage == :font
+      assert diagnostic.operation == :measure_math
+      assert diagnostic.message =~ "max_work"
+    end
+  end
+
+  test "operator API rejects invalid transport and reports missing required glyphs", %{
+    node: n,
+    font: font
+  } do
+    for {prepared, constraint} <- [{nil, nil}, {%{}, 1}, {%{kind: :operator}, {1, 1}}] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathLayoutValidator.prepare_operator_stretch(prepared, constraint)
+
+      assert diagnostic.stage == :layout and diagnostic.reason == :invalid_document
+      assert diagnostic.message =~ "validator-prepared"
+    end
+
+    assert {:ok, prepared} = MathLayoutValidator.prepare_element(n.("mo", "(", %{}), %{})
+
+    for invalid <- [{:bad, 0}, {1, 2, 3}, -1, 1.0e20] do
+      assert {:error, {:invalid_document, diagnostic}} =
+               MathLayoutValidator.prepare_operator_stretch(prepared, invalid)
+
+      assert diagnostic.message =~ "constraints"
+    end
+
+    missing = %{font | cmap: Map.delete(font.cmap, ?+)}
+    operator = n.("mo", "+", %{})
+
+    assert {:error, {:unsupported_glyph, diagnostic}} =
+             MathLayout.measure(%{
+               operator
+               | style: %{operator.style | font_face: missing},
+                 children: [
+                   %{type: :text, text: "+", style: %{operator.style | font_face: missing}}
+                 ]
+             })
+
+    assert diagnostic.source == "+" and diagnostic.operation == :measure_math
+    assert diagnostic.message =~ "no usable glyph"
+
+    for unit <- ["vw", "cqw"] do
+      assert {:ok, pdf} = HtmlToPdf.render("<math><mo minsize='2#{unit}'>(</mo></math>")
+      assert byte_size(pdf) > 0
+    end
+
+    Limits.install(Map.put(Limits.effective(), :max_numeric_magnitude, 100))
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>")
+
+    assert diagnostic.reason == :resource_limit_exceeded
+
+    # A bounded explicit media context also reaches the operator's own limit,
+    # rather than stopping at the derived page viewport's numeric reservation.
+    assert {:error, {:resource_limit_exceeded, operator_diagnostic}} =
+             HtmlToPdf.render("<math><mo minsize='100pc'>(</mo></math>", print_viewport: {80, 80})
+
+    assert operator_diagnostic.message =~ "max_numeric_magnitude"
   end
 end
