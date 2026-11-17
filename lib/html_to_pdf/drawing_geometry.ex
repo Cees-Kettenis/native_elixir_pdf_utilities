@@ -90,6 +90,60 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     end)
   end
 
+  @doc "Measures normalized paint with its actual paired affine groups and clip bounds for intermediate effect canvases."
+  @spec placed_ink_rectangles([map()]) :: {:ok, [tuple()]} | {:error, term()}
+  def placed_ink_rectangles(boxes) do
+    alias NativeElixirPdfUtilities.HtmlToPdf.AffineGeometry
+
+    Enum.reduce_while(boxes, {:ok, [], {1, 0, 0, 1, 0, 0}, nil, []}, fn box,
+                                                                        {:ok, rectangles, matrix,
+                                                                         clip, stack} ->
+      NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
+        :max_work,
+        1,
+        :layout
+      )
+
+      case box do
+        %{type: :drawing_group_start, transform: local} ->
+          own = AffineGeometry.multiply(matrix, local)
+          bound = transform_box_clip(Map.get(box, :clip), own) |> clip_bounds()
+          {:cont, {:ok, rectangles, own, intersect_clip(clip, bound), [{matrix, clip} | stack]}}
+
+        %{type: :drawing_group_end} ->
+          [{matrix, clip} | stack] = stack
+          {:cont, {:ok, rectangles, matrix, clip, stack}}
+
+        _ ->
+          case ink_rectangles([box]) do
+            {:ok, bounds} ->
+              bounds =
+                Enum.flat_map(bounds, fn {left, bottom, right, top} ->
+                  bounds =
+                    transform_clip(
+                      %{x: left, y: bottom, width: right - left, height: top - bottom},
+                      matrix
+                    )
+                    |> clip_bounds()
+                    |> intersect_clip(clip)
+
+                  {left, bottom, right, top} = bounds
+                  if right > left and top > bottom, do: [bounds], else: []
+                end)
+
+              {:cont, {:ok, bounds ++ rectangles, matrix, clip, stack}}
+
+            error ->
+              {:halt, error}
+          end
+      end
+    end)
+    |> case do
+      {:ok, rectangles, _, _, _} -> {:ok, rectangles}
+      error -> error
+    end
+  end
+
   @doc "Translates validated native boxes, including glyph-group children in the parent coordinate space."
   @spec translate_boxes([map()], number(), number()) :: [map()]
   def translate_boxes(boxes, delta_x, delta_y) do
@@ -217,12 +271,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
                   :empty ->
                     :empty
 
+                  matrix when tuple_size(matrix) == 16 ->
+                    alias NativeElixirPdfUtilities.HtmlToPdf.ProjectionGeometry
+                    ProjectionGeometry.around(matrix, delta_x, delta_y, 0.0)
+
                   {a, b, c, d, e, f} ->
                     {a, b, c, d, e + delta_x - a * delta_x - c * delta_y,
                      f + delta_y - b * delta_x - d * delta_y}
                 end
 
-              %{scope | matrix: matrix, border_box: bounds}
+              style =
+                case Map.get(scope.style, :_offset_reference) do
+                  nil ->
+                    scope.style
+
+                  reference ->
+                    if Map.get(scope.style, :_offset_reference_pending, false) do
+                      Map.delete(scope.style, :_offset_reference_pending)
+                    else
+                      Map.put(scope.style, :_offset_reference, %{
+                        reference
+                        | x: reference.x + delta_x,
+                          top: reference.top + delta_y
+                      })
+                    end
+                end
+
+              %{scope | matrix: matrix, border_box: bounds, style: style}
             end)
           )
       end
@@ -586,9 +661,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
         do: parent_height,
         else: group.height
 
-    case transform do
-      {sx, sy, tx, ty} -> {sx, sy, tx, ty, clip, height}
-      affine -> %{transform: affine, clip: clip, height: height}
+    if is_map(clip) do
+      %{transform: affine_matrix(transform), clip: clip, height: height}
+    else
+      case transform do
+        {sx, sy, tx, ty} -> {sx, sy, tx, ty, clip, height}
+        affine -> %{transform: affine, clip: clip, height: height}
+      end
     end
   end
 
@@ -624,6 +703,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
     case clip do
       nil ->
         nil
+
+      %{path_commands: _} ->
+        bounds =
+          transform_clip(Map.drop(clip, [:path_commands, :fill_rule]), transform) |> clip_bounds()
+
+        %{bounds: bounds, expression: box_clip_expression(clip, transform)}
 
       %{x: x, y: y, width: width, height: height} ->
         [x, y, width, height] = Enum.map([x, y, width, height], &Float.round(&1 * 1.0, 4))
@@ -661,6 +746,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
       {{left, bottom, right, top}, {x1, y1, x2, y2}} ->
         {max(left, x1), max(bottom, y1), min(right, x2), min(top, y2)}
 
+      {first, second} when is_map(first) or is_map(second) ->
+        %{
+          bounds: intersect_clip(clip_bounds(first), clip_bounds(second)),
+          expression: {:intersection, [clip_expression(first), clip_expression(second)]}
+        }
+
       {first, second} ->
         {:polygon, clip_polygon(clip_polygon_points(first), second)}
     end
@@ -670,6 +761,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
   @spec clip_bounds(term()) :: tuple() | nil
   def clip_bounds(clip) do
     case clip do
+      %{bounds: bounds} ->
+        bounds
+
       nil ->
         nil
 
@@ -689,6 +783,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
   @spec clip_expression(term()) :: tuple() | nil
   def clip_expression(clip) do
     case clip do
+      %{expression: expression} ->
+        expression
+
       nil ->
         nil
 
@@ -698,6 +795,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
           points -> NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry.polygon(points)
         end
     end
+  end
+
+  @doc "Returns the shared native path of an admitted arrow, triangle or diagonal paint marker."
+  @spec marker_commands(map()) :: list()
+  def marker_commands(box) do
+    left = box.x
+    right = box.x + box.width
+    bottom = box.y
+    top = box.y + box.height
+
+    {points, closed} =
+      case box.shape do
+        {:diagonal, :up} ->
+          {[{left, bottom}, {right, top}], false}
+
+        {:chevron, :down} ->
+          {[{left, top}, {(left + right) / 2, bottom}, {right, top}], false}
+
+        {:triangle, direction} ->
+          {case direction do
+             :up -> [{left, bottom}, {right, bottom}, {(left + right) / 2, top}]
+             :down -> [{left, top}, {right, top}, {(left + right) / 2, bottom}]
+             :left -> [{right, bottom}, {right, top}, {left, (bottom + top) / 2}]
+             :right -> [{left, bottom}, {left, top}, {right, (bottom + top) / 2}]
+           end, true}
+      end
+
+    [{x, y} | rest] = points
+
+    [{0, [x, y]}] ++
+      Enum.map(rest, fn {x, y} -> {1, [x, y]} end) ++ if(closed, do: [{4, []}], else: [])
   end
 
   @doc "Returns the actual cubic commands shared by rounded rectangle paint and clip projection."
@@ -735,20 +863,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
           [clip, Map.get(clip, :inner_clip)]
           |> Enum.reject(&is_nil/1)
           |> Enum.map(fn clip ->
-            if Map.get(clip, :border_radius, 0) > 0 or Map.has_key?(clip, :border_radii) do
+            if Map.has_key?(clip, :path_commands) or Map.get(clip, :border_radius, 0) > 0 or
+                 Map.has_key?(clip, :border_radii) do
               commands =
-                case Map.get(clip, :border_radii) do
-                  nil ->
-                    rounded_rect_commands(
-                      clip.x,
-                      clip.y,
-                      clip.width,
-                      clip.height,
-                      clip.border_radius
-                    )
+                case clip do
+                  %{path_commands: commands} ->
+                    commands
 
-                  radii ->
-                    elliptical_rect_commands(clip.x, clip.y, clip.width, clip.height, radii, 4)
+                  clip ->
+                    case Map.get(clip, :border_radii) do
+                      nil ->
+                        rounded_rect_commands(
+                          clip.x,
+                          clip.y,
+                          clip.width,
+                          clip.height,
+                          clip.border_radius
+                        )
+
+                      radii ->
+                        elliptical_rect_commands(
+                          clip.x,
+                          clip.y,
+                          clip.width,
+                          clip.height,
+                          radii,
+                          4
+                        )
+                    end
                 end
                 |> Enum.map(fn {operation, coordinates} ->
                   coordinates =
@@ -762,10 +904,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
                   {operation, coordinates}
                 end)
 
-              NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry.flatten_box(
-                commands,
-                1 / NativeElixirPdfUtilities.Limits.get(:clip_curve_precision)
-              )
+              {:contour, edges} =
+                NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry.flatten_box(
+                  commands,
+                  1 / NativeElixirPdfUtilities.Limits.get(:clip_curve_precision)
+                )
+
+              {if(Map.get(clip, :fill_rule) == :evenodd, do: :evenodd, else: :contour), edges}
             else
               clip_expression(transform_clip(clip, transform))
             end

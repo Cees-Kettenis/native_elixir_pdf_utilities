@@ -43,6 +43,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgCompositingTest do
     assert :binary.bin_to_list(transparent_gray.alpha_data) == [128, 128, 128]
   end
 
+  test "SVG CSS blending reaches the converter instead of being discarded by host styles" do
+    image =
+      raster(
+        "<rect width='3' height='1' fill='red'/><rect width='3' height='1' fill='blue' style='mix-blend-mode:multiply'/>"
+      )
+
+    assert image.data == <<0, 0, 0, 0, 0, 0, 0, 0, 0>>
+
+    assert {:ok, "color-dodge"} =
+             NativeElixirPdfUtilities.Validators.SvgStyleValidator.parse(
+               "mix-blend-mode",
+               "COLOR-DODGE"
+             )
+
+    assert :error =
+             NativeElixirPdfUtilities.Validators.SvgStyleValidator.parse(
+               "mix-blend-mode",
+               "unknown"
+             )
+  end
+
   test "inherited and overridden modes survive isolated opacity boundaries" do
     cases = [
       {"<g color-interpolation='linearRGB'><rect width='3' height='1' fill='white' fill-opacity='.5'/></g>",

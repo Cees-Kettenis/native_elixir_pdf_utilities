@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   @simple ~w(outline-width outline-style outline-color outline-offset box-shadow border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize box-sizing border-radius
     text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
-    ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
+    ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation opacity mix-blend-mode contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
     border-spacing caption-side table-layout empty-cells column-count column-width column-fill column-span column-rule-width column-rule-style column-rule-color float clear shape-outside shape-inside shape-margin shape-image-threshold flex-direction flex-wrap row-gap column-gap
     justify-content align-items align-self justify-self justify-items align-content order
     flex-grow flex-shrink flex-basis grid-template-columns grid-template-rows grid-auto-columns
@@ -63,6 +63,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             "background-clip" => [[:background_clips]],
             "background-attachment" => [[:background_attachments]],
             "background-color" => [[:background_color]],
+            "background-blend-mode" => [[:background_blend_modes]],
             "background-image" => [
               [:background_image],
               [:background_image_source],
@@ -77,6 +78,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             "break-before" => [[:break_before]],
             "break-after" => [[:break_after]],
             "break-inside" => [[:break_inside]],
+            "clip-path" => [[:css_clip_path]],
+            "filter" => [[:css_filter]],
+            "backdrop-filter" => [[:css_backdrop_filter]],
+            "offset-path" => [[:css_offset_path]],
+            "offset-position" => [[:css_offset_position]],
+            "offset-anchor" => [[:css_offset_anchor]],
+            "offset-distance" => [[:css_offset_distance]],
+            "offset-rotate" => [[:css_offset_rotate]],
+            "perspective" => [[:css_perspective]],
+            "perspective-origin" => [[:css_perspective_origin]],
+            "transform-style" => [[:css_transform_style]],
+            "backface-visibility" => [[:css_backface_visibility]],
+            "translate" => [[:css_translate], [:css_translate_metric_style]],
+            "rotate" => [[:css_rotate], [:css_rotate_metric_style]],
+            "scale" => [[:css_scale], [:css_scale_metric_style]],
+            "transform-box" => [[:css_transform_box]],
             "transform" => [[:css_transform], [:css_transform_metric_style]],
             "transform-origin" => [[:transform_origin], [:transform_origin_metric_style]],
             "text-decoration-line" => [[:text_decoration_line]],
@@ -87,6 +104,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
           |> Map.merge(
             NativeElixirPdfUtilities.Validators.CssFontControlsValidator.cascade_fields()
           )
+          |> Map.merge(NativeElixirPdfUtilities.Validators.CssMaskValidator.cascade_fields())
           |> then(fn fields ->
             Enum.reduce(@sides, fields, fn side, fields ->
               edge = String.to_atom(side)
@@ -109,6 +127,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             end)
           end)
   @shorthands %{
+                "offset" =>
+                  ~w(offset-path offset-position offset-anchor offset-distance offset-rotate),
+                "mask" =>
+                  ~w(mask-image mask-mode mask-repeat mask-position mask-size mask-origin mask-clip mask-composite mask-border-source mask-border-slice mask-border-width mask-border-outset mask-border-repeat mask-border-mode),
+                "mask-border" =>
+                  ~w(mask-border-source mask-border-slice mask-border-width mask-border-outset mask-border-repeat mask-border-mode),
                 "outline" => ~w(outline-width outline-style outline-color),
                 "-webkit-text-stroke" => ~w(-webkit-text-stroke-width -webkit-text-stroke-color),
                 "vertical-align" => ~w(baseline-source alignment-baseline baseline-shift),
@@ -389,6 +413,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             do: Map.keys(SvgStyleValidator.presentation_properties()),
             else: []
           )
+
+      Map.get(context, :_svg_element, false) and
+          Map.has_key?(SvgStyleValidator.presentation_properties(), property) ->
+        [property]
 
       true ->
         case NativeElixirPdfUtilities.Validators.CssLogicalValidator.physical_properties(
@@ -857,6 +885,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         counter_increment: [],
         counter_set: [],
         isolation: :auto,
+        opacity: 1.0,
+        mix_blend_mode: :Normal,
+        background_blend_modes: [:Normal],
         contain: [],
         overflow_x: :visible,
         overflow_y: :visible,
@@ -922,12 +953,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         text_decoration_color: :current_color,
         text_decoration_style: :solid,
         text_decoration_thickness: :auto,
+        css_mask: NativeElixirPdfUtilities.Validators.CssMaskValidator.defaults().css_mask,
+        css_clip_path: :none,
+        css_filter: [],
+        css_backdrop_filter: [],
+        css_perspective: :none,
+        css_perspective_origin: {{:percent, 0.5}, {:percent, 0.5}},
+        css_transform_style: :flat,
+        css_backface_visibility: :visible,
+        css_translate: :none,
+        css_rotate: :none,
+        css_scale: :none,
+        css_transform_box: :view_box,
         css_transform: :none,
         transform_origin: {{:percent, 0.5}, {:percent, 0.5}},
         math_style: :normal,
         math_shift: :normal,
         math_depth: 0
       }
+      |> Map.merge(NativeElixirPdfUtilities.Validators.CssMotionValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssHyphenationValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.defaults())
       |> Map.merge(NativeElixirPdfUtilities.Validators.CssTextSpacingValidator.defaults())
@@ -960,6 +1004,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
       case hd(property_fields(property, context)) do
         [key] -> Map.has_key?(inherited, key)
         [key, side] -> Map.has_key?(Map.get(inherited, key, %{}), side)
+        path -> get_in(inherited, Enum.map(path, &Access.key(&1, %{}))) != %{}
       end
 
     if present, do: inherited, else: initial
@@ -994,6 +1039,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
       [key, side] ->
         value = source |> Map.get(key, %{}) |> Map.get(side)
         Map.update(result, key, %{side => value}, &Map.put(&1, side, value))
+
+      [key, inner, leaf] ->
+        path = [Access.key(key, %{}), Access.key(inner, %{})]
+        copied = copy_path(get_in(result, path), get_in(source, path), [leaf])
+        put_in(result, path, copied)
     end
   end
 end

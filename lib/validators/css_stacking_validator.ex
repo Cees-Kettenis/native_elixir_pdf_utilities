@@ -41,23 +41,41 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
   def geometry(style) do
     case style do
       %{position: :static, z_index: :auto} = style
-      when not is_map_key(style, :css_transform) and not is_map_key(style, :contain) and
+      when not is_map_key(style, :css_offset_path) and not is_map_key(style, :css_clip_path) and
+             not is_map_key(style, :css_filter) and
+             not is_map_key(style, :css_backdrop_filter) and
+             not is_map_key(style, :css_perspective) and
+             not is_map_key(style, :css_transform_style) and not is_map_key(style, :css_translate) and
+             not is_map_key(style, :css_rotate) and
+             not is_map_key(style, :css_scale) and not is_map_key(style, :css_transform) and
+             not is_map_key(style, :contain) and
              not is_map_key(style, :isolation) and not is_map_key(style, :_stacking_item) ->
-        {false, false, false}
+        {NativeElixirPdfUtilities.Validators.CssCompositingValidator.group?(style), false, false}
 
       style
       when not is_map_key(style, :position) and
-             not is_map_key(style, :css_transform) and
+             not is_map_key(style, :css_offset_path) and not is_map_key(style, :css_clip_path) and
+             not is_map_key(style, :css_filter) and
+             not is_map_key(style, :css_backdrop_filter) and
+             not is_map_key(style, :css_perspective) and
+             not is_map_key(style, :css_transform_style) and not is_map_key(style, :css_translate) and
+             not is_map_key(style, :css_rotate) and
+             not is_map_key(style, :css_scale) and not is_map_key(style, :css_transform) and
              not is_map_key(style, :contain) and
              not is_map_key(style, :isolation) and
              not is_map_key(style, :_stacking_item) ->
-        {false, false, false}
+        {NativeElixirPdfUtilities.Validators.CssCompositingValidator.group?(style), false, false}
 
       _ ->
         position = Map.get(style, :position, :static)
 
         fixed =
-          Map.get(style, :css_transform, :none) != :none or Map.get(style, :contain, []) != []
+          Map.get(style, :css_perspective, :none) != :none or
+            Map.get(style, :css_transform_style, :flat) == :preserve_3d or
+            NativeElixirPdfUtilities.Validators.CssTransformValidator.transformed?(style) or
+            Map.get(style, :contain, []) != [] or
+            (Map.get(style, :css_filter, []) != [] or
+               Map.get(style, :css_backdrop_filter, []) != [])
 
         absolute = fixed or position != :static
 
@@ -65,7 +83,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
           fixed or position in [:fixed, :sticky] or
             (is_integer(Map.get(style, :z_index)) and
                (position != :static or Map.get(style, :_stacking_item, false))) or
-            Map.get(style, :isolation, :auto) == :isolate
+            NativeElixirPdfUtilities.Validators.CssCompositingValidator.group?(style)
 
         {context, absolute, fixed}
     end
@@ -75,6 +93,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
   @spec context?(map()) :: boolean()
   def context?(style), do: elem(geometry(style), 0)
 
+  @doc "Resolves the stack level only where CSS makes z-index applicable."
+  @spec level(map()) :: integer()
+  def level(style) do
+    z = Map.get(style, :z_index, :auto)
+
+    if is_integer(z) and
+         (Map.get(style, :position, :static) != :static or Map.get(style, :_stacking_item, false)),
+       do: z,
+       else: 0
+  end
+
   @doc "Identifies the absolute or fixed containing-block owner independently of paint isolation."
   @spec containing_block?(map(), :absolute | :fixed) :: boolean()
   def containing_block?(style, position),
@@ -83,7 +112,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
   @doc "Returns actionable diagnostics for malformed computed box metadata."
   @spec validate_style(map(), String.t()) :: :ok | {:error, {atom(), map()}}
   def validate_style(style, source) do
-    if valid_style?(style) do
+    if valid_style?(style) and
+         NativeElixirPdfUtilities.Validators.CssCompositingValidator.valid_style?(style) do
       :ok
     else
       NativeElixirPdfUtilities.Diagnostics.error(

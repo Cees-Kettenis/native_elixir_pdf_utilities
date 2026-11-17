@@ -36,9 +36,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @text_shadow_properties NativeElixirPdfUtilities.Validators.CssTextShadowValidator.properties()
   @underline_properties NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.properties()
   @source_wide_keywords ~w(inherit initial unset revert revert-layer)
-  @source_layout_properties NativeElixirPdfUtilities.Validators.CssBorderImageValidator.properties() ++
+  @source_layout_properties NativeElixirPdfUtilities.Validators.CssMaskValidator.properties() ++
+                              NativeElixirPdfUtilities.Validators.CssBorderImageValidator.properties() ++
                               NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.properties() ++
-                              ~w(border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius image-orientation image-resolution image-rendering background-origin background-clip background-attachment color-scheme print-color-adjust forced-color-adjust flex-flow width height min-width max-width min-height max-height
+                              ~w(offset offset-path offset-position offset-anchor offset-distance offset-rotate perspective perspective-origin transform-style backface-visibility translate rotate scale transform-box clip-path filter backdrop-filter opacity mix-blend-mode background-blend-mode border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius image-orientation image-resolution image-rendering background-origin background-clip background-attachment color-scheme print-color-adjust forced-color-adjust flex-flow width height min-width max-width min-height max-height
           margin padding border-width border-style border-radius border-spacing
           text-align text-transform unicode-bidi white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style text-wrap tab-size word-break word-wrap overflow-wrap line-break
           break-before page-break-before break-after page-break-after break-inside page-break-inside
@@ -1378,13 +1379,34 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
     svg_property =
       if Map.get(style, :_svg_prepare, false) and
            (Map.get(style, :_svg_element, false) or
-              property not in ~w(width height opacity visibility transform)),
+              property not in ~w(width height opacity visibility transform filter backdrop-filter mix-blend-mode background-blend-mode clip-path mask mask-image mask-mode mask-repeat mask-position mask-size mask-origin mask-clip mask-composite mask-border mask-border-source mask-border-slice mask-border-width mask-border-outset mask-border-repeat mask-border-mode)),
          do: SvgStyleValidator.apply(style, property, value),
          else: :unhandled
 
     case svg_property do
       :unhandled ->
         case property do
+          property
+          when property in ~w(mask mask-image mask-mode mask-repeat mask-position mask-size mask-origin mask-clip mask-composite mask-border mask-border-source mask-border-slice mask-border-width mask-border-outset mask-border-repeat mask-border-mode) ->
+            NativeElixirPdfUtilities.Validators.CssMaskValidator.prepare(style, property, value)
+
+          "clip-path" ->
+            NativeElixirPdfUtilities.Validators.CssClipValidator.prepare(style, value)
+
+          property when property in ["filter", "backdrop-filter"] ->
+            NativeElixirPdfUtilities.Validators.CssEffectsValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property when property in ["opacity", "mix-blend-mode", "background-blend-mode"] ->
+            NativeElixirPdfUtilities.Validators.CssCompositingValidator.apply(
+              style,
+              property,
+              value
+            )
+
           "--" <> _custom_property ->
             properties = style |> Map.get(:_custom_properties, %{}) |> Map.put(property, value)
             {:ok, Map.put(style, :_custom_properties, properties)}
@@ -1948,6 +1970,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             else
               put_size(style, length_property(property), value)
             end
+
+          property
+          when property in ~w(offset offset-path offset-position offset-anchor offset-distance offset-rotate) ->
+            NativeElixirPdfUtilities.Validators.CssMotionValidator.prepare(style, property, value)
+
+          property
+          when property in ~w(perspective perspective-origin transform-style backface-visibility) ->
+            NativeElixirPdfUtilities.Validators.CssProjectionValidator.prepare(
+              style,
+              property,
+              value
+            )
+
+          property when property in ["translate", "rotate", "scale", "transform-box"] ->
+            NativeElixirPdfUtilities.Validators.CssTransformValidator.individual(
+              style,
+              property,
+              value
+            )
 
           property when property in ["transform", "transform-origin"] ->
             NativeElixirPdfUtilities.Validators.CssTransformValidator.apply(

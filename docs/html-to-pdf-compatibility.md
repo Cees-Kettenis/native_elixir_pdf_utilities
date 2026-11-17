@@ -107,8 +107,8 @@ A transformed containing block keeps its fixed
 children local. Sticky uses the initial print scrollport before pagination and
 retains its normal flow allocation. No scrolling is simulated. Transforms move
 artwork without reflow. Isolation, layout/paint containment and positioned stacking
-contexts preserve paint order. Full containment, 3D transforms, perspective
-and animations are unsupported. Child-document form repetition restrictions still apply.
+contexts preserve paint order. Static 3D projection and flattening are described
+under compositing below. Full containment and animations remain unsupported. Child-document form repetition restrictions still apply.
 
 Logical sizes, edges and insets follow `writing-mode` and `direction` during the
 cascade. Vertical and sideways text use the glyph orientation and font metrics
@@ -273,6 +273,37 @@ dimensions. SVG sources remain converter-backed images; percentage slices avoid
 dependence on their raster sampling density. HTML text fill/stroke keeps PDF text
 operators and logical extraction. SVG text retains the converter's existing
 image/text ownership rules.
+
+### Compositing, effects and static transforms
+
+| Feature | Support |
+| --- | --- |
+| Compositing | Element/group opacity, the sixteen standard blend modes, background layer blending and isolation |
+| Filters | Static blur, drop shadow and color functions; owned same-document SVG filter graphs; backdrop filtering |
+| Clipping and masking | Basic shapes and SVG path clips, layered alpha/luminance image masks, mask composites and nine-part mask borders |
+| Affine transforms | Transform boxes and origins; individual translate, rotate and scale before the transform list |
+| Projective transforms | Static 4x4 matrices, perspective and origins, preserve-3d, flattening boundaries, hidden backfaces and intersecting paint planes |
+| Offset paths | Static path strings, basic shapes, geometry boxes and rays; distance, position, anchor, rotation and the offset shorthand |
+
+Group opacity applies once to overlapping descendants. Ordinary affine artwork
+keeps native PDF instructions. Filters, masks and projective scenes use bounded
+raster artwork at the shared SVG sampling scale, with logical text and separate
+link geometry retained. Clipped link regions follow source contours, including
+perspective projection. Open offset paths clamp distance at their endpoints;
+closed paths wrap, and rays use their specified containment rules.
+
+Rasterized effects, projective scenes and CSS opacity/blend groups require
+`forms: :static` for controls. Editable PDF widgets repaint outside the page's
+CSS compositing groups, so those combinations return an actionable diagnostic.
+Text in these effects requires selected embedded glyph outlines. Complex source
+border styles and chained referenced filter graphs return diagnostics; use solid
+borders or separate nested effect elements. Filter references stay within their
+selected document/tree scope and reuse already authorized image resources.
+Mask URLs load authorized images; SVG `<mask>` references are not accepted.
+Offset path strings and basic shapes are supported; SVG URL offset-path
+references are not currently accepted. Extreme intermediate scenes that cross
+the eye plane without a finite flattening canvas return a projection diagnostic.
+No animation or scripting is sampled.
 
 Selected static `-webkit-` background, corner, shadow, box-sizing, flex, column,
 appearance, transform, print-adjustment and text spellings share their standard

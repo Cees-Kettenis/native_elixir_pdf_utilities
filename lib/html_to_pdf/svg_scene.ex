@@ -306,6 +306,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgScene do
           property == "opacity" and node.tag == "svg" ->
             attrs
 
+          property == "mix-blend-mode" ->
+            Map.put(attrs, "style", "mix-blend-mode:" <> value)
+
           property == "transform" and value == "none" ->
             attrs
 

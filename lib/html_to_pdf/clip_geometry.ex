@@ -70,7 +70,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
   @spec edges(tuple()) :: [tuple()]
   def edges(expression) do
     case expression do
-      {:contour, edges} -> edges
+      {kind, edges} when kind in [:contour, :evenodd] -> edges
       {_, children} -> Enum.flat_map(children, &edges/1)
     end
   end
@@ -240,8 +240,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
   # the link rectangle that still determine its real winding.
   defp scan_paths(expression, index) do
     case expression do
-      {:contour, edges} ->
-        {{:scan_path, index}, index + 1, Enum.map(edges, &{index, &1})}
+      {kind, edges} when kind in [:contour, :evenodd] ->
+        {{if(kind == :evenodd, do: :scan_path_evenodd, else: :scan_path), index}, index + 1,
+         Enum.map(edges, &{index, &1})}
 
       {kind, children} ->
         {children, next} =
@@ -291,9 +292,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
   # those once for all cells instead of revisiting every curve chord per cell.
   defp scan_expression(expression, crossings) do
     case expression do
-      {:scan_path, index} ->
+      {kind, index} when kind in [:scan_path, :scan_path_evenodd] ->
         points = Map.get(crossings, index, [])
-        {{:scan, points}, length(points) + 1}
+
+        {{if(kind == :scan_path_evenodd, do: :scan_evenodd, else: :scan), points},
+         length(points) + 1}
 
       {kind, children} ->
         {children, work} =
@@ -311,13 +314,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
       {:intersection, children} ->
         Enum.all?(children, &contains?(&1, x))
 
-      {:scan, crossings} ->
+      {kind, crossings} when kind in [:scan, :scan_evenodd] ->
         winding =
           Enum.reduce(crossings, 0, fn {position, direction}, total ->
             if position > x, do: total + direction, else: total
           end)
 
-        winding != 0
+        if kind == :scan_evenodd, do: rem(winding, 2) != 0, else: winding != 0
     end
   end
 
@@ -337,7 +340,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ClipGeometry do
   @spec contains_point?(tuple(), number(), number()) :: boolean()
   def contains_point?(expression, x, y) do
     case expression do
-      {:contour, edges} ->
+      {kind, edges} when kind in [:contour, :evenodd] ->
         HtmlValidator.reserve_render_resource(
           :max_work,
           length(edges) + 1,

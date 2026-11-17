@@ -46,6 +46,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     "vector-effect" => :svg_vector_effect,
     "visibility" => :svg_visibility,
     "opacity" => :svg_opacity,
+    "mix-blend-mode" => :svg_mix_blend_mode,
     "x" => :svg_x,
     "y" => :svg_y,
     "cx" => :svg_cx,
@@ -112,6 +113,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
       svg_stop_color: {:color, {0, 0, 0}},
       svg_stop_opacity: 1.0,
       svg_opacity: 1.0,
+      svg_mix_blend_mode: "normal",
       svg_vector_effect: "none",
       svg_clip_path: :none,
       svg_mask: :none,
@@ -428,6 +430,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
 
       {"visibility", value} ->
         NativeElixirPdfUtilities.Validators.CssDisplayValidator.visibility(value)
+
+      {"mix-blend-mode", value} ->
+        with {:ok, %{mix_blend_mode: mode}} <-
+               NativeElixirPdfUtilities.Validators.CssCompositingValidator.apply(
+                 %{},
+                 "mix-blend-mode",
+                 value
+               ),
+             do: {:ok, NativeElixirPdfUtilities.Validators.CssCompositingValidator.keyword(mode)}
 
       {property, value}
       when property in ~w(opacity fill-opacity stroke-opacity stop-opacity flood-opacity) ->

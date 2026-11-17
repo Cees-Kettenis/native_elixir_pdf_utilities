@@ -2191,6 +2191,20 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
               {:ok, pages, []}
 
             Enum.any?(controls, fn item ->
+              Enum.any?(
+                Map.get(item.box, :css_compositing_scopes, []),
+                &(&1.opacity != 1.0 or &1.mix_blend_mode != :Normal)
+              )
+            end) ->
+              error(
+                :unsupported_form,
+                "Editable PDF widgets repaint outside CSS opacity and blend groups; use forms: :static to preserve the complete composited control artwork",
+                source: "opacity/mix-blend-mode",
+                operation: :write_pdf,
+                module: __MODULE__
+              )
+
+            Enum.any?(controls, fn item ->
               Map.has_key?(item.control.initial_state, :range) and
                   not item.control.initial_state.disabled
             end) ->

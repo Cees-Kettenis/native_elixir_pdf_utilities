@@ -8286,6 +8286,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                not is_map_key(style, :_flow_root) and not is_map_key(style, :_display_outer) and
                not is_map_key(style, :_display_role) and not is_map_key(style, :_force_hidden) and
                not is_map_key(style, :isolation) and
+               not is_map_key(style, :opacity) and not is_map_key(style, :mix_blend_mode) and
+               not is_map_key(style, :_css_compositing_contexts) and
                not is_map_key(style, :contain) and not is_map_key(style, :_stacking_item) and
                not is_map_key(style, :overflow_x) and not is_map_key(style, :overflow_y) and
                not is_map_key(style, :overflow_clip_margin) and
@@ -8499,7 +8501,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     # Collapsed edge metadata is prepared after input validation.
     # Incoming styled trees must not supply internal border calculations.
     is_map(style) and
+      NativeElixirPdfUtilities.Validators.CssCompositingValidator.valid_style?(style) and
+      NativeElixirPdfUtilities.Validators.CssEffectsValidator.valid_style?(style) and
+      NativeElixirPdfUtilities.Validators.CssClipValidator.valid_style?(style) and
+      NativeElixirPdfUtilities.Validators.CssMaskValidator.valid_style?(style) and
       NativeElixirPdfUtilities.Validators.CssTransformValidator.valid_style?(style) and
+      NativeElixirPdfUtilities.Validators.CssProjectionValidator.valid_style?(style) and
+      NativeElixirPdfUtilities.Validators.CssMotionValidator.valid_style?(style) and
       not Map.has_key?(style, :_collapsed_borders) and
       (:maps.get(:_image_map, style, nil) == nil or
          NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_model?(style._image_map)) and

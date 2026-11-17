@@ -12,6 +12,96 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
   @identity {1.0, 0.0, 0.0, 1.0, 0.0, 0.0}
 
+  @individuals %{
+    "translate" => {:css_translate, :css_translate_metric_style},
+    "rotate" => {:css_rotate, :css_rotate_metric_style},
+    "scale" => {:css_scale, :css_scale_metric_style}
+  }
+
+  @doc "Identifies transform lists or individual transform properties that establish a containing block."
+  @spec transformed?(map()) :: boolean()
+  def transformed?(style) do
+    case style do
+      style
+      when not is_map_key(style, :css_offset_path) and not is_map_key(style, :css_transform) and
+             not is_map_key(style, :css_translate) and not is_map_key(style, :css_rotate) and
+             not is_map_key(style, :css_scale) ->
+        false
+
+      _ ->
+        NativeElixirPdfUtilities.Validators.CssMotionValidator.active?(style) or
+          Enum.any?(
+            [:css_transform, :css_translate, :css_rotate, :css_scale],
+            &(Map.get(style, &1, :none) != :none)
+          )
+    end
+  end
+
+  @doc "Captures declaring font/viewport metrics before explicit transform inheritance."
+  @spec compute_style(map()) :: {:ok, map()}
+  def compute_style(style) do
+    case style do
+      style
+      when not is_map_key(style, :css_transform) and
+             not is_map_key(style, :css_translate) and
+             not is_map_key(style, :css_rotate) and
+             not is_map_key(style, :css_scale) and
+             not is_map_key(style, :transform_origin) ->
+        {:ok, style}
+
+      _ ->
+        fields =
+          Map.put(@individuals, "transform", {:css_transform, :css_transform_metric_style})
+          |> Map.put("transform-origin", {:transform_origin, :transform_origin_metric_style})
+
+        {:ok,
+         Enum.reduce(fields, style, fn {property, {key, metric}}, style ->
+           value = Map.get(style, key, :none)
+
+           if value not in [:none, nil, {{:percent, 0.5}, {:percent, 0.5}}],
+             do: Map.put_new(style, metric, metric_style(style, property)),
+             else: style
+         end)}
+    end
+  end
+
+  @doc "Prepares individual translate/rotate/scale and transform-box using canonical transform argument roles."
+  @spec individual(map(), binary(), binary()) :: {:ok, map()} | :error
+  def individual(style, property, value) do
+    if property == "transform-box" do
+      with {:ok, name, ""} <- HtmlValidator.parse_css_identifier(String.trim(value)),
+           name = String.downcase(name, :ascii),
+           true <- name in ~w(content-box border-box fill-box stroke-box view-box),
+           do:
+             {:ok,
+              Map.put(
+                style,
+                :css_transform_box,
+                String.to_existing_atom(String.replace(name, "-", "_"))
+              )},
+           else: (_ -> :error)
+    else
+      {key, metric} = Map.fetch!(@individuals, property)
+      tokens = HtmlValidator.split_css_tokens(value)
+
+      {operation, tokens} =
+        case {property, tokens} do
+          {"translate", [_, _, _]} -> {"translate3d", tokens}
+          {"scale", [_, _, _]} -> {"scale3d", tokens}
+          {"rotate", [axis, angle]} when axis in ["x", "y", "z"] -> {"rotate" <> axis, [angle]}
+          {"rotate", [_, _, _, _]} -> {"rotate3d", tokens}
+          _ -> {property, tokens}
+        end
+
+      if String.downcase(String.trim(value), :ascii) == "none" do
+        {:ok, style |> Map.delete(metric) |> Map.put(key, :none)}
+      else
+        with {:ok, operation} <- prepare_operation(operation, Enum.join(tokens, ",")),
+             do: {:ok, style |> Map.delete(metric) |> Map.put(key, [operation])}
+      end
+    end
+  end
+
   @doc "Prepares transform declarations while deferring used border-box percentages and selected font units."
   @spec apply(map(), String.t(), String.t()) :: {:ok, map()} | :error | {:error, {atom(), map()}}
   def apply(style, property, value) do
@@ -65,9 +155,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   @spec metric_style(map(), String.t()) :: map()
   def metric_style(style, property) do
     key =
-      if property == "transform",
-        do: :css_transform_metric_style,
-        else: :transform_origin_metric_style
+      case Map.get(@individuals, property) do
+        {_key, metric} ->
+          metric
+
+        nil ->
+          if property == "transform",
+            do: :css_transform_metric_style,
+            else: :transform_origin_metric_style
+      end
 
     Map.get(style, key) ||
       Map.take(style, [
@@ -172,6 +268,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
 
     roles =
       case {name, length(arguments)} do
+        {"matrix3d", 16} -> List.duplicate(:number, 16)
+        {"translate3d", 3} -> [:length_x, :length_y, :length_z]
+        {"translatez", 1} -> [:length_z]
+        {"scale3d", 3} -> [:scale, :scale, :scale]
+        {"scalez", 1} -> [:scale]
+        {name, 1} when name in ~w(rotatex rotatey rotatez) -> [:angle]
+        {"rotate3d", 4} -> [:number, :number, :number, :angle]
+        {"perspective", 1} -> [:distance]
         {"matrix", 6} -> [:number, :number, :number, :number, :number, :number]
         {"translate", 1} -> [:length_x]
         {"translate", 2} -> [:length_x, :length_y]
@@ -206,8 +310,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
           case CssMathValidator.evaluate(source, environment) do
             {:ok, value, type} ->
               case role do
-                role when role in [:length_x, :length_y] ->
+                role when role in [:length_x, :length_y, :length_z] ->
                   type == %{length: 1} or (value == 0 and type == %{})
+
+                :distance ->
+                  (type == %{length: 1} or (value == 0 and type == %{})) and
+                    match?(
+                      {:ok, _},
+                      NativeElixirPdfUtilities.Validators.CssLengthValidator.prepare(
+                        source,
+                        :length
+                      )
+                    )
 
                 :angle ->
                   type == %{angle: 1} or (value == 0 and type == %{})
@@ -244,7 +358,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                  Map.get(style, :font_size, 12),
                  false
                ) do
-          {:ok, origin}
+          if z_value == 0,
+            do: {:ok, origin},
+            else: {:ok, {elem(origin, 0), elem(origin, 1), {:css_position_math, z}}}
         else
           _ -> :error
         end
@@ -257,105 +373,213 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   @doc "Checks caller-supplied prepared style transforms using the canonical function and position validators."
   @spec valid_style?(term()) :: boolean()
   def valid_style?(style) do
-    if is_map(style) do
-      operations = Map.get(style, :css_transform, :none)
+    case style do
+      style
+      when is_map(style) and not is_map_key(style, :css_transform) and
+             not is_map_key(style, :css_translate) and
+             not is_map_key(style, :css_rotate) and
+             not is_map_key(style, :css_scale) and
+             not is_map_key(style, :transform_origin) and
+             not is_map_key(style, :css_transform_box) ->
+        true
 
-      valid_operations =
-        case operations do
-          :none ->
-            true
+      _ ->
+        if is_map(style) do
+          valid_operations =
+            Enum.all?(
+              [
+                {:css_transform, nil},
+                {:css_translate, ["translate", "translate3d"]},
+                {:css_rotate, ["rotate", "rotatex", "rotatey", "rotatez", "rotate3d"]},
+                {:css_scale, ["scale", "scale3d"]}
+              ],
+              fn {key, expected} ->
+                operations = Map.get(style, key, :none)
 
-          operations when is_list(operations) and operations != [] ->
-            HtmlValidator.check_render_resource(
-              :max_entries,
-              length(operations),
-              :layout
+                (expected == nil or operations == :none or
+                   (is_list(operations) and length(operations) == 1 and
+                      match?({_, _}, hd(operations)) and elem(hd(operations), 0) in expected)) and
+                  case operations do
+                    :none ->
+                      true
+
+                    operations when is_list(operations) and operations != [] ->
+                      HtmlValidator.check_render_resource(
+                        :max_entries,
+                        length(operations),
+                        :layout
+                      )
+
+                      Enum.all?(operations, fn operation ->
+                        case operation do
+                          {name, arguments} when is_binary(name) and is_list(arguments) ->
+                            if Enum.all?(
+                                 arguments,
+                                 &match?({_role, source} when is_binary(source), &1)
+                               ) do
+                              sources = Enum.map(arguments, &elem(&1, 1))
+
+                              Enum.all?(sources, &String.valid?/1) and
+                                prepare_operation(name, Enum.join(sources, ",")) ==
+                                  {:ok, operation}
+                            else
+                              false
+                            end
+
+                          _ ->
+                            false
+                        end
+                      end)
+
+                    _ ->
+                      false
+                  end
+              end
             )
 
-            Enum.all?(operations, fn operation ->
-              case operation do
-                {name, arguments} when is_binary(name) and is_list(arguments) ->
-                  if Enum.all?(arguments, &match?({_role, source} when is_binary(source), &1)) do
-                    sources = Enum.map(arguments, &elem(&1, 1))
+          valid_operations and
+            Map.get(style, :css_transform_box, :view_box) in [
+              :view_box,
+              :border_box,
+              :content_box,
+              :fill_box,
+              :stroke_box
+            ] and
+            case Map.get(style, :transform_origin, {{:percent, 0.5}, {:percent, 0.5}}) do
+              {x, y} ->
+                CssPositionValidator.valid_prepared?(x) and
+                  CssPositionValidator.valid_prepared?(y)
 
-                    Enum.all?(sources, &String.valid?/1) and
-                      prepare_operation(name, Enum.join(sources, ",")) == {:ok, operation}
-                  else
-                    false
-                  end
+              {x, y, z} ->
+                CssPositionValidator.valid_prepared?(x) and
+                  CssPositionValidator.valid_prepared?(y) and
+                  CssPositionValidator.valid_prepared?(z)
 
-                _ ->
-                  false
-              end
-            end)
-
-          _ ->
-            false
+              _ ->
+                false
+            end
+        else
+          false
         end
-
-      valid_operations and
-        case Map.get(style, :transform_origin, {{:percent, 0.5}, {:percent, 0.5}}) do
-          {x, y} ->
-            CssPositionValidator.valid_prepared?(x) and CssPositionValidator.valid_prepared?(y)
-
-          _ ->
-            false
-        end
-    else
-      false
     end
   end
 
-  @doc "Resolves a prepared CSS transform against the actual point border box and selected font/viewport metrics."
+  @doc "Resolves an admitted transform against actual CSS reference geometry, retaining projective scenes when required."
   @spec resolve(map(), map()) :: {:ok, tuple() | :none | :empty} | {:error, {atom(), map()}}
-  def resolve(style, %{x: x, top: top, width: width, height: height}) do
+  def resolve(style, bounds) do
+    if NativeElixirPdfUtilities.Validators.CssProjectionValidator.needs_group?(style),
+      do: NativeElixirPdfUtilities.Validators.CssProjectionValidator.resolve(style, bounds),
+      else: resolve_affine(style, bounds)
+  end
+
+  @doc "Resolves every transform argument through one selected-font and percentage policy for affine and 3D consumers."
+  @spec used_operations(map(), number(), number()) :: {:ok, list()} | {:error, {atom(), map()}}
+  @spec used_operations(map(), number(), number(), map() | nil) ::
+          {:ok, list()} | {:error, term()}
+  def used_operations(style, width, height, bounds \\ nil) do
+    entries =
+      Enum.flat_map(
+        [
+          {"translate", :css_translate},
+          {"rotate", :css_rotate},
+          {"scale", :css_scale},
+          {"transform", :css_transform}
+        ],
+        fn {property, key} ->
+          case Map.get(style, key, :none) do
+            :none -> []
+            operations -> Enum.map(operations, &{property, &1})
+          end
+        end
+      )
+
+    Enum.reduce_while(entries, {:ok, []}, fn {property, {name, args}}, {:ok, operations} ->
+      with {:ok, environment} <-
+             CssPositionValidator.math_environment(
+               Map.merge(style, metric_style(style, property)),
+               width
+             ) do
+        values =
+          Enum.map(args, fn {role, source} ->
+            environment =
+              case role do
+                :length_y ->
+                  Map.put(environment, :percentage_basis, height / 0.75)
+
+                :length_x ->
+                  environment
+
+                :scale ->
+                  Map.merge(environment, %{percentage_basis: 1.0, percentage_dimension: :number})
+
+                _ ->
+                  Map.delete(environment, :percentage_basis)
+              end
+
+            case CssMathValidator.evaluate(source, environment) do
+              {:ok, n, _} when is_number(n) ->
+                {:ok, if(role == :distance, do: max(n, 1.0), else: n)}
+
+              _ ->
+                :error
+            end
+          end)
+
+        if Enum.all?(values, &match?({:ok, _}, &1)),
+          do: {:cont, {:ok, [{name, Enum.map(values, &elem(&1, 1))} | operations]}},
+          else:
+            {:halt, error("CSS transform calculation requires finite used values", inspect(args))}
+      else
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, operations} ->
+        operations = Enum.reverse(operations)
+        count = Enum.count(entries, fn {property, _} -> property != "transform" end)
+
+        NativeElixirPdfUtilities.Validators.CssMotionValidator.operations(
+          style,
+          bounds || %{x: 0.0, top: height, width: width, height: height},
+          operations,
+          count
+        )
+
+      error ->
+        error
+    end
+  end
+
+  defp resolve_affine(style, %{x: x, top: top, width: width, height: height}) do
     HtmlValidator.with_render_budget(fn ->
-      case Map.get(style, :css_transform, :none) do
-        :none ->
-          {:ok, :none}
+      %{x: x, top: top, width: width, height: height} =
+        NativeElixirPdfUtilities.Validators.CssClipValidator.reference_box(
+          %{x: x, top: top, width: width, height: height},
+          style,
+          case Map.get(style, :css_transform_box, :view_box) do
+            :fill_box -> :content_box
+            value -> value
+          end
+        )
 
-        operations ->
-          with {:ok, environment} <-
-                 CssPositionValidator.math_environment(
-                   Map.merge(style, metric_style(style, "transform")),
-                   width
-                 ),
-               {:ok, matrix} <-
-                 Enum.reduce_while(operations, {:ok, @identity}, fn {name, args}, {:ok, matrix} ->
-                   values =
-                     Enum.map(args, fn {role, source} ->
-                       environment =
-                         case role do
-                           :length_y ->
-                             Map.put(environment, :percentage_basis, height / 0.75)
+      with {:ok, operations} <-
+             used_operations(style, width, height, %{x: x, top: top, width: width, height: height}) do
+        case operations do
+          [] ->
+            {:ok,
+             if(NativeElixirPdfUtilities.Validators.CssEffectsValidator.active?(style),
+               do: @identity,
+               else: :none
+             )}
 
-                           :scale ->
-                             Map.merge(environment, %{
-                               percentage_basis: 1.0,
-                               percentage_dimension: :number
-                             })
-
-                           :number ->
-                             Map.delete(environment, :percentage_basis)
-
-                           :angle ->
-                             Map.delete(environment, :percentage_basis)
-
-                           _ ->
-                             environment
-                         end
-
-                       CssMathValidator.evaluate(source, environment)
-                     end)
-
-                   if Enum.all?(values, &match?({:ok, value, _} when is_number(value), &1)) do
-                     values = Enum.map(values, &elem(&1, 1))
-
-                     combined =
-                       AffineGeometry.multiply(matrix, operation_matrix(name, values))
+          operations ->
+            with {:ok, matrix} <-
+                   Enum.reduce_while(operations, {:ok, @identity}, fn {name, values},
+                                                                      {:ok, matrix} ->
+                     matrix = AffineGeometry.multiply(matrix, operation_matrix(name, values))
 
                      Enum.each(
-                       Tuple.to_list(combined),
+                       Tuple.to_list(matrix),
                        &HtmlValidator.check_render_resource(
                          :max_numeric_magnitude,
                          abs(&1),
@@ -363,43 +587,37 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                        )
                      )
 
-                     {:cont, {:ok, combined}}
-                   else
-                     {:halt,
-                      error(
-                        "CSS transform calculation requires finite used values",
-                        inspect(args)
-                      )}
-                   end
-                 end),
-               {origin_x, origin_y} =
-                 Map.get(style, :transform_origin, {{:percent, 0.5}, {:percent, 0.5}}),
-               {:ok, origin_x} <-
-                 CssPositionValidator.resolve(
-                   origin_x,
-                   width,
-                   Map.merge(style, metric_style(style, "transform-origin"))
-                 ),
-               {:ok, origin_y} <-
-                 CssPositionValidator.resolve(
-                   origin_y,
-                   height,
-                   Map.merge(style, metric_style(style, "transform-origin"))
-                 ) do
-            {a, b, c, d, e, f} = matrix
-            ox = x + origin_x
-            oy = top - origin_y
+                     {:cont, {:ok, matrix}}
+                   end),
+                 origin = Map.get(style, :transform_origin, {{:percent, 0.5}, {:percent, 0.5}}),
+                 {origin_x, origin_y} = {elem(origin, 0), elem(origin, 1)},
+                 {:ok, origin_x} <-
+                   CssPositionValidator.resolve(
+                     origin_x,
+                     width,
+                     Map.merge(style, metric_style(style, "transform-origin"))
+                   ),
+                 {:ok, origin_y} <-
+                   CssPositionValidator.resolve(
+                     origin_y,
+                     height,
+                     Map.merge(style, metric_style(style, "transform-origin"))
+                   ) do
+              {a, b, c, d, e, f} = matrix
+              ox = x + origin_x
+              oy = top - origin_y
 
-            matrix =
-              {a, -b, -c, d, ox - a * ox + c * oy + e * 0.75, oy + b * ox - d * oy - f * 0.75}
+              matrix =
+                {a, -b, -c, d, ox - a * ox + c * oy + e * 0.75, oy + b * ox - d * oy - f * 0.75}
 
-            Enum.each(
-              Tuple.to_list(matrix),
-              &HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(&1), :layout)
-            )
+              Enum.each(
+                Tuple.to_list(matrix),
+                &HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(&1), :layout)
+              )
 
-            if a * d - b * c == 0, do: {:ok, :empty}, else: {:ok, matrix}
-          end
+              if a * d - b * c == 0, do: {:ok, :empty}, else: {:ok, matrix}
+            end
+        end
       end
     end)
   end
@@ -454,19 +672,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   @spec mark_border_box(map(), [map()], map()) :: [map()]
   def mark_border_box(style, boxes, bounds) do
     needs_bounds? =
-      case style do
-        %{css_transform: transform} when transform != :none ->
-          true
+      transformed?(style) or
+        NativeElixirPdfUtilities.Validators.CssEffectsValidator.active?(style) or
+        NativeElixirPdfUtilities.Validators.CssProjectionValidator.needs_group?(style) or
+        NativeElixirPdfUtilities.Validators.CssClipValidator.active?(style) or
+        case style do
+          %{_stacking_order: _} ->
+            NativeElixirPdfUtilities.Validators.CssStackingValidator.containing_block?(
+              style,
+              :absolute
+            )
 
-        %{_stacking_order: _} ->
-          NativeElixirPdfUtilities.Validators.CssStackingValidator.containing_block?(
-            style,
-            :absolute
-          )
-
-        _ ->
-          false
-      end
+          _ ->
+            false
+        end
 
     if needs_bounds? do
       {breaks, boxes} = Enum.split_while(boxes, &(Map.get(&1, :type) == :page_break))
@@ -542,7 +761,44 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
            border_box: bounds,
            style:
              Map.take(style, [
+               :css_offset_path,
+               :css_offset_position,
+               :css_offset_anchor,
+               :css_offset_distance,
+               :css_offset_rotate,
+               :_offset_reference,
+               :_offset_reference_pending,
+               :css_perspective,
+               :css_perspective_origin,
+               :css_transform_style,
+               :css_backface_visibility,
+               :_css_3d_context,
+               :opacity,
+               :mix_blend_mode,
+               :isolation,
+               :contain,
+               :overflow,
+               :overflow_x,
+               :overflow_y,
+               :css_mask,
+               :css_clip_path,
+               :border_widths,
+               :padding,
+               :margin,
+               :border_radius,
+               :css_filter,
+               :css_backdrop_filter,
+               :_css_effect_definitions,
+               :_css_effect_resources,
+               :color,
                :css_transform,
+               :css_translate,
+               :css_rotate,
+               :css_scale,
+               :css_transform_box,
+               :css_translate_metric_style,
+               :css_rotate_metric_style,
+               :css_scale_metric_style,
                :transform_origin,
                :css_transform_metric_style,
                :transform_origin_metric_style,
@@ -576,7 +832,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                   &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
                 ) and
                 (matrix == :empty or
-                   (is_tuple(matrix) and tuple_size(matrix) == 6 and
+                   (is_tuple(matrix) and tuple_size(matrix) in [6, 16] and
                       Enum.all?(
                         Tuple.to_list(matrix),
                         &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
@@ -645,7 +901,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
           pages =
             if Keyword.get(opts, :forms, :interactive) == :static do
               Enum.map(pages, fn page ->
-                %{page | boxes: Enum.map(page.boxes, &Map.drop(&1, [:form_control, :form_owner]))}
+                %{page | boxes: EmbeddedFormValidator.static_artwork(page.boxes)}
               end)
             else
               pages
@@ -972,7 +1228,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                    ) do
               children =
                 if Keyword.get(opts, :forms, :interactive) == :static,
-                  do: Enum.map(page.boxes, &Map.drop(&1, [:form_control, :form_owner])),
+                  do: EmbeddedFormValidator.static_artwork(page.boxes),
                   else: page.boxes
 
               group = %{box | boxes: children}
@@ -1245,9 +1501,61 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
                 y: 0.0,
                 width: elem(size, 0),
                 height: elem(size, 1),
-                transform: if(scope.matrix == :empty, do: @identity, else: scope.matrix),
+                transform:
+                  if(scope.matrix == :empty or tuple_size(scope.matrix) == 16,
+                    do: @identity,
+                    else: scope.matrix
+                  ),
                 boxes: children
               }
+
+              group =
+                if is_tuple(scope.matrix) and tuple_size(scope.matrix) == 16 do
+                  {:ok, perspective} =
+                    NativeElixirPdfUtilities.Validators.CssProjectionValidator.perspective(
+                      scope.style,
+                      scope.border_box
+                    )
+
+                  Map.put(group, :css_projection, %{
+                    matrix: scope.matrix,
+                    perspective: perspective,
+                    preserve:
+                      NativeElixirPdfUtilities.Validators.CssProjectionValidator.preserve?(
+                        scope.style
+                      ),
+                    backface: Map.get(scope.style, :css_backface_visibility, :visible),
+                    bounds: scope.border_box
+                  })
+                else
+                  group
+                end
+
+              group =
+                case NativeElixirPdfUtilities.Validators.CssClipValidator.resolve(
+                       scope.style,
+                       scope.border_box
+                     ) do
+                  {:ok, nil} -> group
+                  {:ok, clip} -> Map.put(group, :clip, clip)
+                  error -> throw({:render_resource_limit, error})
+                end
+
+              group =
+                if NativeElixirPdfUtilities.Validators.CssEffectsValidator.active?(scope.style) do
+                  Map.put(group, :css_effect, %{
+                    filters: Map.get(scope.style, :css_filter, []),
+                    backdrop: Map.get(scope.style, :css_backdrop_filter, []),
+                    bounds: scope.border_box,
+                    color: Map.get(scope.style, :color, {0.0, 0.0, 0.0}),
+                    definitions: Map.get(scope.style, :_css_effect_definitions, ""),
+                    resources: Map.get(scope.style, :_css_effect_resources, %{}),
+                    clip: Map.get(group, :clip),
+                    style: scope.style
+                  })
+                else
+                  group
+                end
 
               group =
                 if Enum.all?(members, &(Map.get(&1, :position_anchor) == :fixed)),

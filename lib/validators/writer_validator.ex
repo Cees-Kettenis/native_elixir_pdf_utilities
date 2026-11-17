@@ -189,6 +189,27 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       else: drawing_group_error("paint group bounds must remain within max_numeric_magnitude")
   end
 
+  @doc "Prepares a bounded CSS print-canvas rectangle for an intermediate compositing surface."
+  @spec prepare_compositing_fill(map(), number()) :: {map(), map()}
+  def prepare_compositing_fill(box, page_height) do
+    canvas = DrawingGeometry.css_print_canvas(page_height)
+    scale = canvas.css_pixels_per_point
+
+    paint = %{
+      box
+      | x: box.x * scale,
+        y: (page_height - box.y - box.height) * scale,
+        width: box.width * scale,
+        height: box.height * scale
+    }
+
+    Enum.each([paint.x, paint.y, paint.width, paint.height], fn number ->
+      HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(number), :writer)
+    end)
+
+    {paint, canvas}
+  end
+
   @doc """
   Validates pages and writer options and normalizes document metadata.
   """
@@ -196,6 +217,52 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           {:ok, context()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(pages, opts) do
     with_writer_preparation(fn -> prepare(pages, opts, :pages) end)
+  end
+
+  @doc "Normalizes an already document-validated source paint plane without reinterpreting destination pages in its temporary one-page canvas."
+  @spec prepare_paint_plane([map()], tuple()) :: {:ok, context()} | {:error, term()}
+  def prepare_paint_plane(boxes, size) do
+    destination_key = make_ref()
+    boxes = plane_destinations(boxes, destination_key, :retain)
+
+    with {:ok, context} <- prepare([%{size: size, boxes: boxes}], []) do
+      {:ok,
+       %{
+         context
+         | pages:
+             Enum.map(context.pages, fn page ->
+               %{page | boxes: plane_destinations(page.boxes, destination_key, :restore)}
+             end)
+       }}
+    end
+  end
+
+  # A per-preparation opaque key carries source document facts through native
+  # normalization. Callers cannot manufacture the key or change its payload.
+  defp plane_destinations(boxes, key, direction) do
+    Enum.map(boxes, fn box ->
+      HtmlValidator.reserve_render_resource(:max_work, 1, :writer)
+
+      box =
+        case {direction, Map.fetch(box, :link_destination)} do
+          {:retain, {:ok, destination}} when destination != nil ->
+            box |> Map.put(key, destination) |> Map.put(:link_destination, {:xyz, 1, 0, 0})
+
+          {:restore, _} ->
+            case Map.pop(box, key) do
+              {nil, box} -> box
+              {destination, box} -> Map.put(box, :link_destination, destination)
+            end
+
+          _ ->
+            box
+        end
+
+      case Map.fetch(box, :boxes) do
+        {:ok, children} -> %{box | boxes: plane_destinations(children, key, direction)}
+        :error -> box
+      end
+    end)
   end
 
   @doc "Validates ordinary PDF appearance placement and clipping before native Form composition."
@@ -499,6 +566,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       case first_object_id do
         id when is_integer(id) and id > 0 ->
           HtmlValidator.check_render_resource(:max_entries, id, :writer)
+
           prepare(frames, [], :appearances)
 
         _ ->
@@ -671,6 +739,15 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                       end)
 
                       with :ok <-
+                             Enum.reduce_while(pages, :ok, fn page, :ok ->
+                               case NativeElixirPdfUtilities.Validators.CssCompositingValidator.validate_ancestry(
+                                      page.boxes
+                                    ) do
+                                 :ok -> {:cont, :ok}
+                                 error -> {:halt, error}
+                               end
+                             end),
+                           :ok <-
                              NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_destinations(
                                destination_pages
                              ) do
@@ -982,9 +1059,56 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             DrawingGeometry.compose_group(box, composition || {1, 1, 0, 0, nil, parent_height})
 
           local_clip = DrawingGeometry.local_clip(box, parent_height)
+
+          local_clip =
+            if is_map(local_clip) and Map.get(local_clip, :css_source_path, false),
+              do: Map.put(local_clip, :css_print_height, page_height),
+              else: local_clip
+
           {children, count} = normalize_boxes(box.boxes, count, composition, nil, page_height)
+          children = List.flatten(children)
+
+          scopes = Map.get(box, :css_compositing_scopes, [])
+
+          children =
+            if scopes == [],
+              do: children,
+              else:
+                Enum.map(children, fn child ->
+                  own = Map.get(child, :css_compositing_scopes, [])
+
+                  combined =
+                    if Enum.take(own, length(scopes)) == scopes, do: own, else: scopes ++ own
+
+                  case NativeElixirPdfUtilities.Validators.CssCompositingValidator.validate_scopes(
+                         combined
+                       ) do
+                    :ok -> Map.put(child, :css_compositing_scopes, combined)
+                    error -> throw({:render_resource_limit, error})
+                  end
+                end)
+
+          scopes =
+            case children do
+              [%{css_compositing_scopes: first} | _] ->
+                Enum.reduce(children, first, fn child, prefix ->
+                  HtmlValidator.reserve_render_resource(:max_work, length(prefix), :writer)
+                  own = Map.get(child, :css_compositing_scopes, [])
+
+                  prefix
+                  |> Enum.zip(own)
+                  |> Enum.take_while(fn {a, b} -> a == b end)
+                  |> Enum.map(&elem(&1, 0))
+                end)
+
+              _ ->
+                scopes
+            end
 
           start = %{type: :drawing_group_start, transform: transform, clip: local_clip}
+
+          start =
+            if scopes == [], do: start, else: Map.put(start, :css_compositing_scopes, scopes)
 
           start =
             case Map.get(box, :embedded_widgets) do
@@ -1048,7 +1172,12 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
               else: start
             )
 
-          {[start, children, %{type: :drawing_group_end}], count}
+          finish = %{type: :drawing_group_end}
+
+          finish =
+            if scopes == [], do: finish, else: Map.put(finish, :css_compositing_scopes, scopes)
+
+          {[start, children, finish], count}
 
         %{type: :flow_marker} ->
           count = count + 1
@@ -1133,6 +1262,13 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
               end
             end)
           end
+          |> case do
+            :ok ->
+              NativeElixirPdfUtilities.Validators.CssCompositingValidator.validate_ancestry(boxes)
+
+            error ->
+              error
+          end
 
         _ ->
           drawing_group_error("native paint requires an ordered list of writer boxes")
@@ -1179,178 +1315,197 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   end
 
   defp valid_box?(box, parent_height \\ nil) do
-    case box do
-      %{type: :actual_text_start, text: text} ->
-        is_binary(text) and String.valid?(text) and
-          is_boolean(Map.get(box, :break_join?, false)) and
-          Enum.all?(Map.keys(box), &(&1 in [:type, :text, :break_join?]))
+    compositing =
+      case box do
+        box
+        when not is_map_key(box, :css_compositing_paint) and
+               not is_map_key(box, :css_inner_opacity_key) and
+               not is_map_key(box, :css_compositing_scopes) ->
+          :ok
 
-      %{type: :actual_text_end} ->
-        map_size(box) == 1
+        _ ->
+          NativeElixirPdfUtilities.Validators.CssCompositingValidator.validate_box(box)
+      end
 
-      %{css_source_positioned: positioned} ->
-        is_boolean(positioned) and
-          (not positioned or
-             ((Map.get(box, :type) == :image or
-                 (Map.get(box, :type) == :text and
-                    match?(%{type: :embedded}, Map.get(box, :font_face)))) and
-                Map.get(box, :snap_to_css_pixel_grid, false) == false)) and
-          valid_box?(Map.delete(box, :css_source_positioned), parent_height)
+    with :ok <- compositing do
+      case box do
+        %{type: :actual_text_start, text: text} ->
+          is_binary(text) and String.valid?(text) and
+            is_boolean(Map.get(box, :break_join?, false)) and
+            Enum.all?(
+              Map.keys(box),
+              &(&1 in [:type, :text, :break_join?, :css_compositing_scopes])
+            )
 
-      %{initial_select_opacity: opacity} ->
-        case opacity do
-          %{owner: owner, alpha: alpha} when is_reference(owner) ->
-            alpha in [0.7, 1.0] and Enum.all?(Map.keys(opacity), &(&1 in [:owner, :alpha, :clip])) and
-              (not Map.has_key?(opacity, :clip) or
-                 (is_map(opacity.clip) and valid_clip_rectangle?(opacity.clip, true))) and
-              Map.get(box, :form_owner, owner) == owner and
-              valid_box?(Map.delete(box, :initial_select_opacity), parent_height)
+        %{type: :actual_text_end} ->
+          map_size(Map.delete(box, :css_compositing_scopes)) == 1
 
-          _ ->
-            false
-        end
+        %{css_source_positioned: positioned} ->
+          is_boolean(positioned) and
+            (not positioned or
+               ((Map.get(box, :type) == :image or
+                   (Map.get(box, :type) == :text and
+                      match?(%{type: :embedded}, Map.get(box, :font_face)))) and
+                  Map.get(box, :snap_to_css_pixel_grid, false) == false)) and
+            valid_box?(Map.delete(box, :css_source_positioned), parent_height)
 
-      %{css_border_surface: surface} ->
-        case surface do
-          %{alpha: 1.0, clip: clip} ->
-            map_size(surface) == 2 and is_map(clip) and valid_clip_rectangle?(clip, true) and
-              valid_box?(Map.delete(box, :css_border_surface), parent_height)
+        %{initial_select_opacity: opacity} ->
+          case opacity do
+            %{owner: owner, alpha: alpha} when is_reference(owner) ->
+              alpha in [0.7, 1.0] and
+                Enum.all?(Map.keys(opacity), &(&1 in [:owner, :alpha, :clip])) and
+                (not Map.has_key?(opacity, :clip) or
+                   (is_map(opacity.clip) and valid_clip_rectangle?(opacity.clip, true))) and
+                Map.get(box, :form_owner, owner) == owner and
+                valid_box?(Map.delete(box, :initial_select_opacity), parent_height)
 
-          _ ->
-            false
-        end
+            _ ->
+              false
+          end
 
-      %{native_menu_clip: clip} ->
-        is_map(clip) and valid_clip_rectangle?(clip, true) and
-          valid_box?(Map.delete(box, :native_menu_clip), parent_height)
+        %{css_border_surface: surface} ->
+          case surface do
+            %{alpha: 1.0, clip: clip} ->
+              map_size(surface) == 2 and is_map(clip) and valid_clip_rectangle?(clip, true) and
+                valid_box?(Map.delete(box, :css_border_surface), parent_height)
 
-      %{drawing_annotation_rect: _} ->
-        false
+            _ ->
+              false
+          end
 
-      %{drawing_page_height: _} ->
-        false
+        %{native_menu_clip: clip} ->
+          is_map(clip) and valid_clip_rectangle?(clip, true) and
+            valid_box?(Map.delete(box, :native_menu_clip), parent_height)
 
-      %{drawing_link_quad_points: _} ->
-        false
+        %{drawing_annotation_rect: _} ->
+          false
 
-      %{drawing_affine_link_quads: _} ->
-        false
+        %{drawing_page_height: _} ->
+          false
 
-      %{type: :drawing_group} ->
-        case valid_drawing_group(box, 1, {1, 1, 0, 0}, 0, parent_height) do
-          {:ok, _count} -> true
-          {:error, _} = error -> error
-        end
+        %{drawing_link_quad_points: _} ->
+          false
 
-      %{type: :glyph_group, actual_text: text, boxes: children}
-      when is_binary(text) and is_list(children) ->
-        valid_glyph_group?(text, children, 1)
+        %{drawing_affine_link_quads: _} ->
+          false
 
-      %{type: :flow_marker, x: x, y: y, width: width, height: height}
-      when is_number(x) and is_number(y) and is_number(width) and width == 0 and
-             is_number(height) and height >= 0 ->
-        Enum.all?(
-          [
-            :text,
-            :image,
-            :fill_color,
-            :stroke_color,
-            :font_face,
-            :glyph_ids,
-            :link_url,
-            :link_destination,
-            :form_control
-          ],
-          &(Map.get(box, &1) == nil)
-        )
+        %{type: :drawing_group} ->
+          case valid_drawing_group(box, 1, {1, 1, 0, 0}, 0, parent_height) do
+            {:ok, _count} -> true
+            {:error, _} = error -> error
+          end
 
-      %{type: :link_region, x: x, y: y, width: width, height: height}
-      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and width > 0 and
-             height > 0 ->
-        Enum.all?([x, y, width, height, x + width, y + height], &bounded_number?/1) and
+        %{type: :glyph_group, actual_text: text, boxes: children}
+        when is_binary(text) and is_list(children) ->
+          valid_glyph_group?(text, children, 1)
+
+        %{type: :flow_marker, x: x, y: y, width: width, height: height}
+        when is_number(x) and is_number(y) and is_number(width) and width == 0 and
+               is_number(height) and height >= 0 ->
           Enum.all?(
-            [:text, :image, :font_face, :glyph_ids, :form_control, :fill_color, :stroke_color],
+            [
+              :text,
+              :image,
+              :fill_color,
+              :stroke_color,
+              :font_face,
+              :glyph_ids,
+              :link_url,
+              :link_destination,
+              :form_control
+            ],
             &(Map.get(box, &1) == nil)
-          ) and
-          (Map.get(box, :link_url) != nil or Map.get(box, :link_destination) != nil) and
-          (not Map.has_key?(box, :link_quads) or
-             NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_link_region?(box)) and
-          valid_clip_rectangle?(Map.get(box, :clip), true) and valid_link_box?(box)
+          )
 
-      %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
-      when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
-             font_size >= 0 and is_binary(font) ->
-        valid_text_typography?(box) and valid_color?(color) and valid_font_box?(box) and
-          valid_clip_rectangle?(Map.get(box, :clip), true) and valid_link_box?(box)
+        %{type: :link_region, x: x, y: y, width: width, height: height}
+        when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
+               width > 0 and
+               height > 0 ->
+          Enum.all?([x, y, width, height, x + width, y + height], &bounded_number?/1) and
+            Enum.all?(
+              [:text, :image, :font_face, :glyph_ids, :form_control, :fill_color, :stroke_color],
+              &(Map.get(box, &1) == nil)
+            ) and
+            (Map.get(box, :link_url) != nil or Map.get(box, :link_destination) != nil) and
+            (not Map.has_key?(box, :link_quads) or
+               NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_link_region?(box)) and
+            valid_clip_rectangle?(Map.get(box, :clip), true) and valid_link_box?(box)
 
-      %{
-        type: :rect,
-        x: x,
-        y: y,
-        width: width,
-        height: height,
-        fill_color: fill_color,
-        stroke_color: stroke_color,
-        stroke_width: stroke_width,
-        border_radius: border_radius
-      }
-      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
-             width > 0 and height > 0 and is_number(stroke_width) and stroke_width >= 0 and
-             is_number(border_radius) and border_radius >= 0 ->
-        Map.get(box, :shape, :rectangle) in [
-          :rectangle,
-          :wave,
-          {:triangle, :up},
-          {:triangle, :down},
-          {:triangle, :left},
-          {:triangle, :right},
-          {:chevron, :down},
-          {:diagonal, :up}
-        ] and
-          (Map.get(box, :shape) != :wave or
-             (fill_color == nil and stroke_color != nil and stroke_width > 0 and
-                border_radius == 0 and
-                not Map.has_key?(box, :border_widths) and not Map.has_key?(box, :border_styles) and
-                is_number(Map.get(box, :wave_offset, 0.0)) and
-                abs(Map.get(box, :wave_offset, 0.0)) <= Limits.get(:max_numeric_magnitude))) and
-          (Map.get(box, :role) != :select_arrow or
-             (Map.get(box, :shape) == {:chevron, :down} and is_map(Map.get(box, :clip)))) and
-          valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
-          (not is_map_key(box, :border_radii) or valid_corner_radii?(box.border_radii)) and
-          valid_baseline_paint?(box) and
-          valid_gauge_frame?(box) and
-          valid_range_frame?(box) and
-          is_boolean(Map.get(box, :gauge_quantize_value, false)) and
-          is_boolean(Map.get(box, :gauge_clip_track, false)) and
-          case Map.get(box, :gauge_fraction) do
-            nil -> true
-            fraction -> is_number(fraction) and fraction >= 0 and fraction <= 1
-          end and
-          case Map.get(box, :gauge_gradient) do
-            nil ->
-              true
+        %{type: :text, text: text, x: x, y: y, font_size: font_size, font: font, color: color}
+        when is_binary(text) and is_number(x) and is_number(y) and is_number(font_size) and
+               font_size >= 0 and is_binary(font) ->
+          valid_text_typography?(box) and valid_color?(color) and valid_font_box?(box) and
+            valid_clip_rectangle?(Map.get(box, :clip), true) and valid_link_box?(box)
 
-            colors ->
-              is_list(colors) and length(colors) == 4 and
-                Enum.all?(colors, fn color ->
-                  is_tuple(color) and tuple_size(color) == 3 and valid_color?(color)
-                end)
-          end and
-          valid_clip_rectangle?(Map.get(box, :clip), true) and
-          valid_clip_rectangle?(Map.get(box, :border_cutout)) and
-          valid_border_widths?(Map.get(box, :border_widths)) and
-          valid_border_colors?(Map.get(box, :border_colors)) and
-          valid_border_styles?(Map.get(box, :border_styles)) and
-          (not is_nil(fill_color) or visible_border?(box) or is_map(Map.get(box, :form_control)))
+        %{
+          type: :rect,
+          x: x,
+          y: y,
+          width: width,
+          height: height,
+          fill_color: fill_color,
+          stroke_color: stroke_color,
+          stroke_width: stroke_width,
+          border_radius: border_radius
+        }
+        when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
+               width > 0 and height > 0 and is_number(stroke_width) and stroke_width >= 0 and
+               is_number(border_radius) and border_radius >= 0 ->
+          Map.get(box, :shape, :rectangle) in [
+            :rectangle,
+            :wave,
+            {:triangle, :up},
+            {:triangle, :down},
+            {:triangle, :left},
+            {:triangle, :right},
+            {:chevron, :down},
+            {:diagonal, :up}
+          ] and
+            (Map.get(box, :shape) != :wave or
+               (fill_color == nil and stroke_color != nil and stroke_width > 0 and
+                  border_radius == 0 and
+                  not Map.has_key?(box, :border_widths) and not Map.has_key?(box, :border_styles) and
+                  is_number(Map.get(box, :wave_offset, 0.0)) and
+                  abs(Map.get(box, :wave_offset, 0.0)) <= Limits.get(:max_numeric_magnitude))) and
+            (Map.get(box, :role) != :select_arrow or
+               (Map.get(box, :shape) == {:chevron, :down} and is_map(Map.get(box, :clip)))) and
+            valid_optional_color?(fill_color) and valid_optional_color?(stroke_color) and
+            (not is_map_key(box, :border_radii) or valid_corner_radii?(box.border_radii)) and
+            valid_baseline_paint?(box) and
+            valid_gauge_frame?(box) and
+            valid_range_frame?(box) and
+            is_boolean(Map.get(box, :gauge_quantize_value, false)) and
+            is_boolean(Map.get(box, :gauge_clip_track, false)) and
+            case Map.get(box, :gauge_fraction) do
+              nil -> true
+              fraction -> is_number(fraction) and fraction >= 0 and fraction <= 1
+            end and
+            case Map.get(box, :gauge_gradient) do
+              nil ->
+                true
 
-      %{type: :image, x: x, y: y, width: width, height: height, image: image}
-      when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
-             width > 0 and height > 0 ->
-        valid_image?(image) and valid_clip_rectangle?(Map.get(box, :clip), true) and
-          valid_baseline_paint?(box) and valid_link_box?(box)
+              colors ->
+                is_list(colors) and length(colors) == 4 and
+                  Enum.all?(colors, fn color ->
+                    is_tuple(color) and tuple_size(color) == 3 and valid_color?(color)
+                  end)
+            end and
+            valid_clip_rectangle?(Map.get(box, :clip), true) and
+            valid_clip_rectangle?(Map.get(box, :border_cutout)) and
+            valid_border_widths?(Map.get(box, :border_widths)) and
+            valid_border_colors?(Map.get(box, :border_colors)) and
+            valid_border_styles?(Map.get(box, :border_styles)) and
+            (not is_nil(fill_color) or visible_border?(box) or is_map(Map.get(box, :form_control)))
 
-      _ ->
-        false
+        %{type: :image, x: x, y: y, width: width, height: height, image: image}
+        when is_number(x) and is_number(y) and is_number(width) and is_number(height) and
+               width > 0 and height > 0 ->
+          valid_image?(image) and valid_clip_rectangle?(Map.get(box, :clip), true) and
+            valid_baseline_paint?(box) and valid_link_box?(box)
+
+        _ ->
+          false
+      end
     end
   end
 
@@ -1395,7 +1550,16 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             :range_tick
           ] and
             Enum.all?(
-              [dx, dy, width, height, thumb_left, thumb_top, Map.get(box, :x), Map.get(box, :y)],
+              [
+                dx,
+                dy,
+                width,
+                height,
+                thumb_left,
+                thumb_top,
+                Map.get(box, :x),
+                Map.get(box, :y)
+              ],
               &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))
             ) and
             Enum.all?(
@@ -1446,218 +1610,242 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   # Group dimensions are viewport metadata. Only the explicit clip restricts
   # nondegenerate viewports; a zero dimension prepares an empty visible region.
   defp valid_drawing_group(box, depth, parent_transform, count, parent_height \\ nil) do
-    HtmlValidator.check_render_resource(:max_depth, depth, :writer)
-    HtmlValidator.check_render_resource(:max_entries, count + 2, :writer)
+    with :ok <-
+           NativeElixirPdfUtilities.Validators.CssCompositingValidator.validate_box(box),
+         :ok <-
+           NativeElixirPdfUtilities.Validators.CssProjectionValidator.validate_descriptor(
+             Map.get(box, :css_projection)
+           ) do
+      HtmlValidator.check_render_resource(:max_depth, depth, :writer)
+      HtmlValidator.check_render_resource(:max_entries, count + 2, :writer)
 
-    case box do
-      %{width: width, height: height, transform: {a, b, c, d, e, f}, boxes: children}
-      when is_number(width) and width >= 0 and is_number(height) and height >= 0 and
-             is_list(children) ->
-        baseline = Map.get(box, :baseline, 0)
-        clip = Map.get(box, :clip)
+      case box do
+        %{width: width, height: height, transform: {a, b, c, d, e, f}, boxes: children}
+        when is_number(width) and width >= 0 and is_number(height) and height >= 0 and
+               is_list(children) ->
+          baseline = Map.get(box, :baseline, 0)
+          clip = Map.get(box, :clip)
+          spans = validate_actual_text_spans(children)
 
-        cond do
-          Map.has_key?(box, :drawing_annotation_rect) or Map.has_key?(box, :drawing_page_height) ->
-            drawing_group_error(
-              "drawing_group cannot contain caller-supplied private prepared fields"
-            )
+          cond do
+            spans != :ok ->
+              spans
 
-          not is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) ->
-            drawing_group_error("drawing_group snap_to_css_pixel_grid must be boolean")
-
-          Map.get(box, :role) == :overflow_clip and
-              (box.transform != {1, 0, 0, 1, 0, 0} or not is_map(clip)) ->
-            drawing_group_error("overflow clipping must preserve the containing coordinate plane")
-
-          Map.get(box, :viewport_paint_role) not in [nil, :iframe_viewport, :frameset_viewport] ->
-            drawing_group_error(
-              "drawing_group viewport paint role must identify an existing iframe or frameset viewport"
-            )
-
-          not Enum.all?([width, height, a, b, c, d, e, f, baseline], &bounded_number?/1) ->
-            drawing_group_error(
-              "drawing_group dimensions, baseline and affine values must be numeric and within max_numeric_magnitude"
-            )
-
-          baseline < 0 or baseline > height ->
-            drawing_group_error("drawing_group baseline must lie within its local height")
-
-          a * d - b * c == 0 ->
-            drawing_group_error("drawing_group affine matrix must remain nondegenerate")
-
-          not valid_clip_rectangle?(clip, true) ->
-            drawing_group_error(
-              "drawing_group clip requires bounded numeric x/y, non-negative width/height and valid rounded corners"
-            )
-
-          not is_nil(Map.get(box, :form_control)) ->
-            drawing_group_error(
-              "drawing_group form controls require transformed widget support",
-              :unsupported_form
-            )
-
-          not is_nil(Map.get(box, :link_destination)) ->
-            drawing_group_error(
-              "drawing_group destinations require scoped root placement and final composition geometry",
-              :unsupported_html
-            )
-
-          not is_nil(Map.get(box, :link_url)) ->
-            drawing_group_error("drawing_group links belong on child text boxes")
-
-          true ->
-            box =
-              if is_map(clip),
-                do: Map.put(box, :clip, normalize_clip_rectangle(clip, parent_height, false)),
-                else: box
-
-            parent =
-              case parent_transform do
-                {sx, sy, tx, ty} -> {sx, sy, tx, ty, nil, parent_height}
-                matrix -> %{transform: matrix, clip: nil, height: parent_height}
-              end
-
-            composition = DrawingGeometry.compose_group(box, parent)
-            {transform, _clip, paint_height} = DrawingGeometry.composition_parts(composition)
-
-            widget_validation =
-              case Map.get(box, :embedded_widgets) do
-                nil ->
-                  :ok
-
-                descriptor ->
-                  case composition do
-                    %{} ->
-                      case NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.resolve(
-                             descriptor
-                           ) do
-                        {:ok, _fields} -> :ok
-                        error -> error
-                      end
-
-                    _ ->
-                      NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.validate_composition(
-                        descriptor,
-                        composition
-                      )
-                  end
-              end
-
-            clip_bounds =
-              case DrawingGeometry.transform_clip(
-                     DrawingGeometry.local_clip(box, parent_height),
-                     transform
-                   ) do
-                nil -> []
-                bounds -> Tuple.to_list(DrawingGeometry.clip_bounds(bounds))
-              end
-
-            viewport_bounds =
-              DrawingGeometry.transform_clip(
-                %{x: 0, y: 0, width: width, height: height},
-                transform
+            Map.has_key?(box, :drawing_annotation_rect) or Map.has_key?(box, :drawing_page_height) ->
+              drawing_group_error(
+                "drawing_group cannot contain caller-supplied private prepared fields"
               )
-              |> DrawingGeometry.clip_bounds()
 
-            matrix_values = DrawingGeometry.affine_matrix(transform) |> Tuple.to_list()
+            not is_boolean(Map.get(box, :snap_to_css_pixel_grid, false)) ->
+              drawing_group_error("drawing_group snap_to_css_pixel_grid must be boolean")
 
-            if widget_validation != :ok do
-              widget_validation
-            else
-              if Enum.all?(
-                   matrix_values ++ Tuple.to_list(viewport_bounds) ++ clip_bounds,
-                   &bounded_number?/1
-                 ) do
-                Enum.reduce_while(children, {:ok, count + 2}, fn child, {:ok, count} ->
-                  result =
-                    case child do
-                      %{type: :drawing_group} ->
-                        valid_drawing_group(child, depth + 1, transform, count, paint_height)
+            Map.get(box, :role) == :overflow_clip and
+                (box.transform != {1, 0, 0, 1, 0, 0} or not is_map(clip)) ->
+              drawing_group_error(
+                "overflow clipping must preserve the containing coordinate plane"
+              )
 
-                      child when is_map(child) ->
-                        HtmlValidator.check_render_resource(:max_entries, count + 1, :writer)
+            Map.get(box, :viewport_paint_role) not in [nil, :iframe_viewport, :frameset_viewport] ->
+              drawing_group_error(
+                "drawing_group viewport paint role must identify an existing iframe or frameset viewport"
+              )
 
-                        pieces =
-                          if child[:type] == :glyph_group,
-                            do: Map.get(child, :boxes),
-                            else: [child]
+            not Enum.all?([width, height, a, b, c, d, e, f, baseline], &bounded_number?/1) ->
+              drawing_group_error(
+                "drawing_group dimensions, baseline and affine values must be numeric and within max_numeric_magnitude"
+              )
 
-                        if is_list(pieces) and child[:type] == :glyph_group do
-                          HtmlValidator.check_render_resource(
-                            :max_entries,
-                            count + length(pieces) + 2,
-                            :writer
-                          )
-                        end
+            baseline < 0 or baseline > height ->
+              drawing_group_error("drawing_group baseline must lie within its local height")
 
-                        cond do
-                          not is_list(pieces) ->
-                            drawing_group_error(
-                              "drawing_group children must contain valid existing writer boxes"
-                            )
+            a * d - b * c == 0 ->
+              drawing_group_error("drawing_group affine matrix must remain nondegenerate")
 
-                          not is_nil(Map.get(child, :form_control)) or
-                              Enum.any?(
-                                pieces,
-                                &(is_map(&1) and not is_nil(Map.get(&1, :form_control)))
-                              ) ->
-                            drawing_group_error(
-                              "drawing_group form controls require transformed widget support",
-                              :unsupported_form
-                            )
+            not valid_clip_rectangle?(clip, true) ->
+              drawing_group_error(
+                "drawing_group clip requires bounded numeric x/y, non-negative width/height and valid rounded corners"
+              )
 
-                          child[:type] not in [
-                            :text,
-                            :rect,
-                            :image,
-                            :link_region,
-                            :glyph_group,
-                            :flow_marker
-                          ] or
-                            not is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) or
-                              not valid_box?(child) ->
-                            drawing_group_error(
-                              "drawing_group children must contain valid text, rectangle, image, link_region, glyph_group or drawing_group boxes"
-                            )
+            not is_nil(Map.get(box, :form_control)) ->
+              drawing_group_error(
+                "drawing_group form controls require transformed widget support",
+                :unsupported_form
+              )
 
-                          not Enum.all?(
-                            pieces,
-                            &valid_group_geometry?(&1, transform, paint_height)
-                          ) ->
-                            drawing_group_error(
-                              "drawing_group child geometry and transformed bounds must be within max_numeric_magnitude"
-                            )
+            not is_nil(Map.get(box, :link_destination)) ->
+              drawing_group_error(
+                "drawing_group destinations require scoped root placement and final composition geometry",
+                :unsupported_html
+              )
 
-                          true ->
-                            count =
-                              count +
-                                if child[:type] == :glyph_group, do: length(pieces) + 2, else: 1
+            not is_nil(Map.get(box, :link_url)) ->
+              drawing_group_error("drawing_group links belong on child text boxes")
 
-                            HtmlValidator.check_render_resource(:max_entries, count, :writer)
-                            {:ok, count}
+            true ->
+              box =
+                if is_map(clip),
+                  do: Map.put(box, :clip, normalize_clip_rectangle(clip, parent_height, false)),
+                  else: box
+
+              parent =
+                case parent_transform do
+                  {sx, sy, tx, ty} -> {sx, sy, tx, ty, nil, parent_height}
+                  matrix -> %{transform: matrix, clip: nil, height: parent_height}
+                end
+
+              composition = DrawingGeometry.compose_group(box, parent)
+              {transform, _clip, paint_height} = DrawingGeometry.composition_parts(composition)
+
+              widget_validation =
+                case Map.get(box, :embedded_widgets) do
+                  nil ->
+                    :ok
+
+                  descriptor ->
+                    case composition do
+                      %{} ->
+                        case NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.resolve(
+                               descriptor
+                             ) do
+                          {:ok, _fields} -> :ok
+                          error -> error
                         end
 
                       _ ->
-                        drawing_group_error("drawing_group children must be writer box maps")
+                        NativeElixirPdfUtilities.Validators.EmbeddedFormValidator.validate_composition(
+                          descriptor,
+                          composition
+                        )
                     end
+                end
 
-                  case result do
-                    {:ok, _count} -> {:cont, result}
-                    {:error, _} -> {:halt, result}
-                  end
-                end)
-              else
-                drawing_group_error(
-                  "drawing_group cumulative transform and viewport bounds exceed max_numeric_magnitude"
+              clip_bounds =
+                case DrawingGeometry.transform_clip(
+                       DrawingGeometry.local_clip(box, parent_height),
+                       transform
+                     ) do
+                  nil -> []
+                  bounds -> Tuple.to_list(DrawingGeometry.clip_bounds(bounds))
+                end
+
+              viewport_bounds =
+                DrawingGeometry.transform_clip(
+                  %{x: 0, y: 0, width: width, height: height},
+                  transform
                 )
-              end
-            end
-        end
+                |> DrawingGeometry.clip_bounds()
 
-      _ ->
-        drawing_group_error(
-          "drawing_group requires non-negative width/height, a six-value transform and a list of boxes"
-        )
+              matrix_values = DrawingGeometry.affine_matrix(transform) |> Tuple.to_list()
+
+              if widget_validation != :ok do
+                widget_validation
+              else
+                if Enum.all?(
+                     matrix_values ++ Tuple.to_list(viewport_bounds) ++ clip_bounds,
+                     &bounded_number?/1
+                   ) do
+                  Enum.reduce_while(children, {:ok, count + 2}, fn child, {:ok, count} ->
+                    result =
+                      case child do
+                        %{type: :drawing_group} ->
+                          valid_drawing_group(child, depth + 1, transform, count, paint_height)
+
+                        %{type: type} = marker
+                        when type in [:actual_text_start, :actual_text_end] ->
+                          HtmlValidator.check_render_resource(:max_entries, count + 1, :writer)
+
+                          if valid_box?(marker),
+                            do: {:ok, count + 1},
+                            else:
+                              drawing_group_error(
+                                "drawing_group ActualText markers require valid source text and balanced spans"
+                              )
+
+                        child when is_map(child) ->
+                          HtmlValidator.check_render_resource(:max_entries, count + 1, :writer)
+
+                          pieces =
+                            if child[:type] == :glyph_group,
+                              do: Map.get(child, :boxes),
+                              else: [child]
+
+                          if is_list(pieces) and child[:type] == :glyph_group do
+                            HtmlValidator.check_render_resource(
+                              :max_entries,
+                              count + length(pieces) + 2,
+                              :writer
+                            )
+                          end
+
+                          cond do
+                            not is_list(pieces) ->
+                              drawing_group_error(
+                                "drawing_group children must contain valid existing writer boxes"
+                              )
+
+                            not is_nil(Map.get(child, :form_control)) or
+                                Enum.any?(
+                                  pieces,
+                                  &(is_map(&1) and not is_nil(Map.get(&1, :form_control)))
+                                ) ->
+                              drawing_group_error(
+                                "drawing_group form controls require transformed widget support",
+                                :unsupported_form
+                              )
+
+                            child[:type] not in [
+                              :text,
+                              :rect,
+                              :image,
+                              :link_region,
+                              :glyph_group,
+                              :flow_marker
+                            ] or
+                              not is_boolean(Map.get(child, :snap_to_css_pixel_grid, false)) or
+                                not valid_box?(child) ->
+                              drawing_group_error(
+                                "drawing_group children must contain valid text, rectangle, image, link_region, glyph_group or drawing_group boxes"
+                              )
+
+                            not Enum.all?(
+                              pieces,
+                              &valid_group_geometry?(&1, transform, paint_height)
+                            ) ->
+                              drawing_group_error(
+                                "drawing_group child geometry and transformed bounds must be within max_numeric_magnitude"
+                              )
+
+                            true ->
+                              count =
+                                count +
+                                  if child[:type] == :glyph_group, do: length(pieces) + 2, else: 1
+
+                              HtmlValidator.check_render_resource(:max_entries, count, :writer)
+                              {:ok, count}
+                          end
+
+                        _ ->
+                          drawing_group_error("drawing_group children must be writer box maps")
+                      end
+
+                    case result do
+                      {:ok, _count} -> {:cont, result}
+                      {:error, _} -> {:halt, result}
+                    end
+                  end)
+                else
+                  drawing_group_error(
+                    "drawing_group cumulative transform and viewport bounds exceed max_numeric_magnitude"
+                  )
+                end
+              end
+          end
+
+        _ ->
+          drawing_group_error(
+            "drawing_group requires non-negative width/height, a six-value transform and a list of boxes"
+          )
+      end
     end
   end
 
@@ -2161,7 +2349,18 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{x: x, y: y, width: width, height: height} ->
         allowed =
           if rounded?,
-            do: [:x, :y, :width, :height, :border_radius, :border_radii, :inner_clip],
+            do: [
+              :x,
+              :y,
+              :width,
+              :height,
+              :border_radius,
+              :border_radii,
+              :inner_clip,
+              :path_commands,
+              :css_source_path,
+              :fill_rule
+            ],
             else: [:x, :y, :width, :height]
 
         radius = Map.get(clip, :border_radius, 0.0)
@@ -2169,7 +2368,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         radii_valid? =
           valid_corner_radii?(Map.get(clip, :border_radii))
 
-        radii_valid? and Enum.all?(Map.keys(clip), &(&1 in allowed)) and
+        NativeElixirPdfUtilities.Validators.CssClipValidator.validate_clip(clip) == :ok and
+          radii_valid? and Enum.all?(Map.keys(clip), &(&1 in allowed)) and
           Enum.all?(
             [x, y, width, height, radius],
             &match?({:ok, _}, HtmlValidator.normalize_geometry_number(&1))

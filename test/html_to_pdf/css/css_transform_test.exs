@@ -56,8 +56,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssTransformTest do
           "translate(2pt,,3pt)",
           "scale(1 2)",
           "matrix(1,0,0,1,0)",
-          "rotateX(20deg)",
-          "perspective(10pt)",
+          "rotateX(20px)",
+          "perspective(-10pt)",
           "rotate (10deg)"
         ] do
       assert :error = CssTransformValidator.prepare(invalid)

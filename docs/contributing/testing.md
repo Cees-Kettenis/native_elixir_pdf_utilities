@@ -228,6 +228,22 @@ before triggering cancellation; a longer timeout cannot fix a monitor race.
 For deadline behavior, advance an injected clock after the tested operation
 starts so browser startup speed does not determine the assertion.
 
+### Compositor references for static effects
+
+The compositing sheet uses `compositor_reference: :png` for its marked HTML
+viewports. Chromium's PDF painter drops backface hiding, depth intersections and
+mask exclusion, and paints colored form text with the wrong group opacity.
+The shared capture adapter saves the original printed PDF, captures those source
+viewports under print media, checks that capture leaves their geometry and styles
+unchanged, then prints their PNG replacements. The authored native HTML is unchanged.
+Existing vector regions retain their 1% thresholds; raster regions use the SVG
+comparison tolerance and independent geometry or channel assertions.
+
+The forty scenes share one browser reference. Nine compositor viewports add nine
+screenshots and one second print in that capture, using the same browser process.
+They participate in the normal bounded reference cache with a separate capture
+mode identity. A cache hit still renders and compares every native region.
+
 ### Persistent Chromium references
 
 The local matrix reuses compressed browser references in

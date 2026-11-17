@@ -338,6 +338,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialLetter do
 
       run_style =
         parent
+        |> Map.drop([:css_translate, :css_rotate, :css_scale])
         |> Map.put(:css_transform, :none)
         |> Map.put(:display, :inline)
         |> Map.put(:margin, %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0})

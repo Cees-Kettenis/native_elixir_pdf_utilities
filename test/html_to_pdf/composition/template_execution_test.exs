@@ -474,13 +474,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionTest do
 
   test "an unmatched original declaration that requires element context blocks replacement" do
     html =
-      "<style>.absent{perspective:100pt}</style><body><?start name='A'><p>Old</p><?end?><template for='A'><p>New</p></template><p>After</p></body>"
+      "<style>.absent{animation:spin 1s}</style><body><?start name='A'><p>Old</p><?end?><template for='A'><p>New</p></template><p>After</p></body>"
 
     assert {:error, {:unsupported_html, diagnostic}} = HtmlToPdf.render(html, @opts)
     assert diagnostic.stage == :css and diagnostic.reason == :unsupported_html
     assert diagnostic.operation == :parse
     assert diagnostic.module == TemplateExecutionValidator
-    assert diagnostic.source == "perspective:100pt"
+    assert diagnostic.source == "animation:spin 1s"
 
     assert diagnostic.message ==
              "template replacement requires an original context for unmatched_original_context; this authored declaration remains unresolved"

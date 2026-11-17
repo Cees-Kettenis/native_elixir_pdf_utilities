@@ -405,7 +405,11 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedFormValidator do
     }
   end
 
-  defp appearance_paint(box) do
+  @doc "Retains static source geometry and targets while removing control ownership from admitted artwork."
+  @spec static_artwork([map()]) :: [map()]
+  def static_artwork(boxes), do: Enum.flat_map(boxes, &appearance_paint(&1, true))
+
+  defp appearance_paint(box, preserve_geometry \\ false) do
     marker =
       box.type == :rect and is_map(Map.get(box, :form_control)) and
         is_nil(Map.get(box, :fill_color)) and not WriterValidator.visible_border?(box)
@@ -413,11 +417,20 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedFormValidator do
     box = Map.drop(box, [:form_control, :form_owner])
 
     if marker do
-      []
+      if preserve_geometry, do: [Map.put(box, :fill_color, {0.0, 0.0, 0.0, 0.0})], else: []
     else
       case Map.fetch(box, :boxes) do
-        {:ok, children} -> [Map.put(box, :boxes, Enum.flat_map(children, &appearance_paint/1))]
-        :error -> [box]
+        {:ok, children} ->
+          [
+            Map.put(
+              box,
+              :boxes,
+              Enum.flat_map(children, &appearance_paint(&1, preserve_geometry))
+            )
+          ]
+
+        :error ->
+          [box]
       end
     end
   end

@@ -569,11 +569,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                   case result do
                     {:ok, styled_tree} ->
-                      {:ok,
-                       if(mode == :prepare_svg,
-                         do: Map.put(styled_tree, :type, :svg_prepared_document),
-                         else: styled_tree
-                       )}
+                      if mode == :prepare_svg,
+                        do: {:ok, Map.put(styled_tree, :type, :svg_prepared_document)},
+                        else:
+                          NativeElixirPdfUtilities.Validators.CssEffectsValidator.resolve_references(
+                            styled_tree
+                          )
 
                     {:error, :invalid_document} ->
                       {:error, style_error_detail(dom, opts)}
@@ -4016,6 +4017,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
              do:
                NativeElixirPdfUtilities.Validators.CssImageValueValidator.apply_style(style, opts)
     end
+    |> case do
+      {:ok, style} ->
+        NativeElixirPdfUtilities.Validators.CssMaskValidator.load(style, opts, fn source ->
+          load_paint_image(source, opts, :background_image, image_budget)
+        end)
+
+      error ->
+        error
+    end
   end
 
   defp load_paint_image(source, opts, kind, image_budget) do
@@ -4164,6 +4174,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     inherited =
       if Map.has_key?(style, :_frameset),
         do: Map.put(inherited, :_frameset_parent, style._frameset),
+        else: inherited
+
+    inherited =
+      if NativeElixirPdfUtilities.Validators.CssProjectionValidator.needs_group?(style),
+        do: Map.put(inherited, :_css_3d_context, true),
         else: inherited
 
     if :maps.get(:_svg_prepare, style, false) do
@@ -5492,6 +5507,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                ])
                |> resolve_current_color_values(),
              {:ok, style} <- put_font_face(style, rules.cache),
+             {:ok, style} <-
+               NativeElixirPdfUtilities.Validators.CssTransformValidator.compute_style(style),
+             {:ok, style} <-
+               NativeElixirPdfUtilities.Validators.CssProjectionValidator.compute_style(style),
+             {:ok, style} <-
+               NativeElixirPdfUtilities.Validators.CssMotionValidator.compute_style(style),
              {:ok, style} <- MathLayoutValidator.compute_style(style),
              {:ok, style} <-
                if(declarations != [] or hints != [],

@@ -10,10 +10,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Stacking do
           boxes
 
         order ->
-          z = Map.get(style, :z_index, :auto)
           isolated? = NativeElixirPdfUtilities.Validators.CssStackingValidator.context?(style)
-          level = if is_integer(z), do: z, else: 0
+          level = NativeElixirPdfUtilities.Validators.CssStackingValidator.level(style)
           entry = {order, level}
+
+          scope =
+            if NativeElixirPdfUtilities.Validators.CssCompositingValidator.paint_group?(
+                 style,
+                 boxes
+               ),
+               do: %{
+                 id: order,
+                 opacity: Map.get(style, :opacity, 1.0),
+                 mix_blend_mode: Map.get(style, :mix_blend_mode, :Normal)
+               }
 
           Enum.map(boxes, fn box ->
             path = Map.get(box, :_stacking_path, [])
@@ -24,20 +34,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Stacking do
               is_list(background_owner) and background_owner != order and
                 Enum.take(order, length(background_owner)) == background_owner
 
-            cond do
-              ancestor_background? -> box
-              List.first(path) == entry -> box
-              isolated? or path == [] -> Map.put(box, :_stacking_path, [entry | path])
-              true -> box
+            if ancestor_background? do
+              box
+            else
+              box =
+                cond do
+                  List.first(path) == entry -> box
+                  isolated? or path == [] -> Map.put(box, :_stacking_path, [entry | path])
+                  true -> box
+                end
+
+              scopes = Map.get(box, :css_compositing_scopes, [])
+
+              if scope != nil and List.first(scopes) != scope,
+                do: Map.put(box, :css_compositing_scopes, [scope | scopes]),
+                else: box
             end
           end)
       end
 
-    style
-    |> Map.get(:_stacking_contexts, [])
-    |> Enum.reverse()
-    |> Enum.reduce(boxes, fn {order, level}, boxes ->
-      attach(boxes, %{_stacking_order: order, z_index: level, _stacking_item: true})
+    boxes =
+      style
+      |> Map.get(:_stacking_contexts, [])
+      |> Enum.reverse()
+      |> Enum.reduce(boxes, fn {order, level}, boxes ->
+        attach(boxes, %{_stacking_order: order, z_index: level, _stacking_item: true})
+      end)
+
+    Enum.reduce(Enum.reverse(Map.get(style, :_css_compositing_contexts, [])), boxes, fn scope,
+                                                                                        boxes ->
+      attach(boxes, %{
+        _stacking_order: scope.id,
+        opacity: scope.opacity,
+        mix_blend_mode: scope.mix_blend_mode,
+        isolation: :isolate
+      })
     end)
   end
 

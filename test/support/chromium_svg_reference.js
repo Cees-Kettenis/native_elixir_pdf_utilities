@@ -6,7 +6,7 @@
     return Array.from(style, name => [name, style.getPropertyValue(name)]);
   };
   const visit = (doc, offsetX, offsetY) => {
-    for (const element of doc.querySelectorAll('svg, img, object, embed, iframe')) {
+    for (const element of doc.querySelectorAll(globalThis.__nativePdfCompositorReference ? '[data-compositor-reference]' : 'svg, img, object, embed, iframe')) {
       if (element.parentElement?.closest('svg')) continue;
       const tag = element.localName;
       let child;
@@ -16,7 +16,7 @@
       const svgImage = tag === 'img' && (/^data:image\/svg\+xml[,;]/i.test(source) || /\.svg(?:[?#]|$)/i.test(source));
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
-      if (tag === 'svg' || svgDocument || svgImage) {
+      if (tag === 'svg' || svgDocument || svgImage || element.hasAttribute('data-compositor-reference')) {
         if (style.display === 'none' || rect.width === 0 || rect.height === 0) continue;
         if (tag === 'svg' && style.overflow === 'visible') throw new Error('SVG PNG reference requires the root viewport to clip its artwork');
         if (style.transform !== 'none') throw new Error('SVG PNG reference requires an untransformed host viewport');
@@ -36,7 +36,7 @@
       }
     }
     for (const element of doc.querySelectorAll('body *')) {
-      if (element.closest('svg') || targets.some(target => target.element === element)) continue;
+      if (element.closest('svg') || targets.some(target => target.element.contains(element))) continue;
       outside.push({element, rect: element.getBoundingClientRect().toJSON(), styles: stylesOf(element)});
     }
   };
@@ -44,6 +44,7 @@
   const prepare = index => {
     const target = targets[index];
     target.captureChanges = [];
+    if (target.element.hasAttribute('data-compositor-reference')) return;
     for (let element = target.element; element; element = element.parentElement) {
       const properties = element === target.element ? ['background-color', 'background-image'] : ['background-color', 'background-image', 'opacity'];
       for (const name of properties) {
@@ -76,6 +77,11 @@
     for (const [name, value] of target.styles) image.style.setProperty(name, value, 'important');
     // These SVG effects are already painted into the captured PNG.
     for (const name of ['opacity', 'filter', 'mask', 'clip-path']) image.style.setProperty(name, name === 'opacity' ? '1' : 'none', 'important');
+    if (target.element.hasAttribute('data-compositor-reference')) {
+      // HTML scene captures include the host background in their pixels.
+      image.style.setProperty('background-color', 'transparent', 'important');
+      image.style.setProperty('background-image', 'none', 'important');
+    }
     // The capture already includes the source object's fit and positioning.
     image.style.setProperty('object-fit', 'fill', 'important');
     image.src = 'data:image/png;base64,' + data;

@@ -15,6 +15,20 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceBudgetValidatorTest do
     :ok
   end
 
+  test "canonical clip paths use the shared entry ceiling" do
+    alias NativeElixirPdfUtilities.Validators.CssClipValidator
+    Limits.install(Map.put(Limits.effective(), :max_entries, 2))
+
+    refute CssClipValidator.valid_style?(%{
+             css_clip_path: %{
+               type: :path,
+               operations: [{?M, [0, 0]}, {?L, [1, 0]}, {?Z, []}],
+               rule: :nonzero,
+               reference: :border_box
+             }
+           })
+  end
+
   test "an image read cannot reuse source bytes consumed by another stage" do
     Limits.install(Map.put(Limits.effective(), :max_input_bytes, 5))
 

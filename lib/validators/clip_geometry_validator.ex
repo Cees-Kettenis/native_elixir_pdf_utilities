@@ -124,7 +124,7 @@ defmodule NativeElixirPdfUtilities.Validators.ClipGeometryValidator do
     HtmlValidator.check_render_resource(:max_depth, depth, :layout)
 
     case expression do
-      {:contour, edges} when is_list(edges) ->
+      {kind, edges} when kind in [:contour, :evenodd] and is_list(edges) ->
         HtmlValidator.reserve_render_resource(
           :max_work,
           length(edges) + 1,

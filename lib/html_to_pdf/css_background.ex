@@ -47,7 +47,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBackground do
              not is_map_key(style, :background_repeats) and
              not is_map_key(style, :background_origins) and
              not is_map_key(style, :background_clips) and
-             not is_map_key(style, :background_attachments) ->
+             not is_map_key(style, :background_attachments) and
+             not is_map_key(style, :background_blend_modes) ->
         false
 
       _ ->
@@ -55,13 +56,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBackground do
           Map.has_key?(style, :background_sizes) or Map.has_key?(style, :background_repeats) or
           Map.get(style, :background_origins, [:padding_box]) != [:padding_box] or
           Map.get(style, :background_clips, [:border_box]) != [:border_box] or
-          Map.get(style, :background_attachments, [:scroll]) != [:scroll]
+          Map.get(style, :background_attachments, [:scroll]) != [:scroll] or
+          Map.get(style, :background_blend_modes, [:Normal]) != [:Normal]
     end
   end
 
   @doc "Paints the color below independent image layers and keeps physical borders above them."
   @spec boxes(map(), map()) :: [map()]
   def boxes(style, rect) do
+    modes = Map.get(style, :background_blend_modes, [:Normal])
+    surface = if Enum.any?(modes, &(&1 != :Normal)), do: make_ref()
+    outer_scope = %{id: {:background, surface, 0}, opacity: 1.0, mix_blend_mode: :Normal}
+
     images =
       Map.get_lazy(style, :background_images, fn ->
         case Map.get(style, :background_image) do
@@ -98,7 +104,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBackground do
             ),
           origin: cycle(style, :background_origins, [:padding_box], index),
           clip: cycle(style, :background_clips, [:border_box], index),
-          attachment: cycle(style, :background_attachments, [:scroll], index)
+          attachment: cycle(style, :background_attachments, [:scroll], index),
+          blend_scope: %{
+            id: {:background, surface, index + 1},
+            opacity: 1.0,
+            mix_blend_mode: Enum.at(modes, rem(index, length(modes)))
+          }
         }
       end)
 
@@ -121,32 +132,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBackground do
       layers
       |> Enum.reverse()
       |> Enum.flat_map(fn layer ->
-        cond do
-          layer.image == nil ->
-            []
+        boxes =
+          cond do
+            layer.image == nil ->
+              []
 
-          layer.attachment == :fixed ->
-            Process.put(@fixed_context, true)
+            layer.attachment == :fixed ->
+              Process.put(@fixed_context, true)
 
-            marker =
-              rect
-              |> Map.put(:fill_color, {0.0, 0.0, 0.0, 0.0})
-              |> Map.put(:stroke_width, 0.0)
-              |> Map.put(:stroke_color, nil)
-              |> Map.put(:border_widths, @zero)
-              |> Map.delete(:form_control)
-              |> Map.put(:clip, clip(rect, style, layer.clip))
+              marker =
+                rect
+                |> Map.put(:fill_color, {0.0, 0.0, 0.0, 0.0})
+                |> Map.put(:stroke_width, 0.0)
+                |> Map.put(:stroke_color, nil)
+                |> Map.put(:border_widths, @zero)
+                |> Map.delete(:form_control)
+                |> Map.put(:clip, clip(rect, style, layer.clip))
 
-            [
-              Map.put(marker, :css_fixed_background, %{
-                layer: %{layer | attachment: :scroll},
-                style: style
-              })
-            ]
+              [
+                Map.put(marker, :css_fixed_background, %{
+                  layer: %{layer | attachment: :scroll},
+                  style: style
+                })
+              ]
 
-          true ->
-            paint_layer(layer, rect, style, rect)
-        end
+            true ->
+              paint_layer(layer, rect, style, rect)
+          end
+
+        if surface == nil,
+          do: boxes,
+          else:
+            Enum.map(
+              boxes,
+              &Map.put(&1, :css_compositing_scopes, [outer_scope, layer.blend_scope])
+            )
       end)
 
     borders =
@@ -158,6 +178,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBackground do
       if color == [] and borders == [] and Map.get(rect, :form_control) != nil,
         do: [%{rect | fill_color: {0.0, 0.0, 0.0, 0.0}}],
         else: []
+
+    color =
+      if surface == nil,
+        do: color,
+        else: Enum.map(color, &Map.put(&1, :css_compositing_scopes, [outer_scope]))
 
     color ++ artwork ++ borders ++ carrier
   end

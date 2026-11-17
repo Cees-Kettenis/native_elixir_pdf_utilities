@@ -9,8 +9,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBorderImage do
   }
 
   @doc "Paints independent corner, edge and optional center patches without changing layout dimensions."
+  @spec boxes(map(), map(), :border | :mask) :: [map()]
   @spec boxes(map(), map()) :: [map()]
-  def boxes(style, rect) do
+  def boxes(style, rect, mode \\ :border) do
     fields = Map.merge(CssBorderImageValidator.defaults(), style)
 
     outset =
@@ -115,7 +116,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBorderImage do
 
       for row <- 0..2,
           col <- 0..2,
-          fields.border_image_slice.fill or row != 1 or col != 1,
+          mode == :mask or fields.border_image_slice.fill or row != 1 or col != 1,
           reduce: [] do
         boxes ->
           {sx, source_width} = Enum.at(xs, col)
@@ -128,91 +129,112 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBorderImage do
             height: Enum.at(dy, row) - Enum.at(dy, row + 1)
           }
 
-          if source_width > 0 and source_height > 0 and destination.width > 0 and
-               destination.height > 0 do
-            # Edges retain the scale of their perpendicular border width. The
-            # middle uses the top/left scale, then the opposite edge, then 1.
-            horizontal_scale =
-              if row == 1 do
-                cond do
-                  slices.top > 0 and widths.top > 0 -> widths.top / slices.top
-                  slices.bottom > 0 and widths.bottom > 0 -> widths.bottom / slices.bottom
-                  true -> 0.75
-                end
-              else
-                destination.height / source_height
-              end
-
-            vertical_scale =
-              if col == 1 do
-                cond do
-                  slices.left > 0 and widths.left > 0 -> widths.left / slices.left
-                  slices.right > 0 and widths.right > 0 -> widths.right / slices.right
-                  true -> 0.75
-                end
-              else
-                destination.width / source_width
-              end
-
-            xplan =
-              tiles(
-                destination.x,
-                destination.width,
-                source_width * horizontal_scale,
-                if(col == 1, do: repeat_x, else: :stretch)
-              )
-
-            yplan =
-              tiles(
-                destination.y,
-                destination.height,
-                source_height * vertical_scale,
-                if(row == 1, do: repeat_y, else: :stretch)
-              )
-
-            HtmlValidator.check_render_resource(:max_entries, xplan.count * yplan.count, :layout)
-
-            patches =
-              for xi <- 0..(xplan.count - 1),
-                  yi <- 0..(yplan.count - 1),
-                  xplan.count > 0 and yplan.count > 0 do
-                x = xplan.start + xi * xplan.step
-                y = yplan.start + yi * yplan.step
-                scale_x = xplan.size / source_width
-                scale_y = yplan.size / source_height
-
-                %{
-                  type: HtmlValidator.reserve_layout_box(:image),
-                  paint_layer: :container_background,
-                  role: :border_image,
-                  css_paint_role: :border_image,
-                  image: image,
-                  x: x - sx * scale_x,
-                  y: y - (sh - sy - source_height) * scale_y,
-                  width: sw * scale_x,
-                  height: sh * scale_y,
-                  clip: %{
-                    x: max(x, destination.x),
-                    y: max(y, destination.y),
-                    width:
-                      max(
-                        min(x + xplan.size, destination.x + destination.width) -
-                          max(x, destination.x),
-                        0.0
-                      ),
-                    height:
-                      max(
-                        min(y + yplan.size, destination.y + destination.height) -
-                          max(y, destination.y),
-                        0.0
-                      )
-                  }
-                }
-              end
-
-            boxes ++ patches
+          if mode == :mask and row == 1 and col == 1 and not fields.border_image_slice.fill do
+            [
+              Map.merge(rect, %{
+                x: destination.x,
+                y: destination.y,
+                width: destination.width,
+                height: destination.height,
+                fill_color: {1.0, 1.0, 1.0},
+                stroke_color: nil,
+                stroke_width: 0.0,
+                border_radius: 0.0,
+                border_widths: %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+              })
+              | boxes
+            ]
           else
-            boxes
+            if source_width > 0 and source_height > 0 and destination.width > 0 and
+                 destination.height > 0 do
+              # Edges retain the scale of their perpendicular border width. The
+              # middle uses the top/left scale, then the opposite edge, then 1.
+              horizontal_scale =
+                if row == 1 do
+                  cond do
+                    slices.top > 0 and widths.top > 0 -> widths.top / slices.top
+                    slices.bottom > 0 and widths.bottom > 0 -> widths.bottom / slices.bottom
+                    true -> 0.75
+                  end
+                else
+                  destination.height / source_height
+                end
+
+              vertical_scale =
+                if col == 1 do
+                  cond do
+                    slices.left > 0 and widths.left > 0 -> widths.left / slices.left
+                    slices.right > 0 and widths.right > 0 -> widths.right / slices.right
+                    true -> 0.75
+                  end
+                else
+                  destination.width / source_width
+                end
+
+              xplan =
+                tiles(
+                  destination.x,
+                  destination.width,
+                  source_width * horizontal_scale,
+                  if(col == 1, do: repeat_x, else: :stretch)
+                )
+
+              yplan =
+                tiles(
+                  destination.y,
+                  destination.height,
+                  source_height * vertical_scale,
+                  if(row == 1, do: repeat_y, else: :stretch)
+                )
+
+              HtmlValidator.check_render_resource(
+                :max_entries,
+                xplan.count * yplan.count,
+                :layout
+              )
+
+              patches =
+                for xi <- 0..(xplan.count - 1),
+                    yi <- 0..(yplan.count - 1),
+                    xplan.count > 0 and yplan.count > 0 do
+                  x = xplan.start + xi * xplan.step
+                  y = yplan.start + yi * yplan.step
+                  scale_x = xplan.size / source_width
+                  scale_y = yplan.size / source_height
+
+                  %{
+                    type: HtmlValidator.reserve_layout_box(:image),
+                    paint_layer: :container_background,
+                    role: :border_image,
+                    css_paint_role: :border_image,
+                    image: image,
+                    x: x - sx * scale_x,
+                    y: y - (sh - sy - source_height) * scale_y,
+                    width: sw * scale_x,
+                    height: sh * scale_y,
+                    clip: %{
+                      x: max(x, destination.x),
+                      y: max(y, destination.y),
+                      width:
+                        max(
+                          min(x + xplan.size, destination.x + destination.width) -
+                            max(x, destination.x),
+                          0.0
+                        ),
+                      height:
+                        max(
+                          min(y + yplan.size, destination.y + destination.height) -
+                            max(y, destination.y),
+                          0.0
+                        )
+                    }
+                  }
+                end
+
+              boxes ++ patches
+            else
+              boxes
+            end
           end
       end
     else

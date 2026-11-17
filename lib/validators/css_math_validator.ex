@@ -78,6 +78,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     end
   end
 
+  @doc "Resolves a CSS angle calculation in radians, including the unitless zero invariant."
+  @spec angle(String.t()) :: {:ok, number()} | :error
+  def angle(source) do
+    case evaluate(source, %{}) do
+      {:ok, n, type} when is_number(n) ->
+        if type == %{angle: 1} or (n == 0 and type == %{}), do: {:ok, n}, else: :error
+
+      _ ->
+        :error
+    end
+  end
+
   @doc "Applies a property's numeric range, rejecting out-of-range literals and clamping valid calculations."
   @spec scalar_in_range(String.t(), :number | :integer, number(), number() | nil) ::
           {:ok, number()} | :error

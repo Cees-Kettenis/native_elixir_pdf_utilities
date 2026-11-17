@@ -1597,12 +1597,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp inherit_stacking_context(elements, style) do
     entry =
       {style._stacking_order,
-       if(is_integer(:maps.get(:z_index, style, nil)), do: style.z_index, else: 0)}
+       NativeElixirPdfUtilities.Validators.CssStackingValidator.level(style)}
 
     Enum.map(elements, fn element ->
       contexts = :maps.get(:_stacking_contexts, element.style, [])
       contexts = if List.first(contexts) == entry, do: contexts, else: [entry | contexts]
-      %{element | style: Map.put(element.style, :_stacking_contexts, contexts)}
+
+      inherited =
+        if NativeElixirPdfUtilities.Validators.CssCompositingValidator.group?(style) do
+          scope = %{
+            id: style._stacking_order,
+            opacity: Map.get(style, :opacity, 1.0),
+            mix_blend_mode: Map.get(style, :mix_blend_mode, :Normal)
+          }
+
+          [scope | Map.get(element.style, :_css_compositing_contexts, [])]
+        else
+          Map.get(element.style, :_css_compositing_contexts, [])
+        end
+
+      element_style = Map.put(element.style, :_stacking_contexts, contexts)
+
+      element_style =
+        if inherited == [],
+          do: element_style,
+          else: Map.put(element_style, :_css_compositing_contexts, inherited)
+
+      %{element | style: element_style}
     end)
   end
 
@@ -2790,7 +2811,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       positioned_children ->
         with {:ok, containing_block} <-
-               positioned_containing_block(style, used_bounds),
+               positioned_containing_block(
+                 style,
+                 used_bounds,
+                 Enum.any?(
+                   positioned_children,
+                   &NativeElixirPdfUtilities.Validators.CssMotionValidator.active?(&1.style)
+                 )
+               ),
              {:ok, positioned_boxes} <-
                positioned_child_boxes(positioned_children, containing_block, boxes) do
           positioned_boxes =
@@ -2878,7 +2906,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   # Absolute offsets resolve against the used padding box, including tables
   # and list items. Box layout exports the border box before relative movement.
-  defp positioned_containing_block(style, bounds) do
+  defp positioned_containing_block(style, bounds, motion?) do
     border = Map.get(style, :border_widths, edges(0.0))
 
     {:ok,
@@ -2889,7 +2917,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
        top: bounds.top - border.top,
        width: max(bounds.width - border.left - border.right, 0.0),
        height: max(bounds.height - border.top - border.bottom, 0.0)
-     }}
+     }
+     |> then(fn box ->
+       if motion?,
+         do:
+           Map.put(
+             box,
+             :offset_reference,
+             Map.merge(bounds, %{
+               offset_box_style:
+                 Map.take(style, [:border_widths, :padding, :margin, :border_radius]),
+               offset_position_box: :padding_box
+             })
+           ),
+         else: box
+     end)}
   end
 
   defp resolve_fit_content_style(block, available_width) do
@@ -3089,6 +3131,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         offsets = Map.get(style, :offsets, edges(:auto))
 
         style = resolve_fit_content_style(%{child | style: style}, containing_block.width).style
+
+        style =
+          if NativeElixirPdfUtilities.Validators.CssMotionValidator.active?(style),
+            do:
+              style
+              |> Map.put(
+                :_offset_reference,
+                Map.get(containing_block, :offset_reference, containing_block)
+              )
+              |> Map.put(:_offset_reference_pending, true),
+            else: style
 
         style =
           style
@@ -3550,6 +3603,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp layout_scoped_block_content(children, style, x, y, width, metadata) do
     children = used_edge_children(children, style, width)
+
+    children =
+      if Enum.any?(
+           children,
+           &NativeElixirPdfUtilities.Validators.CssMotionValidator.active?(&1.style)
+         ) do
+        reference = %{
+          x: x,
+          top: y,
+          width: width,
+          height:
+            resolved_content_size(
+              style,
+              :height,
+              Map.get(style, :_containing_height),
+              Map.get(style, :_containing_height, 0.0)
+            ) || 0.0
+        }
+
+        border = Map.get(style, :border_widths, edges(0.0))
+        padding = Map.get(style, :padding, edges(0.0))
+
+        reference =
+          %{
+            reference
+            | x: reference.x - border.left - padding.left,
+              top: reference.top + border.top + padding.top,
+              width: reference.width + border.left + border.right + padding.left + padding.right,
+              height: reference.height + border.top + border.bottom + padding.top + padding.bottom
+          }
+          |> Map.put(
+            :offset_box_style,
+            Map.take(style, [:border_widths, :padding, :margin, :border_radius])
+          )
+          |> Map.put(:offset_position_box, :content_box)
+
+        Enum.map(children, fn child ->
+          if NativeElixirPdfUtilities.Validators.CssMotionValidator.active?(child.style),
+            do: %{child | style: Map.put(child.style, :_offset_reference, reference)},
+            else: child
+        end)
+      else
+        children
+      end
+
     key = {__MODULE__, :svg_containing_height}
     previous = Process.get(key)
     height = resolved_content_size(style, :height, previous, nil)
@@ -7785,7 +7883,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp nested_flex_item_style(style, item) do
     style
-    |> Map.delete(:css_transform)
+    |> Map.drop([:css_transform, :css_translate, :css_rotate, :css_scale])
     |> Map.put(:margin, edges(0.0))
     |> Map.put(:width, declared_size_for_border_box(style, :width, item.box_width))
     |> Map.put(:height, declared_size_for_border_box(style, :height, item.box_height))
@@ -11621,7 +11719,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         Enum.any?(line, fn run ->
           :maps.get(:inline_positioning_contexts, run, []) != [] or
             :maps.get(:position, run.style, :static) == :relative or
-            :maps.get(:css_transform, run.style, :none) != :none
+            CssTransformValidator.transformed?(run.style)
         end)
 
       if overflow_x != :visible and shifted? do
@@ -11701,7 +11799,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         bounds =
           if :maps.get(:type, run, nil) in [:inline_block, :inline_image] and
-               :maps.get(:css_transform, run.style, :none) != :none do
+               CssTransformValidator.transformed?(run.style) do
             {:ok, scope} =
               CssTransformValidator.prepare_scope(run.style, %{
                 x: x + dx,
@@ -13466,7 +13564,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           # and inline blocks already mark their border box above; SVG owns
           # its source transform inside the converted image.
           boxes =
-            if measured != nil and :maps.get(:css_transform, style, :none) != :none and
+            if measured != nil and CssTransformValidator.transformed?(style) and
                  not Enum.any?(boxes, &(Map.get(&1, :css_transform_border_box) != nil)) do
               margin = Map.get(style, :margin, edges(0.0))
 
@@ -13835,7 +13933,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp shift_positioned_inline(boxes, style, available_width, containing_height) do
-    if :maps.get(:position, style, nil) == :sticky do
+    if :maps.get(:position, style, :static) in [:static, :sticky] do
       boxes
     else
       {delta_x, delta_y} = relative_translation(style, available_width, containing_height)
@@ -15262,34 +15360,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
               end
 
             child_runs =
-              case :maps.get(:position, style, :static) do
-                position when position in [:relative, :sticky] ->
-                  context = %{
-                    id: System.unique_integer([:positive]),
-                    style: style,
-                    positioned_children: :maps.get(:positioned_children, element, [])
-                  }
+              if :maps.get(:position, style, :static) in [:relative, :sticky] or
+                   NativeElixirPdfUtilities.Validators.CssCompositingValidator.group?(style) do
+                context = %{
+                  id: System.unique_integer([:positive]),
+                  style: style,
+                  positioned_children: :maps.get(:positioned_children, element, [])
+                }
 
-                  case child_runs do
-                    [] ->
-                      [
-                        %{
-                          type: :inline_positioning_marker,
-                          text: "",
-                          style: text_style(style),
-                          inline_positioning_contexts: [context]
-                        }
-                      ]
+                case child_runs do
+                  [] ->
+                    [
+                      %{
+                        type: :inline_positioning_marker,
+                        text: "",
+                        style: text_style(style),
+                        inline_positioning_contexts: [context]
+                      }
+                    ]
 
-                    child_runs ->
-                      Enum.map(child_runs, fn run ->
-                        contexts = [context | :maps.get(:inline_positioning_contexts, run, [])]
-                        Map.put(run, :inline_positioning_contexts, contexts)
-                      end)
-                  end
-
-                _ ->
-                  child_runs
+                  child_runs ->
+                    Enum.map(child_runs, fn run ->
+                      contexts = [context | :maps.get(:inline_positioning_contexts, run, [])]
+                      Map.put(run, :inline_positioning_contexts, contexts)
+                    end)
+                end
+              else
+                child_runs
               end
 
             child_runs =

@@ -850,9 +850,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
       page_size: Keyword.fetch!(render_opts, :page_size),
       margin: Keyword.get(render_opts, :margin),
       dpi: dpi,
-      reference_mode: Keyword.get(opts, :svg_reference),
+      reference_mode:
+        if(Keyword.get(opts, :compositor_reference) == :png,
+          do: :compositor_png,
+          else: Keyword.get(opts, :svg_reference)
+        ),
       reference_scale:
-        if(Keyword.get(opts, :svg_reference) == :png,
+        if(
+          Keyword.get(opts, :svg_reference) == :png or
+            Keyword.get(opts, :compositor_reference) == :png,
           do: NativeElixirPdfUtilities.Limits.get(:svg_raster_scale)
         ),
       browser: command_output!(chromium_bin, ["--version"]),
@@ -1363,7 +1369,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
   end
 
   defp render_chromium_pdf!(chromium_bin, fixture_path, output_path, opts, render_opts) do
-    if Keyword.get(opts, :svg_reference) == :png do
+    if Keyword.get(opts, :svg_reference) == :png or
+         Keyword.get(opts, :compositor_reference) == :png do
       {:ok, {width, height}} =
         NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.normalize_page_size(
           Keyword.fetch!(render_opts, :page_size)
@@ -1381,7 +1388,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         %{
           width: (width - margin.left - margin.right) / 0.75,
           height: (height - margin.top - margin.bottom) / 0.75,
-          scale: NativeElixirPdfUtilities.Limits.get(:svg_raster_scale)
+          scale: NativeElixirPdfUtilities.Limits.get(:svg_raster_scale),
+          mode: if(Keyword.get(opts, :compositor_reference) == :png, do: :compositor, else: :svg)
         },
         request_observer: self()
       )

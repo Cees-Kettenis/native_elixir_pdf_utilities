@@ -255,7 +255,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
         if reference,
           do:
             Telemetry.measure(:svg_reference, %{}, fn ->
-              raster_svg_reference(state, session, output, pdf)
+              raster_svg_reference(state, session, output, pdf, reference)
             end),
           else: {pdf, state}
 
@@ -432,14 +432,20 @@ defmodule NativeElixirPdfUtilities.TestSupport.ChromiumPool do
     %{state | events: [message | state.events]}
   end
 
-  defp raster_svg_reference(state, session, output, pdf) do
+  defp raster_svg_reference(state, session, output, pdf, reference) do
     # Inactive tabs can wait indefinitely for a screenshot compositor frame.
     # Keep activation explicit at the screenshot boundary.
     {_, state} = command(state, "Page.bringToFront", %{}, session)
     File.write!(Path.rootname(output) <> "-vector.pdf", Base.decode64!(pdf["data"]))
 
-    {targets, state} =
-      evaluate(state, session, File.read!(Path.join(__DIR__, "chromium_svg_reference.js")))
+    script = File.read!(Path.join(__DIR__, "chromium_svg_reference.js"))
+
+    script =
+      if reference[:mode] == :compositor,
+        do: "globalThis.__nativePdfCompositorReference = true;" <> script,
+        else: script
+
+    {targets, state} = evaluate(state, session, script)
 
     if targets == [], do: raise("Chrome SVG PNG reference found no painted SVG viewports")
     File.write!(Path.join(Path.dirname(output), "svg-viewports.json"), :json.encode(targets))

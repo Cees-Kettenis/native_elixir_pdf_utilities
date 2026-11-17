@@ -614,7 +614,29 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
                                                                                              number},
                                                                                             acc ->
           {width, height} = page.size
-          collect_positions(page.boxes, number, {1, 1, 0, 0, {0, 0, width, height}, height}, acc)
+
+          collect_positions(
+            page.boxes,
+            number,
+            if(
+              NativeElixirPdfUtilities.Validators.CssProjectionValidator.scoped_boxes?(
+                page.boxes
+              ),
+              do: %{
+                transform: {1, 0, 0, 1, 0, 0},
+                clip: {0, 0, width, height},
+                height: height,
+                css_projection_matrix:
+                  NativeElixirPdfUtilities.HtmlToPdf.ProjectionGeometry.identity(),
+                css_projection_viewport: {0, 0, width, height},
+                css_projection_hidden: false,
+                css_projection_orientation:
+                  NativeElixirPdfUtilities.HtmlToPdf.ProjectionGeometry.identity()
+              },
+              else: {1, 1, 0, 0, {0, 0, width, height}, height}
+            ),
+            acc
+          )
         end)
 
       missing = Enum.find(expected, &(not Map.has_key?(positions, &1.identity)))
@@ -726,7 +748,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
               box.x + target.dx,
               box.y + target.dy,
               page,
-              transform,
+              target_transform(composition),
               target_clip
             )
 
@@ -735,8 +757,60 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
 
       case box do
         %{type: :drawing_group, boxes: children} ->
+          parent = composition
           composition = DrawingGeometry.compose_group(box, composition)
-          {transform, clip, _height} = DrawingGeometry.composition_parts(composition)
+
+          composition =
+            case parent do
+              %{css_projection_matrix: matrix, css_projection_viewport: viewport} ->
+                {_own, child} =
+                  case NativeElixirPdfUtilities.Validators.CssProjectionValidator.compose_group(
+                         matrix,
+                         box,
+                         elem(DrawingGeometry.composition_parts(parent), 2)
+                       ) do
+                    {:ok, matrices} -> matrices
+                    error -> throw({:render_resource_limit, error})
+                  end
+
+                {facing, oriented_child} =
+                  NativeElixirPdfUtilities.HtmlToPdf.ProjectionGeometry.group_matrices(
+                    parent.css_projection_orientation,
+                    box,
+                    elem(DrawingGeometry.composition_parts(parent), 2)
+                  )
+
+                projection =
+                  Map.get(box, :css_projection, %{
+                    preserve: false,
+                    perspective: NativeElixirPdfUtilities.HtmlToPdf.ProjectionGeometry.identity()
+                  })
+
+                orientation =
+                  if projection.preserve, do: oriented_child, else: projection.perspective
+
+                {native, clip, height} = DrawingGeometry.composition_parts(composition)
+
+                hidden =
+                  parent.css_projection_hidden or
+                    (get_in(box, [:css_projection, :backface]) == :hidden and
+                       NativeElixirPdfUtilities.HtmlToPdf.ProjectionGeometry.backface?(facing))
+
+                %{
+                  transform: DrawingGeometry.affine_matrix(native),
+                  clip: clip,
+                  height: height,
+                  css_projection_matrix: child,
+                  css_projection_viewport: viewport,
+                  css_projection_hidden: hidden,
+                  css_projection_orientation: orientation
+                }
+
+              _ ->
+                composition
+            end
+
+          {_transform, clip, _height} = DrawingGeometry.composition_parts(composition)
 
           positions =
             Enum.reduce(Map.get(box, :link_document_targets, []), positions, fn target,
@@ -744,7 +818,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
               put_visible_target_position(
                 positions,
                 target.identity,
-                target_position(target.x, target.y, page, transform, clip)
+                target_position(target.x, target.y, page, target_transform(composition), clip)
               )
             end)
 
@@ -759,7 +833,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
                 Map.put_new(
                   beginnings,
                   scope,
-                  target_position(origin.x, origin.y, page, transform, clip)
+                  target_position(origin.x, origin.y, page, target_transform(composition), clip)
                 )
             end
 
@@ -796,14 +870,50 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlLinkValidator do
     end)
   end
 
+  defp target_transform(composition) do
+    case composition do
+      %{
+        css_projection_matrix: matrix,
+        css_projection_viewport: viewport,
+        css_projection_hidden: hidden
+      } ->
+        %{
+          projection: matrix,
+          affine: elem(DrawingGeometry.composition_parts(composition), 0),
+          viewport: viewport,
+          hidden: hidden
+        }
+
+      _ ->
+        elem(DrawingGeometry.composition_parts(composition), 0)
+    end
+  end
+
   defp target_position(x, y, page, transform, clip) do
-    {x, y} = DrawingGeometry.transform_point(x, y, transform)
+    {x, y, visible} =
+      case transform do
+        %{projection: matrix, affine: affine, viewport: viewport, hidden: hidden} ->
+          {sx, sy} = DrawingGeometry.transform_point(x, y, affine)
+
+          {px, py, _, w} =
+            NativeElixirPdfUtilities.HtmlToPdf.ProjectionGeometry.point(matrix, x, y)
+
+          if w > 0 do
+            {px / w, py / w,
+             not hidden and DrawingGeometry.clip_contains?(clip, sx, sy) and
+               DrawingGeometry.clip_contains?(viewport, px / w, py / w)}
+          else
+            {sx, sy, false}
+          end
+
+        _ ->
+          {x, y} = DrawingGeometry.transform_point(x, y, transform)
+          {x, y, DrawingGeometry.clip_contains?(clip, x, y)}
+      end
+
     HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(x), :pagination)
     HtmlValidator.check_render_resource(:max_numeric_magnitude, abs(y), :pagination)
-
-    if DrawingGeometry.clip_contains?(clip, x, y),
-      do: {:xyz, page, x, y},
-      else: {:unavailable, page, x, y}
+    if visible, do: {:xyz, page, x, y}, else: {:unavailable, page, x, y}
   end
 
   defp resolve_boxes(boxes, positions, beginnings) do
