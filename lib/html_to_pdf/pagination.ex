@@ -91,7 +91,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   @doc "Fragments already validated layout boxes into column viewports, retaining link and transform scopes for final page placement."
   @spec fragment_columns([map()], number(), number()) :: {:ok, [page()]} | {:error, term()}
-  def fragment_columns(boxes, width, height) do
+  @spec fragment_columns([map()], number(), number(), map() | nil) ::
+          {:ok, [page()]} | {:error, term()}
+  def fragment_columns(boxes, width, height, publishing \\ nil) do
     with :ok <-
            NativeElixirPdfUtilities.Validators.CssColumnsValidator.validate_fragment_geometry(
              width,
@@ -130,7 +132,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         {width, height},
         boxes,
         %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0},
-        %{},
+        %{publishing_context: publishing},
         [],
         :columns
       )
@@ -265,7 +267,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     pages =
       groups
       |> keep_table_groups(headers, content_height)
-      |> groups_to_pages(headers, page_size, margins)
+      |> keep_avoided_breaks(content_height, context)
+      |> groups_to_pages(
+        headers,
+        page_size,
+        margins,
+        Map.get(layout_tree, :publishing_context),
+        pagination_order
+      )
       |> restore_atomic_overflow(
         Enum.reverse(atomic_overflow),
         atomic_anchor,
@@ -286,7 +295,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end)
 
     with {:ok, pages} <-
-           if(context != :pages,
+           if(context != :pages or Map.get(layout_tree, :publishing_defer_finalization, false),
              do: {:ok, pages},
              else:
                finalize(
@@ -481,8 +490,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
                     widths = %{
                       widths
-                      | top: if(index == first_page, do: widths.top, else: 0.0),
-                        bottom: if(index == last_page, do: widths.bottom, else: 0.0)
+                      | top:
+                          if(
+                            index == first_page or
+                              Map.get(paint, :box_decoration_break) == "clone",
+                            do: widths.top,
+                            else: 0.0
+                          ),
+                        bottom:
+                          if(
+                            index == last_page or Map.get(paint, :box_decoration_break) == "clone",
+                            do: widths.bottom,
+                            else: 0.0
+                          )
                     }
 
                     paint =
@@ -516,7 +536,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                     }
 
                     paint =
-                      if (index != first_page or index != last_page) and
+                      if Map.get(paint, :box_decoration_break) != "clone" and
+                           (index != first_page or index != last_page) and
                            (paint.border_radius > 0 or Map.has_key?(paint, :border_radii)) do
                         radii =
                           Map.get_lazy(paint, :border_radii, fn ->
@@ -610,6 +631,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
                 |> Map.merge(
                   Map.take(paint, [pagination_order, :fieldset_paint_id, :fieldset_ancestors])
                 )
+              end)
+              |> Enum.reject(fn box ->
+                box.type == :rect and Map.get(box, :fill_color) == nil and
+                  not NativeElixirPdfUtilities.Validators.WriterValidator.visible_border?(box)
               end)
             end)
 
@@ -1017,7 +1042,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
-  defp groups_to_pages(groups, headers, page_size, margins) do
+  defp groups_to_pages(groups, headers, page_size, margins, publishing, pagination_order) do
     {_width, page_height} = page_size
     content_top = page_height - margins.top
 
@@ -1027,7 +1052,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       current_boxes: [],
       current_y: content_top,
       position_delta: 0.0,
-      clip_origins: %{}
+      clip_origins: %{},
+      pagination_order: pagination_order
+    }
+
+    initial_state =
+      if publishing == nil,
+        do: initial_state,
+        else: Map.merge(initial_state, %{publishing: publishing, base_margins: margins})
+
+    initial_state = %{
+      initial_state
+      | current_y: page_height - current_margins(initial_state, margins).top
     }
 
     final_state =
@@ -1068,6 +1104,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   # Consume actual capacity so following content keeps its source offset even
   # when the reservation alone crosses a page boundary.
   defp consume_block_space(group, state, page_size, margins) do
+    margins = current_margins(state, margins)
     reserve = Map.get(group, :placement_height, group.height)
     full_height = elem(page_size, 1) - margins.top - margins.bottom
 
@@ -1144,6 +1181,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp place_group(group, state, headers, page_size, margins) do
+    margins = current_margins(state, margins)
+
+    state =
+      case state do
+        %{publishing: publishing} ->
+          targets = Enum.flat_map(group.boxes, &Map.get(&1, :publishing_targets, []))
+          minimum = Enum.reduce(targets, 1, &max(Map.get(publishing.minimum_pages, &1, 1), &2))
+          advance_to_page(state, minimum - publishing.page_offset, page_size, margins)
+
+        _ ->
+          state
+      end
+
+    {group, state} =
+      if group.break_before in [:left, :right, :recto, :verso],
+        do:
+          {%{group | break_before: :auto},
+           force_break(group.break_before, state, page_size, margins)},
+        else: {group, state}
+
     parallel? = Enum.any?(group.boxes, &Map.has_key?(&1, :parallel_item_bounds))
 
     {group, state} =
@@ -1168,6 +1225,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp place_parallel_group(group, source_top, units, state, headers, page_size, margins) do
+    margins = current_margins(state, margins)
     capacity = max(target_group_top(state, %{group | top: source_top}) - margins.bottom, 0.0)
 
     cut =
@@ -1249,6 +1307,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp place_ordinary_group(group, state, headers, page_size, margins) do
+    margins = current_margins(state, margins)
     content_height = elem(page_size, 1) - margins.top - margins.bottom
 
     group =
@@ -1314,6 +1373,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   # their whole height to a fresh page. Every cut comes from canonical native
   # line/atomic geometry, and each continuation reserves the repeated heading.
   defp place_table_row(group, source_top, state, headers, page_size, margins) do
+    margins = current_margins(state, margins)
     remaining = source_top - group.bottom
     target_top = target_group_top(state, %{group | top: source_top})
     capacity = max(target_top - margins.bottom, 0.0)
@@ -1411,6 +1471,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   end
 
   defp place_whole_group(group, state, headers, page_size, margins) do
+    margins = current_margins(state, margins)
+
     state =
       case Map.get(group, :break_before) do
         :page ->
@@ -1422,6 +1484,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
           state
       end
 
+    margins = current_margins(state, margins)
     target_top = target_group_top(state, group)
 
     group_bottom = target_top - Map.get(group, :placement_height, group.height)
@@ -1509,8 +1572,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       end
 
     case Map.get(group, :break_after) do
-      :page -> page_break(state, page_size, margins)
-      _ -> state
+      :page ->
+        page_break(state, page_size, margins)
+
+      value when value in [:left, :right, :recto, :verso] ->
+        force_break(value, state, page_size, margins)
+
+      _ ->
+        state
     end
   end
 
@@ -1569,24 +1638,88 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end
   end
 
-  defp page_break(state, page_size, margins) do
-    {_width, page_height} = page_size
-    content_top = page_height - margins.top
+  defp current_margins(state, margins) do
+    case state do
+      %{publishing: publishing, base_margins: base} ->
+        reserve =
+          Map.get(publishing.reserves, publishing.page_offset + state.page_count + 1, %{
+            top: 0.0,
+            bottom: 0.0
+          })
 
+        %{base | top: base.top + reserve.top, bottom: base.bottom + reserve.bottom}
+
+      _ ->
+        margins
+    end
+  end
+
+  defp advance_to_page(state, minimum, page_size, margins) do
+    if state.page_count + 1 >= minimum do
+      state
+    else
+      state =
+        if state.current_boxes == [],
+          do: mark_blank(state),
+          else: state
+
+      advance_to_page(page_break(state, page_size, margins), minimum, page_size, margins)
+    end
+  end
+
+  defp force_break(value, state, page_size, margins) do
+    state = page_break(state, page_size, margins)
+    rtl = get_in(state, [:publishing, :direction]) == :rtl
+    desired_odd = value in [:right, :recto]
+    desired_odd = if rtl and value in [:recto, :verso], do: not desired_odd, else: desired_odd
+
+    offset =
+      case state do
+        %{publishing: p} -> p.page_offset
+        _ -> 0
+      end
+
+    if rem(offset + state.page_count + 1, 2) == 1 == desired_odd do
+      state
+    else
+      page_break(mark_blank(state), page_size, margins)
+    end
+  end
+
+  defp mark_blank(state) do
+    HtmlValidator.reserve_render_resource(:max_entries, 1, :pagination)
+
+    blank =
+      %{
+        type: :flow_marker,
+        role: :publishing_blank,
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0
+      }
+      |> Map.put(state.pagination_order, -1)
+
+    %{state | current_boxes: [blank]}
+  end
+
+  defp page_break(state, page_size, margins) do
     pages =
       case state.current_boxes do
         [] -> state.pages
         boxes -> [boxes | state.pages]
       end
 
-    %{
+    state = %{
       state
       | pages: pages,
         page_count: state.page_count + if(state.current_boxes == [], do: 0, else: 1),
         current_boxes: [],
-        current_y: content_top,
         position_delta: nil
     }
+
+    margins = current_margins(state, margins)
+    %{state | current_y: elem(page_size, 1) - margins.top}
   end
 
   @doc "Finds a column's minimum height for fitting avoided groups, including their decorative edge allocations."
@@ -1703,7 +1836,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       row_group: Map.get(first, :row_group),
       row_group_avoid: Map.get(first, :row_group_avoid, false),
       table_caption_side: Map.get(first, :table_caption_side),
-      block_placement_height: Map.get(first, :block_placement_height)
+      block_placement_height: Map.get(first, :block_placement_height),
+      css_margin_break: Enum.find_value(boxes, &Map.get(&1, :css_margin_break))
     }
     |> Map.put(:_hyphenation_fragment_end, Map.get(first, :_hyphenation_fragment_end, :none))
     |> Map.put(:_initial_letter_lines, Map.get(first, :_initial_letter_lines, 0))
@@ -1996,6 +2130,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
+  defp keep_avoided_breaks(groups, height, context) do
+    avoids = if context == :columns, do: [:avoid, :avoid_column], else: [:avoid, :avoid_page]
+    forced = [:page, :column, :left, :right, :recto, :verso]
+
+    {groups, _} =
+      Enum.reduce(Enum.reverse(groups), {[], nil}, fn group, {result, next} ->
+        group =
+          if next != nil and (group.break_after in avoids or next.break_before in avoids) and
+               group.break_after not in forced and next.break_before not in forced do
+            required =
+              max(
+                group.height,
+                group.top - next.top + Map.get(next, :placement_height, next.height)
+              )
+
+            if required <= height,
+              do:
+                Map.put(
+                  group,
+                  :placement_height,
+                  max(required, Map.get(group, :placement_height, group.height))
+                ),
+              else: group
+          else
+            group
+          end
+
+        {[group | result], group}
+      end)
+
+    groups
+  end
+
   defp page_break_box?(box) do
     case box do
       %{type: :page_break} -> true
@@ -2041,8 +2208,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp target_group_top(state, group) do
     case state.position_delta do
-      position_delta when is_number(position_delta) -> group.top + position_delta
-      nil -> state.current_y
+      position_delta when is_number(position_delta) ->
+        group.top + position_delta
+
+      nil ->
+        case Map.get(group, :css_margin_break) do
+          {"keep", amount} when is_number(amount) -> state.current_y - amount
+          _ -> state.current_y
+        end
     end
   end
 end

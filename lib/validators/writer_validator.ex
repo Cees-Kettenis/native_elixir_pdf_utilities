@@ -895,7 +895,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 valid_clip_rectangle?(origin)
           end
 
-        if frame_valid? and bounded_number?(width) and bounded_number?(height) do
+        if frame_valid? and bounded_number?(width) and bounded_number?(height) and
+             NativeElixirPdfUtilities.Validators.CssPageValidator.valid_pdf_boxes?(page) do
           page_height = Map.get(page, :paint_frame, %{height: height}).height
 
           case validate_actual_text_spans(boxes) do
@@ -1177,7 +1178,22 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           finish =
             if scopes == [], do: finish, else: Map.put(finish, :css_compositing_scopes, scopes)
 
-          {[start, children, finish], count}
+          case Map.fetch(box, :actual_text) do
+            :error ->
+              {[start, children, finish], count}
+
+            {:ok, text} ->
+              HtmlValidator.reserve_render_resource(:max_output_bytes, byte_size(text), :writer)
+              HtmlValidator.check_render_resource(:max_entries, count + 2, :writer)
+
+              {[
+                 %{type: :actual_text_start, text: text},
+                 start,
+                 children,
+                 finish,
+                 %{type: :actual_text_end}
+               ], count + 2}
+          end
 
         %{type: :flow_marker} ->
           count = count + 1
@@ -1628,6 +1644,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           spans = validate_actual_text_spans(children)
 
           cond do
+            Map.has_key?(box, :actual_text) and
+                not (is_binary(box.actual_text) and String.valid?(box.actual_text)) ->
+              drawing_group_error("drawing_group ActualText must be valid UTF-8")
+
             spans != :ok ->
               spans
 

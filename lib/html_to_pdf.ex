@@ -31,7 +31,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   alias NativeElixirPdfUtilities.HtmlToPdf.Layout
   alias NativeElixirPdfUtilities.HtmlToPdf.PageFurniture
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
-  alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
   alias NativeElixirPdfUtilities.Diagnostics
@@ -379,10 +378,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
                styled_tree,
                Keyword.get(effective_opts, :unsupported_glyphs, :replace)
              ),
-           {:ok, layout_tree} <-
-             Font.with_measurement_cache(fn -> layout_document(styled_tree, effective_opts) end),
-           {:ok, layout_tree} <- Layout.resolve_images(layout_tree),
-           {:ok, pages} <- Pagination.paginate(layout_tree, effective_opts),
+           {:ok, layout_tree, pages} <-
+             NativeElixirPdfUtilities.HtmlToPdf.PagedDocument.prepare(
+               styled_tree,
+               effective_opts,
+               opts,
+               &layout_document/2
+             ),
            effective_opts <- prepared_outline_options(pages, effective_opts),
            {:ok, pages} <-
              PageFurniture.decorate(pages, layout_tree, effective_opts, image_budget) do
@@ -400,10 +402,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   defp prepared_outline_options(pages, opts) do
     outlines =
       case Keyword.get(opts, :outlines) do
-        :headings -> OutlineDetector.from_paginated_headings(pages)
-        false -> []
-        nil -> []
-        outlines -> outlines
+        :headings ->
+          OutlineDetector.from_paginated_headings(pages)
+
+        false ->
+          []
+
+        nil ->
+          if Map.has_key?(hd(pages), :page_name),
+            do: OutlineDetector.from_css_bookmarks(pages),
+            else: []
+
+        outlines ->
+          outlines
       end
 
     Keyword.put(opts, :outlines, outlines)

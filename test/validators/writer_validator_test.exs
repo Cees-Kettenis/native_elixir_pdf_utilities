@@ -4,6 +4,24 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidatorTest do
   alias NativeElixirPdfUtilities.Validators.WriterValidator
   alias NativeElixirPdfUtilities.HtmlToPdf.{Font, PdfWriter}
 
+  test "drawing group accessible text must be valid UTF-8" do
+    drawing = %{
+      type: :drawing_group,
+      x: 0,
+      y: 0,
+      width: 12,
+      height: 12,
+      transform: {1, 0, 0, 1, 0, 0},
+      boxes: [],
+      actual_text: <<255>>
+    }
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} =
+             WriterValidator.validate_drawing_group(drawing)
+
+    assert diagnostic.message =~ "ActualText"
+  end
+
   test "generated containers diagnose capacity before allocating their entries" do
     maximum = NativeElixirPdfUtilities.Limits.get(:max_entries)
 

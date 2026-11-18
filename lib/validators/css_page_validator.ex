@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+  alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @page_context_properties [
     "background",
@@ -34,6 +35,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
     "color",
     "counter-increment",
     "counter-reset",
+    "counter-set",
     "direction",
     "font",
     "font-family",
@@ -212,9 +214,374 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
     end
   end
 
+  @margin_boxes ~w(top-left-corner top-left top-center top-right top-right-corner bottom-left-corner bottom-left bottom-center bottom-right bottom-right-corner left-top left-middle left-bottom right-top right-middle right-bottom)
+
+  @doc "Returns the sixteen fixed CSS page-margin box names."
+  @spec margin_boxes() :: [String.t()]
+  def margin_boxes, do: @margin_boxes
+
+  @doc "Prepares named page selectors, page descriptors and nested margin boxes."
+  @spec rules(String.t()) :: {:ok, [map()]} | {:error, term()}
+  def rules(css) do
+    if not Regex.match?(~r/@page/iu, css) do
+      {:ok, []}
+    else
+      alias NativeElixirPdfUtilities.Validators.{CssSyntaxValidator, CssCounterStyleValidator}
+
+      css
+      |> CssSyntaxValidator.rules()
+      |> Enum.filter(&Regex.match?(~r/^@page(?:\s|:|$)/iu, String.trim(&1.selectors)))
+      |> Enum.reduce_while({:ok, []}, fn rule, {:ok, pages} ->
+        selector =
+          rule.selectors |> String.trim() |> String.slice(5..-1//1) |> String.trim()
+
+        selectors = String.split(selector, ",")
+
+        parsed =
+          Enum.map(selectors, fn source ->
+            [name | pseudo] = String.split(String.trim(source), ":")
+
+            if (name == "" or (name != "auto" and CssCounterStyleValidator.identifier?(name))) and
+                 Enum.all?(pseudo, &(&1 in ~w(first left right blank))),
+               do: %{
+                 name: name,
+                 pseudo: pseudo,
+                 specificity:
+                   {if(name == "", do: 0, else: 1), Enum.count(pseudo, &(&1 in ~w(first blank))),
+                    Enum.count(pseudo, &(&1 in ~w(left right)))}
+               },
+               else: nil
+          end)
+
+        items = CssSyntaxValidator.block_items(rule.declarations)
+
+        declarations =
+          CssSyntaxValidator.declarations(rule.declarations) |> Enum.map(& &1.declaration)
+
+        boxes = Enum.filter(items, &(&1.kind == :rule))
+
+        valid =
+          Enum.all?(parsed, &is_map/1) and
+            Enum.all?(declarations, &match?({:ok, _}, validate_declaration(&1))) and
+            Enum.all?(boxes, fn box ->
+              String.trim_leading(String.trim(box.selectors), "@") in (@margin_boxes ++
+                                                                         ["footnote"])
+            end)
+
+        if valid do
+          margins =
+            Enum.reduce(boxes, %{}, fn box, definitions ->
+              name = String.trim_leading(String.trim(box.selectors), "@")
+
+              declarations =
+                CssSyntaxValidator.declarations(box.declarations) |> Enum.map(& &1.declaration)
+
+              Map.update(definitions, name, declarations, &(&1 ++ declarations))
+            end)
+
+          {:cont,
+           {:ok,
+            pages ++
+              [
+                %{
+                  selectors: parsed,
+                  declarations: declarations,
+                  margin_boxes: margins,
+                  source: rule.source
+                }
+              ]}}
+        else
+          source = String.trim(rule.selectors)
+
+          offset =
+            rule.offset + byte_size(rule.selectors) -
+              byte_size(String.trim_leading(rule.selectors))
+
+          prefix = binary_part(css, 0, offset)
+          lines = String.split(prefix, "\n")
+          line = length(lines)
+          column = String.length(List.last(lines)) + 1
+
+          {:halt,
+           NativeElixirPdfUtilities.Diagnostics.error(
+             :css,
+             :invalid_css,
+             ~s(line #{line}: page rule "#{source}" is invalid or unsupported),
+             module: __MODULE__,
+             source: source,
+             line: line,
+             column: column
+           )}
+        end
+      end)
+    end
+  end
+
+  @doc "Cascades matching page rules by page specificity, importance and source order."
+  @spec select([map()], String.t(), pos_integer(), boolean(), :ltr | :rtl) :: map()
+  def select(rules, name, number, blank, direction \\ :ltr) do
+    side =
+      if rem(number, 2) == 1,
+        do: if(direction == :rtl, do: "left", else: "right"),
+        else: if(direction == :rtl, do: "right", else: "left")
+
+    {page, boxes} =
+      rules
+      |> Enum.with_index()
+      |> Enum.reduce({%{}, %{}}, fn {rule, order}, {page, boxes} ->
+        matching =
+          Enum.filter(rule.selectors, fn selector ->
+            selector.name in ["", name] and
+              Enum.all?(selector.pseudo, fn
+                "first" -> number == 1
+                "blank" -> blank
+                pseudo -> pseudo == side
+              end)
+          end)
+
+        if matching == [] do
+          {page, boxes}
+        else
+          specificity = matching |> Enum.map(& &1.specificity) |> Enum.max()
+
+          merge = fn declarations, old ->
+            Enum.reduce(Enum.with_index(declarations), old, fn {declaration, declaration_order},
+                                                               acc ->
+              {property, value, important} =
+                case declaration do
+                  {p, v} -> {p, v, false}
+                  {p, v, :important} -> {p, v, true}
+                end
+
+              priority = {important, specificity, order, declaration_order}
+
+              case Map.get(acc, property) do
+                {previous, _} when previous > priority -> acc
+                _ -> Map.put(acc, property, {priority, {property, value}})
+              end
+            end)
+          end
+
+          {merge.(rule.declarations, page),
+           Enum.reduce(rule.margin_boxes, boxes, fn {name, declarations}, boxes ->
+             Map.update(boxes, name, merge.(declarations, %{}), &merge.(declarations, &1))
+           end)}
+        end
+      end)
+
+    values = fn map ->
+      map
+      |> Enum.sort_by(fn {_p, {priority, _}} -> priority end)
+      |> Enum.map(fn {_p, {_priority, d}} -> d end)
+    end
+
+    resource = fn
+      nil -> nil
+      {priority, _} -> rules |> Enum.at(elem(priority, 2)) |> Map.get(:resource_context)
+    end
+
+    background = fn declarations ->
+      resource.(
+        max(Map.get(declarations, "background-image"), Map.get(declarations, "background"))
+      )
+    end
+
+    %{
+      declarations: values.(page),
+      resource_context: background.(page),
+      margin_boxes: Map.new(boxes, fn {name, d} -> {name, values.(d)} end),
+      margin_contexts:
+        Map.new(boxes, fn {name, declarations} ->
+          {name,
+           %{
+             content: resource.(Map.get(declarations, "content")),
+             background: background.(declarations)
+           }}
+        end)
+    }
+  end
+
+  @doc "Checks optional PDF trim and bleed rectangles against the physical sheet."
+  @spec valid_pdf_boxes?(map()) :: boolean()
+  def valid_pdf_boxes?(page) do
+    Enum.all?([:trim_box, :bleed_box], fn key ->
+      case Map.fetch(page, key) do
+        :error ->
+          true
+
+        {:ok, {left, bottom, right, top}} ->
+          Enum.all?([left, bottom, right, top], &is_number/1) and
+            left >= 0 and bottom >= 0 and right > left and top > bottom and
+            right <= elem(page.size, 0) and top <= elem(page.size, 1)
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  @doc "Resolves page descriptors using selected metrics and the physical page percentage bases."
+  @spec resolve_geometry(map(), keyword(), keyword(), map()) ::
+          {:ok, keyword()} | {:error, term()}
+  def resolve_geometry(selected, opts, explicit, style) do
+    descriptors = Map.new(selected.declarations)
+    size = Map.get(descriptors, "size", "auto")
+
+    with {:ok, size} <- resolve_size(size, Keyword.get(opts, :page_size, :a4), style),
+         size = Keyword.get(explicit, :page_size, size),
+         {:ok, {width, height}} <- PageGeometry.normalize_page_size(size),
+         {:ok, margins} <- PageGeometry.normalize_margins(Keyword.get(opts, :margin, 0)),
+         {:ok, margins} <- resolve_margins(selected.declarations, margins, width, height, style) do
+      {:ok,
+       opts
+       |> Keyword.put(:page_size, size)
+       |> Keyword.put(:margin, margins)
+       |> Keyword.merge(Keyword.take(explicit, [:page_size, :margin]))}
+    else
+      {:error, _} = error ->
+        error
+
+      _ ->
+        NativeElixirPdfUtilities.Diagnostics.error(
+          :css,
+          :invalid_css,
+          "page dimensions or margins cannot be resolved in the page context",
+          source: inspect(descriptors)
+        )
+    end
+  end
+
+  defp resolve_size(value, fallback, style) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    case {normalized, page_size_option(value)} do
+      {orientation, _} when orientation in ["portrait", "landscape"] ->
+        with {:ok, {w, h}} <- PageGeometry.normalize_page_size(fallback) do
+          {width, height} =
+            if(orientation == "landscape",
+              do: {max(w, h), min(w, h)},
+              else: {min(w, h), max(w, h)}
+            )
+
+          {:ok, "#{width}pt #{height}pt"}
+        end
+
+      {value, nil} ->
+        cond do
+          value in ["auto" | @css_wide_keywords] ->
+            {:ok, fallback}
+
+          true ->
+            tokens = value_tokens(value)
+
+            case tokens do
+              [a] ->
+                with {:ok, a} <- page_length(a, 0, style),
+                     true <- a > 0,
+                     do: {:ok, "#{a}pt #{a}pt"}
+
+              [a, b] ->
+                with {:ok, a} <- page_length(a, 0, style),
+                     {:ok, b} <- page_length(b, 0, style),
+                     true <- a > 0 and b > 0,
+                     do: {:ok, "#{a}pt #{b}pt"}
+
+              _ ->
+                :error
+            end
+        end
+
+      {_, size} ->
+        {:ok, size}
+    end
+  end
+
+  defp resolve_margins(declarations, margins, width, height, style) do
+    Enum.reduce_while(declarations, {:ok, margins}, fn {property, value}, {:ok, margins} ->
+      entries =
+        case property do
+          "margin" ->
+            case value_tokens(value) do
+              [a] -> Enum.zip([:top, :right, :bottom, :left], [a, a, a, a])
+              [a, b] -> Enum.zip([:top, :right, :bottom, :left], [a, b, a, b])
+              [a, b, c] -> Enum.zip([:top, :right, :bottom, :left], [a, b, c, b])
+              [a, b, c, d] -> Enum.zip([:top, :right, :bottom, :left], [a, b, c, d])
+            end
+
+          p when p in ~w(margin-top margin-right margin-bottom margin-left) ->
+            [{page_margin_side(p), value}]
+
+          _ ->
+            []
+        end
+
+      result =
+        Enum.reduce_while(entries, {:ok, margins}, fn {side, source}, {:ok, margins} ->
+          basis = if side in [:top, :bottom], do: height, else: width
+
+          case page_length(source, basis, style) do
+            {:ok, n} -> {:cont, {:ok, Map.put(margins, side, n)}}
+            error -> {:halt, error}
+          end
+        end)
+
+      case result do
+        {:ok, margins} -> {:cont, {:ok, margins}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp page_length(value, basis, style) do
+    if value in ["auto" | @css_wide_keywords],
+      do: {:ok, 0.0},
+      else:
+        NativeElixirPdfUtilities.Validators.CssPositionValidator.resolve(
+          {:css_position_math, value},
+          basis,
+          style
+        )
+  end
+
+  @doc "Resolves the nonnegative physical bleed amount using page font metrics."
+  @spec resolve_bleed(String.t(), [String.t()], map()) :: {:ok, number()} | {:error, term()}
+  def resolve_bleed(value, marks, style) do
+    normalized = value |> String.trim() |> String.downcase()
+
+    if normalized in ["auto" | @css_wide_keywords] do
+      {:ok, if("crop" in marks, do: 6.0, else: 0.0)}
+    else
+      with {:ok, value} <-
+             NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.resolve_value(
+               value,
+               style,
+               HtmlValidator.new_css_budget()
+             ),
+           {:ok, length} <- page_length(value, 0.0, style),
+           true <- length >= 0 do
+        {:ok, length}
+      else
+        _ ->
+          NativeElixirPdfUtilities.Diagnostics.error(
+            :css,
+            :invalid_css,
+            "page bleed must resolve to a nonnegative length",
+            source: value
+          )
+      end
+    end
+  end
+
+  defp value_tokens(value) do
+    value
+    |> NativeElixirPdfUtilities.Validators.CssSyntaxValidator.components()
+    |> Enum.reject(&(String.trim(&1.text) == "" or &1.kind == :comment))
+    |> Enum.map(& &1.text)
+  end
+
   defp valid_page_size?(value) do
     normalized = value |> String.trim() |> String.downcase()
-    tokens = String.split(normalized, ~r/\s+/u, trim: true)
+    tokens = value_tokens(normalized)
 
     case tokens do
       ["auto"] ->
@@ -233,7 +600,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
       [first, second] ->
         (first in @page_size_names and second in ["portrait", "landscape"]) or
           (second in @page_size_names and first in ["portrait", "landscape"]) or
-          (valid_page_length?(first, false) and valid_page_length?(second, false))
+          ((valid_page_length?(first, false) or valid_page_function?(first)) and
+             (valid_page_length?(second, false) or valid_page_function?(second)))
 
       _ ->
         false
@@ -243,11 +611,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
   defp valid_page_margin?(value, maximum_values) do
     normalized = value |> String.trim() |> String.downcase()
 
-    values =
-      case valid_page_function?(normalized) do
-        true -> [normalized]
-        false -> String.split(normalized, ~r/\s+/u, trim: true)
-      end
+    values = value_tokens(normalized)
 
     length(values) in 1..maximum_values and
       Enum.all?(values, fn value ->

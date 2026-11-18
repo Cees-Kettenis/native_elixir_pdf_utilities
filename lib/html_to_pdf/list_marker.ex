@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ListMarker do
     markers = Map.get(style, :_list_marker, [])
 
     markers =
-      if markers == [] do
+      if markers == [] and not Map.get(style, :_marker_content, false) do
         text = CounterStyle.marker(Map.get(style, :list_marker_type, marker_type), index)
         if text == "", do: [], else: [%{type: :text, text: text, style: marker_style}]
       else
@@ -16,7 +16,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ListMarker do
       end
 
     markers =
-      case Map.get(style, :list_style_image) do
+      case if(Map.get(style, :_marker_content, false),
+             do: nil,
+             else: Map.get(style, :list_style_image)
+           ) do
         nil ->
           markers
 
@@ -36,7 +39,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ListMarker do
 
     gap =
       cond do
-        markers == [] ->
+        markers == [] or Map.get(style, :_marker_content, false) or
+          is_binary(Map.get(style, :list_marker_type)) or
+            is_tuple(Map.get(style, :list_marker_type)) ->
           []
 
         Map.get(style, :list_style_image) != nil ->

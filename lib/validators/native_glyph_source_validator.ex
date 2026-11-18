@@ -4,7 +4,14 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
-  @scalar_lists [:source_glyph_characters, :bidi_characters, :hyphenation_characters]
+
+  @scalar_lists [
+    :source_glyph_characters,
+    :bidi_characters,
+    :hyphenation_characters,
+    :publishing_characters,
+    :generated_characters
+  ]
 
   @doc "Retains authored text identities in the actual issued native HTML subtree."
   @spec prepare_tree(map()) :: map()
@@ -117,6 +124,40 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
   @spec prepare_run(map(), String.t()) :: map()
   def prepare_run(node, text) do
     run = %{text: text, style: node.style}
+
+    run =
+      case node do
+        %{publishing_text_id: id} ->
+          characters =
+            node.text
+            |> String.codepoints()
+            |> Enum.with_index(Map.get(node, :publishing_offset, 0))
+            |> Enum.map(fn {text, offset} ->
+              %{displayed: text, fragments: [%{id: id, offset: offset}]}
+            end)
+
+          Map.put(run, :publishing_characters, normalize_characters(characters, node.style))
+
+        _ ->
+          run
+      end
+
+    run =
+      case node.style do
+        %{_generated_alternative: alternative} ->
+          characters =
+            node.text
+            |> String.codepoints()
+            |> Enum.with_index()
+            |> Enum.map(fn {char, i} ->
+              %{displayed: char, fragments: [%{text: if(i == 0, do: alternative, else: "")}]}
+            end)
+
+          Map.put(run, :generated_characters, normalize_characters(characters, node.style))
+
+        _ ->
+          run
+      end
 
     case Map.get(node.style, :_source_glyph_characters) do
       characters when is_list(characters) ->
@@ -249,19 +290,24 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
         characters when is_list(characters) ->
           {expanded, []} =
             Enum.map_reduce(characters, counts, fn character, remaining ->
-              tab? =
-                if field == :source_glyph_characters,
-                  do: character.displayed == "\t",
-                  else: character.codepoint == 9
+              tab? = match?(%{displayed: "\t"}, character) or match?(%{codepoint: 9}, character)
 
               case {tab?, remaining} do
                 {true, [count | remaining]} ->
-                  selected =
-                    if field == :source_glyph_characters,
-                      do: %{character | displayed: " "},
-                      else: %{character | codepoint: 32}
+                  expanded =
+                    case character do
+                      %{displayed: _} when field == :generated_characters and count > 0 ->
+                        first = %{character | displayed: " "}
+                        [first | List.duplicate(%{first | fragments: []}, count - 1)]
 
-                  {List.duplicate(selected, count), remaining}
+                      %{displayed: _} ->
+                        List.duplicate(%{character | displayed: " "}, count)
+
+                      %{codepoint: _} ->
+                        List.duplicate(%{character | codepoint: 32}, count)
+                    end
+
+                  {expanded, remaining}
 
                 _ ->
                   {[character], remaining}
@@ -285,7 +331,9 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
       first
       when not is_map_key(first, :source_glyph_characters) and
              not is_map_key(first, :bidi_characters) and
-             not is_map_key(first, :hyphenation_characters) ->
+             not is_map_key(first, :hyphenation_characters) and
+             not is_map_key(first, :publishing_characters) and
+             not is_map_key(first, :generated_characters) ->
         result
 
       _ ->

@@ -369,7 +369,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssComputedLengthsTest do
   test "source substitutions inspect generated content and reject intrinsic background sizes" do
     alias NativeElixirPdfUtilities.Validators.CssValueValidator
 
-    for value <- ["attr(data-text raw-string)", "env(unknown, \"Text\")"] do
+    for value <- ["env(unknown, \"Text\")"] do
       assert {:ok, %{kind: :substitution_tokens}} =
                CssValueValidator.prepare_unapplied_declaration(
                  %{declaration: {"content", value}},

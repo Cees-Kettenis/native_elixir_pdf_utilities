@@ -36,7 +36,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @text_shadow_properties NativeElixirPdfUtilities.Validators.CssTextShadowValidator.properties()
   @underline_properties NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.properties()
   @source_wide_keywords ~w(inherit initial unset revert revert-layer)
-  @source_layout_properties NativeElixirPdfUtilities.Validators.CssMaskValidator.properties() ++
+  @publishing_properties NativeElixirPdfUtilities.Validators.CssPublishingValidator.properties()
+  @source_layout_properties @publishing_properties ++
+                              NativeElixirPdfUtilities.Validators.CssMaskValidator.properties() ++
                               NativeElixirPdfUtilities.Validators.CssBorderImageValidator.properties() ++
                               NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.properties() ++
                               ~w(offset offset-path offset-position offset-anchor offset-distance offset-rotate perspective perspective-origin transform-style backface-visibility translate rotate scale transform-box clip-path filter backdrop-filter opacity mix-blend-mode background-blend-mode border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius image-orientation image-resolution image-rendering background-origin background-clip background-attachment color-scheme print-color-adjust forced-color-adjust flex-flow width height min-width max-width min-height max-height
@@ -1670,6 +1672,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                    NativeElixirPdfUtilities.Validators.HtmlQuoteValidator.parse(value, style),
                  do: {:ok, Map.put(style, :quotes, pairs)}
 
+          property when property in @publishing_properties ->
+            NativeElixirPdfUtilities.Validators.CssPublishingValidator.prepare(
+              style,
+              property,
+              value
+            )
+
           "content" ->
             put_generated_content(style, value)
 
@@ -1998,7 +2007,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             )
 
           "position" ->
-            put_position(style, value)
+            if String.starts_with?(String.trim(value), "running("),
+              do:
+                NativeElixirPdfUtilities.Validators.CssPublishingValidator.prepare(
+                  style,
+                  "position",
+                  value
+                ),
+              else: put_position(style, value)
 
           property when property in ["top", "right", "bottom", "left"] ->
             put_position_offset(style, property, value)
@@ -2077,8 +2093,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           property when property in ["float", "clear"] ->
             with {:ok, fields} <-
-                   NativeElixirPdfUtilities.Validators.CssFloatValidator.prepare(property, value),
-                 do: {:ok, Map.merge(style, fields)}
+                   NativeElixirPdfUtilities.Validators.CssFloatValidator.prepare(property, value) do
+              style =
+                if property == "float" and not Map.has_key?(fields, :publishing_float),
+                  do: Map.delete(style, :publishing_float),
+                  else: style
+
+              {:ok, Map.merge(style, fields)}
+            end
 
           property
           when property in [
@@ -2547,6 +2569,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_position(style, value) do
+    style =
+      if Map.get(style, :running_copy, false),
+        do: style,
+        else: Map.drop(style, [:running_name, :running_copy])
+
     case value |> String.trim() |> String.downcase() do
       "static" ->
         {:ok, Map.put(style, :position, :static)}
@@ -2654,47 +2681,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_generated_content(style, value) do
-    normalized = String.trim(value)
+    validator = NativeElixirPdfUtilities.Validators.CssGeneratedContentValidator
+    context = if Map.has_key?(style, :_page_margin_box), do: :margin, else: :body
 
-    case String.downcase(normalized) do
-      keyword when keyword in ["none", "normal"] ->
-        {:ok, Map.put(style, :content, :none)}
-
-      _ ->
-        token_regex =
-          ~r/\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|attr\(\s*[a-zA-Z_][a-zA-Z0-9_:-]*\s*\)|counter\(\s*[a-zA-Z_][a-zA-Z0-9_-]*\s*\)|open-quote|close-quote|no-open-quote|no-close-quote)/u
-
-        tokens = Regex.scan(token_regex, normalized)
-        parsed_source = Enum.map_join(tokens, "", &List.first/1) |> String.trim()
-
-        case tokens != [] and parsed_source == normalized do
-          true ->
-            parts =
-              Enum.map(tokens, fn [_, token] ->
-                cond do
-                  String.starts_with?(token, ["\"", "'"]) ->
-                    {:string, HtmlValidator.decode_css_string(token)}
-
-                  token in ~w(open-quote close-quote no-open-quote no-close-quote) ->
-                    {:quote, token |> String.replace("-", "_") |> String.to_existing_atom()}
-
-                  String.starts_with?(token, "attr(") ->
-                    [_, name] = Regex.run(~r/^attr\(\s*([a-zA-Z_][a-zA-Z0-9_:-]*)\s*\)$/u, token)
-                    {:attr, String.downcase(name)}
-
-                  String.starts_with?(token, "counter(") ->
-                    [_, name] =
-                      Regex.run(~r/^counter\(\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*\)$/u, token)
-
-                    {:counter, name}
-                end
-              end)
-
-            {:ok, Map.put(style, :content, parts)}
-
-          false ->
-            {:error, :invalid_document}
-        end
+    with {:ok, parts} <- validator.prepare(value),
+         true <- validator.valid_context?(parts, context) do
+      {:ok, Map.put(style, :content, parts)}
+    else
+      _ -> {:error, :invalid_document}
     end
   end
 
@@ -2703,17 +2697,32 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
     case tokens do
       ["none"] ->
-        {:ok, Map.put(style, property, [])}
+        style = Map.put(style, property, [])
+
+        style =
+          if property == :counter_increment,
+            do: Map.delete(style, :counter_increment_implicit),
+            else: style
+
+        {:ok, style}
 
       tokens ->
         result =
           Enum.reduce_while(tokens, {:ok, [], false}, fn token, {:ok, values, integer_allowed?} ->
+            reversed =
+              if property == :counter_reset,
+                do: Regex.run(~r/^reversed\(\s*([a-zA-Z_][a-zA-Z0-9_-]*)\s*\)$/u, token)
+
             identifier? =
               token != "none" and Regex.match?(~r/^[a-zA-Z_][a-zA-Z0-9_-]*$/u, token)
 
             cond do
+              reversed != nil ->
+                [_, name] = reversed
+                {:cont, {:ok, [{name, {:reversed, :auto}, false} | values], true}}
+
               identifier? ->
-                {:cont, {:ok, [{token, default_value} | values], true}}
+                {:cont, {:ok, [{token, default_value, true} | values], true}}
 
               integer_allowed? ->
                 case NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(
@@ -2721,8 +2730,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                        :integer
                      ) do
                   {:ok, integer} ->
-                    [{name, _old_value} | rest] = values
-                    {:cont, {:ok, [{name, integer} | rest], false}}
+                    [{name, old_value, _implicit} | rest] = values
+
+                    value =
+                      if match?({:reversed, _}, old_value),
+                        do: {:reversed, integer},
+                        else: integer
+
+                    {:cont, {:ok, [{name, value, false} | rest], false}}
 
                   _ ->
                     {:halt, :error}
@@ -2735,7 +2750,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
         case result do
           {:ok, values, _integer_allowed?} ->
-            {:ok, Map.put(style, property, Enum.reverse(values))}
+            values = Enum.reverse(values)
+
+            style =
+              Map.put(style, property, Enum.map(values, fn {name, value, _} -> {name, value} end))
+
+            style =
+              if property == :counter_increment do
+                implicit =
+                  for {{_name, _value, true}, index} <- Enum.with_index(values),
+                      into: MapSet.new(),
+                      do: index
+
+                Map.put(style, :counter_increment_implicit, implicit)
+              else
+                style
+              end
+
+            {:ok, style}
 
           :error ->
             {:error, :invalid_document}

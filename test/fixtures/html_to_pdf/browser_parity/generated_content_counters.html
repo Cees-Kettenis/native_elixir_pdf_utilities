@@ -36,6 +36,14 @@
         content: "A/*B*/C } { , \"quoted\"; tail ";
         color: #7c3aed;
       }
+      @counter-style binary { system:numeric; symbols:'0' '1'; suffix:') '; range:-8 8; negative:'(' ')'; }
+      @counter-style repeated { system:symbolic; symbols:'a' 'b'; }
+      .publishing { counter-reset:chapter 2; margin:6pt 0; }
+      .publishing::before { content:counter(chapter,binary) ' / ' counter(chapter,repeated) ' '; }
+      .nested { counter-reset:chapter 3; }
+      .nested::before { content:counters(chapter,'.') ' '; }
+      .marker::marker { content:'Item: '; color:#1d4ed8; }
+      .missing::before { content:attr(data-title raw-string,'Fallback') ' '; }
     </style>
   </head>
   <body>
@@ -55,6 +63,9 @@
         <p class="counter-item">outer item resumes</p>
       </section>
       <p title='a b,c"d'>quoted CSS syntax</p>
+      <div class="publishing">Custom counter styles <div class="nested">Nested scope</div></div>
+      <ol><li class="marker">Authored marker</li></ol>
+      <div class="missing">Attribute content</div>
     </main>
   </body>
 </html>

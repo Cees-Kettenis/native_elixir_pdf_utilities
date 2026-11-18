@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
                     title: title,
                     page: page_number,
                     view: {:fit_h, top},
-                    open: true,
+                    open: Map.get(anchor, :open, true),
                     children: []
                   }
                 }
@@ -51,6 +51,42 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
       end)
 
     headings |> Enum.uniq_by(& &1.anchor_id) |> nest()
+  end
+
+  @doc "Builds outlines explicitly requested by CSS bookmark declarations."
+  @spec from_css_bookmarks([map()]) :: [map()]
+  def from_css_bookmarks(pages) do
+    pages = Enum.map(pages, fn page -> %{page | boxes: css_bookmark_sources(page.boxes, [])} end)
+    from_paginated_headings(pages)
+  end
+
+  defp css_bookmark_sources(boxes, transforms) do
+    Enum.flat_map(boxes, fn box ->
+      anchors =
+        Enum.map(Map.get(box, :css_bookmark_anchors, []), fn anchor ->
+          {_, top} =
+            Enum.reduce(transforms, {Map.get(box, :x, 0.0), outline_top(box)}, fn matrix,
+                                                                                  {x, y} ->
+              NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.transform_point(x, y, matrix)
+            end)
+
+          %{type: :flow_marker, y: top, height: 0.0, outline_anchor: anchor}
+        end)
+
+      nested =
+        case box do
+          %{type: :drawing_group, transform: matrix, boxes: children} ->
+            css_bookmark_sources(children, [matrix | transforms])
+
+          %{boxes: children} ->
+            css_bookmark_sources(children, transforms)
+
+          _ ->
+            []
+        end
+
+      anchors ++ nested
+    end)
   end
 
   defp visual_headings(pages) do

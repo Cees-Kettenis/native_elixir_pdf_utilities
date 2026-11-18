@@ -2201,6 +2201,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   # Archived original diagnostics, version-dependent legacy overflow, and converter
   # conformance inputs. Ordinary tests retain their parsing and resource contracts.
   @reference_only_fixtures ~w(
+    publishing_running_reference.html
+    publishing_notes_reference.html
+    publishing_references_reference.html
     html_decorated_background_fragments.html
     html_frameset_margin_recovery.html
     html_initial_child_mime.html
@@ -2257,6 +2260,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   # These fixtures have dedicated browser cases in this module or sibling test modules.
   # Keep the inventory explicit so an unassigned new fixture still fails this check.
   @dedicated_fixtures ~w(
+    publishing_pages.html
+    publishing_running.html
+    publishing_notes.html
+    publishing_references.html
     css_compositing.html
     flow_layout_algorithms.html
     layout_context_continuation.html

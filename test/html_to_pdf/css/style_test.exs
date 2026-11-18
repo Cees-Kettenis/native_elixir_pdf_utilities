@@ -3921,7 +3921,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
                  %{
                    type: :element,
                    tag: "p",
-                   attributes: %{"style" => "break-before: left"},
+                   attributes: %{"style" => "break-before: sideways"},
                    children: [%{type: :text, text: "Bad"}]
                  }
                ]

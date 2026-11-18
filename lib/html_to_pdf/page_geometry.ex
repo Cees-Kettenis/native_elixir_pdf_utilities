@@ -12,6 +12,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   # Fixed CSS length invariant: one pixel is 1/96 inch, or 0.75 PDF points.
   @css_pixel_points 0.75
 
+  @doc "Rounds page margins to the renderer's CSS pixel grid."
+  @spec snap_css_pixel_margins(margins()) :: margins()
+  def snap_css_pixel_margins(margins) do
+    Map.new(margins, fn {side, value} ->
+      {side, round(value / @css_pixel_points) * @css_pixel_points}
+    end)
+  end
+
   @doc "Returns the whole CSS-pixel source height of a validated print fragmentainer; its physical PDF clip retains the original fractional height."
   @spec css_fragmentainer_source_height(number()) :: float()
   def css_fragmentainer_source_height(height),
@@ -420,6 +428,78 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
 
       _ ->
         bounds
+    end
+  end
+
+  @doc "Resolves the variable dimension of three page-margin boxes using CSS Paged Media flex factors."
+  @spec margin_axis([map()], number()) :: [number()]
+  def margin_axis([a, b, c], available) do
+    [a, b, c] =
+      boxes =
+      Enum.map([a, b, c], fn box ->
+        Map.merge(
+          %{min: 0.0, max: 0.0, fixed: nil, generated: true, minimum: 0.0, maximum: :infinity},
+          box
+        )
+      end)
+
+    widths =
+      if not b.generated do
+        [left, right] = margin_pair(a, c, available)
+        [left, 0.0, right]
+      else
+        middle =
+          if b.fixed == nil do
+            ac = %{
+              min: 2 * max(a.min, c.min),
+              max: 2 * max(a.max, c.max),
+              fixed: if(a.fixed != nil and c.fixed != nil, do: 2 * max(a.fixed, c.fixed))
+            }
+
+            margin_pair(b, ac, available) |> hd()
+          else
+            b.fixed
+          end
+
+        [
+          a.fixed || max((available - middle) / 2, 0.0),
+          middle,
+          c.fixed || max((available - middle) / 2, 0.0)
+        ]
+      end
+
+    constrained =
+      Enum.zip_with(boxes, widths, fn box, width ->
+        cap = if box.maximum == :infinity, do: width, else: min(width, box.maximum)
+        value = max(cap, box.minimum)
+        if value == width, do: box, else: Map.put(box, :fixed, value)
+      end)
+
+    if constrained == boxes, do: widths, else: margin_axis(constrained, available)
+  end
+
+  defp margin_pair(a, b, available) do
+    cond do
+      a.fixed != nil and b.fixed != nil ->
+        [a.fixed, b.fixed]
+
+      a.fixed != nil ->
+        [a.fixed, max(available - a.fixed, 0.0)]
+
+      b.fixed != nil ->
+        [max(available - b.fixed, 0.0), b.fixed]
+
+      true ->
+        {left, right, fa, fb} =
+          cond do
+            a.max + b.max < available -> {a.max, b.max, a.max, b.max}
+            a.min + b.min < available -> {a.min, b.min, a.max - a.min, b.max - b.min}
+            true -> {a.min, b.min, a.min, b.min}
+          end
+
+        {fa, fb} = if fa + fb == 0, do: {1.0, 1.0}, else: {fa, fb}
+        free = available - left - right
+        [max(left + free * fa / (fa + fb), 0.0), max(right + free * fb / (fa + fb), 0.0)]
     end
   end
 end

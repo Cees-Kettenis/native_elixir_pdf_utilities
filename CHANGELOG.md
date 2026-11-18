@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added static paged publishing for named pages, page-margin boxes, running
+  content, cross-references, footnote continuation, and page and column floats.
+- Expanded generated content and list markers with custom counter styles,
+  nested and reversed counters, images, and accessible alternatives.
+- Added CSS-driven page rotation, print marks, bleed boxes, and PDF bookmarks.
+
 ## 1.1.0 - 2026-11-05
 
 Expanded static HTML-to-PDF rendering. See the [compatibility guide](docs/html-to-pdf-compatibility.md)

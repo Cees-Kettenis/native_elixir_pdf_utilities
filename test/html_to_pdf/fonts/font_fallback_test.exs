@@ -112,6 +112,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
              List.flatten(List.duplicate(["Helvetica", "DejaVu Sans"], 200))
   end
 
+  test "generated alternatives and source offsets follow a split across fallback faces" do
+    text = %{
+      type: :text,
+      text: "AαA",
+      publishing_text_id: :source,
+      publishing_offset: 8,
+      style: Map.put(text_style(), :_generated_alternative, "Accessible")
+    }
+
+    assert {:ok, %{children: runs}} = FontFallback.resolve(%{type: :document, children: [text]})
+
+    assert Enum.map(runs, &{&1.text, &1.publishing_offset, &1.style._generated_alternative}) ==
+             [{"A", 8, "Accessible"}, {"α", 9, ""}, {"A", 10, ""}]
+  end
+
   test "keeps supported ASCII in the selected face and falls back per grapheme" do
     style = text_style()
 

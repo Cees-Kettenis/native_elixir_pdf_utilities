@@ -22,8 +22,18 @@ defmodule NativeElixirPdfUtilities.Validators.CssFloatValidator do
       end
 
     case Map.fetch(values, value |> String.trim() |> String.downcase(:ascii)) do
-      {:ok, value} -> {:ok, %{if(property == "float", do: :float, else: :clear) => value}}
-      :error -> :error
+      {:ok, value} ->
+        {:ok, %{if(property == "float", do: :float, else: :clear) => value}}
+
+      :error ->
+        case NativeElixirPdfUtilities.Validators.CssPublishingValidator.prepare(
+               %{},
+               property,
+               value
+             ) do
+          {:ok, fields} -> {:ok, fields}
+          _ -> :error
+        end
     end
   end
 

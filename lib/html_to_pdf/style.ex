@@ -131,6 +131,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           optional(atom()) => term()
         }
   @type render_option :: NativeElixirPdfUtilities.HtmlToPdf.render_option()
+  @type publishing_resource ::
+          {ResourceContext.t(), String.t() | {:document_url, String.t() | nil} | nil}
   @type stylesheet_entry :: %{
           css: String.t(),
           source_kind: :configured | :embedded,
@@ -419,6 +421,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                   base_style = base_style(font_registry, font_families, font_face)
 
+                  counter_styles =
+                    Enum.reduce(stylesheet_entries, %{}, fn entry, acc ->
+                      Map.merge(acc, Map.get(entry.prepared, :counter_styles, %{}))
+                    end)
+
+                  base_style =
+                    if counter_styles == %{},
+                      do: base_style,
+                      else: Map.put(base_style, :_counter_styles, counter_styles)
+
                   {:ok, dictionaries} =
                     NativeElixirPdfUtilities.Validators.HyphenationValidator.prepare_dictionaries(
                       Keyword.get(opts, :hyphenation_dictionaries, %{})
@@ -464,6 +476,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                     context = %{
                       rules: compiled_rules,
+                      options: style_opts,
                       cache: cache,
                       root_selector_id: root_id,
                       root_canvas_key: make_ref(),
@@ -487,10 +500,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     style_opts = Keyword.put(style_opts, :__render_cache__, cache)
 
                     case fragment_root_style(children, base_style, context, style_opts) do
-                      {:ok, nil} ->
-                        {:ok, Map.merge(%{type: :document, children: []}, link_metadata)}
-
                       {:ok, root_style} ->
+                        children = if root_style == nil, do: [], else: children
+                        root_style = root_style || base_style
+
                         with {:ok, styled_children, _counters} <-
                                style_children(
                                  children,
@@ -525,6 +538,38 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            %{
                              type: :document,
                              children: styled_children,
+                             publishing_base_style: root_style,
+                             css_page_rules:
+                               Enum.flat_map(stylesheet_entries, fn entry ->
+                                 if Map.get(entry, :shadow_scope_id) != nil do
+                                   []
+                                 else
+                                   rules = Map.get(entry.prepared, :page_rules, [])
+
+                                   if rules == [] do
+                                     []
+                                   else
+                                     base =
+                                       cond do
+                                         entry.trusted_local_resources ->
+                                           entry.base_url
+
+                                         url_context.authored_base? ->
+                                           {:document_url, url_context.resolution_base}
+
+                                         entry.base_url == nil or
+                                             URI.parse(entry.base_url).scheme == nil ->
+                                           entry.base_url
+
+                                         true ->
+                                           {:document_url, entry.base_url}
+                                       end
+
+                                     source = {ResourceContext.current(), base}
+                                     Enum.map(rules, &Map.put(&1, :resource_context, source))
+                                   end
+                                 end
+                               end),
                              document_canvas: canvas,
                              document_root_sizing:
                                NativeElixirPdfUtilities.Validators.CssSizingValidator.prepare_root(
@@ -699,6 +744,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          root_selector_id: cache,
                          root_children: children,
                          source_budget: budget,
+                         source_selectors:
+                           for(
+                             {pseudo, index} <- compiled.selectors,
+                             is_map(index) and map_size(index) > 0,
+                             do: pseudo
+                           ),
+                         source_pseudos:
+                           Enum.filter(
+                             [
+                               :before,
+                               :after,
+                               :first_letter,
+                               :marker,
+                               :footnote_call,
+                               :footnote_marker
+                             ],
+                             &(map_size(Map.fetch!(compiled.selectors, &1)) > 0)
+                           ),
                          inline_records: inline,
                          source_context_observer: observe,
                          source_selection_observer: select
@@ -824,13 +887,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp source_selection_children(children, context, ancestors) do
     Enum.each(children, fn node ->
       if node.type == :element do
-        Enum.each(context.rules.selectors, fn {pseudo, index} ->
-          if is_map(index) do
-            Enum.each(matching_declarations(context, node, ancestors, pseudo), fn matched ->
-              record = Map.get(matched, :source_record, matched)
-              :ok = context.source_selection_observer.(record, node, pseudo)
-            end)
-          end
+        Enum.each(context.source_selectors, fn pseudo ->
+          Enum.each(matching_declarations(context, node, ancestors, pseudo), fn matched ->
+            record = Map.get(matched, :source_record, matched)
+            :ok = context.source_selection_observer.(record, node, pseudo)
+          end)
         end)
 
         source_selection_children(source_children(node), context, [node | ancestors])
@@ -903,36 +964,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp source_pseudo_contexts(node, style, rules, ancestors, consumer) do
-    Enum.reduce_while([:before, :after, :first_letter], :ok, fn pseudo, :ok ->
-      declarations = matching_declarations(rules, node, ancestors, pseudo)
+    Enum.reduce_while(
+      rules.source_pseudos,
+      :ok,
+      fn pseudo, :ok ->
+        declarations = matching_declarations(rules, node, ancestors, pseudo)
 
-      result =
-        case declarations do
-          [] ->
-            :ok
+        result =
+          case declarations do
+            [] ->
+              :ok
 
-          _ ->
-            with {:ok, context} <-
-                   apply_author_styles(
-                     text_style(style) |> Map.put(:display, :inline),
-                     node,
-                     ancestors,
-                     rules,
-                     pseudo,
-                     declarations
-                   ),
-                 do:
-                   HtmlValidator.consume_source_style_context(consumer, node, pseudo, %{
-                     status: :resolved,
-                     style: context
-                   })
+            _ ->
+              with {:ok, context} <-
+                     apply_author_styles(
+                       text_style(style) |> Map.put(:display, :inline),
+                       node,
+                       ancestors,
+                       rules,
+                       pseudo,
+                       declarations
+                     ),
+                   do:
+                     HtmlValidator.consume_source_style_context(consumer, node, pseudo, %{
+                       status: :resolved,
+                       style: context
+                     })
+          end
+
+        case result do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
         end
-
-      case result do
-        :ok -> {:cont, :ok}
-        error -> {:halt, error}
       end
-    end)
+    )
   end
 
   defp unresolved_source_context(node, consumer, reason) do
@@ -1139,6 +1204,83 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           Enum.map(rendered, fn styled ->
             styled = Map.update!(styled, :style, &HtmlValidator.list_paint_style/1)
 
+            styled =
+              if Map.get(styled.style, :display) == :list_item do
+                markers =
+                  generated_value(
+                    generated_content_node(
+                      node,
+                      :marker,
+                      styled.style,
+                      rules,
+                      ancestors,
+                      sibling_counters || CounterState.new()
+                    )
+                  )
+
+                case markers do
+                  [] ->
+                    case generated_content_style(node, :marker, styled.style, rules, ancestors) do
+                      {:ok, %{content: :none, _marker_content: true}} ->
+                        Map.update!(
+                          styled,
+                          :style,
+                          &Map.merge(&1, %{_list_marker: [], _marker_content: true})
+                        )
+
+                      _ ->
+                        styled
+                    end
+
+                  markers ->
+                    marker_fields = Map.take(hd(markers).style, [:_marker_content])
+
+                    marker_fields =
+                      Map.put(marker_fields, :_list_marker, Enum.flat_map(markers, & &1.children))
+
+                    Map.update!(styled, :style, &Map.merge(&1, marker_fields))
+                end
+              else
+                styled
+              end
+
+            styled =
+              if Map.get(styled.style, :publishing_float) == :footnote do
+                Enum.reduce([:footnote_call, :footnote_marker], styled, fn pseudo, styled ->
+                  pseudo_style =
+                    generated_value(
+                      generated_content_style(node, pseudo, styled.style, rules, ancestors)
+                    )
+
+                  if pseudo_style == nil,
+                    do: styled,
+                    else: Map.update!(styled, :style, &Map.put(&1, pseudo, pseudo_style))
+                end)
+              else
+                styled
+              end
+
+            styled =
+              if is_list(Map.get(styled.style, :content)) and
+                   not String.starts_with?(styled.tag, "::") do
+                # Reuse the same content owner for replacement and pseudo content.
+                replacements =
+                  generated_value(
+                    generated_content_node(
+                      node,
+                      :replacement,
+                      styled.style,
+                      Map.put(rules, :replacement_style, styled.style),
+                      ancestors,
+                      sibling_counters || CounterState.new()
+                    )
+                  )
+
+                %{styled | children: Enum.flat_map(replacements, & &1.children)}
+              else
+                styled
+              end
+
             if :maps.get(:type, node, nil) == :element and
                  :maps.get(:tag, styled, nil) == :maps.get(:tag, node, nil),
                do:
@@ -1166,6 +1308,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  ),
                else: styled
           end)
+
+        rendered =
+          if sibling_counters != nil and sibling_counters.values != %{} and
+               (Map.has_key?(:maps.get(:attributes, node, %{}), "id") or
+                  Enum.any?(
+                    rendered,
+                    &(Map.has_key?(&1.style, :string_set) or Map.has_key?(&1.style, :running_name) or
+                        Map.get(&1.style, :publishing_float) == :footnote)
+                  )),
+             do: Enum.map(rendered, &Map.put(&1, :publishing_counters, sibling_counters)),
+             else: rendered
 
         {:ok, rendered, sibling_counters, counters}
 
@@ -2195,56 +2348,78 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, [], counters}
 
         {:ok, style} ->
+          style =
+            Map.update(style, :counter_reset, [], fn resets ->
+              Enum.map(resets, fn
+                {name, {:reversed, :auto}} ->
+                  increments =
+                    style
+                    |> Map.get(:counter_increment, [])
+                    |> Enum.with_index()
+                    |> Enum.filter(fn {{counter, _}, _} -> counter == name end)
+
+                  increment =
+                    case increments do
+                      [] ->
+                        if name == "list-item" and style.display == :list_item, do: -1, else: 0
+
+                      increments ->
+                        implicit = Map.get(style, :counter_increment_implicit, MapSet.new())
+
+                        Enum.sum_by(increments, fn {{_, n}, index} ->
+                          if MapSet.member?(implicit, index), do: -1, else: n
+                        end)
+                    end
+
+                  {name, {:reversed, -2 * increment}}
+
+                reset ->
+                  reset
+              end)
+            end)
+
           counters =
-            CounterState.apply(
-              style,
-              counters,
-              counters,
-              NativeElixirPdfUtilities.HtmlToPdf.CssSelector.owner_identity(node, pseudo_element),
-              :pseudo
-            )
-
-          {text, counters} =
-            if style.display == :none do
-              {"", counters}
-            else
-              generated_content_text(
-                :maps.get(:content, style, :none),
-                node.attributes,
-                counters,
-                NativeElixirPdfUtilities.Validators.HtmlQuoteValidator.pairs(
+            if pseudo_element == :replacement,
+              do: counters,
+              else:
+                CounterState.apply(
                   style,
-                  node,
-                  ancestors
+                  counters,
+                  counters,
+                  NativeElixirPdfUtilities.HtmlToPdf.CssSelector.owner_identity(
+                    node,
+                    pseudo_element
+                  ),
+                  :pseudo
                 )
-              )
-            end
 
-          case {:maps.get(:display, style, nil), :maps.get(:content, style, :none), text} do
-            {:none, _content, _text} ->
+          case {style.display, Map.get(style, :content, :none)} do
+            {:none, _} ->
               {:ok, [], counters}
 
-            {_display, :none, _text} ->
+            {_, :none} ->
               {:ok, [], counters}
 
-            {_display, _content, text} ->
+            {_, content} ->
               style =
                 style
                 |> HtmlValidator.prepare_list_marker(CounterState.value(counters, "list-item"))
                 |> HtmlValidator.list_paint_style()
 
-              child =
-                transform_text_node(%{type: :text}, text, text_style(style), node, ancestors)
-
-              {:ok,
-               [
-                 %{
-                   type: :element,
-                   tag: "::#{pseudo_element}",
-                   style: style,
-                   children: [child]
-                 }
-               ], counters}
+              with {:ok, children, counters} <-
+                     generated_sequence(
+                       content,
+                       node,
+                       style,
+                       rules,
+                       ancestors,
+                       counters
+                     ) do
+                {:ok,
+                 [
+                   %{type: :element, tag: "::#{pseudo_element}", style: style, children: children}
+                 ], counters}
+              end
           end
 
         {:error, reason} ->
@@ -2253,79 +2428,291 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp generated_content_style(node, pseudo_element, inherited_style, rules, ancestors) do
-    declarations =
-      if :maps.get(:_default_disclosure_summary, node, false),
-        do: [],
-        else: matching_declarations(rules, node, ancestors, pseudo_element)
-
-    case {declarations, node.tag} do
-      {[], tag} when tag != "q" and pseudo_element != :picker_icon ->
-        {:ok, nil}
-
-      {matched_declarations, _tag} ->
-        RenderCache.fetch_partition(
-          rules.cache,
-          :list_preparation,
-          {:list_pseudo_style, node._selector_id, pseudo_element},
-          fn ->
-            generated_style =
-              inherited_style
-              |> text_style()
-              |> Map.put(:display, if(pseudo_element == :picker_icon, do: :block, else: :inline))
-              |> Map.put(:_inherited_quotes, :maps.get(:quotes, inherited_style, :auto))
-              |> Map.put(
-                :content,
-                if(node.tag == "q",
-                  do: [
-                    {:quote, if(pseudo_element == :before, do: :open_quote, else: :close_quote)}
-                  ],
-                  else: :none
-                )
-              )
-              |> then(fn style ->
-                if pseudo_element == :picker_icon,
-                  do:
-                    style
-                    |> Map.put(:content, [
-                      {:string,
-                       NativeElixirPdfUtilities.HtmlToPdf.CounterStyle.marker(:disclosure_open, 0)}
-                    ])
-                    |> Map.put(:margin, CssValueValidator.edges(0.0, 0.0, 0.0, :auto)),
-                  else: style
-              end)
-
-            with {:ok, style} <-
-                   apply_author_styles(
-                     generated_style,
-                     node,
-                     ancestors,
-                     rules,
-                     pseudo_element,
-                     matched_declarations
-                   ) do
-              {:ok,
-               HtmlValidator.prepare_list_owner(
-                 %{
-                   tag: "::#{pseudo_element}",
-                   _selector_id:
-                     NativeElixirPdfUtilities.HtmlToPdf.CssSelector.owner_identity(
-                       node,
-                       pseudo_element
-                     )
-                 },
-                 style,
-                 inherited_style
-               )}
-            end
-          end
-        )
+  defp generated_value(result) do
+    case result do
+      {:ok, value, _counters} -> value
+      {:ok, value} -> value
+      error -> throw({:render_resource_limit, error})
     end
   end
 
-  defp generated_content_text(content, _attributes, counters, quote_pairs) do
+  @doc "Prepares page and margin backgrounds without changing their source permissions."
+  @spec prepare_publishing_paint(map(), keyword(), publishing_resource() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def prepare_publishing_paint(style, opts, resource) do
+    context = ResourceContext.current()
+
+    loader = fn source, opts, kind, budget ->
+      with_publishing_asset(resource, opts, fn opts ->
+        load_paint_image(source, opts, kind, budget)
+      end)
+    end
+
+    opts =
+      opts
+      |> Keyword.put(:__render_cache__, context.scope)
+      |> Keyword.put(:__image_budget__, context.image_budget)
+
+    finalize_background_image_style(style, opts, context.image_budget, loader)
+  end
+
+  @doc "Loads page-generated image artwork within its stylesheet's issued resource context."
+  @spec prepare_generated_image(String.t(), map(), keyword(), publishing_resource() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def prepare_generated_image(source, style, opts, resource) do
+    with_publishing_asset(resource, opts, fn opts ->
+      budget = Keyword.fetch!(opts, :__image_budget__)
+
+      with {:ok, loaded} <- load_image_style(source, opts, :image),
+           {:ok, image_style} <-
+             finalize_image_style(
+               Map.merge(image_box_style(style.font_size), loaded)
+               |> Map.merge(%{display: :image, image_display: :inline}),
+               budget,
+               opts
+             ) do
+        {:ok,
+         %{
+           type: :element,
+           tag: "img",
+           children: [],
+           style: Map.merge(text_style(style), image_style)
+         }}
+      end
+    end)
+  end
+
+  defp with_publishing_asset(resource, opts, load) do
+    {context, base} = resource || {ResourceContext.current(), nil}
+
+    with {:ok, context} <-
+           if(base == nil, do: {:ok, context}, else: ResourceContext.rebase(context, base)),
+         {:ok, urls} <-
+           (case base do
+              {:document_url, url} ->
+                HtmlUrlValidator.document_context_from_url(%{children: []}, url)
+
+              _ ->
+                HtmlUrlValidator.document_context(%{children: []},
+                  base_url: context.resolution_base
+                )
+            end) do
+      opts =
+        opts
+        |> Keyword.put(:__render_cache__, context.scope)
+        |> Keyword.put(:__image_budget__, context.image_budget)
+        |> Keyword.put(:__document_url_context__, %{urls | authored_base?: base != nil})
+
+      ResourceContext.with_document(context, fn -> load.(opts) end)
+    end
+  end
+
+  defp generated_sequence(parts, node, style, rules, ancestors, counters) do
+    quotes = NativeElixirPdfUtilities.Validators.HtmlQuoteValidator.pairs(style, node, ancestors)
+    definitions = Map.get(style, :_counter_styles, %{})
+
+    alternative =
+      Enum.find_value(parts, fn
+        {:alternative, parts} -> parts
+        _ -> nil
+      end)
+
+    parts = Enum.reject(parts, &match?({:alternative, _}, &1))
+    chunks = Enum.chunk_by(parts, &match?({:image, _}, &1))
+
+    result =
+      Enum.reduce_while(chunks, {:ok, [], counters}, fn chunk, {:ok, children, counters} ->
+        if match?([{:image, _} | _], chunk) do
+          images =
+            Enum.reduce_while(chunk, {:ok, []}, fn {:image, source}, {:ok, images} ->
+              opts = Keyword.put(rules.options, :__render_cache__, rules.cache)
+
+              with {:ok, loaded} <- load_image_style(source, opts, :image),
+                   {:ok, image_style} <-
+                     finalize_image_style(
+                       Map.merge(image_box_style(style.font_size), loaded)
+                       |> Map.merge(%{display: :image, image_display: :inline}),
+                       Keyword.fetch!(opts, :__image_budget__),
+                       opts
+                     ) do
+                image = %{
+                  type: :element,
+                  tag: "img",
+                  attributes: %{"alt" => ""},
+                  style: Map.merge(text_style(style), image_style),
+                  children: []
+                }
+
+                {:cont, {:ok, images ++ [image]}}
+              else
+                error -> {:halt, error}
+              end
+            end)
+
+          case images do
+            {:ok, images} -> {:cont, {:ok, children ++ images, counters}}
+            error -> {:halt, error}
+          end
+        else
+          {text, next} =
+            generated_content_text(chunk, counters, quotes, definitions)
+
+          child = transform_text_node(%{type: :text}, text, text_style(style), node, ancestors)
+
+          late =
+            Enum.any?(chunk, fn part ->
+              match?({:string, _, _}, part) or
+                elem(part, 0) in [:target_counter, :target_text, :leader] or
+                (elem(part, 0) == :counter and elem(part, 1) in ["page", "pages"])
+            end)
+
+          child =
+            if late,
+              do:
+                Map.put(child, :publishing_content, %{
+                  parts: chunk,
+                  attributes: node.attributes,
+                  counters: counters,
+                  quote_pairs: quotes,
+                  language: LanguageValidator.resolved_language(node, ancestors)
+                }),
+              else: child
+
+          {:cont, {:ok, children ++ [child], next}}
+        end
+      end)
+
+    with {:ok, children, counters} <- result do
+      children =
+        if alternative == nil,
+          do: children,
+          else:
+            (
+              {text, _} =
+                generated_content_text(
+                  alternative,
+                  counters,
+                  quotes,
+                  definitions
+                )
+
+              mark_generated_alternative(children, text)
+            )
+
+      {:ok, children, counters}
+    end
+  end
+
+  @doc false
+  @spec mark_generated_alternative([map()], String.t()) :: [map()]
+  def mark_generated_alternative(children, text) do
+    children
+    |> Enum.with_index()
+    |> Enum.map(fn {child, i} ->
+      Map.update!(
+        child,
+        :style,
+        &Map.put(&1, :_generated_alternative, if(i == 0, do: text, else: ""))
+      )
+    end)
+  end
+
+  defp generated_content_style(node, pseudo_element, inherited_style, rules, ancestors) do
+    if pseudo_element == :replacement do
+      {:ok, rules.replacement_style}
+    else
+      declarations =
+        if :maps.get(:_default_disclosure_summary, node, false),
+          do: [],
+          else: matching_declarations(rules, node, ancestors, pseudo_element)
+
+      case {declarations, node.tag} do
+        {[], tag} when tag != "q" and pseudo_element != :picker_icon ->
+          {:ok, nil}
+
+        {matched_declarations, _tag} ->
+          RenderCache.fetch_partition(
+            rules.cache,
+            :list_preparation,
+            {:list_pseudo_style, node._selector_id, pseudo_element},
+            fn ->
+              generated_style =
+                inherited_style
+                |> text_style()
+                |> Map.put(
+                  :display,
+                  if(pseudo_element == :picker_icon, do: :block, else: :inline)
+                )
+                |> Map.put(:_inherited_quotes, :maps.get(:quotes, inherited_style, :auto))
+                |> Map.put(
+                  :content,
+                  if(node.tag == "q",
+                    do: [
+                      {:quote, if(pseudo_element == :before, do: :open_quote, else: :close_quote)}
+                    ],
+                    else:
+                      if(pseudo_element == :marker,
+                        do: [
+                          {:string,
+                           Enum.map_join(Map.get(inherited_style, :_list_marker, []), & &1.text)}
+                        ],
+                        else: :none
+                      )
+                  )
+                )
+                |> then(fn style ->
+                  if pseudo_element == :picker_icon,
+                    do:
+                      style
+                      |> Map.put(:content, [
+                        {:string,
+                         NativeElixirPdfUtilities.HtmlToPdf.CounterStyle.marker(
+                           :disclosure_open,
+                           0
+                         )}
+                      ])
+                      |> Map.put(:margin, CssValueValidator.edges(0.0, 0.0, 0.0, :auto)),
+                    else: style
+                end)
+
+              with {:ok, style} <-
+                     apply_author_styles(
+                       generated_style,
+                       node,
+                       ancestors,
+                       rules,
+                       pseudo_element,
+                       matched_declarations
+                     ) do
+                style =
+                  if pseudo_element == :marker and
+                       Enum.any?(matched_declarations, fn d ->
+                         elem(CssValueValidator.declaration_pair(d.declaration), 0) == "content"
+                       end), do: Map.put(style, :_marker_content, true), else: style
+
+                {:ok,
+                 HtmlValidator.prepare_list_owner(
+                   %{
+                     tag: "::#{pseudo_element}",
+                     _selector_id:
+                       NativeElixirPdfUtilities.HtmlToPdf.CssSelector.owner_identity(
+                         node,
+                         pseudo_element
+                       )
+                   },
+                   style,
+                   inherited_style
+                 )}
+              end
+            end
+          )
+      end
+    end
+  end
+
+  defp generated_content_text(content, counters, quote_pairs, definitions) do
     {parts, counters} =
-      Enum.reduce(content_parts(content), {[], counters}, fn part, {parts, counters} ->
+      Enum.reduce(content, {[], counters}, fn part, {parts, counters} ->
         {text, counters} =
           case part do
             {:string, text} ->
@@ -2335,6 +2722,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               text = counters |> CounterState.value(name) |> Integer.to_string()
 
               {text, counters}
+
+            {:counter, name, counter_style} ->
+              {NativeElixirPdfUtilities.HtmlToPdf.CounterStyle.format(
+                 counter_style,
+                 CounterState.value(counters, name),
+                 definitions
+               ), counters}
+
+            {:counters, name, separator, counter_style} ->
+              {Enum.map_join(
+                 CounterState.values(counters, name),
+                 separator,
+                 &NativeElixirPdfUtilities.HtmlToPdf.CounterStyle.format(
+                   counter_style,
+                   &1,
+                   definitions
+                 )
+               ), counters}
+
+            {:leader, pattern} ->
+              {pattern, counters}
+
+            part when elem(part, 0) in [:target_counter, :target_text, :string] ->
+              {"", counters}
 
             {:quote, kind} ->
               depth = CounterState.value(counters, :_quote_depth)
@@ -2356,13 +2767,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       end)
 
     {parts |> Enum.reverse() |> IO.iodata_to_binary(), counters}
-  end
-
-  defp content_parts(content) do
-    case content do
-      parts when is_list(parts) -> parts
-      _ -> []
-    end
   end
 
   defp fragment_root_style(children, base_style, rules, opts) do
@@ -2452,15 +2856,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   # scope, including pseudo-elements. Probe the shared counter state without
   # painting, then reuse prepared styles and resources during normal traversal.
   defp prepare_list_counter_scope(style, children, rules, ancestors, opts) do
+    case style do
+      %{counter_reset: [_ | _] = resets} ->
+        Enum.reduce_while(resets, {:ok, style}, fn
+          {name, {:reversed, :auto}}, {:ok, style} ->
+            case prepare_reversed_counter_scope(style, children, rules, ancestors, opts, name) do
+              {:ok, style} -> {:cont, {:ok, style}}
+              error -> {:halt, error}
+            end
+
+          _, result ->
+            {:cont, result}
+        end)
+
+      _ ->
+        {:ok, style}
+    end
+  end
+
+  defp prepare_reversed_counter_scope(style, children, rules, ancestors, opts, name) do
     if HtmlValidator.counter_box?(style, :element) and
          not Map.has_key?(style, :_html_content_skipped) and
-         List.keyfind(:maps.get(:counter_reset, style, []), "list-item", 0) ==
-           {"list-item", {:reversed, :auto}} do
+         List.keyfind(:maps.get(:counter_reset, style, []), name, 0) ==
+           {name, {:reversed, :auto}} do
       [node | parents] = ancestors
-      probe_style = Map.put(style, :counter_reset, [{"list-item", {:reversed, 0}}])
+      probe_style = Map.put(style, :counter_reset, [{name, {:reversed, 0}}])
       empty = CounterState.new()
       counters = CounterState.apply(probe_style, empty, empty, node._selector_id)
-      calculation = %{owner: {:reversed, node._selector_id}, num: 0, last: 0, done: false}
+
+      calculation = %{
+        name: name,
+        owner: {:reversed, node._selector_id},
+        num: 0,
+        last: 0,
+        done: false
+      }
+
       calculation = CounterState.reversed_initial_value(style, counters, calculation, :element)
 
       with {:ok, counters, calculation} <-
@@ -2497,9 +2928,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         resets =
           List.keyreplace(
             style.counter_reset,
-            "list-item",
+            name,
             0,
-            {"list-item", {:reversed, calculation.num + calculation.last}}
+            {name, {:reversed, calculation.num + calculation.last}}
           )
 
         {:ok, Map.put(style, :counter_reset, resets)}
@@ -2600,7 +3031,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         calculation =
           CounterState.reversed_initial_value(style, element_counters, calculation, :element)
 
-        if Map.get(element_counters.scope, "list-item") != calculation.owner do
+        if Map.get(element_counters.scope, calculation.name) != calculation.owner do
           {:ok, element_counters, element_counters, calculation}
         else
           children =
@@ -3882,7 +4313,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
          do: NativeElixirPdfUtilities.Validators.CssImageValueValidator.apply_style(style, opts)
   end
 
-  defp finalize_background_image_style(style, opts, image_budget) do
+  defp finalize_background_image_style(style, opts, image_budget, loader \\ &load_paint_image/4) do
     style =
       style
       |> Map.put_new(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
@@ -3942,7 +4373,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                           do: :image,
                           else: property
 
-                      result = load_paint_image(source, opts, kind, image_budget)
+                      result = loader.(source, opts, kind, image_budget)
 
                       case result do
                         {:ok, image} ->
@@ -3969,7 +4400,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            value,
                            opts,
                            fn source ->
-                             load_paint_image(source, opts, :background_image, image_budget)
+                             loader.(source, opts, :background_image, image_budget)
                            end
                          ) do
                       {:ok, value} -> {:cont, {:ok, [value | loaded]}}
@@ -4005,7 +4436,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                              source,
                              opts,
                              fn reference ->
-                               load_paint_image(reference, opts, :background_image, image_budget)
+                               loader.(reference, opts, :background_image, image_budget)
                              end
                            )
                        ),
@@ -4117,6 +4548,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :_custom_properties,
           :_font_registry,
           :_font_definitions,
+          :_counter_styles,
           :_base_select,
           :_root_font_size,
           :_root_font_face,
@@ -5177,7 +5609,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :before => %{},
           :after => %{},
           :picker_icon => %{},
-          :first_letter => %{}
+          :first_letter => %{},
+          :marker => %{},
+          :footnote_call => %{},
+          :footnote_marker => %{}
         },
         declarations: %{}
       },

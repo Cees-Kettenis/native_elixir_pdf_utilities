@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidator do
     "first-line" => :first_line,
     "first-letter" => :first_letter,
     "marker" => :marker,
+    "footnote-call" => :footnote_call,
+    "footnote-marker" => :footnote_marker,
     "placeholder" => :placeholder,
     "-webkit-input-placeholder" => :placeholder,
     "details-content" => :details_content,
@@ -88,6 +90,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidator do
     type = if input, do: HtmlValidator.input_type(Map.get(node.attributes, "type", "text"))
 
     case pseudo do
+      kind when kind in [:footnote_call, :footnote_marker] ->
+        Map.get(style, :publishing_float) == :footnote
+
       kind when kind in [:before, :after, :first_line, :first_letter, :column] ->
         true
 
@@ -150,7 +155,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidator do
 
   @doc "Identifies pseudo-elements whose layout and painting already have an implementation owner."
   @spec paint_ready?(atom() | tuple()) :: boolean()
-  def paint_ready?(pseudo), do: pseudo in [:before, :after, :picker_icon, :first_letter]
+  def paint_ready?(pseudo),
+    do:
+      pseudo in [
+        :before,
+        :after,
+        :picker_icon,
+        :first_letter,
+        :marker,
+        :footnote_call,
+        :footnote_marker
+      ]
 
   @doc "Keeps selected pseudo-elements gated until their layout and painting implementation is ready."
   @spec validate_paint([map()], map()) :: :ok | {:error, {atom(), map()}}

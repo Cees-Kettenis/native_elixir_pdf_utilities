@@ -3,6 +3,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidatorTest do
   alias NativeElixirPdfUtilities.Validators.{CssPseudoValidator, CssSelectorValidator}
   alias NativeElixirPdfUtilities.HtmlToPdf.CssSelector
 
+  test "footnote pseudo-elements belong to the selected note" do
+    node = %{tag: "span", attributes: %{}}
+
+    for pseudo <- [:footnote_call, :footnote_marker] do
+      assert CssPseudoValidator.owner?(pseudo, node, %{publishing_float: :footnote})
+      refute CssPseudoValidator.owner?(pseudo, node, %{publishing_float: "top"})
+    end
+  end
+
   test "static control parts select their originating controls and retain separate gated identities" do
     for {selector, tag, attributes, state} <- [
           {"::marker", "li", %{}, %{}},
@@ -35,13 +44,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidatorTest do
       assert {:ok, selectors} = CssSelectorValidator.parse(selector)
       assert [owner] = CssSelector.pseudo_owners(selectors, node, [], %{})
       assert owner.owner == {node._selector_id, owner.pseudo}
-      refute owner.paint_ready
 
-      assert {:error, {:not_implemented, diagnostic}} =
-               CssPseudoValidator.validate_paint([owner], node)
+      if owner.pseudo == :marker do
+        assert owner.paint_ready
+        assert :ok = CssPseudoValidator.validate_paint([owner], node)
+      else
+        refute owner.paint_ready
 
-      assert diagnostic.stage == :css and
-               diagnostic.source == selector |> String.split("(") |> hd()
+        assert {:error, {:not_implemented, diagnostic}} =
+                 CssPseudoValidator.validate_paint([owner], node)
+
+        assert diagnostic.stage == :css and
+                 diagnostic.source == selector |> String.split("(") |> hd()
+      end
 
       other = %{node | tag: "p", attributes: %{}, _initial_form_state: %{}}
       assert CssSelector.pseudo_owners(selectors, other, [], %{}) == []

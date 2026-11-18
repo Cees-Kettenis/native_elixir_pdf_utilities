@@ -78,7 +78,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     {"counter-reset", "chapter 1 2"},
     {"counter-increment", "chapter 1.5"},
     {"list-style", "square circle"},
-    {"list-style-type", "unknown"},
+    {"list-style-type", "123"},
     {"list-style-position", "middle"},
     {"grid-template-columns", "minmax(1fr, 2fr)"},
     {"grid-template-rows", "repeat(0, 1pt)"}

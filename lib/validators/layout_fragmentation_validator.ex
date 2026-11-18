@@ -17,7 +17,16 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
     values =
       if property == "break-inside",
         do: values,
-        else: Map.merge(values, %{"page" => :page, "always" => :page, "column" => :column})
+        else:
+          Map.merge(values, %{
+            "page" => :page,
+            "always" => :page,
+            "column" => :column,
+            "left" => :left,
+            "right" => :right,
+            "recto" => :recto,
+            "verso" => :verso
+          })
 
     Map.fetch(values, value |> String.trim() |> String.downcase(:ascii))
   end
@@ -41,7 +50,11 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
             :avoid_page,
             :avoid_column,
             :page,
-            :column
+            :column,
+            :left,
+            :right,
+            :recto,
+            :verso
           ] and
             Map.get(style, :break_after, :auto) in [
               :auto,
@@ -49,7 +62,11 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
               :avoid_page,
               :avoid_column,
               :page,
-              :column
+              :column,
+              :left,
+              :right,
+              :recto,
+              :verso
             ] and
             Map.get(style, :break_inside, :auto) in [:auto, :avoid, :avoid_page, :avoid_column]
 

@@ -48,17 +48,17 @@ or page furniture. Unsupported widget transforms return diagnostics.
 | Layout | Block, inline, inline-block/table, flex, grid, flow-root, contents, logical box axes, sizing, margins, padding and gaps |
 | Text | Fonts, alignment, spacing, wrapping, whitespace, list markers, text decorations, shadows and emphasis |
 | Boxes | Colors, borders, rounded corners and background images |
-| Generated content | `::before`, `::after`, strings, `attr()`, `counter()` and counter reset/increment/set controls |
-| Printing | Print media queries, static `@supports`, bare `@page` size/margins and page breaks |
+| Generated content | `::before`, `::after`, `::marker`, replacement content, images, quotes, attribute fallbacks, nested counters and visual `@counter-style` definitions |
+| Printing | Print media queries, static `@supports`, named pages, margin boxes, cross-references, footnotes and page/column floats |
 
 Shadow styles support `:host()`, `:host-context()`, `::slotted()` and explicit
 `::part()` exports. Matching uses authored tree relationships across slot composition.
 Malformed declarations and invalid selector rules are discarded; unknown at-rules
 and `@import` are ignored. Valid declarations still receive strict value and resource
 checks. Direction selectors resolve initial HTML direction; right-to-left layout
-and painting remain gated. New pseudo-elements such as `::first-line`, `::first-letter`, `::marker`,
-`::placeholder` and control parts have selector ownership, but return
-`:not_implemented` when selected until their layout and painting are available.
+and painting remain gated. Some pseudo-elements, including `::first-line`,
+`::placeholder` and unimplemented control parts, have selector ownership and
+return `:not_implemented` when selected.
 
 Support is a subset of browser CSS. Lengths include physical units, selected-font
 `em`, `ex`, `ch`, `cap`, `ic`, `lh` and their root-relative forms. Physical and
@@ -186,8 +186,30 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | Page size | `:a4`, `:letter`, `{:a4, :landscape}` or `"100mm 60mm"` |
 | Numeric sizes | Both values ≤ 20: inches; otherwise points |
 | Margins | `36`, `"18mm 12mm"` or `%{top: 36, bottom: "12mm"}` |
-| `@page` | Supported size and absolute margins only; explicit options take priority |
-| Ignored page settings | Rotation, marks, bleed, decoration and unsupported size/margin values |
+| `@page` | Named pages, `:first`, `:left`, `:right` and `:blank` selectors, page-specific geometry and decoration |
+| Print output | `page-orientation` rotation, crop and cross marks, bleed, and PDF trim and bleed boxes |
+
+Explicit `:page_size` and `:margin` options take priority over authored geometry.
+The default print viewport still comes from the initial page geometry.
+
+### Paged publishing
+
+| Feature | Supported behavior |
+| --- | --- |
+| Running content | All 16 page-margin boxes, `counter(page)`, `counter(pages)`, `string-set` and `position: running(name)`. The draft `running: name` spelling also keeps a copy in body flow. |
+| References | `target-counter()`, `target-text()` and `leader()` for same-document references and tables of contents |
+| Breaks | Forced and avoided page/column break controls, recto/verso pages, and selected `box-decoration-break` and `margin-break` behavior |
+| Footnotes | `float: footnote`, `::footnote-call`, `::footnote-marker`, `@footnote`, keep policies and continuation across pages |
+| Floats | Static page and column placement, deferral, offsets and continuation |
+| Bookmarks | `bookmark-level`, `bookmark-label` and `bookmark-state`. Explicit `:outlines` options select the API outline behavior. |
+
+Reference targets need an ID in the same document. Running content keeps the
+source element's resource permissions. Pagination returns a diagnostic when it
+repeats a state, exhausts a resource budget or cannot advance through an
+oversized allocation across different page widths. Footnote and float
+continuations use one page size and margin configuration. Counter styles are visual.
+Spoken counter styles and live browser state are outside this static rendering
+subset.
 
 ## Tables
 

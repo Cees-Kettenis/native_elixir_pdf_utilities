@@ -74,7 +74,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   @css_opaque_pattern HtmlValidator.css_opaque_pattern()
   @page_rule_regex Regex.compile!(
-                     "#{@css_opaque_pattern}(*SKIP)(*F)|@page\\s*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}])*+)\\}",
+                     "#{@css_opaque_pattern}(*SKIP)(*F)|@page[^{};]*\\{(?<declarations>(?:#{@css_opaque_pattern}|[^{}]|\\{(?&declarations)\\})*+)\\}",
                      "ui"
                    )
   @page_rule_candidate_regex Regex.compile!(
@@ -146,7 +146,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
               with {:ok, active_css} <-
                      PrintMediaValidator.select_rules(projected, media_context),
                    {:ok, font_faces} <- parse_font_faces(active_css, css),
-                   {:ok, page_options} <- parse_page_rules(active_css, css) do
+                   {:ok, page_options} <- parse_page_rules(active_css, css),
+                   {:ok, publishing_pages} <- CssPageValidator.rules(active_css),
+                   {:ok, counter_styles} <-
+                     NativeElixirPdfUtilities.Validators.CssCounterStyleValidator.prepare(
+                       active_css
+                     ) do
                 parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
 
                 {:ok, rules, cascade} = parse_rules(parsed_css, namespaces)
@@ -160,6 +165,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                      rules: rules,
                      font_faces: font_faces,
                      page_options: page_options,
+                     page_rules: publishing_pages,
+                     counter_styles: counter_styles,
                      cascade: %{
                        layers: Enum.filter(cascade.layers, &Map.get(&1, :condition_active, true)),
                        registrations: registrations,
@@ -218,8 +225,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         projection = source_projection(css) |> Map.put(:descriptor, descriptor)
 
         with {:ok, projected, media} <- source_media_projection(projection, media_context),
+             {:ok, selected_css} <- PrintMediaValidator.select_rules(projected, media_context),
+             {:ok, counter_styles} <-
+               NativeElixirPdfUtilities.Validators.CssCounterStyleValidator.prepare(selected_css),
              {:ok, fonts} <- source_font_records(projected, projection, media),
              {:ok, pages} <- source_page_records(projected, projection, media),
+             {:ok, publishing_pages} <- CssPageValidator.rules(selected_css),
              rules_css = mask_source_blocks(projected, @font_face_rule_regex),
              rules_css = mask_source_blocks(rules_css, @page_rule_regex),
              {:ok, cascade} <- CssStylesheetValidator.prepare(rules_css, projection.namespaces),
@@ -240,10 +251,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           {:ok,
            %{
              rules: active_rules,
+             page_rules: publishing_pages,
+             counter_styles: counter_styles,
              font_faces: fonts |> Enum.filter(& &1.active) |> Enum.map(& &1.face),
              page_options:
                Enum.reduce(pages, [], fn page, options ->
-                 if page.active,
+                 if page.active and page.default,
                    do: PageGeometry.merge_page_options(options, page.options),
                    else: options
                end),
@@ -649,6 +662,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         {:ok, options, checked} ->
           page = %{
             source: source_record(projection, offset, length),
+            default: Regex.match?(~r/^@page\s*\{/iu, binary_part(projected, offset, length)),
             declarations: Enum.reverse(checked),
             options: options,
             active: source_active?(offset, media),
@@ -713,8 +727,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   apply them yet. Rendering consumes accepted named and explicit two-length
   `size` values, portrait and landscape orientations, one-to-four-value
   `margin` shorthands, and the four margin longhands. Malformed declarations,
-  unknown properties, invalid paged-media descriptor values, page selectors,
-  named-page preludes, and misspelled `@page` at-rules return
+  unknown properties, invalid paged-media descriptors or selectors, and
+  misspelled `@page` at-rules return
   `{:error, :invalid_css}`.
   """
   @spec page_options(String.t()) ::
@@ -733,8 +747,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
           with {:ok, active_css} <-
                  css |> strip_comments() |> PrintMediaValidator.select_rules(nil) do
-            case parse_page_rules(active_css, css) do
-              {:ok, page_options} -> {:ok, page_options}
+            with {:ok, page_options} <- parse_page_rules(active_css, css),
+                 {:ok, _rules} <- CssPageValidator.rules(active_css) do
+              {:ok, page_options}
+            else
               {:error, {reason, _detail}} -> {:error, reason}
             end
           end
@@ -898,8 +914,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp page_rule_blocks(css) do
     @page_rule_regex
-    |> Regex.scan(css, capture: ["declarations"])
-    |> List.flatten()
+    |> Regex.scan(css)
+    |> Enum.filter(fn [source, _] -> Regex.match?(~r/^@page\s*\{/iu, source) end)
+    |> Enum.map(&List.last/1)
   end
 
   defp parse_page_rules(css, diagnostic_css) do

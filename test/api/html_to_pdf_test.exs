@@ -3599,26 +3599,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              }}} = HtmlToPdf.render(html)
   end
 
-  test "render returns detailed diagnostics for unsupported page selectors" do
+  test "render returns detailed diagnostics for invalid page selectors" do
     html = """
     <style>
-    @page :first { size: A5; margin: 1pt; }
+    @page :unknown { size: A5; margin: 1pt; }
     </style>
     <p>Unsupported page selector</p>
     """
 
-    assert {:error,
-            {:invalid_css,
-             %{
-               stage: :css,
-               reason: :invalid_css,
-               operation: :render,
-               module: NativeElixirPdfUtilities.HtmlToPdf,
-               line: 2,
-               column: 1,
-               source: "@page :first",
-               message: ~s(line 2: page rule "@page :first" is invalid or unsupported)
-             }}} = HtmlToPdf.render(html)
+    assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html)
+    assert diagnostic.stage == :css and diagnostic.operation == :render
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.CssPageValidator
+    assert diagnostic.source == "@page :unknown"
+    assert diagnostic.line == 2 and diagnostic.column == 1
   end
 
   test "render accepts valid unused page-context properties" do

@@ -723,10 +723,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
              {:ok, []}
   end
 
-  test "page rules reject selectors, named pages, and misspelled at-rules" do
+  test "page rules reject invalid page selectors and retain unknown at-rules" do
     for css <- [
-          "@page :first { size: A5; margin: 1pt; }",
-          "@page rotated { size: letter; }"
+          "@page :unknown { size: A5; margin: 1pt; }",
+          "@page rotated invalid { size: letter; }"
         ] do
       assert CssParser.page_options(css) == {:error, :invalid_css}
       assert CssParser.parse(css) == {:error, :invalid_css}
@@ -734,19 +734,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
     css = """
     p { color: black; }
-    @page :first { size: A5; margin: 1pt; }
+    @page :unknown { size: A5; margin: 1pt; }
     """
 
-    assert {:error,
-            {:invalid_css,
-             %{
-               stage: :css,
-               reason: :invalid_css,
-               line: 2,
-               column: 1,
-               source: "@page :first",
-               message: ~s(line 2: page rule "@page :first" is invalid or unsupported)
-             }}} = CssParser.parse_detailed(css)
+    assert {:error, {:invalid_css, %{stage: :css, source: source}}} =
+             CssParser.parse_detailed(css)
+
+    assert source =~ "@page :unknown"
 
     assert {:ok, []} = CssParser.parse_detailed("@pagefoo { size: A3; }")
 

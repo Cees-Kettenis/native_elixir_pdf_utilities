@@ -261,7 +261,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
             {replacement, namespaces, false}
 
           {name, _}
-          when name in ["font-face", "page", "font-feature-values", "font-palette-values"] ->
+          when name in [
+                 "font-face",
+                 "page",
+                 "counter-style",
+                 "font-feature-values",
+                 "font-palette-values"
+               ] ->
             {rule.source, namespaces, false}
 
           {_unknown, _} ->

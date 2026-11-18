@@ -2222,7 +2222,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec prepare_list_marker(map(), integer()) :: map()
   def prepare_list_marker(style, ordinal) do
     if style.display == :list_item do
-      marker = CounterStyle.marker(:maps.get(:list_marker_type, style, :disc), ordinal)
+      marker =
+        CounterStyle.marker(
+          :maps.get(:list_marker_type, style, :disc),
+          ordinal,
+          Map.get(style, :_counter_styles, %{})
+        )
+
       reserve_render_resource(:max_output_bytes, byte_size(marker), :style)
       marker_style = list_paint_style(style)
       markers = if marker == "", do: [], else: [%{type: :text, text: marker, style: marker_style}]
@@ -2267,6 +2273,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           normalized in ~w(inside outside) and property != "list-style-type" ->
             {:ok, :list_style_position, if(normalized == "inside", do: :inside, else: :outside)}
 
+          property == "list-style-type" and normalized in ~w(inside outside) ->
+            :error
+
           property != "list-style-position" ->
             case normalized do
               "none" ->
@@ -2306,7 +2315,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                 {:ok, :list_marker_type, :upper_roman}
 
               _ ->
-                :error
+                if String.starts_with?(token, "symbols(") do
+                  case NativeElixirPdfUtilities.Validators.CssCounterStyleValidator.symbols(token) do
+                    {:ok, definition} ->
+                      {:ok, :list_marker_type, {:custom_counter_style, definition}}
+
+                    _ ->
+                      :error
+                  end
+                else
+                  if NativeElixirPdfUtilities.Validators.CssCounterStyleValidator.identifier?(
+                       token
+                     ), do: {:ok, :list_marker_type, token}, else: :error
+                end
             end
 
           true ->
@@ -8540,6 +8561,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     # Incoming styled trees must not supply internal border calculations.
     is_map(style) and
       valid_css_scene_style?(style) and
+      NativeElixirPdfUtilities.Validators.CssPublishingValidator.valid_style?(style) and
       not Map.has_key?(style, :_collapsed_borders) and
       (:maps.get(:_image_map, style, nil) == nil or
          NativeElixirPdfUtilities.Validators.ImageMapValidator.valid_model?(style._image_map)) and
@@ -8554,7 +8576,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           true
 
         {:ok, markers} when is_list(markers) ->
-          Enum.all?(markers, &match?(%{type: :text}, &1)) and
+          Enum.all?(
+            markers,
+            &(match?(%{type: :text}, &1) or
+                match?(%{type: :element, tag: "img", style: %{display: :image}}, &1))
+          ) and
             validate_layout_nodes(markers) == :ok
 
         _ ->
@@ -8779,8 +8805,15 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp valid_pages?(pages, page_size) do
     Enum.all?(pages, fn page ->
       case page do
-        %{size: ^page_size, boxes: boxes} when is_list(boxes) -> true
-        _ -> false
+        %{size: ^page_size, boxes: boxes} when is_list(boxes) ->
+          true
+
+        %{size: size, margins: margins, boxes: boxes} when is_list(boxes) ->
+          validate_page_size(size) == :ok and validate_margins(margins) == :ok and
+            validate_printable_area(size, margins) == :ok
+
+        _ ->
+          false
       end
     end)
   end

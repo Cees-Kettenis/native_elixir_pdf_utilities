@@ -5,8 +5,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
 
   # Scopes select the visible instance by name. Values remain shared across
   # descendants so restoring an outer scope retains increments made inside it.
-  @empty %{scope: %{}, values: %{}, created: %{}}
-  @type t :: %{scope: map(), values: map(), created: map()}
+  @empty %{scope: %{}, values: %{}, created: %{}, chains: %{}}
+  @type t :: %{scope: map(), values: map(), created: map(), chains: map()}
 
   @doc "Returns an empty counter scope."
   @spec new() :: t()
@@ -60,7 +60,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
             Map.update(acc, creator, %{name => creator}, &Map.put(&1, name, creator))
           end)
 
-        %{scope: scope, values: values, created: created}
+        chains =
+          Map.new(scope, fn {name, creator} ->
+            source =
+              if Map.get(parent.scope, name) == creator,
+                do: parent,
+                else: if(sibling == nil, do: latest, else: sibling)
+
+            {name, Map.get(source.chains, name, [creator])}
+          end)
+
+        %{scope: scope, values: values, created: created, chains: chains}
       end
     end
   end
@@ -69,9 +79,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
   @spec apply(map(), t(), t(), term()) :: t()
   @spec apply(map(), t(), t(), term(), :element | :pseudo) :: t()
   def apply(style, counters, parent, creator, kind \\ :element) do
-    if HtmlValidator.counter_box?(style, kind),
-      do: apply_box(style, counters, parent, creator),
-      else: counters
+    case style do
+      %{display: display}
+      when display != :list_item and not is_map_key(style, :counter_reset) and
+             not is_map_key(style, :counter_increment) and not is_map_key(style, :counter_set) and
+             not is_map_key(style, :publishing_float) ->
+        counters
+
+      _ ->
+        if HtmlValidator.counter_box?(style, kind),
+          do: apply_box(style, counters, parent, creator),
+          else: counters
+    end
   end
 
   defp apply_box(style, counters, parent, creator) do
@@ -100,7 +119,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
             state
           end
 
-        put(state, name, creator, value)
+        chain = Map.get(parent.chains, name, []) ++ [creator]
+        put(%{state | chains: Map.put(state.chains, name, chain)}, name, creator, value)
       end)
 
     counters =
@@ -128,7 +148,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
       end
 
     counters =
-      Enum.reduce(increments(style, step), counters, fn {name, amount}, state ->
+      Enum.reduce(increments(style, step, counters), counters, fn {name, amount}, state ->
         owner = Map.get(state.scope, name, creator)
         put(state, name, owner, value(state, name) + amount)
       end)
@@ -142,17 +162,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
   @spec reversed_initial_value(map(), t(), map(), :element | :pseudo) :: map()
   def reversed_initial_value(style, counters, calculation, kind) do
     if not calculation.done and HtmlValidator.counter_box?(style, kind) and
-         Map.get(counters.scope, "list-item") == calculation.owner do
+         Map.get(counters.scope, Map.get(calculation, :name, "list-item")) == calculation.owner do
       negated =
-        Enum.reduce(increments(style, -1), 0, fn {name, amount}, total ->
-          if name == "list-item", do: total - amount, else: total
+        Enum.reduce(increments(style, -1, counters), 0, fn {name, amount}, total ->
+          if name == Map.get(calculation, :name, "list-item"), do: total - amount, else: total
         end)
 
       last = if negated == 0, do: calculation.last, else: negated
-      set = List.keyfind(Enum.reverse(Map.get(style, :counter_set, [])), "list-item", 0)
+
+      set =
+        List.keyfind(
+          Enum.reverse(Map.get(style, :counter_set, [])),
+          Map.get(calculation, :name, "list-item"),
+          0
+        )
 
       case set do
-        {"list-item", value} ->
+        {_name, value} ->
           %{calculation | num: calculation.num + value, last: last, done: true}
 
         nil ->
@@ -163,8 +189,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
     end
   end
 
-  defp increments(style, step) do
-    increments = Map.get(style, :counter_increment, [])
+  defp increments(style, step, counters) do
+    implicit = Map.get(style, :counter_increment_implicit, MapSet.new())
+
+    increments =
+      style
+      |> Map.get(:counter_increment, [])
+      |> Enum.with_index()
+      |> Enum.map(fn {{name, value}, index} ->
+        reversed = match?({:reversed, _}, Map.get(counters.scope, name))
+        {name, if(reversed and MapSet.member?(implicit, index), do: -1, else: value)}
+      end)
+
+    increments =
+      if Map.get(style, :publishing_float) == :footnote and
+           not List.keymember?(increments, "footnote", 0),
+         do: [{"footnote", 1} | increments],
+         else: increments
 
     if Map.get(style, :display) == :list_item and
          not List.keymember?(increments, "list-item", 0),
@@ -181,7 +222,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
       counters
     else
       HtmlValidator.reserve_render_resource(:max_work, map_size(additions), :style)
-      %{counters | scope: Map.merge(counters.scope, additions)}
+
+      %{
+        counters
+        | scope: Map.merge(counters.scope, additions),
+          chains: Map.merge(counters.chains, Map.take(latest.chains, Map.keys(additions)))
+      }
     end
   end
 
@@ -189,6 +235,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
   @spec value(t(), term()) :: integer()
   def value(counters, name) do
     Map.get(counters.values, {name, Map.get(counters.scope, name)}, 0)
+  end
+
+  @doc "Returns visible nested instances from outermost to innermost."
+  @spec values(t(), String.t()) :: [integer()]
+  def values(counters, name) do
+    case Map.get(counters.chains, name, []) do
+      [] -> [0]
+      creators -> Enum.map(creators, &Map.get(counters.values, {name, &1}, 0))
+    end
   end
 
   @doc "Sets the document-wide quotation depth."
@@ -200,6 +255,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterState do
 
     %{
       scope: Map.put(counters.scope, name, creator),
+      chains: Map.put_new(counters.chains, name, [creator]),
       values: Map.put(counters.values, {name, creator}, value),
       created:
         Map.update(counters.created, creator, %{name => creator}, &Map.put(&1, name, creator))

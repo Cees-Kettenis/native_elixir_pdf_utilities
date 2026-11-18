@@ -6,7 +6,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
   @sides ~w(top right bottom left)
   @font_controls NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties()
-  @simple ~w(outline-width outline-style outline-color outline-offset box-shadow border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize box-sizing border-radius
+  @simple NativeElixirPdfUtilities.Validators.CssPublishingValidator.properties() ++
+            ~w(outline-width outline-style outline-color outline-offset box-shadow border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize box-sizing border-radius
     text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
     ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation opacity mix-blend-mode contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
@@ -75,6 +76,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             "list-style-type" => [[:list_marker_type]],
             "list-style-position" => [[:list_style_position]],
             "list-style-image" => [[:list_style_image], [:list_style_image_source]],
+            "page" => [[:page_name]],
+            "float" => [[:float], [:publishing_float]],
+            "position" => [[:position], [:running_name], [:running_copy]],
+            "running" => [[:running_name], [:running_copy]],
+            "counter-increment" => [[:counter_increment], [:counter_increment_implicit]],
             "break-before" => [[:break_before]],
             "break-after" => [[:break_after]],
             "break-inside" => [[:break_inside]],

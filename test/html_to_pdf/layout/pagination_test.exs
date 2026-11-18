@@ -7,6 +7,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PaginationTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.Pagination
   alias NativeElixirPdfUtilities.HtmlToPdf.Style
 
+  test "reserved column placement keeps a blank column and applies the first fragment's margin" do
+    assert Layout.attach_html_target(%{break_after: :avoid}, [], 0, 0) == []
+
+    first = %{
+      type: :rect,
+      x: 0.0,
+      y: -30.0,
+      width: 10.0,
+      height: 30.0,
+      break_after: :avoid_column,
+      css_margin_break: {"keep", 4.0},
+      publishing_targets: [:figure]
+    }
+
+    second = %{type: :rect, x: 0.0, y: -70.0, width: 10.0, height: 30.0}
+    placement = %{minimum_pages: %{figure: 2}, page_offset: 0, reserves: %{}, direction: :ltr}
+
+    assert {:ok, [blank, held, tail]} =
+             Pagination.fragment_columns([first, second], 100.0, 50.0, placement)
+
+    assert [%{role: :publishing_blank}] = blank.boxes
+    assert [%{publishing_targets: [:figure], y: y}] = held.boxes
+    assert_in_delta y, 16.0, 0.01
+    assert [%{type: :rect}] = tail.boxes
+  end
+
   test "root body trailing padding keeps the final fragment within its page" do
     for {height, padding, count} <- [{"auto", 12, 2}, {"auto", 0, 1}, {"20pt", 12, 1}] do
       html =

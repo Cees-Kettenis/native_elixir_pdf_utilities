@@ -80,7 +80,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end)
   end
 
-  defp decorate_pages(pages, page_size, margins, furniture, opts, image_budget) do
+  defp decorate_pages(pages, _page_size, margins, furniture, opts, image_budget) do
     case furniture do
       nil ->
         {:ok, pages}
@@ -91,6 +91,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
         pages
         |> Enum.with_index(1)
         |> Enum.reduce_while({:ok, []}, fn {page, page_number}, {:ok, decorated} ->
+          page_size = page.size
+          margins = Map.get(page, :margins, margins)
+
           with {:ok, header_boxes} <-
                  render_position(
                    :header,

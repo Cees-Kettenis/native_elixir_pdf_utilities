@@ -163,6 +163,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
               graphemes
           end
 
+        graphemes =
+          if Map.has_key?(node, :publishing_text_id) do
+            {graphemes, _} =
+              Enum.map_reduce(graphemes, Map.get(node, :publishing_offset, 0), fn grapheme,
+                                                                                  offset ->
+                {Map.put(grapheme, :publishing_offset, offset),
+                 offset + length(String.codepoints(grapheme.text))}
+              end)
+
+            graphemes
+          else
+            graphemes
+          end
+
         prepared =
           node
           |> Map.put(:_font_candidates, candidates)
@@ -243,10 +257,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                 text
               )
 
-            append_run(runs, node, style, font_face, text, source)
+            append_run(
+              runs,
+              node,
+              style,
+              font_face,
+              text,
+              source,
+              Map.get(grapheme, :publishing_offset)
+            )
           end)
 
-        Enum.reverse(resolved)
+        if resolved == [] and Map.has_key?(node, :publishing_content),
+          do: [node],
+          else: Enum.reverse(resolved)
 
       %{type: :element, children: children} = element when is_list(children) ->
         element =
@@ -263,7 +287,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
     end
   end
 
-  defp append_run(runs, node, style, font_face, grapheme, source) do
+  defp append_run(runs, node, style, font_face, grapheme, source, publishing_offset) do
     case runs do
       [%{style: %{font_face: previous_face}} = previous | remaining]
       when previous_face == font_face ->
@@ -284,6 +308,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
           if source,
             do: Map.put(resolved_style, :_source_glyph_characters, source),
             else: resolved_style
+
+        resolved_style =
+          if runs != [] and Map.has_key?(resolved_style, :_generated_alternative),
+            do: Map.put(resolved_style, :_generated_alternative, ""),
+            else: resolved_style
+
+        node =
+          if publishing_offset == nil,
+            do: node,
+            else: Map.put(node, :publishing_offset, publishing_offset)
 
         [%{node | text: grapheme, style: resolved_style} | runs]
     end

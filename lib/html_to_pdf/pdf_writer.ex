@@ -562,8 +562,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     annotations = annotation_dictionary(annotation_object_ids)
     gradients = gauge_gradient_dictionary(page.boxes)
 
+    page_boxes =
+      Enum.map_join([{:trim_box, "TrimBox"}, {:bleed_box, "BleedBox"}], fn {key, name} ->
+        case Map.fetch(page, key) do
+          :error ->
+            ""
+
+          {:ok, rectangle} ->
+            " /#{name} [" <>
+              (rectangle |> Tuple.to_list() |> Enum.map_join(" ", &format_number/1)) <> "]"
+        end
+      end)
+
     """
-    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}] /Resources << /Font << #{fonts} >>#{xobjects}#{graphics_states}#{gradients} >> /Contents #{content_object_id} 0 R#{annotations} >>
+    << /Type /Page /Parent #{pages_object_id} 0 R /MediaBox [0 0 #{format_number(width)} #{format_number(height)}]#{page_boxes} /Resources << /Font << #{fonts} >>#{xobjects}#{graphics_states}#{gradients} >> /Contents #{content_object_id} 0 R#{annotations} >>
     """
     |> String.trim()
   end

@@ -130,8 +130,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout do
           remaining = if is_number(height), do: max(height - used, @precision), else: nil
           followed_by_span? = index < last_section
 
-          with {:ok, source, natural_height} <-
-                 without_page(fn -> render.(section, inner, 0.0, 0.0, column_width) end) do
+          floats? = NativeElixirPdfUtilities.HtmlToPdf.PagedDocument.column_floats?(section)
+
+          with {:ok, source, natural_height, floats} <-
+                 without_page(fn ->
+                   if floats?,
+                     do:
+                       NativeElixirPdfUtilities.HtmlToPdf.PagedDocument.column_source(
+                         section,
+                         inner,
+                         column_width,
+                         render
+                       ),
+                     else:
+                       with(
+                         {:ok, source, height} <- render.(section, inner, 0.0, 0.0, column_width),
+                         do: {:ok, source, height, nil}
+                       )
+                 end) do
             fill =
               if followed_by_span?, do: :balance, else: Map.get(style, :column_fill, :balance)
 
@@ -147,27 +163,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout do
             paged? = remaining == nil and page_capacity != nil
 
             initial =
-              if natural_height == 0,
-                do: {:ok, [{[%{size: {column_width, 0.0}, boxes: source}], 0.0}]},
-                else:
-                  entry_column_sets(
-                    source,
-                    max(column_width, 0.75),
-                    upper,
-                    count,
-                    fill,
-                    paged?,
-                    boxes,
-                    x,
-                    y - used,
-                    style
-                  )
+              if floats != nil do
+                with {:ok, pages} <-
+                       NativeElixirPdfUtilities.HtmlToPdf.PagedDocument.column_fragments(
+                         source,
+                         floats,
+                         column_width,
+                         upper
+                       ) do
+                  {:ok, Enum.map(column_groups(pages, count, paged?), &{&1, upper})}
+                end
+              else
+                if natural_height == 0,
+                  do: {:ok, [{[%{size: {column_width, 0.0}, boxes: source}], 0.0}]},
+                  else:
+                    entry_column_sets(
+                      source,
+                      max(column_width, 0.75),
+                      upper,
+                      count,
+                      fill,
+                      paged?,
+                      boxes,
+                      x,
+                      y - used,
+                      style
+                    )
+              end
 
             with {:ok, sets} <- initial do
               minimum_height = sets |> Enum.map(&elem(&1, 1)) |> Enum.min()
 
               sets =
-                if minimum_height > 0 and nested_columns?(section) and
+                if floats == nil and minimum_height > 0 and nested_columns?(section) and
                      minimum_height < (page_capacity || upper) do
                   # Nested fragmentainers need their final outer capacity before
                   # allocating source text to inner columns. Repeat layout once at
