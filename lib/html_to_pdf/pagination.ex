@@ -2098,52 +2098,58 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp keep_table_groups(groups, headers, content_height) do
     groups =
-      groups
-      |> Enum.chunk_by(fn group ->
-        if group.row_group_avoid, do: group.row_group, else: make_ref()
-      end)
-      |> Enum.flat_map(fn [first | rest] = rows ->
-        height = first.top - List.last(rows).bottom
-        header_height = Map.get(headers, first.table_id, %{height: 0}).height
+      if Enum.any?(groups, & &1.row_group_avoid) do
+        groups
+        |> Enum.chunk_by(fn group ->
+          if group.row_group_avoid, do: group.row_group, else: make_ref()
+        end)
+        |> Enum.flat_map(fn [first | rest] = rows ->
+          height = first.top - List.last(rows).bottom
+          header_height = Map.get(headers, first.table_id, %{height: 0}).height
 
-        if first.row_group_avoid and height + header_height <= content_height do
-          [Map.put(first, :placement_height, height) | rest]
-        else
-          rows
-        end
-      end)
-
-    # A table heading must travel with at least its first body row. Looking
-    # ahead also preserves a fitting first row group when starting a table.
-    groups
-    |> Enum.with_index()
-    |> Enum.map(fn {group, index} ->
-      if group.table_section == :head do
-        following = Enum.drop(groups, index + 1)
-
-        {headings, body} =
-          Enum.split_while(
-            following,
-            &(&1.table_id == group.table_id and &1.table_section == :head)
-          )
-
-        case body do
-          [row | _] when row.table_id == group.table_id ->
-            heading_height = group.top - List.last([group | headings]).bottom
-            required = heading_height + Map.get(row, :placement_height, row.height)
-
-            required =
-              if required <= content_height, do: required, else: heading_height + row.height
-
-            Map.put(group, :placement_height, required)
-
-          _ ->
-            group
-        end
+          if first.row_group_avoid and height + header_height <= content_height do
+            [Map.put(first, :placement_height, height) | rest]
+          else
+            rows
+          end
+        end)
       else
-        group
+        groups
       end
-    end)
+
+    # Advance a list cursor so each heading can find its following body row
+    # without scanning the earlier tables again.
+    {groups, _} =
+      Enum.map_reduce(groups, groups, fn group, [_current | following] ->
+        if group.table_section == :head do
+          {headings, body} =
+            Enum.split_while(
+              following,
+              &(&1.table_id == group.table_id and &1.table_section == :head)
+            )
+
+          kept =
+            case body do
+              [row | _] when row.table_id == group.table_id ->
+                heading_height = group.top - List.last([group | headings]).bottom
+                required = heading_height + Map.get(row, :placement_height, row.height)
+
+                required =
+                  if required <= content_height, do: required, else: heading_height + row.height
+
+                Map.put(group, :placement_height, required)
+
+              _ ->
+                group
+            end
+
+          {kept, following}
+        else
+          {group, following}
+        end
+      end)
+
+    groups
   end
 
   defp keep_avoided_breaks(groups, height, context) do
@@ -2191,17 +2197,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     |> Enum.filter(&(&1.repeat_table_header == true and not is_nil(&1.table_id)))
     |> Enum.group_by(& &1.table_id)
     |> Map.new(fn {table_id, header_groups} ->
-      top = header_groups |> Enum.map(& &1.top) |> Enum.max()
-      bottom = header_groups |> Enum.map(& &1.bottom) |> Enum.min()
+      {top, bottom, boxes} =
+        case header_groups do
+          [%{top: top, bottom: bottom, boxes: boxes}] ->
+            {top, bottom, boxes}
 
-      header = %{
-        boxes: Enum.flat_map(header_groups, & &1.boxes),
-        top: top,
-        bottom: bottom,
-        height: top - bottom
-      }
+          groups ->
+            {Enum.max_by(groups, & &1.top).top, Enum.min_by(groups, & &1.bottom).bottom,
+             Enum.flat_map(groups, & &1.boxes)}
+        end
 
-      {table_id, header}
+      {table_id, %{boxes: boxes, top: top, bottom: bottom, height: top - bottom}}
     end)
   end
 
