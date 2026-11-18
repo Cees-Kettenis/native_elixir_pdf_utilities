@@ -8,11 +8,27 @@ when Elixir/Erlang are already on your PATH.
 
 | Check | Command |
 | --- | --- |
-| One suite | `mise exec -- mix test test/html_to_pdf/tables/atomic_table_overflow_test.exs` |
-| Formatting | `mise exec -- mix format --check-formatted` |
-| Coverage | `mise exec -- mix test --cover --warnings-as-errors` |
+| One suite | `./scripts/quality-matrix --check test test/html_to_pdf/tables/atomic_table_overflow_test.exs` |
+| Compile, formatting and unused dependencies | `./scripts/quality-matrix --check format` |
+| Standalone 100% coverage | `./scripts/quality-matrix --check coverage` |
+| One Chromium parity suite | `./scripts/quality-matrix --check parity test/html_to_pdf/browser_parity/curved_border_browser_parity_test.exs` |
+| Full Chromium parity only | `./scripts/quality-matrix --check parity` |
 | Dialyzer | `MIX_ENV=test mise exec -- mix dialyzer` |
 | Performance | `mise exec -- ./scripts/check-performance` |
+
+Each `--check` uses the CI images and freezes the current source at startup.
+Test, format and coverage use the canonical runtime. Parity uses every supported
+runtime. Supply paths or Mix test arguments to `test` and `parity` to check a
+specific change and its affected existing behavior. Coverage runs the full
+ordinary suite and enforces the same threshold as CI.
+
+Run parity and coverage in separate terminals or background jobs while reviewing
+the change. Each check and runtime has its own build and browser reference cache.
+Set `QUALITY_MATRIX_JOBS=2` on the parity command to run two runtimes together
+when the host has CPU and memory to spare. Wait for running checks before starting
+performance measurements or the full matrix. Results, warnings and source
+snapshots are under `.quality/checks/<check>/logs/<run>/`. Restart affected
+checks after changing their inputs.
 
 Run focused checks while working and the full matrix before submitting a PR.
 

@@ -96,7 +96,7 @@ Use case/cond/with or clearly named private functions instead of hidden branchin
   fixture so the native output is compared against Chromium.
 - Browser parity work must pass on every supported runtime through the quality
   matrix. Use `CHROMIUM_BIN=/usr/bin/chromium mise exec -- mix test.browser_parity`
-  for focused host feedback or to investigate a host/container discrepancy.
+  to investigate a host/container discrepancy.
 
 Before adding browser parity coverage, check whether the scenario can join an
 existing page group or share a browser reference. Explain any new independent
@@ -107,6 +107,11 @@ increases in browser launches or raster work, including unexpected reference
 fallbacks, and require the full quality matrix to pass.
 
 ## Quality Gates
+
+During development, use `./scripts/quality-matrix --check test` with relevant
+test paths. Use `--check coverage` for standalone CI coverage and `--check parity`
+with affected test paths for visible changes. Run independent checks concurrently
+when resources allow and keep performance measurements isolated.
 
 Run `./scripts/quality-matrix` for every change. Do not consider agent-authored
 work complete or push it unless the matrix succeeds. Inspect every `FAIL` or

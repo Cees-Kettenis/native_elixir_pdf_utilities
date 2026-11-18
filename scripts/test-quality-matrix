@@ -77,6 +77,11 @@ for setting in "${envs[@]}"; do
 done
 export MOCK_RUNTIME="${MIX_BUILD_PATH#*elixir-}"
 export MOCK_RUNTIME="${MOCK_RUNTIME%%/*}"
+export MOCK_PHASE=checks
+if [[ "$MIX_BUILD_PATH" == */.quality/checks/* ]]; then
+  MOCK_PHASE="${MIX_BUILD_PATH#*/.quality/checks/}"
+  MOCK_PHASE="${MOCK_PHASE%%/*}"
+fi
 cd "$workspace"
 exec "$@"
 MOCK_DOCKER
@@ -87,6 +92,7 @@ printf '%s\t%s\t%s\n' "$MOCK_RUNTIME" "$*" "$MIX_ENV" >> "$MOCK_TRACE/commands"
 case "$1" in
   test)
     [[ "$(cat source.txt)" == 'pending change' && "$(cat untracked.txt)" == 'new input' ]]
+    if [[ "$MOCK_PHASE" != checks ]]; then exit 0; fi
     echo "$MOCK_RUNTIME" > source.txt
     mkdir -p tmp/browser_parity
     echo "$MOCK_RUNTIME" > tmp/browser_parity/output
@@ -103,9 +109,15 @@ case "$1" in
     done
     "$ready" ;;
   test.browser_parity)
-    [[ "$(cat source.txt)" == "$MOCK_RUNTIME" ]]
     [[ -z "${MIX_TEST_PARTITION+x}" ]]
-    [[ "$*" == 'test.browser_parity --warnings-as-errors' ]]
+    if [[ "$MOCK_PHASE" == checks ]]; then
+      [[ "$(cat source.txt)" == "$MOCK_RUNTIME" ]]
+      [[ "$*" == 'test.browser_parity --warnings-as-errors' ]]
+    else
+      [[ "$(cat source.txt)" == 'pending change' ]]
+      [[ "$#" == 3 && "$2" == --warnings-as-errors && "$3" == 'test/browser suite.exs' ]]
+      [[ "$BROWSER_PARITY_CACHE" == */.quality/checks/parity/browser-reference-cache/elixir-"$MOCK_RUNTIME" ]]
+    fi
     [[ "$BROWSER_PARITY_TOOLCHAIN" == sha256:mock ]]
     [[ "$CHROMIUM_PROFILE_ROOT" == /browser-profiles ]]
     if [[ "${MOCK_CACHE_OFF:-}" == true ]]; then [[ "$BROWSER_PARITY_CACHE" == off ]]; fi
@@ -180,6 +192,39 @@ for version in 1.19 1.20 1.21; do
 done
 check test ! -e "$project/.quality/matrix.lock"
 echo 'QUALITY_MATRIX_TEST_PASS parallel_source_isolation_latest_policy_and_performance_barrier'
+
+prepare_fixture focused
+run_matrix --check coverage
+check test "$status" -eq 0
+check grep -Fxq $'1.21\ttest --cover --warnings-as-errors\ttest' "$MOCK_TRACE/commands"
+check test "$(cut -f1 "$MOCK_TRACE/commands" | sort -u)" = 1.21
+if grep -Eq $'\t(format|dialyzer|test\\.browser_parity|test\\.performance|clean)( |\t)' "$MOCK_TRACE/commands"; then
+  fail 'coverage_must_run_without_other_checks'
+fi
+check test -d "$project/.quality/checks/coverage/elixir-1.21/build"
+: > "$MOCK_TRACE/commands"
+run_matrix --check test test/unit_test.exs:42
+check test "$status" -eq 0
+check grep -Fxq $'1.21\ttest --warnings-as-errors test/unit_test.exs:42\ttest' "$MOCK_TRACE/commands"
+: > "$MOCK_TRACE/commands"
+run_matrix --check format
+check test "$status" -eq 0
+check grep -Fxq $'1.21\tformat --check-formatted\ttest' "$MOCK_TRACE/commands"
+check grep -Fxq $'1.21\tdeps.unlock --check-unused\ttest' "$MOCK_TRACE/commands"
+: > "$MOCK_TRACE/commands"
+export MOCK_FAIL_PARITY=1.19 MIX_TEST_PARTITION=2
+run_matrix --check parity 'test/browser suite.exs'
+unset MIX_TEST_PARTITION
+check test "$status" -eq 1
+check grep -Fq 'runtime=1.19 stage=parity status=FAIL' "$project/output"
+check grep -Fq 'runtime=1.21 stage=parity status=PASS' "$project/output"
+for version in 1.19 1.20 1.21; do
+  check test -d "$project/.quality/checks/parity/elixir-$version/build"
+  check test "$(grep -Fxc "$version" "$MOCK_TRACE/parity-invocations")" -eq 1
+done
+run_matrix --check coverage test/unit_test.exs
+check test "$status" -eq 2
+echo 'QUALITY_MATRIX_TEST_PASS focused_checks_runtime_selection_and_failure_propagation'
 
 for outcome in retention retention-after-failure; do
   prepare_fixture "$outcome"
