@@ -1249,7 +1249,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             independent? =
               :maps.get(:position, style, :static) in [:absolute, :fixed] or
                 :maps.get(:_flow_root, style, false) or
-                NativeElixirPdfUtilities.Validators.CssContainmentValidator.independent?(style) or
+                ((is_map_key(style, :contain) or is_map_key(style, :content_visibility)) and
+                   NativeElixirPdfUtilities.Validators.CssContainmentValidator.independent?(style)) or
                 parent_display in [:flex, :inline_flex, :grid, :inline_grid] or
                 NativeElixirPdfUtilities.Validators.CssOverflowValidator.independent?(style) or
                 :maps.get(:_fieldset, style, false) or Map.has_key?(style, :embedded_document) or
@@ -2894,10 +2895,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp intrinsic_content_width(children, style, kind) do
-    case NativeElixirPdfUtilities.Validators.CssContainmentValidator.intrinsic(style, :width) do
-      nil -> measure_intrinsic_content_width(children, style, kind)
-      width -> width
-    end
+    placeholder =
+      if is_map_key(style, :contain) or is_map_key(style, :container_type) or
+           is_map_key(style, :_html_content_skipped) do
+        NativeElixirPdfUtilities.Validators.CssContainmentValidator.intrinsic(style, :width)
+      end
+
+    placeholder || measure_intrinsic_content_width(children, style, kind)
   end
 
   defp measure_intrinsic_content_width(children, style, kind) do

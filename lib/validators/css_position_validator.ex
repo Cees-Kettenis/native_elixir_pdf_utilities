@@ -109,6 +109,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
   @doc "Computes position units at their declaring element while retaining the used percentage space."
   @spec compute_style(map()) :: {:ok, map()} | :error | {:error, {atom(), map()}}
   def compute_style(style) do
+    case style do
+      %{
+        offsets: %{top: :auto, right: :auto, bottom: :auto, left: :auto} = offsets,
+        background_position: {{:percent, x}, {:percent, y}}
+      }
+      when map_size(offsets) == 4 and is_number(x) and is_number(y) and
+             not is_map_key(style, :object_position) and not is_map_key(style, :transform_origin) ->
+        {:ok, style}
+
+      _ ->
+        compute_style_positions(style)
+    end
+  end
+
+  defp compute_style_positions(style) do
     Enum.reduce_while(
       [:offsets, :object_position, :background_position, :transform_origin],
       {:ok, style},

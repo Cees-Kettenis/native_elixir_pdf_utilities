@@ -2977,17 +2977,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok, style}
       end)
 
-      owners =
-        NativeElixirPdfUtilities.HtmlToPdf.CssSelector.pseudo_owners(
-          rules.rules.gated_selectors,
-          node,
-          ancestors,
-          rules,
-          style
-        )
+      paint_validation =
+        case rules.rules do
+          %{gated_selectors: []} ->
+            :ok
 
-      with :ok <-
-             NativeElixirPdfUtilities.Validators.CssPseudoValidator.validate_paint(owners, node),
+          %{gated_selectors: selectors} ->
+            selectors
+            |> NativeElixirPdfUtilities.HtmlToPdf.CssSelector.pseudo_owners(
+              node,
+              ancestors,
+              rules,
+              style
+            )
+            |> NativeElixirPdfUtilities.Validators.CssPseudoValidator.validate_paint(node)
+        end
+
+      with :ok <- paint_validation,
            {:ok, first_letter} <-
              generated_content_style(node, :first_letter, style, rules, ancestors) do
         {:ok,

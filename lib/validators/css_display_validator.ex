@@ -414,7 +414,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssDisplayValidator do
       match?(%{column_width: width} when width != :auto, style) or
       match?(%{column_span: :all}, style) or
       Map.get(style, :position, :static) in [:absolute, :fixed] or
-      NativeElixirPdfUtilities.Validators.CssContainmentValidator.independent?(style) or
+      ((is_map_key(style, :contain) or is_map_key(style, :content_visibility)) and
+         NativeElixirPdfUtilities.Validators.CssContainmentValidator.independent?(style)) or
       Map.get(style, :_fieldset, false) or
       Map.has_key?(style, :embedded_document) or
       NativeElixirPdfUtilities.Validators.CssOverflowValidator.independent?(style)
