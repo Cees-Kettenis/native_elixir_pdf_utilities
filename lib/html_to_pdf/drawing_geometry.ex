@@ -177,12 +177,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
       end
 
     box =
-      Enum.reduce([{:x, delta_x}, {:y, delta_y}], box, fn {key, delta}, shifted ->
-        case Map.get(shifted, key) do
-          value when is_number(value) -> Map.put(shifted, key, value + delta)
-          _ -> shifted
-        end
-      end)
+      case box do
+        %{x: x} when is_number(x) -> %{box | x: x + delta_x}
+        _ -> box
+      end
+
+    box =
+      case box do
+        %{y: y} when is_number(y) -> %{box | y: y + delta_y}
+        _ -> box
+      end
 
     box =
       case Map.get(box, :clip) do

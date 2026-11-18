@@ -426,39 +426,55 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
         page.boxes
         |> Enum.with_index()
         |> Enum.map(fn {box, box_index} ->
-          box =
-            if Map.has_key?(box, :css_border_surface),
-              do:
-                Map.put(
-                  box,
-                  :select_opacity_resource_key,
-                  {:css_border_surface, page_index, box_index}
-                ),
-              else: box
+          case box do
+            %{type: type}
+            when type != :image and not is_map_key(box, :css_border_surface) and
+                   not is_map_key(box, :initial_select_opacity) and
+                   not is_map_key(box, :css_compositing_scopes) ->
+              box
 
-          box =
-            case Map.get(box, :initial_select_opacity) do
-              nil ->
-                box
+            _ ->
+              box =
+                if Map.has_key?(box, :css_border_surface),
+                  do:
+                    Map.put(
+                      box,
+                      :select_opacity_resource_key,
+                      {:css_border_surface, page_index, box_index}
+                    ),
+                  else: box
 
-              %{owner: owner} ->
-                Map.put(box, :select_opacity_resource_key, {:select_opacity, page_index, owner})
-            end
+              box =
+                case Map.get(box, :initial_select_opacity) do
+                  nil ->
+                    box
 
-          box =
-            case Map.get(box, :css_compositing_scopes, []) do
-              [] ->
-                box
+                  %{owner: owner} ->
+                    Map.put(
+                      box,
+                      :select_opacity_resource_key,
+                      {:select_opacity, page_index, owner}
+                    )
+                end
 
-              [scope | _] ->
-                box
-                |> Map.put(:css_inner_opacity_key, Map.get(box, :select_opacity_resource_key))
-                |> Map.put(:select_opacity_resource_key, {:css_compositing, page_index, scope.id})
-            end
+              box =
+                case Map.get(box, :css_compositing_scopes, []) do
+                  [] ->
+                    box
 
-          case box.type do
-            :image -> Map.put(box, :image_resource_key, image_key(box.image))
-            _ -> box
+                  [scope | _] ->
+                    box
+                    |> Map.put(:css_inner_opacity_key, Map.get(box, :select_opacity_resource_key))
+                    |> Map.put(
+                      :select_opacity_resource_key,
+                      {:css_compositing, page_index, scope.id}
+                    )
+                end
+
+              case box.type do
+                :image -> Map.put(box, :image_resource_key, image_key(box.image))
+                _ -> box
+              end
           end
         end)
 
@@ -877,10 +893,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
     {page_width, page_height} = page.size
 
     page.boxes
-    |> Enum.filter(
-      &(&1.type in [:text, :image, :link_region] and
-          (is_binary(Map.get(&1, :link_url)) or Map.get(&1, :link_destination) != nil))
-    )
+    |> Enum.filter(fn box ->
+      (is_map_key(box, :link_url) or is_map_key(box, :link_destination)) and
+        box.type in [:text, :image, :link_region] and
+        (is_binary(:maps.get(:link_url, box, nil)) or
+           :maps.get(:link_destination, box, nil) != nil)
+    end)
     |> Enum.flat_map(fn box ->
       {width, height} =
         case box.type do
