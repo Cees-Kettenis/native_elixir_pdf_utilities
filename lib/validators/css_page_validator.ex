@@ -235,23 +235,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
         selector =
           rule.selectors |> String.trim() |> String.slice(5..-1//1) |> String.trim()
 
-        selectors = String.split(selector, ",")
-
-        parsed =
-          Enum.map(selectors, fn source ->
-            [name | pseudo] = String.split(String.trim(source), ":")
-
-            if (name == "" or (name != "auto" and CssCounterStyleValidator.identifier?(name))) and
-                 Enum.all?(pseudo, &(&1 in ~w(first left right blank))),
-               do: %{
-                 name: name,
-                 pseudo: pseudo,
-                 specificity:
-                   {if(name == "", do: 0, else: 1), Enum.count(pseudo, &(&1 in ~w(first blank))),
-                    Enum.count(pseudo, &(&1 in ~w(left right)))}
-               },
-               else: nil
-          end)
+        parsed = Enum.map(CssSyntaxValidator.split_trimmed(selector, ","), &page_selector/1)
 
         items = CssSyntaxValidator.block_items(rule.declarations)
 
@@ -317,9 +301,74 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
     end
   end
 
+  defp page_selector(source) do
+    alias NativeElixirPdfUtilities.Validators.{CssCounterStyleValidator, CssSyntaxValidator}
+
+    [name | pseudos] = CssSyntaxValidator.split_trimmed(source, ":")
+
+    pseudos =
+      Enum.map(pseudos, fn
+        name when name in ~w(first left right blank) ->
+          name
+
+        source ->
+          with {:ok, body, ""} <- CssSyntaxValidator.function(":" <> source, "nth"),
+               [expression | groups] <- Regex.split(~r/\s+of\s+/i, String.trim(body), parts: 2),
+               group = List.first(groups) || "",
+               true <- group == "" or CssCounterStyleValidator.identifier?(group),
+               {:ok, {:nth_child, series}, ""} <-
+                 HtmlValidator.parse_css_nth_pseudo_class(":nth-child(" <> expression <> ")") do
+            {:nth, series, group}
+          else
+            _ -> nil
+          end
+      end)
+
+    if (name == "" or (name != "auto" and CssCounterStyleValidator.identifier?(name))) and
+         Enum.all?(pseudos, &(not is_nil(&1))) do
+      priority = Enum.count(pseudos, &(&1 in ["first", "blank"] or match?({:nth, _, _}, &1)))
+      side = Enum.count(pseudos, &(&1 in ["left", "right"]))
+
+      %{
+        name: name,
+        pseudo: pseudos,
+        specificity: {if(name == "", do: 0, else: 1), priority, side}
+      }
+    end
+  end
+
+  @doc "Returns the page-group names that referenced positions need to track."
+  @spec group_names([map()]) :: MapSet.t()
+  def group_names(rules) do
+    MapSet.new(
+      for rule <- rules,
+          selector <- rule.selectors,
+          {:nth, _, group} <- selector.pseudo,
+          group != "",
+          do: group
+    )
+  end
+
+  @doc "Checks for positional rules with descriptors that can change the layout of a later page."
+  @spec positional_geometry?([map()]) :: boolean()
+  def positional_geometry?(rules) do
+    Enum.any?(rules, fn rule ->
+      Enum.any?(rule.selectors, fn selector ->
+        Enum.any?(selector.pseudo, &match?({:nth, _, _}, &1))
+      end) and
+        Enum.any?(rule.declarations, fn declaration ->
+          property = elem(declaration, 0)
+
+          property in ~w(size page-orientation line-height) or
+            String.starts_with?(property, ["margin", "padding", "border", "font"])
+        end)
+    end)
+  end
+
   @doc "Cascades matching page rules by page specificity, importance and source order."
   @spec select([map()], String.t(), pos_integer(), boolean(), :ltr | :rtl) :: map()
-  def select(rules, name, number, blank, direction \\ :ltr) do
+  @spec select([map()], String.t(), pos_integer(), boolean(), :ltr | :rtl, map()) :: map()
+  def select(rules, name, number, blank, direction \\ :ltr, group_positions \\ %{}) do
     side =
       if rem(number, 2) == 1,
         do: if(direction == :rtl, do: "left", else: "right"),
@@ -333,9 +382,23 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
           Enum.filter(rule.selectors, fn selector ->
             selector.name in ["", name] and
               Enum.all?(selector.pseudo, fn
-                "first" -> number == 1
-                "blank" -> blank
-                pseudo -> pseudo == side
+                "first" ->
+                  number == 1
+
+                "blank" ->
+                  blank
+
+                {:nth, index, ""} ->
+                  HtmlValidator.css_nth_matches?(index, number)
+
+                {:nth, index, group} ->
+                  Enum.any?(
+                    Map.get(group_positions, group, []),
+                    &HtmlValidator.css_nth_matches?(index, &1)
+                  )
+
+                pseudo ->
+                  pseudo == side
               end)
           end)
 

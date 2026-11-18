@@ -289,6 +289,7 @@ The default print viewport still comes from the initial page geometry.
 
 | Feature | Supported behavior |
 | --- | --- |
+| Page selectors | Physical `:nth(An+B)` and named `:nth(An+B of name)` page groups. A named element with a forced page break establishes a group, which can contain pages belonging to another group. |
 | Running content | All 16 page-margin boxes, `counter(page)`, `counter(pages)`, `string-set` and `position: running(name)`. The draft `running: name` spelling also keeps a copy in body flow. |
 | References | `target-counter()`, `target-text()` and `leader()` for same-document references and tables of contents |
 | Breaks | Forced and avoided page/column break controls, recto/verso pages, and selected `box-decoration-break` and `margin-break` behavior |
@@ -336,15 +337,27 @@ therefore wrap differently or extend farther beyond the page.
 | --- | --- |
 | Formats | PNG, JPEG and rasterized SVG; [image restrictions](image-processing.md) |
 | SVG text and links | Text becomes pixels; internal links are inactive |
-| Image styling | `object-fit`, `object-position`, `image-orientation`, `image-resolution` and `image-rendering` |
-| CSS images | URLs, linear/radial/conic gradients and their repeating forms, `image-set()` and static `image()` sources with color fallback |
+| Image styling | `object-fit`, `object-position`, rectangular `object-view-box`, `image-orientation`, `image-resolution` and `image-rendering` |
+| CSS images | URLs, linear/radial/conic gradients and their repeating forms, `image-set()`, static `image()`, `cross-fade()`, and same-document `element(#id)` for static images |
 | Backgrounds | Ordered layers, shorthand resets, independent sizes/positions/repetition, origin/clip boxes and fixed page attachment |
 
 `image-set()` uses `:image_selection_density`, shared with responsive HTML images.
-Only the selected supported source is loaded. Static `image()` supports direction
-and a color fallback for an unavailable or undecodable image. Permission denials
-and resource-limit failures retain their diagnostics rather than using a fallback.
-Asset permissions and resolver behavior are the same as for ordinary images.
+Only the selected supported source is loaded. Static `image()` supports direction,
+a color fallback for an unavailable or undecodable image, and pixel or percentage
+`#xywh` crops on decoded PNG or SVG surfaces. `cross-fade()` samples these surfaces
+and generated color/gradient layers in premultiplied sRGB. JPEG remains available
+as an ordinary image. `element(#id)` selects the static `src` of a same-document
+`img` without responsive sources, in documents without shadow roots. Permission
+denials and resource-limit failures retain their diagnostics.
+
+External SVG image paint accepts `link-parameters: param(--name, value)`,
+`#param(--name,value)` fragments, and quoted `url()` modifiers. An SVG can
+read these values with `env(--name, fallback)` in paint attributes and styles.
+Values are limited to literal colors and numbers or simple lengths. The SVG's
+own resource permissions apply. Segment and repeating markers support straight
+lines and polylines. Offset marker knockouts and dash adjustments apply to
+single straight segments, and inside/outside strokes apply to unrounded solid
+rectangles with miter joins.
 
 Raster orientation uses Exif metadata by default. `image-orientation:none` retains
 the encoded orientation. `image-resolution:from-image` opts into Exif/JFIF or PNG
@@ -368,15 +381,18 @@ shared image, raster, work and entry budgets.
 | --- | --- |
 | Color spaces | sRGB, linear sRGB, Display P3, A98 RGB, ProPhoto RGB, Rec. 2020, XYZ D50/D65, Lab/LCH, Oklab/Oklch, HSL and HWB |
 | Color functions | Relative colors, missing components, `color-mix()`, `light-dark()` and deterministic system colors |
+| Print color input | Named RGB ICC matrix profiles, `device-cmyk()`, `hdr-color()` and Rec. 2100 linear, PQ and HLG, ICtCp, Jzazbz and JzCzhz input |
 | Interpolation | Premultiplied alpha, selected color spaces, hue paths, gradient stop fixup, double positions and transition hints |
 | Corners | Physical and logical corner longhands, elliptical pairs, percentages and proportional overlap reduction |
 | Borders | Border images with independent slices, widths, outsets, edge repetition and optional center fill |
 | Additional paint | Outlines and offsets, ordered outer/inset box shadows, inherited `-webkit-text-fill-color` and text stroke |
 
 Conversions and mixing retain extended channels until the paint boundary. Output
-uses component-clipped sRGB in PDF DeviceRGB; this is not an ICC workflow or a
-PDF-wide conformance claim. Gradients use the legacy sRGB default unless an
-interpolation space is specified with `in`.
+uses component-clipped sRGB in PDF DeviceRGB. `@color-profile` reads authorized
+ICC v2/v4 RGB matrix profiles with relative colorimetric intent and simple or
+table tone curves. CMYK uses the CSS conversion to sRGB. HDR uses zero stops of
+print headroom and diffuse white as its luminance reference. Gradients use the
+legacy sRGB default unless an interpolation space is specified with `in`.
 
 The print environment prefers light when both color schemes are offered.
 `color-scheme:dark` selects the dark system/control palette. Authored colors take
@@ -469,6 +485,12 @@ replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 | Custom fonts | Embeddable TrueType, CFF/CFF2 OpenType, WOFF/WOFF2 and selected collection faces; [registration example](html-to-pdf-examples.md#register-a-font) |
 | Face selection | Ordered families; CSS directional weight and width matching, weight/width ranges, italic/oblique descriptors and Unicode ranges. Supply `collection_index` to select a collection face, starting at zero |
 | Missing characters | Fallback fonts, then replacement; use `unsupported_glyphs: :error` to fail |
+
+Text boxes support first- and last-line edge trimming with `text-box-trim`,
+`text-box-edge` and `text-box`. `line-fit-edge` uses text, cap-height,
+x-height and alphabetic font metrics. `text-fit` grows or shrinks plain text
+lines. Superscript and subscript face descriptors override the size and baseline
+shift of synthesized horizontal glyphs.
 
 CFF 1 fonts preserve source charstrings, hints and local/global subroutine ownership
 when converted to CID-keyed PDF fonts. Each document character code keeps its own
@@ -592,7 +614,7 @@ font metrics. Missing information returns an actionable font diagnostic.
 | --- | --- |
 | JavaScript, media playback, canvas drawing APIs | Static HTML and images |
 | Embedded PDFs, XFA, JavaScript form actions | Supported HTML and PDF forms |
-| Named pages, page-margin boxes, CSS page counters | Page options and header/footer templates |
+| GCPM 4 copied content and historical CSS Template Layout | Running content, CSS Grid, and modern print layout |
 
 Embedded content and framesets have restricted static support. SVG, control
 styling and some layouts can differ from browsers. Check your generated PDF.

@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     CounterState,
     CounterStyle,
+    CssColor,
     DrawingGeometry,
     Font,
     FontFallback,
@@ -23,6 +24,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
   @spec prepare(map(), keyword(), keyword(), function()) ::
           {:ok, map(), [map()]} | {:error, term()}
   def prepare(tree, opts, explicit, layout) do
+    CssColor.with_profiles(Map.get(tree, :css_color_profiles, %{}), fn ->
+      prepare_pages(tree, opts, explicit, layout)
+    end)
+  end
+
+  defp prepare_pages(tree, opts, explicit, layout) do
     active =
       Enum.any?(Map.get(tree, :css_page_rules, []), fn rule ->
         rule.margin_boxes != %{} or Enum.any?(rule.selectors, &(&1.name != "" or &1.pseudo != [])) or
@@ -661,20 +668,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
   end
 
   defp layout_segments(tree, opts, explicit, layout, state) do
+    rules = Map.get(tree, :css_page_rules, [])
+    group_names = CssPageValidator.group_names(rules)
+
     segments =
-      case split_nodes(tree.children, "") do
+      case split_nodes(tree.children, "", [], group_names) do
         [] -> [[]]
         nodes -> Enum.chunk_by(nodes, &elem(&1, 0))
       end
 
-    Enum.reduce_while(segments, {:ok, nil, []}, fn group, {:ok, result, pages} ->
-      name =
-        case group do
-          [] -> ""
-          [{name, _} | _] -> name
+    Enum.reduce_while(segments, {:ok, nil, [], %{}}, fn segment,
+                                                        {:ok, result, pages, group_counts} ->
+      {name, groups} =
+        case segment do
+          [] -> {"", []}
+          [{key, _} | _] -> key
         end
 
       number = length(pages) + 1
+
+      positioned =
+        Enum.group_by(groups, &elem(&1, 0), fn {_, id} -> Map.get(group_counts, id, 0) + 1 end)
 
       selected =
         CssPageValidator.select(
@@ -682,10 +696,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           name,
           number,
           false,
-          Map.get(first_style(tree), :direction, :ltr)
+          Map.get(first_style(tree), :direction, :ltr),
+          positioned
         )
 
-      part = %{tree | children: Enum.map(group, &elem(&1, 1))}
+      part = %{tree | children: Enum.map(segment, &elem(&1, 1))}
 
       with {:ok, options, page_margins} <-
              page_options(selected, opts, explicit, first_style(tree)),
@@ -701,17 +716,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
              }),
            {:ok, placed} <-
              if(variable_geometry?(tree, name, number, opts, explicit),
-               do: varying_pages(part, opts, explicit, layout, state, name, number, []),
+               do:
+                 varying_pages(part, opts, explicit, layout, state, name, number, [], positioned),
                else: Pagination.paginate(measured, options)
              ) do
         placed =
-          Enum.map(
-            placed,
-            &(&1
-              |> Map.put(:page_name, name)
-              |> Map.put_new(:margins, measured.margins)
-              |> Map.put_new(:page_box_margins, page_margins))
-          )
+          Enum.with_index(placed, fn page, index ->
+            page
+            |> Map.put(:page_name, name)
+            |> Map.put(:page_groups, group_positions(positioned, index))
+            |> Map.put_new(:margins, measured.margins)
+            |> Map.put_new(:page_box_margins, page_margins)
+          end)
+
+        group_counts =
+          Enum.reduce(groups, group_counts, fn {_, id}, counts ->
+            Map.update(counts, id, length(placed), &(&1 + length(placed)))
+          end)
 
         {:cont,
          {:ok, result || measured,
@@ -722,11 +743,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
                 :blank,
                 Enum.any?(page.boxes, &(Map.get(&1, :role) == :publishing_blank))
               )
-            end)}}
+            end), group_counts}}
       else
         error -> {:halt, error}
       end
     end)
+    |> case do
+      {:ok, measured, pages, _groups} -> {:ok, measured, pages}
+      error -> error
+    end
+  end
+
+  defp group_positions(positions, delta) do
+    Map.new(positions, fn {name, indices} -> {name, Enum.map(indices, &(&1 + delta))} end)
   end
 
   defp variable_geometry?(tree, name, number, opts, explicit) do
@@ -748,10 +777,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
               first_style(tree)
             )
 
-    length(Enum.uniq(options)) > 1
+    CssPageValidator.positional_geometry?(rules) or length(Enum.uniq(options)) > 1
   end
 
-  defp varying_pages(tree, opts, explicit, layout, state, name, number, pages) do
+  defp varying_pages(tree, opts, explicit, layout, state, name, number, pages, positions) do
     HtmlValidator.check_render_resource(:max_pages, number, :pagination)
 
     selected =
@@ -760,7 +789,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
         name,
         number,
         false,
-        Map.get(first_style(tree), :direction, :ltr)
+        Map.get(first_style(tree), :direction, :ltr),
+        group_positions(positions, length(pages))
       )
 
     with {:ok, options, page_margins} <- page_options(selected, opts, explicit, first_style(tree)),
@@ -799,7 +829,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
             state,
             name,
             number + 1,
-            pages ++ [first]
+            pages ++ [first],
+            positions
           )
 
         true ->
@@ -815,7 +846,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
               state,
               name,
               number + 1,
-              pages ++ [first]
+              pages ++ [first],
+              positions
             )
           else
             CssPublishingValidator.failure(
@@ -912,20 +944,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
     {Enum.reject(nodes, &is_nil/1), changed}
   end
 
-  defp split_nodes(nodes, inherited) do
+  defp split_nodes(nodes, inherited, parent_groups, tracked) do
     Enum.flat_map(nodes, fn node ->
-      name = get_in(node, [:style, :page_name]) || inherited
+      style = Map.get(node, :style, %{})
+      authored = Map.get(style, :page_name)
+      name = authored || inherited
+
+      groups =
+        if MapSet.member?(tracked, authored) and
+             (Map.get(style, :break_before) in [:page, :left, :right, :recto, :verso] or
+                Map.get(style, :break_after) in [:page, :left, :right, :recto, :verso]),
+           do: [{authored, make_ref()} | parent_groups],
+           else: parent_groups
 
       case node do
         %{type: :element, children: [_ | _] = children} ->
-          split_nodes(children, name)
+          split_nodes(children, name, groups, tracked)
           |> Enum.chunk_by(&elem(&1, 0))
           |> Enum.map(fn group ->
             {elem(hd(group), 0), %{node | children: Enum.map(group, &elem(&1, 1))}}
           end)
 
         _ ->
-          [{name, node}]
+          [{{name, groups}, node}]
       end
     end)
   end
@@ -1084,7 +1125,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           registry.page_rules,
           page.page_name,
           target,
-          Map.get(page, :blank, false)
+          Map.get(page, :blank, false),
+          Map.get(node.style, :direction, :ltr),
+          Map.get(page, :page_groups, %{})
         )
 
       area_declarations =
@@ -1445,7 +1488,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
             sheet.page_name,
             number,
             number <= count and sheet.blank,
-            Map.get(base, :direction, :ltr)
+            Map.get(base, :direction, :ltr),
+            group_positions(Map.get(sheet, :page_groups, %{}), max(number - count, 0))
           )
 
         with {:ok, destination} <-
@@ -1482,7 +1526,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
             sheet.page_name,
             page,
             Map.get(sheet, :blank, false),
-            Map.get(node.style, :direction, :ltr)
+            Map.get(node.style, :direction, :ltr),
+            Map.get(sheet, :page_groups, %{})
           )
 
         style =
@@ -1531,7 +1576,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
             page.page_name,
             n,
             Map.get(page, :blank, false),
-            Map.get(base, :direction, :ltr)
+            Map.get(base, :direction, :ltr),
+            Map.get(page, :page_groups, %{})
           )
 
         declarations =
@@ -1586,7 +1632,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           page.page_name,
           number,
           Map.get(page, :blank, false),
-          Map.get(base, :direction, :ltr)
+          Map.get(base, :direction, :ltr),
+          Map.get(page, :page_groups, %{})
         )
 
       typography =

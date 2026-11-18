@@ -860,7 +860,16 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           end
 
         _ ->
-          {:error, :invalid_document}
+          if :binary.match(normalized, "param(") != :nomatch do
+            case NativeElixirPdfUtilities.Validators.CssLinkParameterValidator.modified_url(
+                   normalized
+                 ) do
+              :error -> {:error, :invalid_document}
+              result -> result
+            end
+          else
+            {:error, :invalid_document}
+          end
       end
     end
   end
@@ -1211,8 +1220,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   # streams until a missing or cyclic property actually selects them.
   defp css_variable_references(value, depth) do
     with :ok <- css_limit(:max_depth, depth),
-         {:ok, _} <-
-           NativeElixirPdfUtilities.Validators.CssMathValidator.component_tokens(value, false) do
+         true <-
+           :binary.match(value, ["(", ")", <<34>>, <<39>>, <<92>>]) == :nomatch or
+             match?(
+               {:ok, _},
+               NativeElixirPdfUtilities.Validators.CssMathValidator.component_tokens(value, false)
+             ) do
       reserve_render_resource(:max_work, byte_size(value), :css)
 
       # Balanced components without a function opening cannot contain var().
@@ -1227,7 +1240,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
         css_variable_scan(units, value, depth, [])
       end
     else
-      :invalid -> :error
+      false -> :error
       result -> result
     end
   end
@@ -4846,6 +4859,18 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
       nil ->
         nil
+    end
+  end
+
+  @doc "Matches a prepared An+B series against a one-based index."
+  @spec css_nth_matches?(term(), pos_integer()) :: boolean()
+  def css_nth_matches?(index, position) do
+    case index do
+      :odd -> rem(position, 2) == 1
+      :even -> rem(position, 2) == 0
+      {0, offset} -> position == offset
+      {step, offset} -> rem(position - offset, step) == 0 and div(position - offset, step) >= 0
+      index -> position == index
     end
   end
 
@@ -8558,7 +8583,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
              not is_map_key(style, :css_offset_distance) and
              not is_map_key(style, :css_offset_position) and
              not is_map_key(style, :css_offset_anchor) and
-             not is_map_key(style, :css_offset_rotate) ->
+             not is_map_key(style, :css_offset_rotate) and
+             not is_map_key(style, :object_view_box) ->
         true
 
       _ ->
@@ -8567,7 +8593,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           NativeElixirPdfUtilities.Validators.CssMaskValidator.valid_style?(style) and
           NativeElixirPdfUtilities.Validators.CssTransformValidator.valid_style?(style) and
           NativeElixirPdfUtilities.Validators.CssProjectionValidator.valid_style?(style) and
-          NativeElixirPdfUtilities.Validators.CssMotionValidator.valid_style?(style)
+          NativeElixirPdfUtilities.Validators.CssMotionValidator.valid_style?(style) and
+          NativeElixirPdfUtilities.Validators.CssObjectViewBoxValidator.valid_style?(style)
     end
   end
 

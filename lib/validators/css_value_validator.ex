@@ -52,9 +52,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                               NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.properties() ++
                               ~w(offset offset-path offset-position offset-anchor offset-distance offset-rotate perspective perspective-origin transform-style backface-visibility translate rotate scale transform-box clip-path filter backdrop-filter opacity mix-blend-mode background-blend-mode border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius image-orientation image-resolution image-rendering background-origin background-clip background-attachment color-scheme print-color-adjust forced-color-adjust flex-flow width height min-width max-width min-height max-height
           margin padding border-width border-style border-radius border-spacing
-          text-align text-transform unicode-bidi white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style text-wrap tab-size word-break word-wrap overflow-wrap line-break
+          text-box text-box-trim text-box-edge line-fit-edge text-fit text-align text-transform unicode-bidi white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style text-wrap tab-size word-break word-wrap overflow-wrap line-break
           break-before page-break-before break-after page-break-after break-inside page-break-inside
-          content-visibility visibility resize zoom field-sizing scrollbar-width scrollbar-color scrollbar-gutter appearance ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction display box-sizing position z-index isolation contain contain-intrinsic-size contain-intrinsic-width contain-intrinsic-height container container-name container-type object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
+          content-visibility visibility resize zoom field-sizing scrollbar-width scrollbar-color scrollbar-gutter appearance ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction display box-sizing position z-index isolation contain contain-intrinsic-size contain-intrinsic-width contain-intrinsic-height container container-name container-type link-parameters object-view-box object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
           border-collapse caption-side table-layout empty-cells flex-direction flex-wrap gap row-gap column-gap
           justify-content align-items align-self justify-self justify-items align-content place-content place-items place-self order reading-flow reading-order
           flex-grow flex-shrink flex-basis flex grid-column grid-row grid-column-start grid-column-end
@@ -2104,6 +2104,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
 
           "z-index" ->
             put_z_index(style, value)
+
+          property
+          when property in ~w(text-box text-box-trim text-box-edge line-fit-edge text-fit) ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssTextBoxValidator.prepare(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
+          "link-parameters" ->
+            with {:ok, parameters} <-
+                   NativeElixirPdfUtilities.Validators.CssLinkParameterValidator.prepare(value),
+                 do: {:ok, Map.put(style, :link_parameters, parameters)}
+
+          "object-view-box" ->
+            with {:ok, view} <-
+                   NativeElixirPdfUtilities.Validators.CssObjectViewBoxValidator.prepare(value),
+                 do: {:ok, Map.put(style, :object_view_box, view)}
 
           "object-fit" ->
             put_object_fit(style, value)

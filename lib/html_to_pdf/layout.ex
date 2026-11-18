@@ -4169,7 +4169,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         lines = if prefix == [], do: [], else: inline_lines(prefix, width)
         last = List.last(lines) || []
-        height = if lines == [], do: 0.0, else: inline_content_height(prefix, lines, style)
+        height = if lines == [], do: 0.0, else: inline_content_height(prefix, lines, style, width)
         line_height = if lines == [], do: 0.0, else: inline_line_height(last, style, width)
 
         clearances =
@@ -4998,19 +4998,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {225.0, 112.5, nil}
 
         image ->
+          dimensions = image_view_box(style, image)
+
+          {natural_width, natural_height} =
+            case dimensions do
+              nil -> {image.width, image.height}
+              {_left, _top, width, height} -> {width, height}
+            end
+
           ratio =
             cond do
-              Map.has_key?(image, :svg_document_image) and (image.width == 0 or image.height == 0) ->
+              Map.has_key?(image, :svg_document_image) and
+                  (natural_width == 0 or natural_height == 0) ->
                 nil
 
-              image.height == 0 ->
+              natural_height == 0 and dimensions != nil ->
+                nil
+
+              natural_height == 0 ->
                 image.width_px / image.height_px
 
               true ->
-                image.width / image.height
+                natural_width / natural_height
             end
 
-          {image.width, image.height, ratio}
+          {natural_width, natural_height, ratio}
       end
 
     ratio =
@@ -12653,6 +12665,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     lines = prepared_lines || inline_lines(runs, width)
     lines = fit_hyphenation_fragmentainer(runs, lines, style, width)
+    lines = fit_text_lines(lines, style, width)
 
     {lines, candidates} =
       if runs == [],
@@ -12805,6 +12818,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
         {current_line_height, measured_depth} = inline_line_extents(line_runs, style)
         baseline_depth = inline_line_baseline_depth(line_runs, style, measured_depth)
+
+        {current_line_height, baseline_depth} =
+          trim_text_line(style, current_line_height, baseline_depth, index, last_line_index)
+
         line_top = y - consumed_height
 
         shift =
@@ -14714,24 +14731,189 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp inline_content_height(runs, measurement, style) do
+  defp inline_content_height(runs, measurement, style, available_width \\ nil) do
     case measurement do
       width when is_number(width) ->
         runs
         |> inline_lines(width)
-        |> then(&inline_content_height(runs, &1, style))
+        |> then(&inline_content_height(runs, &1, style, width))
 
       measurement ->
         height =
           case {runs, measurement} do
-            {[], _} -> 0.0
-            {_, {:measured, height}} -> height
-            {_, lines} -> Enum.reduce(lines, 0.0, &(&2 + inline_line_height(&1, style, nil)))
+            {[], _} ->
+              0.0
+
+            {_, {:measured, height}} ->
+              height
+
+            {_, lines} ->
+              lines =
+                if available_width, do: fit_text_lines(lines, style, available_width), else: lines
+
+              case style do
+                %{text_box_trim: trim} when trim in [:start, :end, :both] ->
+                  last = length(lines) - 1
+
+                  lines
+                  |> Enum.with_index()
+                  |> Enum.reduce(0.0, fn {line, index}, total ->
+                    {height, depth} = inline_line_extents(line, style)
+                    {height, _depth} = trim_text_line(style, height, depth, index, last)
+                    total + height
+                  end)
+
+                _ ->
+                  Enum.reduce(lines, 0.0, &(&2 + inline_line_height(&1, style, nil)))
+              end
           end
 
         if :maps.get(:form_kind, style, nil) in [:text, :input_button, :select],
           do: max(height, Map.fetch!(style, :line_height)),
           else: height
+    end
+  end
+
+  defp trim_text_line(style, height, depth, index, last) do
+    case style do
+      %{text_box_trim: trim} when trim in [:start, :end, :both] and height > 0 ->
+        trim_line_edges(style, trim, height, depth, index, last)
+
+      _ ->
+        {height, depth}
+    end
+  end
+
+  defp trim_line_edges(style, trim, height, depth, index, last) do
+    edge = :maps.get(:text_box_edge, style, :auto)
+    edge = if edge == :auto, do: :maps.get(:line_fit_edge, style, :leading), else: edge
+
+    {ascent, descent} =
+      text_box_metrics(style, if(edge == :leading, do: {:text, :text}, else: edge))
+
+    start = if index == 0 and trim in [:start, :both], do: max(0.0, depth - ascent), else: 0.0
+
+    finish =
+      if index == last and trim in [:end, :both],
+        do: max(0.0, height - depth - descent),
+        else: 0.0
+
+    {height - start - finish, depth - start}
+  end
+
+  defp text_box_metrics(style, {above, below}) do
+    font = style.font_face
+    size = Font.line_size(font, style.font_size)
+
+    {ascent, descent} =
+      case Map.get(font, :layout_metrics, font) do
+        %{ascent: ascent, descent: descent, units_per_em: units} ->
+          {ascent / units * size, -descent / units * size}
+
+        _ ->
+          {size, 0.0}
+      end
+
+    ascent =
+      case above do
+        :text ->
+          ascent
+
+        metric ->
+          {aspect, fallback} =
+            if metric == :cap, do: {"cap-height", 0.7}, else: {"ex-height", 0.5}
+
+          ratio =
+            case font do
+              %{type: :embedded} ->
+                NativeElixirPdfUtilities.Validators.FontMetricValidator.aspect(font, aspect)
+                |> layout_value()
+                |> Kernel.||(fallback)
+
+              _ ->
+                fallback
+            end
+
+          ratio * size
+      end
+
+    {ascent, if(below == :alphabetic, do: 0.0, else: descent)}
+  end
+
+  defp fit_text_lines(lines, style, width) do
+    case style do
+      %{text_fit: {mode, method, cap}} when mode in [:grow, :shrink] and width > 0 ->
+        apply_text_fit(lines, width, mode, method, cap)
+
+      _ ->
+        lines
+    end
+  end
+
+  defp apply_text_fit(lines, width, mode, method, cap) do
+    last = length(lines) - 1
+
+    factors =
+      lines
+      |> Enum.with_index()
+      |> Enum.map(fn {line, index} ->
+        if (method == :per_line and
+              (index == last or Enum.any?(line, &Map.get(&1, :_forced_line_end, false)))) or
+             not Enum.all?(line, &plain_text_fit_run?/1) do
+          1.0
+        else
+          measured = inline_line_width(line, width)
+          if measured > 0, do: limit_text_fit(width / measured, mode, cap), else: 1.0
+        end
+      end)
+
+    factors =
+      if method == :consistent and factors != [] do
+        factor =
+          if Enum.all?(lines, &Enum.all?(&1, fn run -> plain_text_fit_run?(run) end)),
+            do: Enum.min(factors),
+            else: 1.0
+
+        List.duplicate(factor, length(factors))
+      else
+        factors
+      end
+
+    Enum.zip_with(lines, factors, fn
+      line, 1.0 ->
+        line
+
+      line, factor ->
+        Enum.map(line, fn run ->
+          style = run.style
+
+          scaled =
+            Enum.reduce(
+              Map.take(style, [:font_size, :line_height, :letter_spacing, :word_spacing]),
+              style,
+              fn {property, value}, result -> Map.put(result, property, value * factor) end
+            )
+
+          HtmlValidator.check_render_resource(:max_numeric_magnitude, scaled.font_size, :layout)
+          %{run | style: scaled}
+        end)
+        |> List.update_at(0, &Map.put(&1, :_text_fit_factor, factor))
+    end)
+  end
+
+  defp plain_text_fit_run?(run) do
+    Map.get(run, :type) in [nil, :text] and not Map.has_key?(run, :_tab_advance) and
+      not Map.has_key?(run, :_split_inline_alignment) and
+      not Map.has_key?(run.style, :_publishing_leader) and
+      not Map.has_key?(run.style, :_ruby_box)
+  end
+
+  defp limit_text_fit(ratio, mode, cap) do
+    case mode do
+      :grow when is_number(cap) and cap >= 1 -> max(1.0, min(ratio, cap))
+      :grow -> max(1.0, ratio)
+      :shrink when is_number(cap) and cap >= 0 and cap <= 1 -> min(1.0, max(ratio, cap))
+      :shrink -> min(1.0, ratio)
     end
   end
 
@@ -14741,6 +14923,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   # Line height and baseline share the same font, emphasis and atomic extents.
   defp inline_line_extents(line_runs, parent_style) do
+    parent_style =
+      case line_runs do
+        [%{_text_fit_factor: factor} | _] ->
+          %{
+            parent_style
+            | font_size: parent_style.font_size * factor,
+              line_height: parent_style.line_height * factor
+          }
+
+        _ ->
+          parent_style
+      end
+
     marker_only? =
       line_runs != [] and
         Enum.all?(line_runs, fn run ->
@@ -14781,14 +14976,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                max(below, height + margin.bottom - depth - shift)}
 
             %{style: style} ->
-              depth = text_baseline_depth(style)
+              {depth, run_height} =
+                case style do
+                  %{line_fit_edge: {_, _} = edge} ->
+                    {ascent, descent} = text_box_metrics(style, edge)
+                    {ascent, ascent + descent}
+
+                  _ ->
+                    {text_baseline_depth(style), style.line_height}
+                end
+
               emphasis = NativeElixirPdfUtilities.HtmlToPdf.TextEmphasis.metrics(style)
               run_ascent = if emphasis == nil, do: depth, else: max(depth, emphasis.ascent)
 
               run_descent =
                 if emphasis == nil,
-                  do: style.line_height - depth,
-                  else: max(style.line_height - depth, emphasis.descent)
+                  do: run_height - depth,
+                  else: max(run_height - depth, emphasis.descent)
 
               case :maps.get(:_split_inline_alignment, run, 0.0) do
                 {_side, _depth, _height} ->
@@ -14822,6 +15026,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
               %{type: type, _inline_baseline_depth: _depth}
               when type in [:inline_block, :inline_image] ->
+                height
+
+              %{style: %{line_fit_edge: {_, _}}} ->
                 height
 
               %{style: style} ->
@@ -16801,7 +17008,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             :maps.get(:form_kind, style, nil) in [:text, :input_button, :select] or
               Enum.any?(lines, &(&1 != [])) or Enum.any?(runs, &String.contains?(&1.text, "\n"))
 
-          height = if has_flow_line, do: inline_content_height(runs, lines, style), else: 0.0
+          height =
+            if has_flow_line,
+              do: inline_content_height(runs, lines, style, content_width),
+              else: 0.0
 
           baseline =
             if not has_flow_line do
@@ -17885,7 +18095,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 end
 
               _ ->
-                fitted_image_box(style, x, y, width, height, image)
+                case image_view_box(style, image) do
+                  nil ->
+                    fitted_image_box(style, x, y, width, height, image)
+
+                  {left, top, view_width, view_height} when view_width > 0 and view_height > 0 ->
+                    viewed =
+                      fitted_image_box(style, x, y, width, height, %{
+                        image
+                        | width: view_width,
+                          height: view_height
+                      })
+
+                    sx = viewed.width / view_width
+                    sy = viewed.height / view_height
+
+                    cropped = %{
+                      viewed
+                      | x: viewed.x - left * sx,
+                        y: viewed.y + (top + view_height - image.height) * sy,
+                        width: image.width * sx,
+                        height: image.height * sy,
+                        image: image,
+                        snap_to_css_pixel_grid: false
+                    }
+
+                    view = Map.take(viewed, [:x, :y, :width, :height])
+
+                    [box] =
+                      NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes(
+                        [cropped],
+                        view
+                      )
+
+                    box
+
+                  _ ->
+                    nil
+                end
             end
         end
 
@@ -17944,13 +18191,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           # This content-edge curve is contained by the rectangular object-fit
           # viewport, so it replaces that clip without adding a second wrapper.
-          [Map.put(box, :clip, PageGeometry.inset_rounded_clip(host, insets))]
+          clip = PageGeometry.inset_rounded_clip(host, insets)
+
+          if :maps.get(:object_view_box, style, :none) != :none,
+            do: NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.clip_boxes([box], clip),
+            else: [Map.put(box, :clip, clip)]
         else
           [box]
         end
       end
     else
       []
+    end
+  end
+
+  defp image_view_box(style, image) do
+    case :maps.get(:object_view_box, style, :none) do
+      :none ->
+        nil
+
+      view ->
+        case NativeElixirPdfUtilities.Validators.CssObjectViewBoxValidator.resolve(
+               view,
+               image.width,
+               image.height,
+               style
+             ) do
+          {:ok, bounds} -> bounds
+          {:error, _} = error -> throw({:render_resource_limit, error})
+        end
     end
   end
 
@@ -18288,6 +18557,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       :overflow_wrap,
       :word_break,
       :line_height,
+      :line_fit_edge,
       :link_url,
       :link_destination,
       :text_align,

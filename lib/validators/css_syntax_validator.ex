@@ -205,7 +205,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
                 child.kind in [:string, :block] or child.text in ["\"", "'"]
               end)
 
-          bad_url or invalid_value?(children)
+          (bad_url and
+             not match?(
+               {:ok, _},
+               NativeElixirPdfUtilities.Validators.CssLinkParameterValidator.modified_url(
+                 value.text
+               )
+             )) or
+            invalid_value?(children)
 
         %{kind: :token, text: text} ->
           text in [")", "]", "}"]
@@ -262,6 +269,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
 
           {name, _}
           when name in [
+                 "color-profile",
                  "custom-media",
                  "custom-selector",
                  "function",

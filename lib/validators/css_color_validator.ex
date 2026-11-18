@@ -222,9 +222,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
 
     # HTML's initial color-input sanitizer retains its independently pinned
     # browser grammar, including rejection of CSS mixing and relative colors.
-    if Regex.match?(~r/\A(?:(?:color-mix|light-dark)\(|[a-z]+\(\s*from\b)/, normalized),
-      do: :error,
-      else: parse_color(normalized, nil, true)
+    if Regex.match?(
+         ~r/\A(?:(?:color-mix|light-dark|device-cmyk|hdr-color|color-hdr|ictcp|jzazbz|jzczhz)\(|color\(\s*(?:--|rec2100-)|[a-z]+\(\s*from\b)/,
+         normalized
+       ),
+       do: :error,
+       else: parse_color(normalized, nil, true)
   end
 
   @doc false
@@ -240,7 +243,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
   def valid_prepared?(value) do
     case value do
       %{space: space, channels: [a, b, c], alpha: alpha} when map_size(value) == 3 ->
-        space in ~w(rgb rgba srgb hsl hsla hwb lab lch oklab oklch srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 xyz xyz-d50 xyz-d65) and
+        space in ~w(rgb rgba srgb hsl hsla hwb lab lch oklab oklch ictcp jzazbz jzczhz srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 rec2100-linear rec2100-pq rec2100-hlg xyz xyz-d50 xyz-d65) and
           Enum.all?([a, b, c], fn n ->
             n == :none or
               (is_number(n) and
@@ -293,11 +296,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
     HtmlValidator.check_render_resource(:max_input_bytes, byte_size(source), :style)
     HtmlValidator.reserve_render_resource(:max_work, byte_size(source), :style)
 
-    source =
+    authored =
       source
       |> HtmlValidator.normalize_css_comments(:value)
       |> HtmlValidator.trim_css_whitespace()
-      |> String.downcase(:ascii)
+
+    source = String.downcase(authored, :ascii)
 
     cond do
       source == "currentcolor" ->
@@ -375,12 +379,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
                 :error
             end
 
+          [_, "device-cmyk", body] ->
+            device_cmyk(body)
+
+          [_, function, body] when function in ["hdr-color", "color-hdr"] ->
+            hdr_color(body, current_color, depth + 1)
+
           [_, "color-mix", body] ->
             mix(body, current_color, depth + 1)
 
           [_, function, body]
-          when function in ~w(rgb rgba hsl hsla hwb lab lch oklab oklch color) ->
+          when function in ~w(rgb rgba hsl hsla hwb lab lch oklab oklch ictcp jzazbz jzczhz color) ->
             case HtmlValidator.split_css_tokens(body) do
+              ["--" <> _ | _] when function == "color" ->
+                profile_color(binary_part(authored, 6, byte_size(authored) - 7))
+
               ["from", origin | rest] ->
                 relative(function, origin, rest, current_color, depth + 1)
 
@@ -396,6 +409,79 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
     end
   end
 
+  defp device_cmyk(body) do
+    with {:ok, tokens, legacy?} <- color_arguments(body) do
+      {colors, alpha} =
+        case {tokens, legacy?} do
+          {[c, ",", m, ",", y, ",", k], true} -> {[c, m, y, k], "1"}
+          {[c, m, y, k], false} -> {[c, m, y, k], "1"}
+          {[c, m, y, k, "/", alpha], false} -> {[c, m, y, k], alpha}
+          _ -> {[], ""}
+        end
+
+      channels = Enum.map(colors, &component(&1, :alpha))
+
+      with [{:ok, c}, {:ok, m}, {:ok, y}, {:ok, k}] <- channels,
+           true <- Enum.all?([c, m, y, k], &is_number/1),
+           true <- not legacy? or Enum.all?(colors, &(not String.contains?(&1, "%"))),
+           {:ok, alpha} <- component(alpha, :alpha) do
+        k = min(max(k, 0.0), 1.0)
+        channels = Enum.map([c, m, y], &((1 - min(max(&1, 0.0), 1.0)) * (1 - k)))
+
+        {:ok,
+         %{
+           space: "srgb",
+           channels: channels,
+           alpha: if(alpha == :none, do: :none, else: min(max(alpha, 0.0), 1.0))
+         }}
+      else
+        _ -> :error
+      end
+    end
+  end
+
+  defp profile_color(body) do
+    with {:ok, [name | tokens], false} <- color_arguments(body),
+         {:ok, name, ""} <- HtmlValidator.parse_css_identifier(name),
+         {:ok, _, channels, alpha} <- color_channels("color", ["xyz-d50" | tokens], false),
+         {:ok, xyz} <- CssColor.profile(name, channels) do
+      {:ok, %{space: "xyz-d50", channels: xyz, alpha: alpha}}
+    else
+      _ -> :error
+    end
+  end
+
+  # Printed output has zero stops of headroom above diffuse white.
+  defp hdr_color(body, current_color, depth) do
+    with [left, right] <- HtmlValidator.split_css_comma(body, true),
+         {:ok, a, a_headroom} <- hdr_endpoint(left, current_color, depth),
+         {:ok, b, b_headroom} <- hdr_endpoint(right, current_color, depth),
+         true <- a_headroom != b_headroom do
+      {:ok, if(a_headroom < b_headroom, do: a, else: b)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp hdr_endpoint(source, current_color, depth) do
+    tokens = HtmlValidator.split_css_tokens(source)
+
+    case tokens do
+      [color] ->
+        with {:ok, value} <- parse_value(color, current_color, depth),
+             do: {:ok, value, 0.0}
+
+      [color, headroom] ->
+        with {:ok, value} <- parse_value(color, current_color, depth),
+             {number, ""} when number >= 0 <- HtmlValidator.parse_css_number(headroom),
+             do: {:ok, value, number},
+             else: (_ -> :error)
+
+      _ ->
+        :error
+    end
+  end
+
   defp relative(function, origin, tokens, current_color, depth) do
     {space, tokens} =
       case {function, tokens} do
@@ -406,7 +492,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
     names =
       case space do
         s
-        when s in ~w(rgb rgba srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020) ->
+        when s in ~w(rgb rgba srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 rec2100-linear rec2100-pq rec2100-hlg) ->
           ~w(r g b)
 
         s when s in ~w(xyz xyz-d50 xyz-d65) ->
@@ -423,6 +509,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
 
         s when s in ~w(lch oklch) ->
           ~w(l c h)
+
+        "ictcp" ->
+          ~w(i ct cp)
+
+        "jzazbz" ->
+          ~w(j a b)
+
+        "jzczhz" ->
+          ~w(j c h)
 
         _ ->
           []
@@ -492,7 +587,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
     with [method, first, last] <- HtmlValidator.split_css_comma(body, true),
          ["in", space | modifiers] <- HtmlValidator.split_css_tokens(method),
          true <-
-           space in ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 xyz xyz-d50 xyz-d65 lab lch oklab oklch hsl hwb),
+           space in ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 rec2100-linear rec2100-pq rec2100-hlg xyz xyz-d50 xyz-d65 lab lch oklab oklch ictcp jzazbz jzczhz hsl hwb),
          {:ok, hue} <- interpolation_method(space, modifiers),
          {:ok, first, p} <- mix_operand(first, current_color, depth),
          {:ok, last, q} <- mix_operand(last, current_color, depth) do
@@ -523,7 +618,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
         {:ok, :shorter}
 
       [method, "hue"]
-      when space in ~w(hsl hwb lch oklch) and method in ~w(shorter longer increasing decreasing) ->
+      when space in ~w(hsl hwb lch oklch jzczhz) and
+             method in ~w(shorter longer increasing decreasing) ->
         {:ok, String.to_existing_atom(method)}
 
       _ ->
@@ -646,8 +742,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssColorValidator do
         "oklch" ->
           [{:scaled, 1}, {:scaled, 0.4}, :hue]
 
+        "ictcp" ->
+          [{:scaled, 1}, {:scaled, 0.5}, {:scaled, 0.5}]
+
+        "jzazbz" ->
+          [{:scaled, 1}, {:scaled, 0.21}, {:scaled, 0.21}]
+
+        "jzczhz" ->
+          [{:scaled, 1}, {:scaled, 0.26}, :hue]
+
         s
-        when s in ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 xyz xyz-d50 xyz-d65) ->
+        when s in ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 rec2100-linear rec2100-pq rec2100-hlg xyz xyz-d50 xyz-d65) ->
           [:alpha, :alpha, :alpha]
 
         _ ->

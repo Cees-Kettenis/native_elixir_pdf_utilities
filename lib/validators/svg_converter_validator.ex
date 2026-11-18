@@ -313,6 +313,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
          :ok <- validate_capabilities(summary),
          {:ok, root} <- SvgSceneValidator.extraction_root(summary.document),
          :ok <- SvgSceneValidator.validate_source_tree(root),
+         {:ok, root, summary} <- prepare_print_geometry(source, root, summary, context),
          occurrences =
            Map.new(Enum.with_index(SvgSceneValidator.tree_nodes(root), 1), fn {{node, _}, index} ->
              {node.node_id, Map.get(summary.expansion_counts, index, 1)}
@@ -339,6 +340,31 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
         })
 
       {:ok, approved, summary, fonts}
+    end
+  end
+
+  defp prepare_print_geometry(source, root, summary, context) do
+    validator = NativeElixirPdfUtilities.Validators.SvgPrintGeometryValidator
+
+    if validator.selected?(source) do
+      context = Map.take(context, [:mode, :parent_mode, :fonts, :resources])
+
+      with {:ok, normalized} <- validator.normalize(root),
+           normalized_source = SvgScene.authored_source(normalized),
+           :ok <-
+             HtmlValidator.check_render_resource(
+               :max_input_bytes,
+               byte_size(normalized_source),
+               :style
+             ),
+           {:ok, summary} <- SvgValidator.validate_processing(normalized_source, context),
+           :ok <- validate_capabilities(summary),
+           {:ok, root} <- SvgSceneValidator.extraction_root(summary.document),
+           :ok <- SvgSceneValidator.validate_source_tree(root) do
+        {:ok, root, summary}
+      end
+    else
+      {:ok, root, summary}
     end
   end
 

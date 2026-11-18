@@ -1,6 +1,8 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssImageValue do
   @moduledoc "Loads selected static CSS image values through the owning resource loader."
+  alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.{CssColor, CssGradient}
+  alias NativeElixirPdfUtilities.Validators.CssGradientValidator
   alias NativeElixirPdfUtilities.Validators.{CssImageValueValidator, ResponsiveImageValidator}
 
   @doc "Loads only the selected candidate, retaining resource denials and shared budget failures."
@@ -16,7 +18,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssImageValue do
           {:ok, nil}
 
         %{kind: :url, source: source} ->
-          with {:ok, image} <- loader.(source), do: {:ok, %{kind: :decoded, image: image}}
+          with {:ok, image} <- loader.(source),
+               {:ok, image} <- crop_fragment(image, Map.get(selected, :spatial_fragment)),
+               do: {:ok, %{kind: :decoded, image: image}}
+
+        %{kind: :element, id: id} ->
+          with {:ok, image} <- loader.({:element, id}),
+               do: {:ok, %{kind: :decoded, image: image}}
+
+        %{kind: :cross_fade, values: values} ->
+          CssImageValueValidator.map_blend(values, selected, &load(&1, opts, loader))
 
         %{kind: :fallback, image: image, color: color} = fallback ->
           case load(image, opts, loader) do
@@ -53,6 +64,67 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssImageValue do
     end
   end
 
+  defp crop_fragment(image, fragment) do
+    case {image, fragment} do
+      {image, nil} -> {:ok, image}
+      {%{format: :png}, fragment} -> crop_surface(image, fragment)
+      _ -> fragment_error("CSS image fragments require a decoded PNG or SVG surface")
+    end
+  end
+
+  defp crop_surface(image, {unit, x, y, w, h}) do
+    {scale_x, scale_y} =
+      if unit == :percent, do: {image.width_px / 100, image.height_px / 100}, else: {1, 1}
+
+    left = floor(x * scale_x)
+    top = floor(y * scale_y)
+    width = min(ceil((x + w) * scale_x), image.width_px) - left
+    height = min(ceil((y + h) * scale_y), image.height_px) - top
+
+    if width > 0 and height > 0 do
+      with :ok <- CssImageValueValidator.reserve_surface(width, height, width * height) do
+        sample_bytes = div(image.bits_per_component, 8)
+        color_bytes = sample_bytes * if(image.color_space == :device_gray, do: 1, else: 3)
+
+        cropped = %{
+          image
+          | data: crop_rows(image.data, image.width_px, left, top, width, height, color_bytes),
+            width_px: width,
+            height_px: height,
+            width: image.width * width / image.width_px,
+            height: image.height * height / image.height_px,
+            decoded_stride: width * (color_bytes + sample_bytes)
+        }
+
+        cropped = Map.delete(cropped, :svg_viewport)
+
+        case Map.get(image, :alpha_data) do
+          nil ->
+            {:ok, cropped}
+
+          alpha ->
+            {:ok,
+             Map.put(
+               cropped,
+               :alpha_data,
+               crop_rows(alpha, image.width_px, left, top, width, height, sample_bytes)
+             )}
+        end
+      end
+    else
+      fragment_error("CSS image fragment lies outside the source")
+    end
+  end
+
+  defp crop_rows(data, stride, x, y, width, height, bytes) do
+    for row <- y..(y + height - 1), into: <<>> do
+      binary_part(data, (row * stride + x) * bytes, width * bytes)
+    end
+  end
+
+  defp fragment_error(message),
+    do: Diagnostics.error(:style, :invalid_document, message, source: "image()")
+
   @doc "Supplies a selected decoded image or paints a generated image at its used dimensions."
   @spec rasterize(map(), number(), number(), map()) :: {:ok, map()} | {:error, term()}
   def rasterize(value, width, height, style) do
@@ -60,6 +132,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssImageValue do
       case value do
         %{kind: :decoded, image: image} ->
           {:ok, image}
+
+        %{kind: :cross_fade, values: values} ->
+          blend(values, width, height, style)
 
         %{kind: :gradient} ->
           CssGradient.rasterize(value, width, height, style)
@@ -103,6 +178,96 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssImageValue do
         {:ok, image}
       end
     end
+  end
+
+  defp blend(values, width, height, style) do
+    with {:ok, {w, h}} <- CssGradientValidator.raster_plan(width, height, length(values)),
+         {:ok, prepared} <-
+           CssImageValueValidator.map_blend(values, %{values: values}, fn value ->
+             with {:ok, image} <- rasterize(value, width, height, style) do
+               case image do
+                 %{format: :png, color_space: space} when space in [:device_gray, :device_rgb] ->
+                   {:ok, image}
+
+                 _ ->
+                   Diagnostics.error(
+                     :style,
+                     :not_implemented,
+                     "cross-fade requires a raster image with decoded sample channels",
+                     source: "cross-fade()"
+                   )
+               end
+             end
+           end) do
+      rgba =
+        for row <- 0..(h - 1), column <- 0..(w - 1), into: <<>> do
+          {r, g, b, a} =
+            Enum.reduce(prepared.values, {0.0, 0.0, 0.0, 0.0}, fn {image, alpha}, {r, g, b, a} ->
+              {pr, pg, pb, pa} = image_pixel(image, (column + 0.5) / w, (row + 0.5) / h)
+              coverage = pa * alpha
+              {r + pr * coverage, g + pg * coverage, b + pb * coverage, a + coverage}
+            end)
+
+          if a == 0,
+            do: <<0, 0, 0, 0>>,
+            else: <<round(r / a), round(g / a), round(b / a), round(min(1.0, a) * 255)>>
+        end
+
+      image = %{
+        format: :png,
+        data: for(<<r, g, b, _ <- rgba>>, into: <<>>, do: <<r, g, b>>),
+        width_px: w,
+        height_px: h,
+        width: width,
+        height: height,
+        color_space: :device_rgb,
+        bits_per_component: 8,
+        decoded_stride: w * 4
+      }
+
+      alpha = for <<_, _, _, a <- rgba>>, into: <<>>, do: <<a>>
+
+      {:ok,
+       if(alpha == :binary.copy(<<255>>, w * h),
+         do: image,
+         else: Map.put(image, :alpha_data, alpha)
+       )}
+    end
+  end
+
+  defp image_pixel(image, x, y) do
+    {x, y} =
+      case Map.get(image, :image_orientation, 1) do
+        2 -> {1 - x, y}
+        3 -> {1 - x, 1 - y}
+        4 -> {x, 1 - y}
+        5 -> {y, x}
+        6 -> {y, 1 - x}
+        7 -> {1 - y, 1 - x}
+        8 -> {1 - y, x}
+        _ -> {x, y}
+      end
+
+    at = trunc(y * image.height_px) * image.width_px + trunc(x * image.width_px)
+    bytes = div(image.bits_per_component, 8)
+    channels = if image.color_space == :device_gray, do: 1, else: 3
+    offset = at * channels * bytes
+
+    {red, green, blue} =
+      case binary_part(image.data, offset, channels * bytes) do
+        <<gray>> -> {gray, gray, gray}
+        <<gray, _>> -> {gray, gray, gray}
+        <<r, g, b>> -> {r, g, b}
+        <<r, _, g, _, b, _>> -> {r, g, b}
+      end
+
+    alpha =
+      case Map.get(image, :alpha_data) do
+        nil -> 1.0
+        values -> :binary.at(values, at * bytes) / 255
+      end
+
+    {red, green, blue, alpha}
   end
 
   @doc "Returns the PDF unit-square transform for the fixed TIFF orientation enumeration."

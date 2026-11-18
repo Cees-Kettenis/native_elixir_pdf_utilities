@@ -55,6 +55,71 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
   ]
   @d50 [0.9642956764295677, 1.0, 0.8251046025104601]
 
+  @pq_m1 2610 / 16384
+  @pq_m2 2523 / 32
+  @pq_c1 3424 / 4096
+  @pq_c2 2413 / 128
+  @pq_c3 2392 / 128
+  @jz_black 1.6295499532821566e-11
+
+  # CSS Color HDR's reference conversion matrices, with XYZ relative to diffuse white.
+  @ictcp_xyz_to_lms [
+    [0.3592832590121217, 0.6976051147779502, -0.0358915932320290],
+    [-0.1920808463704993, 1.1004767970374321, 0.0753748658519118],
+    [0.0070797844607479, 0.0748396662186362, 0.8433265453898765]
+  ]
+  @ictcp_lms_to_xyz [
+    [2.0701522183894223, -1.3263473389671563, 0.2066510476294053],
+    [0.3647385209748072, 0.6805660249472273, -0.0453045459220347],
+    [-0.0497472075358123, -0.0492609666966131, 1.1880659249923042]
+  ]
+
+  @doc "Installs the color profiles of the active stylesheet context for one layout."
+  @spec with_profiles(map(), (-> result)) :: result when result: term()
+  def with_profiles(profiles, fun) do
+    key = {__MODULE__, :profiles}
+
+    if profiles == %{} and is_nil(Process.get(key)) do
+      fun.()
+    else
+      previous = Process.put(key, profiles)
+
+      try do
+        fun.()
+      after
+        if is_nil(previous), do: Process.delete(key), else: Process.put(key, previous)
+      end
+    end
+  end
+
+  @doc "Converts a named ICC matrix profile's components to D50 XYZ."
+  @spec profile(String.t(), [number() | :none]) :: {:ok, [number()]} | :error
+  def profile(name, channels) do
+    case Map.get(Process.get({__MODULE__, :profiles}, %{}), name) do
+      %{columns: columns, curves: curves} ->
+        linear =
+          Enum.zip_with(channels, curves, fn value, curve ->
+            value = if value == :none, do: 0.0, else: min(max(value, 0.0), 1.0)
+
+            case curve do
+              {:gamma, exponent} ->
+                :math.pow(value, exponent)
+
+              {:table, data, size} ->
+                position = value * (size - 1)
+                left = min(floor(position), size - 2)
+                <<a::16, b::16>> = binary_part(data, left * 2, 4)
+                (a + (b - a) * (position - left)) / 65535
+            end
+          end)
+
+        {:ok, matrix(linear, Enum.zip_with(columns, & &1))}
+
+      _ ->
+        :error
+    end
+  end
+
   @doc "Converts admitted channels to sRGB, clipping only at the output boundary."
   @spec to_srgb(String.t(), [number()]) :: [float()]
   def to_srgb(space, channels) do
@@ -92,7 +157,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
     alpha_b = if last.alpha == :none, do: first.alpha, else: last.alpha
     alpha_a = if alpha_a == :none, do: 0.0, else: alpha_a
     alpha_b = if alpha_b == :none, do: 0.0, else: alpha_b
-    hue = if space in ~w(hsl hwb), do: 0, else: if(space in ~w(lch oklch), do: 2)
+    hue = if space in ~w(hsl hwb), do: 0, else: if(space in ~w(lch oklch jzczhz), do: 2)
 
     pairs =
       Enum.zip(a, b)
@@ -155,10 +220,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
     # Analogous coordinates retain missingness when converting spaces.
     categories = fn selected ->
       case selected do
-        s when s in ~w(lab oklab) -> [:lightness, :a, :b]
-        s when s in ~w(lch oklch) -> [:lightness, :chroma, :hue]
+        s when s in ~w(lab oklab jzazbz) -> [:lightness, :a, :b]
+        s when s in ~w(lch oklch jzczhz) -> [:lightness, :chroma, :hue]
         s when s in ~w(hsl hsla) -> [:hue, :saturation, :lightness]
         "hwb" -> [:hue, :whiteness, :blackness]
+        "ictcp" -> [:lightness, :ct, :cp]
         _ -> [:red, :green, :blue]
       end
     end
@@ -173,7 +239,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
       |> Enum.map(fn {category, value} -> if category in missing, do: :none, else: value end)
 
     case {space, converted} do
-      {s, [_, c, _]} when s in ~w(lch oklch) and is_number(c) and abs(c) < 0.000004 ->
+      {s, [_, c, _]} when s in ~w(lch oklch jzczhz) and is_number(c) and abs(c) < 0.000004 ->
         List.replace_at(converted, 2, :none)
 
       {"hsl", [_, s, _]} when is_number(s) and abs(s) < 0.000004 ->
@@ -196,6 +262,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
     end
   end
 
+  defp rectangular_space(space) do
+    Map.fetch!(%{"lch" => "lab", "oklch" => "oklab", "jzczhz" => "jzazbz"}, space)
+  end
+
   defp to_xyz(channels, space) do
     case space do
       "hsl" ->
@@ -204,7 +274,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
       "hwb" ->
         to_xyz(hwb(channels), "srgb")
 
-      s when s in ~w(lch oklch) ->
+      s when s in ~w(lch oklch jzczhz) ->
         [l, c, h] = channels
 
         to_xyz(
@@ -213,7 +283,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
             max(c, 0) * :math.cos(h * :math.pi() / 180),
             max(c, 0) * :math.sin(h * :math.pi() / 180)
           ],
-          if(s == "lch", do: "lab", else: "oklab")
+          rectangular_space(s)
         )
 
       "lab" ->
@@ -239,11 +309,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
           [-0.0763729366746601, -0.4214933324022432, 1.5869240198367816]
         ])
 
+      "ictcp" ->
+        channels
+        |> matrix([
+          [1, 0.0086090370379328, 0.1110296250030260],
+          [1, -0.0086090370379328, -0.1110296250030259],
+          [1, 0.5600313357106791, -0.3206271749873188]
+        ])
+        |> Enum.map(&pq_decode(&1, @pq_m2))
+        |> matrix(@ictcp_lms_to_xyz)
+
+      "jzazbz" ->
+        [j, a, b] = channels
+        j = min(max(j, 0.0), 1.0) + @jz_black
+        intensity = j / (0.44 + 0.56 * j)
+
+        [x, y, z] =
+          [intensity, a, b]
+          |> matrix([
+            [1, 0.13860504327153927, 0.05804731615611883],
+            [1, -0.1386050432715393, -0.058047316156118904],
+            [1, -0.09601924202631895, -0.811891896056039]
+          ])
+          |> Enum.map(&pq_decode(&1, 1.7 * @pq_m2))
+          |> matrix([
+            [1.9242264357876067, -1.0047923125953657, 0.037651404030618],
+            [0.35031676209499907, 0.7264811939316552, -0.06538442294808501],
+            [-0.09098281098284752, -0.3127282905230739, 1.5227665613052603]
+          ])
+
+        x = (x + 0.15 * z) / 1.15
+        [x, (y - 0.34 * x) / 0.66, z]
+
       "xyz-d65" ->
         channels
 
       "xyz-d50" ->
         matrix(channels, @d50_to_d65)
+
+      s when s in ~w(rec2100-linear rec2100-pq rec2100-hlg) ->
+        channels
+        |> Enum.map(&hdr_decode(&1, s))
+        |> matrix(Map.fetch!(@matrices, "rec2020"))
 
       s ->
         base = String.replace_suffix(s, "-linear", "")
@@ -268,8 +375,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
         [h, _, _] = rgb_to_hsl(rgb)
         [h, Enum.min(rgb), 1 - Enum.max(rgb)]
 
-      s when s in ~w(lch oklch) ->
-        [l, a, b] = from_xyz(channels, if(s == "lch", do: "lab", else: "oklab"))
+      s when s in ~w(lch oklch jzczhz) ->
+        [l, a, b] = from_xyz(channels, rectangular_space(s))
         h = :math.atan2(b, a) * 180 / :math.pi()
         [l, :math.sqrt(a * a + b * b), if(h < 0, do: h + 360, else: h)]
 
@@ -298,11 +405,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
           [0.0259040424655478, 0.7827717124575296, -0.8086757549230774]
         ])
 
+      "ictcp" ->
+        channels
+        |> matrix(@ictcp_xyz_to_lms)
+        |> Enum.map(&pq_encode(&1, @pq_m2))
+        |> matrix([
+          [0.5, 0.5, 0],
+          [6610 / 4096, -13613 / 4096, 7003 / 4096],
+          [17933 / 4096, -17390 / 4096, -543 / 4096]
+        ])
+
+      "jzazbz" ->
+        [x, y, z] = channels
+
+        [intensity, a, b] =
+          [1.15 * x - 0.15 * z, 0.66 * y + 0.34 * x, z]
+          |> matrix([
+            [0.41478972, 0.579999, 0.0146480],
+            [-0.2015100, 1.120649, 0.0531008],
+            [-0.0166008, 0.264800, 0.6684799]
+          ])
+          |> Enum.map(&pq_encode(&1, 1.7 * @pq_m2))
+          |> matrix([
+            [0.5, 0.5, 0],
+            [3.524000, -4.066708, 0.542708],
+            [0.199076, 1.096799, -1.295875]
+          ])
+
+        [0.44 * intensity / (1 - 0.56 * intensity) - @jz_black, a, b]
+
       "xyz-d65" ->
         channels
 
       "xyz-d50" ->
         matrix(channels, @d65_to_d50)
+
+      s when s in ~w(rec2100-linear rec2100-pq rec2100-hlg) ->
+        channels
+        |> matrix(Map.fetch!(@inverse, "rec2020"))
+        |> Enum.map(&hdr_encode(&1, s))
 
       s ->
         base = String.replace_suffix(s, "-linear", "")
@@ -310,6 +451,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssColor do
         values = matrix(values, Map.fetch!(@inverse, base))
         if String.ends_with?(s, "-linear"), do: values, else: Enum.map(values, &encode(&1, base))
     end
+  end
+
+  # Rec. ITU-R BT.2100 and CSS Color HDR, nominal diffuse white at 203 cd/m².
+  defp hdr_decode(value, space) do
+    case space do
+      "rec2100-linear" ->
+        value
+
+      "rec2100-pq" ->
+        pq_decode(value, @pq_m2)
+
+      "rec2100-hlg" ->
+        if value <= 0.5,
+          do: value * value / 3 * 3.7743,
+          else:
+            (:math.exp((min(value, 1.0) - 0.55991073) / 0.17883277) + 0.28466892) / 12 * 3.7743
+    end
+  end
+
+  defp hdr_encode(value, space) do
+    case space do
+      "rec2100-linear" ->
+        value
+
+      "rec2100-pq" ->
+        pq_encode(value, @pq_m2)
+
+      "rec2100-hlg" ->
+        value = value / 3.7743
+
+        if value <= 1 / 12,
+          do: signed_power(3 * value, 0.5),
+          else: 0.17883277 * :math.log(12 * value - 0.28466892) + 0.55991073
+    end
+  end
+
+  defp pq_decode(value, exponent) do
+    p = :math.pow(min(max(value, 0.0), 1.0), 1 / exponent)
+    :math.pow(max(p - @pq_c1, 0.0) / (@pq_c2 - @pq_c3 * p), 1 / @pq_m1) * 10000 / 203
+  end
+
+  defp pq_encode(value, exponent) do
+    p = :math.pow(min(max(value * 203 / 10000, 0.0), 1.0), @pq_m1)
+    :math.pow((@pq_c1 + @pq_c2 * p) / (1 + @pq_c3 * p), exponent)
   end
 
   defp linearize(n, space) do

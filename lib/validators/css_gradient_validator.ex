@@ -10,7 +10,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssGradientValidator do
     CssValueValidator
   }
 
-  @spaces ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 xyz xyz-d50 xyz-d65 lab lch oklab oklch hsl hwb)
+  @spaces ~w(srgb srgb-linear display-p3 display-p3-linear a98-rgb prophoto-rgb rec2020 rec2100-linear rec2100-pq rec2100-hlg xyz xyz-d50 xyz-d65 lab lch oklab oklch ictcp jzazbz jzczhz hsl hwb)
 
   @doc "Prepares a static linear, radial or conic image with its own interpolation and stop list."
   @spec prepare(String.t(), map()) :: {:ok, map()} | :error | {:error, term()}

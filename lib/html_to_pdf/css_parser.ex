@@ -22,6 +22,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   alias NativeElixirPdfUtilities.Validators.CssReferenceValidator
   alias NativeElixirPdfUtilities.Validators.CssPageValidator
   alias NativeElixirPdfUtilities.Validators.CssFontFaceValidator
+  alias NativeElixirPdfUtilities.Validators.CssColorProfileValidator
   alias NativeElixirPdfUtilities.Validators.CssSyntaxValidator
   alias NativeElixirPdfUtilities.Validators.CssStylesheetValidator
   alias NativeElixirPdfUtilities.Validators.CssPropertyRegistrationValidator
@@ -167,6 +168,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                      page_options: page_options,
                      page_rules: publishing_pages,
                      counter_styles: counter_styles,
+                     color_profiles: CssColorProfileValidator.rules(active_css),
                      cascade: %{
                        layers: Enum.filter(cascade.layers, &Map.get(&1, :condition_active, true)),
                        registrations: registrations,
@@ -262,6 +264,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
              rules: active_rules,
              page_rules: publishing_pages,
              counter_styles: counter_styles,
+             color_profiles: CssColorProfileValidator.rules(selected_css),
              font_faces: fonts |> Enum.filter(& &1.active) |> Enum.map(& &1.face),
              page_options:
                Enum.reduce(pages, [], fn page, options ->

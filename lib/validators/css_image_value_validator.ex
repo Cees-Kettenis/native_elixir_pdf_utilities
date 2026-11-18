@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
     CssGradientValidator,
     CssColorValidator,
     CssMathValidator,
+    CssSyntaxValidator,
     ResponsiveImageValidator
   }
 
@@ -45,6 +46,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
                 "image" ->
                   fallback_image(body, style, depth + 1)
 
+                "cross-fade" ->
+                  cross_fade(body, style, depth + 1)
+
+                "element" ->
+                  case HtmlValidator.parse_css_identifier(
+                         String.trim_leading(String.trim(body), "#")
+                       ) do
+                    {:ok, id, ""} ->
+                      if String.starts_with?(String.trim(body), "#"),
+                        do: {:ok, %{kind: :element, id: id}},
+                        else: :error
+
+                    _ ->
+                      :error
+                  end
+
                 _ ->
                   :error
               end
@@ -55,6 +72,78 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
           _ ->
             :error
         end
+    end
+  end
+
+  defp cross_fade(body, style, depth) do
+    parts = CssSyntaxValidator.split_trimmed(body, ",")
+    HtmlValidator.reserve_render_resource(:max_entries, length(parts), :style)
+
+    Enum.reduce_while(parts, {:ok, []}, fn part, {:ok, acc} ->
+      items = HtmlValidator.split_css_tokens(part)
+
+      {operand, weight} =
+        case items do
+          [operand] ->
+            {operand, nil}
+
+          [source, weight] ->
+            if String.ends_with?(source, "%"), do: {weight, source}, else: {source, weight}
+
+          _ ->
+            {"", "invalid"}
+        end
+
+      weight =
+        case weight do
+          nil ->
+            {:ok, nil}
+
+          value ->
+            case CssMathValidator.evaluate(value, %{}) do
+              {:ok, number, %{percentage: 1}}
+              when is_number(number) and number >= 0 and number <= 100 ->
+                {:ok, number / 100}
+
+              _ ->
+                :error
+            end
+        end
+
+      selected =
+        case CssColorValidator.prepare(operand, style) do
+          {:ok, color} -> {:ok, %{kind: :solid, color: color}}
+          :error -> prepare_value(operand, style, depth)
+        end
+
+      case {selected, weight} do
+        {{:ok, image}, {:ok, weight}} when is_map(image) ->
+          {:cont, {:ok, [{image, weight} | acc]}}
+
+        {{:error, _} = error, _} ->
+          {:halt, error}
+
+        _ ->
+          {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, values} ->
+        {sum, omitted} =
+          Enum.reduce(values, {0.0, 0}, fn {_, weight}, {sum, missing} ->
+            if is_nil(weight), do: {sum, missing + 1}, else: {sum + weight, missing}
+          end)
+
+        share = if omitted > 0, do: max(0.0, 1.0 - sum) / omitted, else: 0.0
+
+        values =
+          Enum.reverse(values, [])
+          |> Enum.map(fn {image, weight} -> {image, (weight || share) / max(1.0, sum)} end)
+
+        {:ok, %{kind: :cross_fade, values: values}}
+
+      error ->
+        error
     end
   end
 
@@ -160,7 +249,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
             {:ok, %{kind: :solid, color: color, direction: direction}}
 
           {_, {:ok, color}} ->
-            with {:ok, image} when not is_nil(image) <- prepare_value(first, style, depth),
+            with {:ok, image} when not is_nil(image) <-
+                   prepare_fallback_source(first, style, depth),
                  do: {:ok, %{kind: :fallback, image: image, color: color, direction: direction}},
                  else: (
                    {:error, _} = error -> error
@@ -168,7 +258,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
                  )
 
           {[], _} ->
-            with {:ok, image} when not is_nil(image) <- prepare_value(first, style, depth),
+            with {:ok, image} when not is_nil(image) <-
+                   prepare_fallback_source(first, style, depth),
                  do: {:ok, %{kind: :fallback, image: image, color: nil, direction: direction}},
                  else: (
                    {:error, _} = error -> error
@@ -178,6 +269,39 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
           _ ->
             :error
         end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp prepare_fallback_source(source, style, depth) do
+    case prepare_value(source, style, depth) do
+      {:ok, %{kind: :url, source: url} = image} ->
+        case String.split(url, "#xywh=", parts: 2) do
+          [_, ""] -> :error
+          [reference, box] -> spatial_fragment(image, reference, box)
+          [_] -> {:ok, image}
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp spatial_fragment(image, reference, box) do
+    {unit, values} =
+      case String.split(box, ":", parts: 2) do
+        ["percent", values] -> {:percent, values}
+        ["pixel", values] -> {:pixel, values}
+        [values] -> {:pixel, values}
+        _ -> {:pixel, ""}
+      end
+
+    case Enum.map(String.split(values, ","), &HtmlValidator.parse_css_number/1) do
+      [{x, ""}, {y, ""}, {w, ""}, {h, ""}]
+      when reference != "" and x >= 0 and y >= 0 and w > 0 and h > 0 ->
+        {:ok, %{image | source: reference} |> Map.put(:spatial_fragment, {unit, x, y, w, h})}
 
       _ ->
         :error
@@ -482,6 +606,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
 
   defp apply_loaded(value, style, density) do
     case value do
+      %{kind: :cross_fade, values: values} ->
+        map_blend(values, value, &apply_loaded(&1, style, density))
+
       %{kind: :decoded, image: image} ->
         with {:ok, image} <- apply_image(image, style, density),
              do: {:ok, %{value | image: image}}
@@ -491,10 +618,28 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
     end
   end
 
+  @doc "Applies a preparation step to each cross-fade image while retaining normalized weights."
+  @spec map_blend(list(), map(), (map() -> term())) :: {:ok, map()} | :error | {:error, term()}
+  def map_blend(values, image, prepare) do
+    Enum.reduce_while(values, {:ok, []}, fn {value, weight}, {:ok, acc} ->
+      case prepare.(value) do
+        {:ok, prepared} -> {:cont, {:ok, [{prepared, weight} | acc]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, values} -> {:ok, %{image | values: Enum.reverse(values)}}
+      error -> error
+    end
+  end
+
   @doc "Computes selected-font CSS units without choosing or loading any image source."
   @spec compute(map() | nil, map()) :: {:ok, map() | nil} | :error | {:error, term()}
   def compute(image, style) do
     case image do
+      %{kind: :cross_fade, values: values} ->
+        map_blend(values, image, &compute(&1, style))
+
       %{kind: :gradient} ->
         CssGradientValidator.compute(image, style)
 
@@ -528,6 +673,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssImageValueValidator do
       %{kind: :decoded, image: %{width: width, height: height} = decoded} ->
         NativeElixirPdfUtilities.Validators.WriterValidator.valid_image?(decoded) and
           is_number(width) and width >= 0 and is_number(height) and height >= 0
+
+      %{kind: :cross_fade, values: values} ->
+        values != [] and
+          Enum.all?(values, fn {image, weight} ->
+            is_number(weight) and weight >= 0 and weight <= 1 and valid_loaded?(image)
+          end)
 
       %{kind: :solid, color: color} ->
         CssColorValidator.valid_prepared?(color)

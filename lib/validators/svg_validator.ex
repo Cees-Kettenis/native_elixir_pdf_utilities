@@ -597,6 +597,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                  "marker-start",
                  "marker-mid",
                  "marker-end",
+                 "marker-segment",
+                 "marker-pattern",
                  "cursor"
                ] do
             validate_css_references(to_string(value), line)

@@ -478,7 +478,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
         if is_nil(position),
           do: false,
           else:
-            nth_matches?(
+            HtmlValidator.css_nth_matches?(
               index,
               if(kind == :nth_child, do: position + 1, else: length(filtered) - position)
             )
@@ -611,21 +611,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
                 :nth_last_of_type -> type_count - type_position + 1
               end
 
-            nth_matches?(index, position)
+            HtmlValidator.css_nth_matches?(index, position)
 
           :error ->
             false
         end
-    end
-  end
-
-  defp nth_matches?(index, position) do
-    case index do
-      :odd -> rem(position, 2) == 1
-      :even -> rem(position, 2) == 0
-      {0, offset} -> position == offset
-      {step, offset} -> rem(position - offset, step) == 0 and div(position - offset, step) >= 0
-      index -> position == index
     end
   end
 

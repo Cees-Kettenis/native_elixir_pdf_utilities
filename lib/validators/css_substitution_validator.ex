@@ -21,7 +21,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
   def contains?(value) do
     :binary.match(value, "(") != :nomatch and
       Regex.match?(
-        ~r/(?:attr|env|control-value|if|first-valid|inherit|sibling-|ident|cycle|random|progress|(?:calc|transform)-mix|interpolate|--|\\)/i,
+        ~r/(?:(?:attr|env|control-value|if|first-valid|inherit|sibling-(?:index|count)|ident|cycle|random(?:-item)?|progress|(?:calc|transform)-mix|(?:(?:calc|color|transform)-)?interpolate|--(?:[a-z0-9_-]|[^\x00-\x7f])*)\(|\\)/iu,
         value
       ) and
       component_contains?(CssSyntaxValidator.components(value))
@@ -723,7 +723,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
     [header | fallback] = HtmlValidator.split_css_comma(body, true)
 
     with {:ok, name, indices} <- environment_header(header) do
+      parameters = Map.get(context, :_css_environment_parameters, %{})
+
       cond do
+        indices == [] and is_map_key(parameters, name) ->
+          {:ok, "/**/" <> Map.fetch!(parameters, name) <> "/**/"}
+
         indices == [] and
             name in ~w(safe-area-inset-top safe-area-inset-right safe-area-inset-bottom safe-area-inset-left safe-area-max-inset-top safe-area-max-inset-right safe-area-max-inset-bottom safe-area-max-inset-left) ->
           {:ok, "0px"}

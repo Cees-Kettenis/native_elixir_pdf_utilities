@@ -11,7 +11,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator
 
-  @type kind :: :image | :background_image | :font
+  @type kind :: :image | :background_image | :font | :color_profile
 
   @doc false
   @spec resolve(String.t(), kind(), keyword(), HtmlValidator.image_budget() | nil) ::
@@ -67,6 +67,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
           case kind do
             :font -> :local_font
             :stylesheet -> :stylesheet
+            :color_profile -> :stylesheet
             _ -> context.image_budget
           end
 
@@ -253,6 +254,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
     case kind do
       :background_image -> "background image"
       :font -> "font"
+      :color_profile -> "color profile"
       :image -> "image"
     end
   end

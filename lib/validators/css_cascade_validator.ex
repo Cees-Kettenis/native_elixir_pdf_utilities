@@ -12,9 +12,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             NativeElixirPdfUtilities.Validators.CssAnchorValidator.properties() ++
             NativeElixirPdfUtilities.Validators.CssPublishingValidator.properties() ++
             ~w(outline-width outline-style outline-color outline-offset box-shadow box-shadow-offset box-shadow-color box-shadow-blur box-shadow-spread box-shadow-position border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize zoom field-sizing scrollbar-width scrollbar-color scrollbar-gutter box-sizing border-radius
-    text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
+    text-box-trim text-box-edge line-fit-edge text-fit text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
-    ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation opacity mix-blend-mode contain contain-intrinsic-width contain-intrinsic-height container-name container-type object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
+    ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation opacity mix-blend-mode contain contain-intrinsic-width contain-intrinsic-height container-name container-type link-parameters object-view-box object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
     border-spacing caption-side table-layout empty-cells column-count column-width column-fill column-span column-rule-width column-rule-style column-rule-color float clear shape-outside shape-inside shape-margin shape-image-threshold flex-direction flex-wrap row-gap column-gap
     justify-content align-items align-self justify-self justify-items align-content order reading-flow reading-order
     flex-grow flex-shrink flex-basis grid-template-columns grid-template-rows grid-auto-columns
@@ -151,6 +151,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                 "outline" => ~w(outline-width outline-style outline-color),
                 "-webkit-text-stroke" => ~w(-webkit-text-stroke-width -webkit-text-stroke-color),
                 "vertical-align" => ~w(baseline-source alignment-baseline baseline-shift),
+                "text-box" => ~w(text-box-trim text-box-edge),
                 "text-emphasis" => ~w(text-emphasis-style text-emphasis-color),
                 "white-space" => ~w(white-space-collapse text-wrap-mode white-space-trim),
                 "text-wrap" => ~w(text-wrap-mode text-wrap-style),
@@ -286,7 +287,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     {canonical_property(property), mapped}
   end
 
-  @inherited ~w(wrap-through line-snap box-snap line-height-step scrollbar-color -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color font-size font-family font-style font-weight font-width line-height
+  @inherited ~w(line-fit-edge text-fit wrap-through line-snap box-snap line-height-step scrollbar-color -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color font-size font-family font-style font-weight font-width line-height
     dominant-baseline letter-spacing word-spacing text-indent text-align-last text-justify hanging-punctuation text-align text-transform quotes white-space white-space-collapse text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter-align initial-letter-wrap orphans widows caption-side border-collapse border-spacing empty-cells list-style-type list-style-position
     list-style-image visibility block-ellipsis ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction math-style math-shift math-depth) ++

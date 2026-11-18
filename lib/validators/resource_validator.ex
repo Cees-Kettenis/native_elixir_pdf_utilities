@@ -235,7 +235,7 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceValidator do
           {:ok, dependency_descriptor()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def authorize_dependency(reference, kind, context, opts) do
     with :ok <- validate_context(context),
-         true <- kind in [:image, :background_image, :font, :stylesheet],
+         true <- kind in [:image, :background_image, :font, :stylesheet, :color_profile],
          {:ok, descriptor} <-
            (case reference do
               {:bytes, bytes} when is_binary(bytes) ->

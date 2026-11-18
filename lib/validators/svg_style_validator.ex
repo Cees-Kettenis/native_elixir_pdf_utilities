@@ -70,6 +70,13 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     "marker-start" => :svg_marker_start,
     "marker-mid" => :svg_marker_mid,
     "marker-end" => :svg_marker_end,
+    "marker-segment" => :svg_marker_segment,
+    "marker-pattern" => :svg_marker_pattern,
+    "marker-knockout-left" => :svg_marker_knockout_left,
+    "marker-knockout-right" => :svg_marker_knockout_right,
+    "stroke-alignment" => :svg_stroke_alignment,
+    "stroke-dashadjust" => :svg_stroke_dashadjust,
+    "stroke-dashcorner" => :svg_stroke_dashcorner,
     "mask" => :svg_mask,
     "mask-type" => :svg_mask_type,
     "filter" => :svg_filter,
@@ -296,6 +303,11 @@ defmodule NativeElixirPdfUtilities.Validators.SvgStyleValidator do
     case {property, value} do
       {"marker", value} ->
         parse("marker-start", value)
+
+      {property, value}
+      when property in ~w(marker-segment marker-pattern marker-knockout-left marker-knockout-right stroke-alignment stroke-dashadjust stroke-dashcorner) and
+             is_binary(value) ->
+        NativeElixirPdfUtilities.Validators.SvgPrintGeometryValidator.prepare(property, value)
 
       {"text-anchor", value} ->
         if value in ~w(start middle end), do: {:ok, value}, else: :error

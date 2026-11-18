@@ -24,6 +24,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.CssColor
+  alias NativeElixirPdfUtilities.Validators.CssColorProfileValidator
+  alias NativeElixirPdfUtilities.Validators.CssLinkParameterValidator
   alias NativeElixirPdfUtilities.Validators.CssCascadeValidator
   alias NativeElixirPdfUtilities.Validators.CssSourceContextValidator
   alias NativeElixirPdfUtilities.Validators.CssValueValidator
@@ -377,6 +380,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                      entries <- entries ++ shadow_entries,
                      {:ok, stylesheet_entries} <-
                        prepare_stylesheet_entries(entries, media_context),
+                     {:ok, profiles} <- stylesheet_color_profiles(stylesheet_entries, opts),
                      {:ok, css_fonts} <- stylesheet_fonts(stylesheet_entries, opts),
                      {:ok, font_registry} <-
                        font_registry(
@@ -499,6 +503,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         nil -> cache
                         document -> document.tree_scope_id
                       end
+
+                    RenderCache.fetch(cache, {:css_element_image_nodes, root_id}, fn ->
+                      if map_size(composition.roots) == 0, do: children, else: []
+                    end)
 
                     context = %{
                       rules: compiled_rules,
@@ -639,6 +647,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                                  root_canvas_style
                                )
                            }
+                           |> then(fn styled ->
+                             if profiles == %{},
+                               do: styled,
+                               else: Map.put(styled, :css_color_profiles, profiles)
+                           end)
                            |> Map.merge(link_metadata)
                            |> Map.merge(
                              if MapSet.size(link_context.selected) == 0,
@@ -665,7 +678,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       cache,
                       fn ->
                         TextTransform.with_document(fn ->
-                          compute_styles.(cache, query_scope, query_sizes)
+                          CssColor.with_profiles(profiles, fn ->
+                            compute_styles.(cache, query_scope, query_sizes)
+                          end)
                         end)
                       end
                     )
@@ -4500,7 +4515,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                    svg,
                    svg_raster_options(style),
                    image_budget,
-                   opts,
+                   Keyword.put(
+                     opts,
+                     :__image_parameters__,
+                     Map.merge(
+                       Map.get(style, :link_parameters, %{}),
+                       Map.get(style, :_svg_link_parameters, %{})
+                     )
+                   ),
                    Limits.get(:svg_raster_scale)
                  ),
                {:ok, image} <-
@@ -4524,6 +4546,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp finalize_background_image_style(style, opts, image_budget, loader \\ &load_paint_image/4) do
+    opts =
+      if is_map_key(style, :link_parameters),
+        do: Keyword.put(opts, :__image_parameters__, style.link_parameters),
+        else: opts
+
     style =
       style
       |> Map.put_new(:background_position, {{:percent, 0.0}, {:percent, 0.0}})
@@ -4670,12 +4697,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp load_paint_image(source, opts, kind, image_budget) do
+    case source do
+      {:element, id} -> load_element_image(id, opts, kind, image_budget)
+      _ -> load_paint_image_source(source, opts, kind, image_budget)
+    end
+  end
+
+  defp load_element_image(id, opts, kind, image_budget) do
+    cache = Keyword.fetch!(opts, :__render_cache__)
+    context = ResourceContext.current()
+    owner = if context == nil, do: cache, else: context.tree_scope_id
+
+    sources =
+      RenderCache.fetch(cache, {:css_element_image_sources, owner}, fn ->
+        nodes = RenderCache.fetch(cache, {:css_element_image_nodes, owner}, fn -> [] end)
+        css_element_sources(nodes, %{})
+      end)
+
+    case Map.get(sources, id) do
+      source when is_binary(source) ->
+        load_paint_image(source, opts, kind, image_budget)
+
+      _ ->
+        Diagnostics.error(
+          :style,
+          :invalid_document,
+          "CSS element() requires a same-document img with a static src",
+          source: "#" <> id
+        )
+    end
+  end
+
+  defp load_paint_image_source(source, opts, kind, image_budget) do
     case load_image_style(source, opts, kind) do
       {:ok, %{image: image}} ->
         {:ok, image}
 
-      {:ok, %{svg_image: svg}} ->
-        rasterize_svg_image(svg, [], image_budget, opts, Limits.get(:svg_raster_scale))
+      {:ok, %{svg_image: svg} = selected} ->
+        parameters =
+          Map.merge(
+            Keyword.get(opts, :__image_parameters__, %{}),
+            Map.get(selected, :_svg_link_parameters, %{})
+          )
+
+        rasterize_svg_image(
+          svg,
+          [],
+          image_budget,
+          Keyword.put(opts, :__image_parameters__, parameters),
+          Limits.get(:svg_raster_scale)
+        )
 
       :error ->
         Diagnostics.error(
@@ -4690,6 +4761,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       error ->
         error
     end
+  end
+
+  defp css_element_sources(nodes, result) do
+    Enum.reduce(nodes, result, fn
+      %{type: :element, tag: tag, attributes: attrs, children: children}, result ->
+        result =
+          case attrs do
+            %{"id" => id} ->
+              source =
+                if tag == "img" and not Map.has_key?(attrs, "srcset"), do: Map.get(attrs, "src")
+
+              Map.put_new(result, id, source)
+
+            _ ->
+              result
+          end
+
+        if tag in ~w(template picture), do: result, else: css_element_sources(children, result)
+
+      _, result ->
+        result
+    end)
   end
 
   defp put_line_height(style) do
@@ -5490,6 +5583,61 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     # separate from the source-only cascade and from the active style registry.
     with {:ok, css_fonts} <- stylesheet_fonts(entries, opts),
          do: font_registry(opts, css_fonts)
+  end
+
+  defp stylesheet_color_profiles(entries, opts) do
+    declared =
+      Enum.reduce(entries, %{}, fn entry, definitions ->
+        if is_nil(Map.get(entry, :shadow_scope_id)) do
+          Enum.reduce(Map.get(entry.prepared, :color_profiles, %{}), definitions, fn {name,
+                                                                                      source},
+                                                                                     acc ->
+            Map.put(acc, name, {source, entry})
+          end)
+        else
+          definitions
+        end
+      end)
+
+    Enum.reduce_while(declared, {:ok, %{}}, fn {name, {source, entry}}, {:ok, prepared} ->
+      bytes =
+        case ResourceContext.current() do
+          %{depth: depth} = context when depth > 0 ->
+            base =
+              if entry.trusted_local_resources,
+                do: entry.base_url,
+                else: {:document_url, entry.base_url}
+
+            with {:ok, context} <- ResourceContext.rebase(context, base),
+                 do: AssetLoader.resolve_local(source, :color_profile, context, opts)
+
+          _ ->
+            opts =
+              if entry.trusted_local_resources,
+                do:
+                  opts
+                  |> Keyword.delete(:__document_url_context__)
+                  |> Keyword.put(:base_url, entry.base_url),
+                else: opts
+
+            AssetLoader.resolve(source, :color_profile, opts)
+        end
+
+      case bytes do
+        {:ok, bytes} ->
+          case CssColorProfileValidator.prepare(bytes) do
+            {:ok, profile} -> {:cont, {:ok, Map.put(prepared, name, profile)}}
+            :error -> {:cont, {:ok, prepared}}
+          end
+
+        {:error, {reason, _}} = error
+        when reason in [:resource_denied, :resource_limit_exceeded] ->
+          {:halt, error}
+
+        {:error, _} ->
+          {:cont, {:ok, prepared}}
+      end
+    end)
   end
 
   defp stylesheet_fonts(entries, opts) do
@@ -6733,9 +6881,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp load_image_style(src, opts, kind) do
     image_budget = Keyword.fetch!(opts, :__image_budget__)
 
+    {src, parameters} =
+      if :binary.match(src, "param(") == :nomatch and :binary.match(src, "#%") == :nomatch,
+        do: {src, %{}},
+        else: CssLinkParameterValidator.reference(src)
+
     case image_source(src, opts, image_budget, kind) do
       {:ok, svg, :svg} ->
-        {:ok, %{svg_image: svg}}
+        {:ok, %{svg_image: svg, _svg_link_parameters: parameters}}
 
       {:ok, data, expected_format} ->
         decoded =
@@ -6777,8 +6930,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     fonts = Keyword.get(opts, :fonts, [])
     font_options = Keyword.take(opts, [:system_font_discovery])
 
+    parameters = Keyword.get(opts, :__image_parameters__, %{})
+
     loader = fn ->
-      with {:ok, png, viewport, actual_scale} <-
+      with {:ok, svg} <- CssLinkParameterValidator.svg(svg, parameters),
+           {:ok, png, viewport, actual_scale} <-
              SvgRasterizer.rasterize_image_with_scale(
                svg,
                raster_options,
@@ -6804,7 +6960,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
     RenderCache.fetch(
       Keyword.fetch!(opts, :__render_cache__),
-      {:rasterized_svg, owner, svg, raster_options, fonts, font_options},
+      {:rasterized_svg, owner, svg, raster_options, fonts, font_options, parameters},
       loader,
       fn _image ->
         case SvgValidator.validate(svg, raster_options, image_budget) do
@@ -6820,8 +6976,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp svg_raster_options(style) do
-    case :maps.get(:object_fit, style, :fill) do
-      fit when fit in [:contain, :cover] ->
+    case {:maps.get(:object_fit, style, :fill), :maps.get(:object_view_box, style, :none)} do
+      {fit, view} when fit in [:contain, :cover] or view != :none ->
         []
 
       _ ->

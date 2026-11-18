@@ -459,7 +459,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
 
               if cap? or script? do
                 FontValidator.memo(
-                  {:synthetic_glyph_face, font.id, cap?, petite?, script?, position},
+                  {:synthetic_glyph_face, font.id, cap?, petite?, script?, position,
+                   Map.get(font, :metric_descriptors)},
                   fn ->
                     cmap =
                       if cap? do
@@ -484,16 +485,12 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
                       if script? do
                         {:ok, metrics} = FontValidator.prepare_text_metrics(font)
                         key = if position == ["sub"], do: :subscript, else: :superscript
-                        sign = if key == :subscript, do: -1, else: 1
 
-                        case metrics[key] do
-                          nil ->
-                            {0.65, sign * 0.35}
-
-                          metrics ->
-                            {metrics.y_size / font.units_per_em,
-                             sign * metrics.y_offset / font.units_per_em}
-                        end
+                        NativeElixirPdfUtilities.Validators.FontMetricValidator.script_metrics(
+                          font,
+                          key,
+                          metrics[key]
+                        )
                       else
                         {1, 0}
                       end

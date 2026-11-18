@@ -2,12 +2,21 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Validators.{FontValidator, HtmlValidator}
 
-  @fields %{
-    "size-adjust" => :size_adjust,
-    "ascent-override" => :ascent_override,
-    "descent-override" => :descent_override,
-    "line-gap-override" => :line_gap_override
+  @script_fields %{
+    "superscript-position-override" => :superscript_position_override,
+    "subscript-position-override" => :subscript_position_override,
+    "superscript-size-override" => :superscript_size_override,
+    "subscript-size-override" => :subscript_size_override
   }
+
+  @fields %{
+            "size-adjust" => :size_adjust,
+            "ascent-override" => :ascent_override,
+            "descent-override" => :descent_override,
+            "line-gap-override" => :line_gap_override
+          }
+          |> Map.merge(@script_fields)
+  @script_properties Map.keys(@script_fields)
 
   @doc "Returns the font-face metric descriptors and their canonical option fields."
   @spec fields() :: map()
@@ -16,6 +25,32 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
   @doc "Prepares font-face metric percentages. Numeric option values use the same percent units as CSS."
   @spec prepare_descriptor(String.t(), term()) :: {:ok, map()} | :error
   def prepare_descriptor(property, value) do
+    if property in @script_properties,
+      do: prepare_script_descriptor(property, value),
+      else: prepare_line_descriptor(property, value)
+  end
+
+  defp prepare_script_descriptor(property, value) do
+    values =
+      if is_binary(value),
+        do: value |> String.downcase(:ascii) |> String.split(),
+        else: if(is_tuple(value), do: Tuple.to_list(value), else: List.wrap(value))
+
+    size? = property in ["superscript-size-override", "subscript-size-override"]
+
+    case Enum.map(values, &script_value(&1, size?)) do
+      [first] when first != :invalid ->
+        {:ok, %{@script_fields[property] => {first, first}}}
+
+      [first, second] when first != :invalid and second != :invalid ->
+        {:ok, %{@script_fields[property] => {first, second}}}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp prepare_line_descriptor(property, value) do
     with {:ok, key} <- Map.fetch(@fields, property) do
       normalized =
         case value do
@@ -72,7 +107,12 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
             case prepare_descriptor(property, value) do
               {:ok, field} ->
                 Enum.each(field, fn {_key, value} ->
-                  if is_number(value), do: FontValidator.check(:max_numeric_magnitude, value)
+                  values = if is_tuple(value), do: Tuple.to_list(value), else: [value]
+
+                  Enum.each(values, fn value ->
+                    if is_number(value),
+                      do: FontValidator.check(:max_numeric_magnitude, abs(value))
+                  end)
                 end)
 
                 {:cont, {:ok, Map.merge(prepared, field)}}
@@ -86,6 +126,55 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
         end
       end)
     end)
+  end
+
+  defp script_value(value, size?) do
+    cond do
+      value in ["normal", :normal] ->
+        :normal
+
+      value in ["from-font", :from_font] ->
+        :from_font
+
+      is_number(value) and (not size? or value >= 0) ->
+        value
+
+      is_binary(value) ->
+        case HtmlValidator.parse_css_number(value) do
+          {value, "%"} -> script_value(value, size?)
+          _ -> :invalid
+        end
+
+      true ->
+        :invalid
+    end
+  end
+
+  def script_metrics(font, key, metrics) do
+    {size_key, position_key, direction} =
+      case key do
+        :subscript -> {:subscript_size_override, :subscript_position_override, -1}
+        :superscript -> {:superscript_size_override, :superscript_position_override, 1}
+      end
+
+    {size, position} =
+      case metrics do
+        nil ->
+          {0.65, direction * 0.35}
+
+        metrics ->
+          {metrics.y_size / font.units_per_em, direction * metrics.y_offset / font.units_per_em}
+      end
+
+    descriptors = Map.get(font, :metric_descriptors, %{})
+    {script_ratio(descriptors[size_key], size), script_ratio(descriptors[position_key], position)}
+  end
+
+  defp script_ratio(value, default) do
+    case value do
+      {percent, _vertical} when is_number(percent) -> percent / 100
+      _ -> default
+    end
   end
 
   @doc "Resolves a from-font aspect against the first selected face, preserving it for fallback faces."

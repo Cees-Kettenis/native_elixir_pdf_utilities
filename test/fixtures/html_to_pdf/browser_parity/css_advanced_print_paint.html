@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page { size: 180pt 110pt; margin: 0; }
+    html, body { margin: 0; padding: 0; }
+    .swatch { width: 70pt; height: 22pt; }
+    .mix { background-image: cross-fade(red 25%, blue 75%); }
+    .ink { background-color: device-cmyk(0 1 1 0); }
+    svg { display: block; }
+  </style>
+</head>
+<body>
+  <div class="swatch mix"></div>
+  <div class="swatch ink"></div>
+  <svg xmlns="http://www.w3.org/2000/svg" width="80" height="40">
+    <rect x="10" y="5" width="50" height="26" fill="blue" stroke="red" stroke-width="3" stroke-alignment="inside"/>
+  </svg>
+</body>
+</html>
