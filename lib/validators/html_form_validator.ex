@@ -1197,7 +1197,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
         ]) :: map()
   def prepare_initial_textfield_style(style, declarations) do
     native? =
-      style.appearance == :auto and
+      style.appearance in [:auto, :textfield] and
         not Enum.any?(declarations, fn declaration ->
           property =
             elem(
@@ -1714,6 +1714,48 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
             do: Map.put(style, dimension, Map.get(intrinsic, dimension, :auto)),
             else: style
         end)
+    end
+  end
+
+  @doc "Replaces native fixed dimensions with content sizing on supported initial fields."
+  @spec prepare_content_sizing(map(), [term()]) :: map()
+  def prepare_content_sizing(style, declarations) do
+    if Map.get(style, :form_kind) in [:text, :textarea, :select, :listbox, :base_select] do
+      axes = [:width, :height]
+
+      authored =
+        Enum.flat_map(declarations, fn declaration ->
+          {property, _} =
+            NativeElixirPdfUtilities.Validators.CssValueValidator.declaration_pair(declaration)
+
+          NativeElixirPdfUtilities.Validators.CssCascadeValidator.targets(property, style)
+        end)
+
+      Enum.reduce(axes, style, fn axis, style ->
+        if Atom.to_string(axis) not in authored or Map.get(style, axis) == :auto,
+          do: Map.put(style, axis, if(axis == :width, do: :fit_content, else: :auto)),
+          else: style
+      end)
+    else
+      style
+    end
+  end
+
+  @doc "Returns the printable initial value for control-value() without exposing password contents."
+  @spec css_control_value(map()) :: String.t()
+  def css_control_value(node) do
+    case node do
+      %{tag: "input", attributes: attributes, _initial_form_state: %{value: value}}
+      when is_binary(value) ->
+        if HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "password",
+          do: "",
+          else: value
+
+      %{_initial_form_state: %{value: value}} when is_binary(value) ->
+        value
+
+      _ ->
+        ""
     end
   end
 

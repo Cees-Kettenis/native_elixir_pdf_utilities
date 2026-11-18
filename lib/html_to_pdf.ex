@@ -337,15 +337,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
             ResourceValidator.renderer_context_options(opts),
             image_budget,
             fn _context ->
-              with {:ok, prepared} <-
-                     NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.prepare_source(
-                       html,
-                       opts,
-                       image_budget
-                     ),
-                   {:ok, pdf_binary} <- PdfWriter.render(prepared.pages, prepared.options) do
-                {:ok, pdf_binary}
-              end
+              NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow.with_document(fn ->
+                with {:ok, prepared} <-
+                       NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.prepare_source(
+                         html,
+                         opts,
+                         image_budget
+                       ),
+                     pages <-
+                       NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow.prepare_pages(
+                         prepared.pages
+                       ),
+                     {:ok, pdf_binary} <- PdfWriter.render(pages, prepared.options) do
+                  {:ok, pdf_binary}
+                end
+              end)
             end
           )
 

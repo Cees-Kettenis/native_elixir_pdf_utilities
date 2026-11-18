@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body {margin:0;padding:0}
+  body {font: 16px "DejaVu Sans"; color:#222}
+  .section {margin:12px;height:75px}
+  .card {container:card/inline-size;width:320px;padding:8px;border:2px solid #456}
+  .shell {height:28px;background:#965}
+  @container card (inline-size >= 320px) {
+    .shell {width:50cqi;background:#368}
+  }
+  .contained {width:120px;contain:strict;contain-intrinsic-size:120px 36px;background:#db9}
+  .overflow {width:180px;height:52px;background:#568}
+  .skipped {width:120px;content-visibility:hidden;contain-intrinsic-height:18px;background:#9db}
+  .zoom {zoom:125%;width:100px;height:24px;background:#785}
+  .control {display:inline-block;vertical-align:top;height:24px;min-width:12px;
+    field-sizing:content;font:16px "DejaVu Sans";padding:2px;border:1px solid #333;appearance:none}
+  .control::placeholder {color:#993333}
+  iframe {border:1px solid #456;width:260px;height:90px}
+</style>
+</head><body>
+  <div class="section"><div class="card"><div class="shell"></div></div></div>
+  <div class="section"><div class="contained"><div class="overflow"></div></div><div class="skipped">Hidden</div></div>
+  <div class="section"><div class="zoom"></div></div>
+  <div class="section"><input class="control" placeholder="Hint"><input class="control" value="Longer text"></div>
+  <div class="section"><iframe srcdoc="<style>html{scrollbar-width:none}body{margin:0}.panel{width:100%;height:180px;background:#cd9}</style><div class='panel'></div>"></iframe></div>
+</body></html>

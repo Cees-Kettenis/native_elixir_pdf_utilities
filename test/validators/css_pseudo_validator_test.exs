@@ -45,7 +45,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidatorTest do
       assert [owner] = CssSelector.pseudo_owners(selectors, node, [], %{})
       assert owner.owner == {node._selector_id, owner.pseudo}
 
-      if owner.pseudo == :marker do
+      if owner.pseudo in [:marker | CssPseudoValidator.control_parts()] do
         assert owner.paint_ready
         assert :ok = CssPseudoValidator.validate_paint([owner], node)
       else

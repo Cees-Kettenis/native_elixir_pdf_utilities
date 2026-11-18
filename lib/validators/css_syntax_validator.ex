@@ -248,7 +248,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
           {name, _} when name in ["media", "font-face", "page"] and not rule.block ->
             {String.duplicate(" ", byte_size(rule.source)), namespaces, false}
 
-          {name, _} when name in ["layer", "scope", "supports"] ->
+          {name, _} when name in ["layer", "scope", "supports", "container"] ->
             {rule.source, namespaces,
              if(name == "layer" and not rule.block, do: prelude, else: false)}
 

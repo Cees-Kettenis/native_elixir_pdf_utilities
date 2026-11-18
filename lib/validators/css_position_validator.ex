@@ -84,6 +84,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPositionValidator do
          font_size: size / 0.75,
          root_font_size: root_size / 0.75,
          writing_mode: Map.get(style, :writing_mode, :horizontal_tb),
+         container_units: Map.get(style, :_query_units, %{}),
          _intrinsic_basis: Map.get(style, :_intrinsic_basis),
          source_metrics: metrics,
          root_metrics: root_metrics,

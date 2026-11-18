@@ -7,12 +7,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
   @sides ~w(top right bottom left)
   @font_controls NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties()
   @simple NativeElixirPdfUtilities.Validators.CssPublishingValidator.properties() ++
-            ~w(outline-width outline-style outline-color outline-offset box-shadow border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize box-sizing border-radius
+            ~w(outline-width outline-style outline-color outline-offset box-shadow border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize zoom field-sizing scrollbar-width scrollbar-color scrollbar-gutter box-sizing border-radius
     text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
-    ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation opacity mix-blend-mode contain object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
+    ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation opacity mix-blend-mode contain contain-intrinsic-width contain-intrinsic-height container-name container-type object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
     border-spacing caption-side table-layout empty-cells column-count column-width column-fill column-span column-rule-width column-rule-style column-rule-color float clear shape-outside shape-inside shape-margin shape-image-threshold flex-direction flex-wrap row-gap column-gap
-    justify-content align-items align-self justify-self justify-items align-content order
+    justify-content align-items align-self justify-self justify-items align-content order reading-flow reading-order
     flex-grow flex-shrink flex-basis grid-template-columns grid-template-rows grid-auto-columns
     grid-auto-rows grid-template-areas grid-auto-flow grid-column-start grid-column-end grid-row-start grid-row-end
     white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break math-style math-shift math-depth) ++
@@ -172,6 +172,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                 "text-decoration" =>
                   ~w(text-decoration-line text-decoration-color text-decoration-style text-decoration-thickness),
                 "columns" => ~w(column-count column-width),
+                "container" => ~w(container-name container-type),
+                "contain-intrinsic-size" => ~w(contain-intrinsic-width contain-intrinsic-height),
                 "column-rule" => ~w(column-rule-width column-rule-style column-rule-color),
                 "gap" => ~w(row-gap column-gap),
                 "place-content" => ~w(align-content justify-content),
@@ -270,7 +272,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     {canonical_property(property), mapped}
   end
 
-  @inherited ~w(-webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color font-size font-family font-style font-weight font-width line-height
+  @inherited ~w(scrollbar-color -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color font-size font-family font-style font-weight font-width line-height
     dominant-baseline letter-spacing word-spacing text-indent text-align-last text-justify hanging-punctuation text-align text-transform quotes white-space white-space-collapse text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter-align initial-letter-wrap orphans widows caption-side border-collapse border-spacing empty-cells list-style-type list-style-position
     list-style-image visibility block-ellipsis ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction math-style math-shift math-depth) ++
@@ -886,6 +888,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         content_visibility: :visible,
         visibility: :visible,
         resize: :none,
+        zoom: 1.0,
+        field_sizing: :fixed,
+        scrollbar_width: :auto,
+        scrollbar_color: :auto,
+        scrollbar_gutter: :auto,
         content: :none,
         counter_reset: [],
         counter_increment: [],
@@ -895,6 +902,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         mix_blend_mode: :Normal,
         background_blend_modes: [:Normal],
         contain: [],
+        container_name: [],
+        container_type: :normal,
+        contain_intrinsic_width: 0.0,
+        contain_intrinsic_height: 0.0,
         overflow_x: :visible,
         overflow_y: :visible,
         overflow_clip_margin: {:padding_box, 0.0},
@@ -936,6 +947,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         flex_shrink: 1.0,
         flex_basis: :auto,
         order: 0,
+        reading_flow: :normal,
+        reading_order: 0,
         justify_content: :none,
         align_items: :stretch,
         align_self: :auto,

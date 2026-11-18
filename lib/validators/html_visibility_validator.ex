@@ -45,13 +45,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlVisibilityValidator do
         _ -> %{}
       end
 
-    if Map.get(style, :content_visibility) in [nil, :visible] and
+    if Map.get(style, :content_visibility) in [nil, :visible, :auto] and
          not Map.has_key?(style, :_html_content_skipped) do
       :ok
     else
       expected = prepare_style(Map.delete(style, :_html_content_skipped))
 
-      if Map.get(style, :content_visibility) in [nil, :visible, :hidden] and
+      if Map.get(style, :content_visibility) in [nil, :visible, :hidden, :auto] and
            Map.fetch(style, :_html_content_skipped) == Map.fetch(expected, :_html_content_skipped) and
            (not Map.has_key?(expected, :_html_content_skipped) or
               (Map.get(node, :children, []) == [] and not Map.has_key?(style, :_form_control) and

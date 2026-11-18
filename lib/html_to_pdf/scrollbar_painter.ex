@@ -9,13 +9,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarPainter do
     Enum.map(parts, fn part ->
       box =
         part
-        |> Map.drop([:kind, :direction, :paint_clip])
+        |> Map.drop([:kind, :direction, :paint_clip, :color])
         |> Map.merge(%{
           type: HtmlValidator.reserve_layout_box(:rect),
           fill_color:
-            if(part.kind == :track,
-              do: {252 / 255, 252 / 255, 252 / 255},
-              else: {139 / 255, 139 / 255, 139 / 255}
+            Map.get(
+              part,
+              :color,
+              if(part.kind == :track,
+                do: {252 / 255, 252 / 255, 252 / 255},
+                else: {139 / 255, 139 / 255, 139 / 255}
+              )
             ),
           stroke_color: nil,
           stroke_width: 0.0,

@@ -45,10 +45,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FileArtwork do
       clip: clip
     }
 
-    filename_x = content_x + display.button_width + 3.0
+    button_style = get_in(style, [:_control_parts, :file_selector_button])
+
+    {filename_x, filename_width} =
+      if match?(%{display: :none}, button_style),
+        do: {content_x, content_width},
+        else: {content_x + display.button_width + 3.0, content_width - display.button_width - 3.0}
 
     {filename_parts, _} =
-      HtmlFileValidator.filename_parts(style, content_width - display.button_width - 3.0)
+      HtmlFileValidator.filename_parts(style, filename_width)
       |> Enum.map_reduce(filename_x, fn part, offset ->
         {{part.text, style.font_face, offset, style.color, style.letter_spacing},
          offset + part.width}
@@ -58,7 +63,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FileArtwork do
       Enum.map(
         [
           {display.button_text, display.button_face, content_x + 6.0,
-           if(display.disabled, do: {16 / 255, 16 / 255, 16 / 255, 0.3}, else: {0, 0, 0}), 0.0}
+           if(button_style,
+             do: button_style.color,
+             else: if(display.disabled, do: {16 / 255, 16 / 255, 16 / 255, 0.3}, else: {0, 0, 0})
+           ), 0.0}
           | filename_parts
         ],
         fn {text, face, text_x, color, spacing} ->
@@ -92,7 +100,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FileArtwork do
             actual_text: Enum.map_join(filename_texts, & &1.text),
             x: filename_x,
             y: content_y,
-            width: max(content_width - display.button_width - 3.0, 0.0),
+            width: max(filename_width, 0.0),
             height: content_height,
             boxes: filename_texts
           }
@@ -101,6 +109,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FileArtwork do
         filename_texts
       end
 
-    if style.font_size == 0, do: [button], else: [button, button_text | status]
+    cond do
+      match?(%{display: :none}, button_style) -> status
+      style.font_size == 0 -> [button]
+      true -> [button, button_text | status]
+    end
   end
 end

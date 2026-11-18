@@ -44,7 +44,7 @@ or page furniture. Unsupported widget transforms return diagnostics.
 | Area | Supported |
 | --- | --- |
 | Selectors | Namespaces, tags, classes, IDs, attributes, descendant/child/sibling combinators, `:is()`/`:where()`/`:not()`/`:has()`, filtered positions, `:lang()`/`:dir()` and initial control/link/disclosure states |
-| Styles | Cascade, inheritance, CSS-wide keywords, `all`, `!important`, layers, nesting, `@scope`, custom properties, `@property`, `var()` and `currentColor` |
+| Styles | Cascade, inheritance, CSS-wide keywords, `all`, `!important`, layers, nesting, `@scope`, `@container`, custom properties, `@property`, `var()` and `currentColor` |
 | Layout | Block, inline, inline-block/table, flex, grid, flow-root, contents, logical box axes, sizing, margins, padding and gaps |
 | Text | Fonts, alignment, spacing, wrapping, whitespace, list markers, text decorations, shadows and emphasis |
 | Boxes | Colors, borders, rounded corners and background images |
@@ -56,8 +56,8 @@ Shadow styles support `:host()`, `:host-context()`, `::slotted()` and explicit
 Malformed declarations and invalid selector rules are discarded; unknown at-rules
 and `@import` are ignored. Valid declarations still receive strict value and resource
 checks. Direction selectors resolve initial HTML direction; right-to-left layout
-and painting remain gated. Some pseudo-elements, including `::first-line`,
-`::placeholder` and unimplemented control parts, have selector ownership and
+and painting remain gated. Some pseudo-elements, including `::first-line`
+and unimplemented control parts, have selector ownership and
 return `:not_implemented` when selected.
 
 Support is a subset of browser CSS. Lengths include physical units, selected-font
@@ -99,6 +99,33 @@ element's metrics. Invalid registrations are ignored. Registered gradient images
 require the CSS image implementation and return `:not_implemented`; source-only
 contexts cannot invent missing font or viewport metrics.
 
+### Containment and container queries
+
+Size and inline-size containment use intrinsic placeholders for the affected
+axes. Layout and paint containment use an independent formatting context and
+clip descendant paint where required. In print, `content-visibility:auto`
+renders its children and `content-visibility:hidden` skips their paint.
+
+`@container` selects the nearest eligible ancestor by name and axis. Size
+conditions use the laid-out content box, and style conditions query custom
+properties. Container units use the nearest eligible ancestor for each axis,
+with the print viewport as the fallback. A query whose geometry keeps changing
+returns a diagnostic. Scroll-state conditions have no initial print state.
+
+### Static controls and viewport panels
+
+`field-sizing:content` sizes initial text fields and selects against their
+displayed content. Placeholder color, file chooser button paint, color swatches
+and selected range and gauge parts use the authored pseudo-element styles.
+Placeholder text stays separate from the PDF field value.
+
+Embedded viewport documents accept root scrollbar width, color and gutter
+properties. Gutters occupy layout space and scrollbar artwork uses the initial
+position. Static `zoom` scales computed box and text lengths.
+
+Block, flex and grid reading flows can set the logical text order in the PDF
+without moving the artwork. Scopes are resolved per page.
+
 ### Positioning and transforms
 
 Static, relative, absolute, fixed and printed sticky positioning are supported.
@@ -108,7 +135,7 @@ children local. Sticky uses the initial print scrollport before pagination and
 retains its normal flow allocation. No scrolling is simulated. Transforms move
 artwork without reflow. Isolation, layout/paint containment and positioned stacking
 contexts preserve paint order. Static 3D projection and flattening are described
-under compositing below. Full containment and animations remain unsupported. Child-document form repetition restrictions still apply.
+under compositing below. Child-document form repetition restrictions still apply.
 
 Logical sizes, edges and insets follow `writing-mode` and `direction` during the
 cascade. Vertical and sideways text use the glyph orientation and font metrics
@@ -478,6 +505,7 @@ font metrics. Missing information returns an actionable font diagnostic.
 | --- | --- |
 | Equations | Tokens, operators, fractions, radicals, scripts, limits, accents and matrices |
 | Fonts | Bundled STIX Two Math; custom fonts need required MATH metrics |
+| CSS context | Math depth, style and shift use the computed cascade. Operator lengths can use the surrounding container geometry. |
 | Page breaks | Equations stay together; oversized equations return a diagnostic |
 
 [MathML examples](html-to-pdf-examples.md#mathml-equations).

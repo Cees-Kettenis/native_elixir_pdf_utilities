@@ -1,7 +1,12 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.OverflowGeometry do
   @moduledoc "Clips each computed overflow axis without moving artwork or inventing an infinite viewport."
   alias NativeElixirPdfUtilities.HtmlToPdf.{DrawingGeometry, PageGeometry}
-  alias NativeElixirPdfUtilities.Validators.{CssOverflowValidator, FontValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    CssContainmentValidator,
+    CssOverflowValidator,
+    FontValidator
+  }
 
   @doc "Returns the overflow clip using allocated box edges and actual ink on any visible axis."
   @spec clip([map()], map(), map()) :: map() | nil
@@ -9,7 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OverflowGeometry do
     case style do
       style
       when not is_map_key(style, :overflow_x) and not is_map_key(style, :overflow_y) and
-             not is_map_key(style, :contain) ->
+             not is_map_key(style, :contain) and not is_map_key(style, :content_visibility) ->
         if Map.get(style, :overflow, :visible) == :visible,
           do: nil,
           else: used_clip(boxes, style, padding_box)
@@ -21,7 +26,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OverflowGeometry do
 
   defp used_clip(boxes, style, padding_box) do
     {x, y} = CssOverflowValidator.axes(style)
-    {x, y} = if :paint in Map.get(style, :contain, []), do: {:clip, :clip}, else: {x, y}
+    {x, y} = if :paint in CssContainmentValidator.effects(style), do: {:clip, :clip}, else: {x, y}
 
     if x == :visible and y == :visible do
       nil

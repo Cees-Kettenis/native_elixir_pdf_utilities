@@ -45,9 +45,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           margin padding border-width border-style border-radius border-spacing
           text-align text-transform unicode-bidi white-space white-space-collapse white-space-trim text-wrap-mode text-wrap-style text-wrap tab-size word-break word-wrap overflow-wrap line-break
           break-before page-break-before break-after page-break-after break-inside page-break-inside
-          content-visibility visibility resize appearance ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction display box-sizing position z-index isolation contain object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
+          content-visibility visibility resize zoom field-sizing scrollbar-width scrollbar-color scrollbar-gutter appearance ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction display box-sizing position z-index isolation contain contain-intrinsic-size contain-intrinsic-width contain-intrinsic-height container container-name container-type object-fit overflow overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue line-clamp aspect-ratio
           border-collapse caption-side table-layout empty-cells flex-direction flex-wrap gap row-gap column-gap
-          justify-content align-items align-self justify-self justify-items align-content place-content place-items place-self order
+          justify-content align-items align-self justify-self justify-items align-content place-content place-items place-self order reading-flow reading-order
           flex-grow flex-shrink flex-basis flex grid-column grid-row grid-column-start grid-column-end
           grid-row-start grid-row-end grid-area grid-template-areas grid-auto-flow grid-template grid float clear shape-outside shape-inside shape-margin shape-image-threshold) ++
                               @hyphenation_properties ++
@@ -1467,6 +1467,32 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               :error -> {:error, :invalid_document}
             end
 
+          property when property in ~w(scrollbar-width scrollbar-color scrollbar-gutter) ->
+            NativeElixirPdfUtilities.Validators.ScrollbarValidator.declaration(
+              style,
+              property,
+              value
+            )
+
+          "zoom" ->
+            case HtmlValidator.parse_css_number(HtmlValidator.trim_css_whitespace(value)) do
+              {number, unit} when number >= 0 and unit in ["", "%"] ->
+                scale = if unit == "%", do: number / 100, else: number
+                {:ok, Map.put(style, :zoom, if(scale == 0, do: 1.0, else: scale))}
+
+              _ ->
+                if String.downcase(String.trim(value), :ascii) == "normal",
+                  do: {:ok, Map.put(style, :zoom, 1.0)},
+                  else: :error
+            end
+
+          "field-sizing" ->
+            case String.downcase(HtmlValidator.trim_ascii_whitespace(value), :ascii) do
+              "fixed" -> {:ok, Map.put(style, :field_sizing, :fixed)}
+              "content" -> {:ok, Map.put(style, :field_sizing, :content)}
+              _ -> :error
+            end
+
           "appearance" ->
             with {:ok, appearance} <- HtmlValidator.parse_control_appearance(value),
                  do: {:ok, Map.put(style, :appearance, appearance)}
@@ -1480,6 +1506,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             case String.downcase(HtmlValidator.trim_ascii_whitespace(value), :ascii) do
               "hidden" -> {:ok, Map.put(style, :content_visibility, :hidden)}
               "visible" -> {:ok, Map.put(style, :content_visibility, :visible)}
+              "auto" -> {:ok, Map.put(style, :content_visibility, :auto)}
               _ -> :error
             end
 
@@ -2029,6 +2056,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             with {:ok, position} <- parse_two_axis_position(value, style.font_size, false),
                  do: {:ok, Map.put(style, :object_position, position)}
 
+          property
+          when property in ~w(contain-intrinsic-size contain-intrinsic-width contain-intrinsic-height) ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssContainmentValidator.intrinsic_size(
+                     style,
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
+          property when property in ~w(container container-name container-type) ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssContainerQueryValidator.declaration(
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
           property when property in ["isolation", "contain"] ->
             with {:ok, key, value} <-
                    NativeElixirPdfUtilities.Validators.CssStackingValidator.prepare(
@@ -2181,6 +2226,33 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
                      value
                    ),
                  do: {:ok, Map.merge(style, fields)}
+
+          "reading-flow" ->
+            source = String.downcase(HtmlValidator.trim_css_whitespace(value), :ascii)
+
+            case Map.fetch(
+                   %{
+                     "normal" => :normal,
+                     "source-order" => :source_order,
+                     "flex-visual" => :flex_visual,
+                     "flex-flow" => :flex_flow,
+                     "grid-rows" => :grid_rows,
+                     "grid-columns" => :grid_columns,
+                     "grid-order" => :grid_order
+                   },
+                   source
+                 ) do
+              {:ok, flow} -> {:ok, Map.put(style, :reading_flow, flow)}
+              :error -> :error
+            end
+
+          "reading-order" ->
+            with {:ok, order} <-
+                   NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(
+                     value,
+                     :integer
+                   ),
+                 do: {:ok, Map.put(style, :reading_order, order)}
 
           "order" ->
             put_order(style, value)

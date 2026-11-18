@@ -12,7 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
   @spec contains?(String.t()) :: boolean()
   def contains?(value) do
     :binary.match(value, "(") != :nomatch and
-      Regex.match?(~r/(?:attr|env|\\)/i, value) and
+      Regex.match?(~r/(?:attr|env|control-value|\\)/i, value) and
       component_contains?(CssSyntaxValidator.components(value))
   end
 
@@ -22,7 +22,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
         %{kind: :block, opener: opener, children: children} ->
           case HtmlValidator.parse_css_identifier(opener) do
             {:ok, name, "("} ->
-              String.downcase(name, :ascii) in ["attr", "env"] or component_contains?(children)
+              String.downcase(name, :ascii) in ["attr", "env", "control-value"] or
+                component_contains?(children)
 
             _ ->
               component_contains?(children)
@@ -134,6 +135,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
 
               "env" ->
                 environment(body, context, depth + 1)
+
+              "control-value" ->
+                control_value(body, context)
 
               # Variable fallbacks are conditional. The shared variable resolver selects them first.
               "var" ->
@@ -297,6 +301,24 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
     syntax != :any and Enum.any?(syntax, fn {_, type, _} -> type in ["url", "image"] end)
   end
 
+  defp control_value(body, context) do
+    value = Map.get(context, :_css_control_value, "")
+
+    case String.trim(body) do
+      type when type in ["", "<string>"] ->
+        {:ok, quote_string(value)}
+
+      "<number>" ->
+        case HtmlValidator.parse_css_number(value) do
+          {_number, ""} -> {:ok, "/**/" <> value <> "/**/"}
+          _ -> :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
   defp environment(body, context, depth) do
     [header | fallback] = HtmlValidator.split_css_comma(body, true)
 
@@ -365,6 +387,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
                 case String.downcase(name, :ascii) do
                   "attr" -> match?({:ok, _, _}, attribute_header(header))
                   "env" -> match?({:ok, _, _}, environment_header(header))
+                  "control-value" -> String.trim(body) in ["", "<string>", "<number>"]
                   _ -> true
                 end
 

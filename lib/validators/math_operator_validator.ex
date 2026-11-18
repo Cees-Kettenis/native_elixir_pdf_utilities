@@ -65,6 +65,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
     :root_line_height,
     :viewport_width,
     :viewport_height,
+    :container_units,
     :text_only
   ]
 
@@ -227,6 +228,18 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
         Enum.all?(Map.to_list(attributes), fn {key, value} ->
           is_binary(key) and String.valid?(key) and is_binary(value) and String.valid?(value)
         end) and is_map(context) and Enum.all?(Map.keys(context), &(&1 in @context_keys))
+
+    valid? =
+      valid? and
+        case Map.get(context, :container_units, %{}) do
+          units when is_map(units) ->
+            Enum.all?(units, fn {unit, value} ->
+              unit in ~w(cqw cqh cqi cqb) and is_number(value) and value >= 0 and value <= limit
+            end)
+
+          _ ->
+            false
+        end
 
     if valid? do
       index = Map.get(context, :index, 0)
@@ -462,8 +475,23 @@ defmodule NativeElixirPdfUtilities.Validators.MathOperatorValidator do
             "cqmax" => max(width, height) / 100
           })
 
-        # The supported CSS model has no eligible size-query container. CSS
-        # container units therefore use the small viewport, which is fixed in print.
+        scales =
+          case Map.get(context, :container_units, %{}) do
+            units when map_size(units) > 0 ->
+              scales =
+                Enum.reduce(units, scales, fn {unit, scale}, scales ->
+                  Map.put(scales, unit, scale * 0.75)
+                end)
+
+              Map.merge(scales, %{
+                "cqmin" => min(scales["cqi"], scales["cqb"]),
+                "cqmax" => max(scales["cqi"], scales["cqb"])
+              })
+
+            _ ->
+              scales
+          end
+
         Enum.reduce(["", "s", "l", "d"], scales, fn prefix, scales ->
           Map.merge(scales, %{
             (prefix <> "vw") => width / 100,

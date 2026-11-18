@@ -18,7 +18,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
              node,
              ancestors,
              context
-           ),
+           ) and selected_pseudo_condition?(selector, context, [node | ancestors]),
          do: [
            %{
              owner: owner_identity(node, pseudo),
@@ -29,6 +29,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
          else: []
     end)
     |> Enum.uniq()
+  end
+
+  defp selected_pseudo_condition?(selector, context, ancestors) do
+    case selector do
+      %{container_queries: [_ | _] = conditions} ->
+        NativeElixirPdfUtilities.HtmlToPdf.ContainerQuery.matches?(conditions, context, ancestors)
+
+      _ ->
+        true
+    end
   end
 
   @doc "Returns the originating element and pseudo-element's generated identity."

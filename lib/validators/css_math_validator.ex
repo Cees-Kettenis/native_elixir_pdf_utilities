@@ -179,7 +179,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
   def resolve_scalars(style) do
     result =
       Enum.reduce_while(
-        [:z_index, :orphans, :widows, :order, :flex_grow, :flex_shrink, :column_count],
+        [
+          :z_index,
+          :orphans,
+          :widows,
+          :order,
+          :reading_order,
+          :flex_grow,
+          :flex_shrink,
+          :column_count
+        ],
         {:ok, style},
         fn property, {:ok, result} ->
           case Map.get(result, property) do
@@ -485,7 +494,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
                root_font_size: if(is_number(root_size), do: root_size / 0.75),
                width: Map.get(viewport, :width),
                height: Map.get(viewport, :height),
-               writing_mode: Map.get(style, :writing_mode, :horizontal_tb)
+               writing_mode: Map.get(style, :writing_mode, :horizontal_tb),
+               container_units: Map.get(style, :_query_units, %{})
              }}
 
           true ->
@@ -747,6 +757,29 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
     end
   end
 
+  defp container_scale(unit, environment) do
+    units = Map.get(environment, :container_units, %{})
+    width = Map.get(environment, :width, 0.0)
+    height = Map.get(environment, :height, 0.0)
+
+    {inline, block} =
+      if Map.get(environment, :writing_mode, :horizontal_tb) == :horizontal_tb,
+        do: {width, height},
+        else: {height, width}
+
+    inline = Map.get(units, "cqi", if(is_number(inline), do: inline / 100))
+    block = Map.get(units, "cqb", if(is_number(block), do: block / 100))
+
+    case unit do
+      "cqw" -> Map.get(units, unit, if(is_number(width), do: width / 100))
+      "cqh" -> Map.get(units, unit, if(is_number(height), do: height / 100))
+      "cqi" -> inline
+      "cqb" -> block
+      "cqmin" -> if(is_number(inline) and is_number(block), do: min(inline, block))
+      "cqmax" -> if(is_number(inline) and is_number(block), do: max(inline, block))
+    end
+  end
+
   defp terminal(value, environment) do
     identifier =
       case HtmlValidator.parse_css_identifier(value) do
@@ -849,6 +882,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
 
               {scale, type} =
                 case unit do
+                  unit when unit in ~w(cqw cqh cqi cqb cqmin cqmax) ->
+                    {container_scale(unit, environment), :length}
+
                   unit when unit in ~w(vw svw lvw dvw vi svi lvi dvi) ->
                     axis =
                       if String.ends_with?(unit, "vi") and

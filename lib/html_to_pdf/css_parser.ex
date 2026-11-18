@@ -1015,7 +1015,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     declarations = Enum.map(CssSyntaxValidator.declarations(declaration_source), & &1.declaration)
 
     metadata =
-      source |> Map.take([:layer, :scopes]) |> Map.reject(fn {_key, value} -> value == [] end)
+      source
+      |> Map.take([:layer, :scopes, :container_queries])
+      |> Map.reject(fn {_key, value} -> value == [] end)
 
     {:ok, Map.merge(%{selectors: selectors, declarations: declarations, order: order}, metadata)}
   end

@@ -6739,11 +6739,26 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec parse_control_appearance(term()) :: {:ok, :auto | :none | :base_select} | :error
+  @spec parse_control_appearance(term()) ::
+          {:ok, :auto | :none | :base_select | :textfield} | :error
   def parse_control_appearance(value) do
-    if value |> trim_ascii_whitespace() |> String.downcase(:ascii) == "base-select",
-      do: {:ok, :base_select},
-      else: parse_gauge_appearance(value)
+    case value |> trim_ascii_whitespace() |> String.downcase(:ascii) do
+      "base-select" ->
+        {:ok, :base_select}
+
+      "base" ->
+        {:ok, :none}
+
+      "textfield" ->
+        {:ok, :textfield}
+
+      value
+      when value in ~w(button checkbox listbox menulist menulist-button radio searchfield textarea) ->
+        {:ok, :auto}
+
+      _ ->
+        parse_gauge_appearance(value)
+    end
   end
 
   @doc false

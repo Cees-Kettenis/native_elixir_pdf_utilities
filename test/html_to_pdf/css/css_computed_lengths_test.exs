@@ -239,27 +239,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssComputedLengthsTest do
     end
   end
 
-  test "unavailable geometry and nonfinite arithmetic return actionable consumer diagnostics" do
+  test "container units without an eligible ancestor use the print viewport" do
     for declaration <- [
           "width:1cqw",
           "margin:1cqw",
           "left:calc(1cqw)",
           "order:calc(1cqw / 1px)",
           "counter-reset:item calc(1cqw / 1px)",
-          "line-height:calc(1cqw / 1px)"
+          "line-height:calc(1cqw / 1px)",
+          "background-size:1cqw"
         ] do
-      assert {:error, {:not_implemented, diagnostic}} =
+      assert {:ok, _pdf} =
                NativeElixirPdfUtilities.HtmlToPdf.render(
                  "<div style='#{declaration}'>Text</div>",
                  system_font_discovery: false
                )
+    end
+  end
 
-      assert diagnostic.stage == :style
-      assert is_atom(diagnostic.module)
-      assert is_binary(diagnostic.source)
-      assert diagnostic.message =~ "measured"
+  test "computed values retain diagnostics when their original viewport is unavailable" do
+    alias NativeElixirPdfUtilities.Validators.{CssPositionValidator, CssSizingValidator}
+
+    style = %{_css_unit_scales: %{}, _position_viewport: %{width: nil, height: nil}}
+    assert {:ok, expression} = CssMathValidator.prepare_scalar("calc(1cqw / 1px)", :integer)
+
+    for props <- [%{order: expression}, %{counter_reset: [{"item", expression}]}] do
+      assert {:error, {:not_implemented, %{source: "calc(1cqw / 1px)"}}} =
+               CssMathValidator.resolve_scalars(Map.merge(style, props))
     end
 
+    assert {:error, {:not_implemented, _}} =
+             CssMathValidator.capture_unit_scales(["cqh"], style)
+
+    assert {:error, {:not_implemented, _}} =
+             CssSizingValidator.compute_dimensions(
+               Map.put(style, :width, {:css_size_math, {"1cqh", false}})
+             )
+
+    assert {:error, {:not_implemented, _}} =
+             CssPositionValidator.compute_style(
+               Map.put(style, :offsets, %{left: {:css_position_math, "1cqh"}})
+             )
+  end
+
+  test "nonfinite arithmetic returns actionable consumer diagnostics" do
     for declaration <- [
           "width:calc(infinity * 1pt)",
           "margin:calc(infinity * 1pt)",
@@ -349,8 +372,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssComputedLengthsTest do
           "<html style='padding:calc(infinity * 1pt + 1%)'><body>Text</body></html>",
           "<div style='padding:calc(infinity * 1pt + 1%)'>Text</div>",
           "<div style='position:absolute;padding:calc(infinity * 1pt + 1%)'>Text</div>",
-          "<div style='width:calc-size(auto, infinity * 1pt)'>Text</div>",
-          "<div style='background-size:1cqw'>Text</div>"
+          "<div style='width:calc-size(auto, infinity * 1pt)'>Text</div>"
         ] do
       assert {:error, {reason, diagnostic}} =
                NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)

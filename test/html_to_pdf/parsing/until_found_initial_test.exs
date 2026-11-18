@@ -160,12 +160,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.UntilFoundInitialTest do
            }) == %{style: %{}, body_background_propagated: false}
   end
 
-  test "unsupported automatic skipping and forged style transport retain public diagnostics" do
+  test "invalid skipping and forged style transport retain public diagnostics" do
     assert {:error, {:invalid_css, diagnostic}} =
-             HtmlToPdf.render("<div style='content-visibility:auto'>Visible</div>")
+             HtmlToPdf.render("<div style='content-visibility:invalid'>Visible</div>")
 
     assert diagnostic.stage == :css and diagnostic.reason == :invalid_css
-    assert diagnostic.source == "content-visibility:auto" and diagnostic.line == 1
+    assert diagnostic.source == "content-visibility:invalid" and diagnostic.line == 1
     assert {:ok, dom} = HtmlParser.parse_detailed("<p>Visible</p>")
     assert {:ok, styled} = Style.compute_detailed(dom)
     forged = put_in(styled, [:children, Access.at(0), :style, :_html_content_skipped], true)

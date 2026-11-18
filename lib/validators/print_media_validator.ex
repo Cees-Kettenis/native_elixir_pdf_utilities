@@ -10,8 +10,8 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
-  @forward_range ~r/\A(width|height|resolution|aspect-ratio|color|color-index|monochrome|grid)\s*(<=|>=|<|>|=)\s*(.+)\z/s
-  @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|resolution|aspect-ratio|color|color-index|monochrome|grid)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
+  @forward_range ~r/\A(width|height|inline-size|block-size|resolution|aspect-ratio|color|color-index|monochrome|grid)\s*(<=|>=|<|>|=)\s*(.+)\z/s
+  @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|inline-size|block-size|resolution|aspect-ratio|color|color-index|monochrome|grid)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
 
   # Static print output uses sRGB, eight bits per component, no device session.
   @numeric_features %{"color" => 8, "color-index" => 0, "monochrome" => 0, "grid" => 0}
@@ -458,6 +458,10 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
     )
   end
 
+  @doc "Evaluates the shared range grammar against a selected query container."
+  @spec container_feature(String.t(), map()) :: boolean() | :unknown
+  def container_feature(value, context), do: feature(value, context)
+
   defp feature(value, context) do
     value = HtmlValidator.trim_css_whitespace(value)
 
@@ -476,7 +480,13 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       [_, "orientation", orientation] ->
         if orientation in ~w(landscape portrait),
           do:
-            orientation == if(context.width > context.height, do: "landscape", else: "portrait"),
+            orientation ==
+              if(
+                Map.get(context, :query_width, context.width) >
+                  Map.get(context, :query_height, context.height),
+                do: "landscape",
+                else: "portrait"
+              ),
           else: :unknown
 
       [_, name, expected] when is_map_key(@discrete_features, name) ->
@@ -542,13 +552,20 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
           _ ->
             case value do
               "width" ->
-                context.width > 0
+                Map.get(context, :query_width, context.width) > 0
 
               "height" ->
-                context.height > 0
+                Map.get(context, :query_height, context.height) > 0
+
+              "inline-size" when is_map_key(context, :query_inline_size) ->
+                context.query_inline_size > 0
+
+              "block-size" when is_map_key(context, :query_block_size) ->
+                context.query_block_size > 0
 
               "aspect-ratio" ->
-                context.width > 0 and context.height > 0
+                Map.get(context, :query_width, context.width) > 0 and
+                  Map.get(context, :query_height, context.height) > 0
 
               "resolution" ->
                 true
@@ -575,7 +592,20 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
       name when name in ~w(width height) ->
         with {:ok, expected} <- evaluated_length(expected, context, :signed),
-             do: {:ok, Map.fetch!(context, String.to_existing_atom(name)), expected}
+             do:
+               {:ok,
+                if(name == "width",
+                  do: Map.get(context, :query_width, context.width),
+                  else: Map.get(context, :query_height, context.height)
+                ), expected}
+
+      "inline-size" when is_map_key(context, :query_inline_size) ->
+        with {:ok, expected} <- evaluated_length(expected, context, :signed),
+             do: {:ok, context.query_inline_size, expected}
+
+      "block-size" when is_map_key(context, :query_block_size) ->
+        with {:ok, expected} <- evaluated_length(expected, context, :signed),
+             do: {:ok, context.query_block_size, expected}
 
       "resolution" ->
         case HtmlValidator.parse_css_number(expected) do
@@ -593,11 +623,18 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
             :error
         end
 
-      "aspect-ratio" when context.height > 0 ->
+      "aspect-ratio" ->
+        width = Map.get(context, :query_width, context.width)
+        height = Map.get(context, :query_height, context.height)
+
         case String.split(expected, "/")
              |> Enum.map(&HtmlValidator.parse_css_number(String.trim(&1))) do
-          [{numerator, ""}, {denominator, ""}] when numerator >= 0 and denominator > 0 ->
-            {:ok, context.width / context.height, numerator / denominator}
+          [{numerator, ""}, {denominator, ""}]
+          when numerator >= 0 and denominator > 0 and height > 0 ->
+            {:ok, width / height, numerator / denominator}
+
+          [{ratio, ""}] when ratio >= 0 and height > 0 ->
+            {:ok, width / height, ratio}
 
           _ ->
             :error

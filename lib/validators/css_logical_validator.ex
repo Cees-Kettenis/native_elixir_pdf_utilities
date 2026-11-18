@@ -20,7 +20,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssLogicalValidator do
               )
               |> Map.merge(
                 Map.new(
-                  for axis <- ~w(inline block), prefix <- ["", "min-", "max-"] do
+                  for axis <- ~w(inline block),
+                      prefix <- ["", "min-", "max-", "contain-intrinsic-"] do
                     {prefix <> axis <> "-size", {:size, axis, prefix}}
                   end
                 )

@@ -316,7 +316,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
 
     assert diagnostic.reason == :unsupported_html and diagnostic.source == "progress"
 
-    for css <- ["appearance:button", "accent-color:invalid", "vertical-align:invalid"] do
+    for css <- ["appearance:unknown", "accent-color:invalid", "vertical-align:invalid"] do
       assert {:ok, dom} = HtmlParser.parse_detailed("<meter style='#{css}'></meter>")
       assert {:error, _} = Style.compute_detailed(dom)
     end

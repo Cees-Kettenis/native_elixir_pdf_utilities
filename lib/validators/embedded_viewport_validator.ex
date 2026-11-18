@@ -431,6 +431,15 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   @spec prepare_scroll_geometry(map(), EmbeddedViewport.t(), number(), number(), map()) ::
           {:paint, map()} | {:relayout, map()}
   def prepare_scroll_geometry(layout, surface, width, height, previous) do
+    style =
+      Enum.find_value(surface.tree.children, %{}, fn node ->
+        if node.tag == "body", do: node.style
+      end)
+
+    scrollbar = Map.get(style, :document_scrollbar, %{})
+    thickness = NativeElixirPdfUtilities.Validators.ScrollbarValidator.thickness(scrollbar)
+    gutter = Map.get(scrollbar, :scrollbar_gutter, :auto)
+
     overflow =
       Enum.find_value(surface.tree.children, :visible, fn node ->
         case node do
@@ -490,7 +499,7 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
 
     enabled? =
       surface.host in [:iframe, :object, :embed, :frame] and width > 0 and height > 0 and
-        overflow != :hidden and
+        thickness > 0 and overflow not in [:hidden, :clip] and
         (surface.host not in [:iframe, :frame] or
            Map.get(surface, :frame_scrollbars, :auto) != :none)
 
@@ -506,19 +515,27 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
 
     # Compare rounded extents against the unclamped client dimension. A gutter
     # wider than a tiny host can still require the other scrollbar axis.
-    available_width = previous.viewport_width - if(previous.vertical, do: 11.25, else: 0)
-    available_height = previous.viewport_height - if(previous.horizontal, do: 11.25, else: 0)
+    stable? =
+      gutter != :auto and surface.host in [:iframe, :object, :embed, :frame] and overflow != :clip
+
+    left = if(stable? and gutter == :both_edges, do: thickness, else: 0.0)
+
+    available_width =
+      previous.viewport_width - left - if(stable? or previous.vertical, do: thickness, else: 0.0)
+
+    available_height =
+      previous.viewport_height - if(previous.horizontal, do: thickness, else: 0.0)
 
     horizontal =
       enabled? and
-        (MapSet.member?(frozen, :horizontal) or
-           (not (fits_viewport? and MapSet.size(frozen) == 0) and
+        (overflow == :scroll or MapSet.member?(frozen, :horizontal) or
+           (not (fits_viewport? and not stable? and MapSet.size(frozen) == 0) and
               DrawingGeometry.snap_css_pixel(scroll_width) > available_width))
 
     vertical =
       enabled? and
-        (MapSet.member?(frozen, :vertical) or
-           (not (fits_viewport? and MapSet.size(frozen) == 0) and
+        (overflow == :scroll or MapSet.member?(frozen, :vertical) or
+           (not (fits_viewport? and not stable? and MapSet.size(frozen) == 0) and
               DrawingGeometry.snap_css_pixel(scroll_height) > available_height))
 
     frozen =
@@ -530,15 +547,21 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
           else: frozen
       end)
 
-    geometry = %{
-      previous
-      | horizontal: horizontal,
+    gutter_width = left + if(stable? or vertical, do: thickness, else: 0.0)
+
+    geometry =
+      Map.merge(previous, %{
+        horizontal: horizontal,
         vertical: vertical,
-        client_width: max(previous.viewport_width - if(vertical, do: 11.25, else: 0), 0),
-        client_height: max(previous.viewport_height - if(horizontal, do: 11.25, else: 0), 0),
+        client_width: max(previous.viewport_width - gutter_width, 0),
+        client_height: max(previous.viewport_height - if(horizontal, do: thickness, else: 0), 0),
         scroll_width: scroll_width,
-        scroll_height: scroll_height
-    }
+        scroll_height: scroll_height,
+        scrollbar_thickness: thickness,
+        scrollbar_color: Map.get(scrollbar, :scrollbar_color, :auto),
+        gutter_width: gutter_width,
+        client_left: left
+      })
 
     if geometry.client_width == previous.client_width and
          geometry.client_height == previous.client_height do

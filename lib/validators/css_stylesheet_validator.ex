@@ -24,6 +24,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
           scope_language: false,
           layer: [],
           scopes: [],
+          container_queries: [],
           namespaces: namespaces,
           origin: 0,
           depth: 0
@@ -80,6 +81,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
         selector_length: context.selector_length,
         layer: context.layer,
         scopes: context.scopes,
+        container_queries: context.container_queries,
         condition_active: context.condition_active,
         resolved_selectors: true,
         parsed_selectors: context.parsed_selectors
@@ -140,6 +142,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
                       else: nil
                     )
               },
+              state
+            )
+
+          :error ->
+            state
+        end
+
+      {"container", body} when rule.block ->
+        case NativeElixirPdfUtilities.Validators.CssContainerQueryValidator.prepare(body) do
+          {:ok, condition} ->
+            flatten(
+              rule.declarations,
+              %{child | container_queries: context.container_queries ++ [condition]},
               state
             )
 
@@ -217,6 +232,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
                   offset: context.origin + rule.offset,
                   layer: context.layer,
                   scopes: context.scopes,
+                  container_queries: context.container_queries,
                   selector_offset: child.selector_offset,
                   selector_length: child.selector_length,
                   condition_active: context.condition_active,

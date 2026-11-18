@@ -14,6 +14,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StackingContextGeometryTest do
           {%{isolation: :isolate}, {true, false, false}},
           {%{contain: [:layout]}, {true, true, true}},
           {%{contain: [:paint]}, {true, true, true}},
+          {%{contain: [:size, :style]}, {false, false, false}},
+          {%{display: :inline, contain: [:layout]}, {false, false, false}},
           {%{_stacking_item: true, z_index: -1}, {true, false, false}}
         ] do
       assert CssStackingValidator.geometry(style) == expected
@@ -26,7 +28,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StackingContextGeometryTest do
           {"isolation", "auto", :isolation, :auto},
           {"isolation", "isolate", :isolation, :isolate},
           {"contain", "none", :contain, []},
-          {"contain", "paint layout", :contain, [:layout, :paint]}
+          {"contain", "paint layout", :contain, [:layout, :paint]},
+          {"contain", "size", :contain, [:size]},
+          {"contain", "strict", :contain, [:layout, :paint, :size, :style]},
+          {"contain", "content", :contain, [:layout, :paint, :style]},
+          {"contain", "inline-size paint", :contain, [:inline_size, :paint]}
         ] do
       assert {:ok, ^key, ^expected} = CssStackingValidator.prepare(property, value)
     end
@@ -35,7 +41,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StackingContextGeometryTest do
           {"isolation", "42"},
           {"isolation", "unknown"},
           {"contain", "layout layout"},
-          {"contain", "size"},
+          {"contain", "size inline-size"},
+          {"contain", "none layout"},
           {"unknown", "auto"}
         ] do
       assert :error = CssStackingValidator.prepare(property, value)

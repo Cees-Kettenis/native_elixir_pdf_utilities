@@ -508,7 +508,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
             else: metadata
 
         if not geometry.horizontal and not geometry.vertical and
-             geometry.client_height == height do
+             geometry.client_height == height and geometry.client_width == width do
           {:ok, drawing_group(width, height, boxes, {1, 0, 0, 1, 0, 0}) |> Map.merge(metadata)}
         else
           content =
@@ -516,7 +516,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
               geometry.client_width,
               geometry.client_height,
               boxes,
-              {1, 0, 0, 1, 0, height - geometry.client_height}
+              {1, 0, 0, 1, geometry.client_left, height - geometry.client_height}
             )
             |> Map.merge(metadata)
 

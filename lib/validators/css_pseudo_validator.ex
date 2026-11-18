@@ -153,19 +153,36 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidator do
     end
   end
 
+  @doc "Identifies CSS parts painted by the static native form control owners."
+  @spec control_parts() :: [atom()]
+  def control_parts do
+    [
+      :placeholder,
+      :checkmark,
+      :file_selector_button,
+      :color_swatch,
+      :slider_fill,
+      :slider_thumb,
+      :slider_track,
+      :fill,
+      :thumb,
+      :track
+    ]
+  end
+
   @doc "Identifies pseudo-elements whose layout and painting already have an implementation owner."
   @spec paint_ready?(atom() | tuple()) :: boolean()
   def paint_ready?(pseudo),
     do:
-      pseudo in [
-        :before,
-        :after,
-        :picker_icon,
-        :first_letter,
-        :marker,
-        :footnote_call,
-        :footnote_marker
-      ]
+      pseudo in ([
+                   :before,
+                   :after,
+                   :picker_icon,
+                   :first_letter,
+                   :marker,
+                   :footnote_call,
+                   :footnote_marker
+                 ] ++ control_parts())
 
   @doc "Keeps selected pseudo-elements gated until their layout and painting implementation is ready."
   @spec validate_paint([map()], map()) :: :ok | {:error, {atom(), map()}}

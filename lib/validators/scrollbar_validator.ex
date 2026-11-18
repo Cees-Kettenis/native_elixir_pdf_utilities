@@ -3,6 +3,56 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  @doc "Parses static scrollbar appearance and gutter policy."
+  @spec declaration(map(), String.t(), String.t()) :: {:ok, map()} | :error | {:error, term()}
+  def declaration(style, property, source) do
+    terms = HtmlValidator.split_css_tokens(source)
+
+    case {property, Enum.map(terms, &String.downcase(&1, :ascii))} do
+      {"scrollbar-width", [value]} when value in ~w(auto thin none) ->
+        {:ok, Map.put(style, :scrollbar_width, String.to_existing_atom(value))}
+
+      {"scrollbar-gutter", ["auto"]} ->
+        {:ok, Map.put(style, :scrollbar_gutter, :auto)}
+
+      {"scrollbar-gutter", ["stable"]} ->
+        {:ok, Map.put(style, :scrollbar_gutter, :stable)}
+
+      {"scrollbar-gutter", values}
+      when values in [["stable", "both-edges"], ["both-edges", "stable"]] ->
+        {:ok, Map.put(style, :scrollbar_gutter, :both_edges)}
+
+      {"scrollbar-color", ["auto"]} ->
+        {:ok, Map.put(style, :scrollbar_color, :auto)}
+
+      {"scrollbar-color", [_, _]} ->
+        [thumb, track] = terms
+
+        with {:ok, thumb} <- HtmlValidator.parse_css_color(thumb, style),
+             {:ok, track} <- HtmlValidator.parse_css_color(track, style) do
+          colors =
+            Enum.map([thumb, track], fn color ->
+              if color == :transparent, do: {0, 0, 0, 0.0}, else: color
+            end)
+
+          {:ok, Map.put(style, :scrollbar_color, List.to_tuple(colors))}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  @doc "Returns the pinned Chromium classic and thin scrollbar thicknesses in points."
+  @spec thickness(map()) :: number()
+  def thickness(style) do
+    case Map.get(style, :scrollbar_width, :auto) do
+      :none -> 0.0
+      :thin -> 7.5
+      :auto -> 11.25
+    end
+  end
+
   @doc false
   @spec prepare(term()) :: {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(geometry) do
@@ -19,6 +69,9 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
       }
       when is_boolean(vertical) and is_boolean(horizontal) ->
         offset = Map.get(geometry, :scroll_offset, %{x: 0.0, y: 0.0})
+        thickness = Map.get(geometry, :scrollbar_thickness, 11.25)
+        gutter = Map.get(geometry, :gutter_width, if(vertical, do: thickness, else: 0.0))
+        left = Map.get(geometry, :client_left, 0.0)
 
         valid? =
           case offset do
@@ -35,7 +88,11 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
                       :client_height,
                       :scroll_width,
                       :scroll_height,
-                      :scroll_offset
+                      :scroll_offset,
+                      :scrollbar_thickness,
+                      :scrollbar_color,
+                      :gutter_width,
+                      :client_left
                     ])
                 ) and
                 Enum.all?(
@@ -46,8 +103,11 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
                       _ -> false
                     end
                   end
-                ) and client_width == max(width - if(vertical, do: 11.25, else: 0), 0) and
-                client_height == max(height - if(horizontal, do: 11.25, else: 0), 0) and
+                ) and thickness in [0.0, 7.5, 11.25] and
+                left in [0.0, thickness] and gutter in [0.0, thickness, thickness * 2] and
+                valid_colors?(Map.get(geometry, :scrollbar_color, :auto)) and
+                client_width == max(width - gutter, 0) and
+                client_height == max(height - if(horizontal, do: thickness, else: 0), 0) and
                 scroll_width >= client_width and scroll_height >= client_height and
                 x <= max(scroll_width - client_width, 0) and
                 y <= max(scroll_height - client_height, 0)
@@ -57,7 +117,24 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
           end
 
         if valid? do
-          parts = parts(Map.put(geometry, :scroll_offset, offset))
+          parts =
+            geometry
+            |> Map.merge(%{
+              scroll_offset: offset,
+              scrollbar_thickness: thickness,
+              client_left: left
+            })
+            |> parts()
+            |> Enum.map(fn part ->
+              case Map.get(geometry, :scrollbar_color, :auto) do
+                {thumb, track} ->
+                  Map.put(part, :color, if(part.kind == :track, do: track, else: thumb))
+
+                :auto ->
+                  part
+              end
+            end)
+
           # Paint rectangles may extend outside a tiny host before clipping. Their
           # coordinates still share the existing geometry budget and finite bounds.
           case Enum.all?(parts, fn part ->
@@ -163,6 +240,20 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
       else: {:relayout, geometry}
   end
 
+  defp valid_colors?(colors) do
+    case colors do
+      :auto ->
+        true
+
+      {thumb, track} ->
+        NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(thumb) and
+          NativeElixirPdfUtilities.Validators.WriterValidator.valid_color?(track)
+
+      _ ->
+        false
+    end
+  end
+
   defp invalid_geometry do
     Diagnostics.error(
       :layout,
@@ -182,6 +273,7 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
       if(geometry.vertical, do: [:vertical], else: []) ++
         if(geometry.horizontal, do: [:horizontal], else: [])
 
+    thickness = geometry.scrollbar_thickness
     parts = Enum.flat_map(axes, &scrollbar_parts(&1, geometry))
 
     if geometry.vertical and geometry.horizontal do
@@ -189,10 +281,10 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
         [
           %{
             kind: :track,
-            x: geometry.client_width,
-            y: geometry.viewport_height - geometry.client_height - 11.25,
-            width: 11.25,
-            height: 11.25,
+            x: max(geometry.viewport_width - thickness, 0),
+            y: geometry.viewport_height - geometry.client_height - thickness,
+            width: thickness,
+            height: thickness,
             border_radius: 0.0
           }
         ]
@@ -202,20 +294,30 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
   end
 
   defp scrollbar_parts(axis, geometry) do
+    thickness = geometry.scrollbar_thickness
+    thin? = thickness != 11.25
+
     {x, y, width, height, span, total} =
       case axis do
         :vertical ->
-          {geometry.viewport_width - 11.25, geometry.viewport_height - geometry.client_height,
-           11.25, geometry.client_height, geometry.client_height, geometry.scroll_height}
+          {geometry.viewport_width - thickness, geometry.viewport_height - geometry.client_height,
+           thickness, geometry.client_height, geometry.client_height, geometry.scroll_height}
 
         :horizontal ->
-          {0.0, geometry.viewport_height - geometry.client_height - 11.25, geometry.client_width,
-           11.25, geometry.client_width, geometry.scroll_width}
+          {geometry.client_left, geometry.viewport_height - geometry.client_height - thickness,
+           geometry.client_width, thickness, geometry.client_width, geometry.scroll_width}
       end
 
     if span > 0 do
       span_pixels = round(span / 0.75)
-      button = if(span_pixels < 36, do: div(span_pixels, 2), else: 18)
+
+      button =
+        cond do
+          thin? -> 0
+          span_pixels < 36 -> div(span_pixels, 2)
+          true -> 18
+        end
+
       track = max(span_pixels - 2 * button, 0)
       length = min(track, max(round(span_pixels / max(total / 0.75, 1) * track), 17))
       parts = [%{kind: :track, x: x, y: y, width: width, height: height, border_radius: 0.0}]
@@ -237,11 +339,11 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
         {thumb_x, thumb_y, thumb_width, thumb_height} =
           case axis do
             :vertical ->
-              {x + 2.25, y + (span_pixels - button - length - position) * 0.75, 6.75,
+              {x + 2.25, y + (span_pixels - button - length - position) * 0.75, thickness - 4.5,
                length * 0.75}
 
             :horizontal ->
-              {x + (button + position) * 0.75, y + 2.25, length * 0.75, 6.75}
+              {x + (button + position) * 0.75, y + 2.25, length * 0.75, thickness - 4.5}
           end
 
         parts ++
@@ -279,8 +381,8 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
            start + Float.floor((button - min(button, side)) / 2) + offset}
 
         :horizontal ->
-          {start + Float.floor((button - min(button, side)) / 2) + offset,
-           geometry.viewport_height / 0.75 - 15 + Float.floor((15 - min(15, side)) / 2)}
+          {geometry.client_left / 0.75 + start + Float.floor((button - min(button, side)) / 2) +
+             offset, geometry.viewport_height / 0.75 - 15 + Float.floor((15 - min(15, side)) / 2)}
       end
 
     # GetArrowRect clamps its centered square to the actual button rectangle
@@ -313,7 +415,7 @@ defmodule NativeElixirPdfUtilities.Validators.ScrollbarValidator do
           }
 
         :horizontal ->
-          %{x: start * 0.75, y: 0.0, width: button * 0.75, height: 11.25}
+          %{x: geometry.client_left + start * 0.75, y: 0.0, width: button * 0.75, height: 11.25}
       end
 
     %{

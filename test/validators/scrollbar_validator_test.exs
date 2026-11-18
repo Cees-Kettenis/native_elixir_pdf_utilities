@@ -19,6 +19,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScrollbarValidatorTest do
     end
   end
 
+  test "classic and thin settings prepare real width, stable gutters and independent colors" do
+    for {property, source, key, expected} <- [
+          {"scrollbar-width", "auto", :scrollbar_width, :auto},
+          {"scrollbar-width", "thin", :scrollbar_width, :thin},
+          {"scrollbar-width", "none", :scrollbar_width, :none},
+          {"scrollbar-gutter", "auto", :scrollbar_gutter, :auto},
+          {"scrollbar-gutter", "stable", :scrollbar_gutter, :stable},
+          {"scrollbar-gutter", "both-edges stable", :scrollbar_gutter, :both_edges},
+          {"scrollbar-color", "auto", :scrollbar_color, :auto},
+          {"scrollbar-color", "red transparent", :scrollbar_color, {{1, 0, 0}, {0, 0, 0, 0.0}}}
+        ] do
+      assert {:ok, %{^key => ^expected}} =
+               ScrollbarValidator.declaration(%{color: {0, 0, 0}}, property, source)
+    end
+
+    assert :error = ScrollbarValidator.declaration(%{}, "scrollbar-gutter", "both-edges")
+    assert ScrollbarValidator.thickness(%{scrollbar_width: :none}) == 0
+    assert ScrollbarValidator.thickness(%{scrollbar_width: :thin}) == 7.5
+
+    geometry = %{
+      vertical: true,
+      horizontal: false,
+      viewport_width: 150.0,
+      viewport_height: 75.0,
+      client_width: 135.0,
+      client_height: 75.0,
+      scroll_width: 135.0,
+      scroll_height: 150.0,
+      gutter_width: 15.0,
+      client_left: 7.5,
+      scrollbar_thickness: 7.5,
+      scrollbar_color: {{1, 0, 0}, {0, 0, 0, 0.0}}
+    }
+
+    assert {:ok, [track, thumb]} = ScrollbarValidator.prepare(geometry)
+    assert %{x: 142.5, width: 7.5, color: {0, 0, 0, +0.0}} = track
+    assert %{color: {1, 0, 0}} = thumb
+
+    for invalid <- [:grey, {{1, 0, 0}, :red}] do
+      assert {:error, {:invalid_layout, _}} =
+               ScrollbarValidator.prepare(%{geometry | scrollbar_color: invalid})
+    end
+  end
+
   test "popover overflow measures clipped image artwork and ignores page-break markers" do
     content = %{x: 6.0, top: 90.0, width: 60.0, height: 24.0, content_height: 6.0}
     padding = %{left: 3.0, right: 3.0, top: 3.0, bottom: 3.0}

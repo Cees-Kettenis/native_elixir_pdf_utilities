@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
 
-  alias NativeElixirPdfUtilities.Validators.HtmlValidator
+  alias NativeElixirPdfUtilities.Validators.{CssContainmentValidator, HtmlValidator}
 
   @doc "Parses static isolation and layout/paint containment geometry."
   @spec prepare(String.t(), String.t()) :: {:ok, atom(), term()} | :error
@@ -22,14 +22,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
       {"isolation", ["isolate"]} ->
         {:ok, :isolation, :isolate}
 
-      {"contain", ["none"]} ->
-        {:ok, :contain, []}
-
       {"contain", terms} ->
-        if terms != [] and Enum.all?(terms, &(&1 in ["layout", "paint"])) and
-             length(terms) == length(Enum.uniq(terms)),
-           do: {:ok, :contain, Enum.map(Enum.sort(terms), &String.to_existing_atom/1)},
-           else: :error
+        with {:ok, effects} <- CssContainmentValidator.declarations(terms),
+             do: {:ok, :contain, effects}
 
       _ ->
         :error
@@ -48,7 +43,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
              not is_map_key(style, :css_transform_style) and not is_map_key(style, :css_translate) and
              not is_map_key(style, :css_rotate) and
              not is_map_key(style, :css_scale) and not is_map_key(style, :css_transform) and
-             not is_map_key(style, :contain) and
+             not is_map_key(style, :contain) and not is_map_key(style, :content_visibility) and
              not is_map_key(style, :isolation) and not is_map_key(style, :_stacking_item) ->
         {NativeElixirPdfUtilities.Validators.CssCompositingValidator.group?(style), false, false}
 
@@ -61,7 +56,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
              not is_map_key(style, :css_transform_style) and not is_map_key(style, :css_translate) and
              not is_map_key(style, :css_rotate) and
              not is_map_key(style, :css_scale) and not is_map_key(style, :css_transform) and
-             not is_map_key(style, :contain) and
+             not is_map_key(style, :contain) and not is_map_key(style, :content_visibility) and
              not is_map_key(style, :isolation) and
              not is_map_key(style, :_stacking_item) ->
         {NativeElixirPdfUtilities.Validators.CssCompositingValidator.group?(style), false, false}
@@ -73,7 +68,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
           Map.get(style, :css_perspective, :none) != :none or
             Map.get(style, :css_transform_style, :flat) == :preserve_3d or
             NativeElixirPdfUtilities.Validators.CssTransformValidator.transformed?(style) or
-            Map.get(style, :contain, []) != [] or
+            CssContainmentValidator.independent?(style) or
             (Map.get(style, :css_filter, []) != [] or
                Map.get(style, :css_backdrop_filter, []) != [])
 
@@ -138,7 +133,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStackingValidator do
 
       _ ->
         Map.get(style, :isolation, :auto) in [:auto, :isolate] and
-          Map.get(style, :contain, []) in [[], [:layout], [:paint], [:layout, :paint]] and
+          CssContainmentValidator.valid_effects?(Map.get(style, :contain, [])) and
           is_boolean(Map.get(style, :_stacking_item, false))
     end
   end

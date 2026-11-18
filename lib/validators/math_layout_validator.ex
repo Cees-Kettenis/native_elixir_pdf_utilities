@@ -2961,9 +2961,17 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
     with {:ok, units} <- units do
       units = Enum.filter(units, &(&1 in ~w(ch cap lh ic rex rch rcap ric rlh)))
 
+      context = Map.take(context, [:viewport_width, :viewport_height])
+
+      context =
+        case style do
+          %{_query_units: units} -> Map.put(context, :container_units, units)
+          _ -> context
+        end
+
       Enum.reduce_while(
         units,
-        {:ok, Map.take(context, [:viewport_width, :viewport_height])},
+        {:ok, context},
         fn unit, {:ok, context} ->
           root? = String.starts_with?(unit, "r")
           metric_unit = if root?, do: String.trim_leading(unit, "r"), else: unit
