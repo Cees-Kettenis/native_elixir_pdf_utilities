@@ -55,10 +55,10 @@ Shadow styles support `:host()`, `:host-context()`, `::slotted()` and explicit
 `::part()` exports. Matching uses authored tree relationships across slot composition.
 Malformed declarations and invalid selector rules are discarded; unknown at-rules
 and `@import` are ignored. Valid declarations still receive strict value and resource
-checks. Direction selectors resolve initial HTML direction; right-to-left layout
-and painting remain gated. Some pseudo-elements, including `::first-line`
-and unimplemented control parts, have selector ownership and
-return `:not_implemented` when selected.
+checks. Direction selectors resolve initial HTML direction. Bidirectional
+layout and painting follow the rules in [Fonts and text](#fonts-and-text).
+Some pseudo-elements, including `::first-line` and unimplemented control
+parts, return `:not_implemented` when selected.
 
 Support is a subset of browser CSS. Lengths include physical units, selected-font
 `em`, `ex`, `ch`, `cap`, `ic`, `lh` and their root-relative forms. Physical and
@@ -608,13 +608,32 @@ font metrics. Missing information returns an actionable font diagnostic.
 
 [Header and footer examples](html-to-pdf-examples.md#add-headers-footers-and-page-numbers).
 
+## Draft features in the static print profile
+
+| Family | Release scope |
+| --- | --- |
+| Backgrounds Level 4 layers-only shorthand | Deferred while the draft uses the provisional `background-tbd` name. Use the ordinary `background` shorthand or its longhands. |
+| CSS Regions | Named flows and region breaks follow the 9 October 2014 Working Draft. Earlier `@region` and region-specific styling remain outside this scope. |
+| Anchor Positioning and Grid Lanes | Static geometry uses `position-area`, `position-try-fallbacks`, `grid-lanes` and `fit-tolerance`. Historical `position-try-options`, `item-*` and `flow-tolerance` spellings remain outside the supported grammar. |
+| CSS Functions and Mixins | Use typed `@function` with its optional `returns` clause, `@mixin`, `@apply`, `@contents` and `@private` as described above. `if()` uses colon-delimited branches separated by semicolons. Older comma and then/else forms are outside the supported grammar. |
+| Linked SVG parameters | Use the published comma form `param(--name, value)`. Parameter values and the paint contexts that consume them are listed under [Images and backgrounds](#images-and-backgrounds). |
+| GCPM | GCPM 3 named page groups support `@page :nth(An+B of name)`. GCPM 4 `copy-into` and the page-based element selectors `:nth-of-page()`, `:first-of-page`, `:last-of-page` and `:start-of-page` remain deferred while their algorithms are unsettled. |
+| Historical CSS Template Layout | The 26 March 2015 Note's slot strings, `::slot()`, flow and `chains()` remain deferred pending an independent reference for slot fragmentation. |
+| Color and typography extensions | `color-layers()`, `wcag2()`, `text-autospace` and `text-spacing-trim` are deferred. Use the listed print color functions and spacing controls. |
+| Gaps, corners and legacy aliases | Gap-rule endpoint caps and junction-specific inset extensions, unlisted corner shorthands, and legacy SVG draft aliases such as `stroke-align` and `stroke-dash-justify` are outside the release profile. |
+| Advanced images, text and SVG geometry | The individual sections above describe the supported image sources, text metrics and geometric shapes for painting. The corresponding draft modules also define forms outside those bounds. |
+
+The coverage tables describe renderer behavior in the contexts listed. A token
+shared by several CSS grammars may be supported in one context and absent in
+another. Check authoring with the same options and caller-provided resources
+that will be used to render the document.
+
 ## Known limits
 
 | Unsupported | Alternative |
 | --- | --- |
 | JavaScript, media playback, canvas drawing APIs | Static HTML and images |
 | Embedded PDFs, XFA, JavaScript form actions | Supported HTML and PDF forms |
-| GCPM 4 copied content and historical CSS Template Layout | Running content, CSS Grid, and modern print layout |
 
 Embedded content and framesets have restricted static support. SVG, control
 styling and some layouts can differ from browsers. Check your generated PDF.

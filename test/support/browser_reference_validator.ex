@@ -117,7 +117,7 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceValidator do
   @doc "Admits repository captures for final-input checking after deterministic reference transformation."
   @spec cache_candidate?(String.t(), keyword(), map()) :: boolean()
   def cache_candidate?(fixture, opts, dependencies) do
-    root = NativeElixirPdfUtilities.TestSupport.Paths.fixture("html_to_pdf/browser_parity") <> "/"
+    root = NativeElixirPdfUtilities.TestSupport.Paths.fixture("html_to_pdf") <> "/"
 
     String.starts_with?(Path.expand(fixture), root) and
       Keyword.get(opts, :reference_cache, true) and
@@ -265,8 +265,15 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceValidator do
   @spec cache_payload?(term()) :: boolean()
   def cache_payload?(value) do
     case value do
-      %{files: files, pages: pages, vector_pages: vectors, embedded_fonts: fonts}
-      when is_list(files) and is_list(pages) and is_list(vectors) and is_binary(fonts) ->
+      %{
+        files: files,
+        pages: pages,
+        vector_pages: vectors,
+        embedded_fonts: fonts,
+        dependencies: dependencies
+      }
+      when is_list(files) and is_list(pages) and is_list(vectors) and is_binary(fonts) and
+             is_map(dependencies) ->
         valid_files =
           Enum.all?(files, fn item ->
             case item do
@@ -284,7 +291,10 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceValidator do
 
         valid_files and length(Enum.uniq(names)) == length(names) and "chromium.pdf" in names and
           pages != [] and
-          Enum.all?(pages ++ vectors, &(&1 in names and String.ends_with?(&1, ".ppm")))
+          Enum.all?(pages ++ vectors, &(&1 in names and String.ends_with?(&1, ".ppm"))) and
+          Enum.all?(dependencies, fn {path, digest} ->
+            is_binary(path) and Path.type(path) == :absolute and match?(<<_::256>>, digest)
+          end)
 
       _ ->
         false

@@ -81,9 +81,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .quality/browser-reference-cache/elixir-${{ matrix.elixir }}
-          key: browser-references-v1-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-${{ github.sha }}
+          key: browser-references-v2-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-${{ github.sha }}
           restore-keys: |
-            browser-references-v1-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-
+            browser-references-v2-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-
 
       - name: Restore Mix and Dialyzer caches
         uses: actions/cache@v5

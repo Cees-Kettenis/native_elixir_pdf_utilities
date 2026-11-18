@@ -25,7 +25,6 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache do
         profile =
           if enabled do
             paths = [
-              Paths.fixture(""),
               Paths.project("priv/fonts"),
               Paths.project("tmp/font-corpus"),
               Paths.support(""),
@@ -33,10 +32,21 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache do
               "/usr/local/share/fonts"
             ]
 
+            environment_files = BrowserReferenceValidator.tree_identity(paths)
+            fixtures = BrowserReferenceValidator.tree_identity([Paths.fixture("")])
+
+            font_files =
+              Map.filter(fixtures, fn {path, _digest} ->
+                String.downcase(Path.extname(path)) in ~w(.ttf .otf .ttc .otc .woff .woff2)
+              end)
+
+            environment =
+              {toolchain, :erlang.system_info(:system_architecture),
+               Map.merge(environment_files, font_files)}
+
             %{
-              toolchain: toolchain,
-              platform: :erlang.system_info(:system_architecture),
-              dependencies: BrowserReferenceValidator.tree_identity(paths)
+              fingerprint: :crypto.hash(:sha256, :erlang.term_to_binary(environment)),
+              dependencies: Map.merge(environment_files, fixtures)
             }
           end
 
@@ -81,19 +91,29 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache do
       )
   end
 
-  @doc "Requires every observed browser request to belong to the fingerprint or the generated capture inputs."
-  @spec requests_covered?([String.t()], [String.t()], String.t()) :: boolean()
-  def requests_covered?(requests, inputs, directory) do
+  @doc "Records the fingerprint of every observed local fixture resource."
+  @spec capture_dependencies([String.t()], [String.t()], String.t()) :: {:ok, map()} | :error
+  def capture_dependencies(requests, inputs, directory) do
     dependencies = Agent.get(__MODULE__, & &1.profile.dependencies)
-    BrowserReferenceValidator.requests_covered?(requests, dependencies, inputs, directory)
+
+    if BrowserReferenceValidator.requests_covered?(requests, dependencies, inputs, directory) do
+      paths =
+        for url <- requests,
+            %URI{scheme: "file", path: path} <- [URI.parse(url)],
+            do: path |> URI.decode() |> Path.expand()
+
+      {:ok, Map.take(dependencies, paths)}
+    else
+      :error
+    end
   end
 
   @doc "Returns a content key for an eligible reference, independent of native renderer changes."
   @spec key(map()) :: String.t()
   def key(identity) do
-    profile = Agent.get(__MODULE__, & &1.profile)
+    fingerprint = Agent.get(__MODULE__, & &1.profile.fingerprint)
 
-    :crypto.hash(:sha256, :erlang.term_to_binary({profile, identity}))
+    :crypto.hash(:sha256, :erlang.term_to_binary({fingerprint, identity}))
     |> Base.encode16(case: :lower)
   end
 
@@ -112,7 +132,12 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache do
                true <- :crypto.hash(:sha256, encoded) == digest do
             try do
               value = :erlang.binary_to_term(encoded, [:safe])
-              if BrowserReferenceValidator.cache_payload?(value), do: value
+
+              if BrowserReferenceValidator.cache_payload?(value) and
+                   Enum.all?(value.dependencies, fn {path, digest} ->
+                     Map.get(state.profile.dependencies, path) == digest
+                   end),
+                 do: value
             rescue
               ArgumentError -> nil
             end
@@ -153,7 +178,8 @@ defmodule NativeElixirPdfUtilities.TestSupport.BrowserReferenceCache do
       files: files,
       pages: Enum.map(reference.pages, &Path.basename/1),
       vector_pages: Enum.map(reference.vector_pages, &Path.basename/1),
-      embedded_fonts: reference.embedded_fonts
+      embedded_fonts: reference.embedded_fonts,
+      dependencies: Map.fetch!(reference, :dependencies)
     }
 
     encoded = :erlang.term_to_binary(payload, compressed: 1)

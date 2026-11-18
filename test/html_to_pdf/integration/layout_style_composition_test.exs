@@ -278,6 +278,62 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutStyleCompositionTest do
     end)
   end
 
+  test "named page groups retain generated labels and clipped grid links on both continuations" do
+    guide = File.read!(Paths.project("docs/html-to-pdf-examples.md"))
+
+    [_, chapter_css] =
+      Regex.run(
+        ~r/### Number pages within each chapter.*?```css
+(.*?)```/s,
+        guide
+      )
+
+    html = """
+    <style>
+    #{chapter_css}
+    @page {size: 200pt 120pt;}
+    html, body, p {margin:0;}
+    .detail {break-before:page; display:grid; grid-template-columns: 112pt 40pt;}
+    .tile {transform:translateX(6pt);clip-path:inset(0 9pt 0 0);}
+    a::before {content:"Read ";}
+    </style>
+    <section class=chapter>
+      <p>First chapter</p>
+      <div class=detail><div class=tile><a href="https://example.test/one">first note</a></div></div>
+    </section>
+    <section class=chapter>
+      <p>Second chapter</p>
+      <div class=detail><div class=tile><a href="https://example.test/two">second note</a></div></div>
+    </section>
+    """
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html, system_font_discovery: false, compress_streams: false)
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert NativeElixirPdfUtilities.Info.page_count(pdf) == {:ok, 4}, inspect(text)
+    [first, continued, second, continued_again] = String.split(text, "\f")
+    assert first =~ "First chapter"
+    assert second =~ "Second chapter"
+    assert continued =~ "Read first note"
+    assert continued_again =~ "Read second note"
+    assert continued =~ "Chapter continued"
+    assert continued_again =~ "Chapter continued"
+    assert length(:binary.matches(text, "Chapter continued")) == 2
+
+    assert {:ok, source} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+    assert Enum.map(source.pages, &length(Map.get(&1.dictionary, "Annots", []))) == [0, 2, 0, 2]
+
+    for {page_number, url} <- [{2, "https://example.test/one"}, {4, "https://example.test/two"}] do
+      for reference <- Enum.at(source.pages, page_number - 1).dictionary["Annots"] do
+        assert {:ok, %{"Rect" => [left, bottom, right, top], "A" => %{"URI" => {:string, ^url}}}} =
+                 NativeElixirPdfUtilities.Pdf.Reader.resolve(source.document, reference)
+
+        assert left >= 30 and right <= 133 and left < right and bottom < top
+      end
+    end
+  end
+
   defp source_layout(html, options) do
     with {:ok, dom} <- HtmlParser.parse_document_detailed(html),
          {:ok, tree} <- Style.compute_detailed(dom, system_font_discovery: false),

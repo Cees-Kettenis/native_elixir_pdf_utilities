@@ -674,7 +674,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
     segments =
       case split_nodes(tree.children, "", [], group_names) do
         [] -> [[]]
-        nodes -> Enum.chunk_by(nodes, &elem(&1, 0))
+        nodes -> chunk_page_nodes(nodes)
       end
 
     Enum.reduce_while(segments, {:ok, nil, [], %{}}, fn segment,
@@ -960,7 +960,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
       case node do
         %{type: :element, children: [_ | _] = children} ->
           split_nodes(children, name, groups, tracked)
-          |> Enum.chunk_by(&elem(&1, 0))
+          |> chunk_page_nodes()
           |> Enum.map(fn group ->
             {elem(hd(group), 0), %{node | children: Enum.map(group, &elem(&1, 1))}}
           end)
@@ -969,6 +969,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           [{{name, groups}, node}]
       end
     end)
+  end
+
+  # A named page boundary can isolate indentation that would collapse within
+  # ordinary flow. Do not lay out that indentation as an entire page segment.
+  defp chunk_page_nodes(nodes) do
+    groups = Enum.chunk_by(nodes, &elem(&1, 0))
+
+    if match?([_, _ | _], groups) do
+      Enum.reject(groups, fn group ->
+        Enum.all?(group, fn
+          {_, %{type: :text, text: text, style: style}} ->
+            collapse = Map.get(style, :white_space_collapse)
+            whitespace = Map.get(style, :white_space, :normal)
+
+            (collapse in [:collapse, :discard] or
+               (collapse == nil and whitespace in [:normal, :nowrap])) and
+              HtmlValidator.trim_ascii_whitespace(text) == ""
+
+          _ ->
+            false
+        end)
+      end)
+    else
+      groups
+    end
   end
 
   defp page_options(selected, opts, explicit, base) do

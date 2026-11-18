@@ -903,8 +903,10 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
 
         key =
           if BrowserReferenceCache.candidate?(fixture_path, opts) and
-               BrowserReferenceCache.eligible?(prepared.chromium_fixture_path, opts),
-             do: BrowserReferenceCache.key(identity)
+               BrowserReferenceCache.eligible?(prepared.chromium_fixture_path, opts) do
+            directory = Path.dirname(prepared.chromium_fixture_path)
+            BrowserReferenceCache.key(Map.put(identity, :resource_directory, directory))
+          end
 
         cached = if key, do: BrowserReferenceCache.restore(key, directory)
         cache_status = if(key, do: if(cached, do: :hit, else: :miss), else: :bypass)
@@ -963,8 +965,13 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
         if key && is_nil(cached) do
           allowed = [prepared.chromium_fixture_path, prepared.fixture_path]
 
-          if BrowserReferenceCache.requests_covered?(reference.requests, allowed, directory),
-            do: BrowserReferenceCache.store(key, reference)
+          case BrowserReferenceCache.capture_dependencies(reference.requests, allowed, directory) do
+            {:ok, dependencies} ->
+              BrowserReferenceCache.store(key, Map.put(reference, :dependencies, dependencies))
+
+            :error ->
+              :ok
+          end
         end
 
         reference
@@ -1946,6 +1953,11 @@ defmodule NativeElixirPdfUtilities.TestSupport.PdfVisualCompare do
           total_delta: delta,
           max_channel_delta: maximum
         })
+
+      {<<chunk::binary-size(192), reference::binary>>,
+       <<chunk::binary-size(192), actual::binary>>} ->
+        # An identical run of 64 pixels contributes only to the denominator.
+        diff_stats(reference, actual, {changed, count + 64, delta, maximum})
 
       {<<r, g, b, reference::binary>>, <<nr, ng, nb, actual::binary>>} ->
         red = abs(r - nr)

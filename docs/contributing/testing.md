@@ -278,14 +278,21 @@ are keyed by runtime, image ID and commit, with earlier commits in the same
 toolchain available as a fallback. A same-commit rerun restores the exact archive;
 the entry checks below still decide whether each reference can be reused.
 
-Keys include browser HTML, source bytes, physical fonts, geometry, DPI, browser
-and rasterizer versions, locale, and a fingerprint of the fixture trees, bundled
-fonts, generated font corpus, installed `/usr/share/fonts` and
-`/usr/local/share/fonts` trees, and browser helpers. These trees are immutable
-within a suite; a new suite fingerprints them again, including added or removed
-assets. Native renderer source changes alone do not invalidate references.
+For release verification, record the full parity command's elapsed time and its
+reference-cache telemetry for each runtime. The target is 300 seconds per
+runtime with one active Chromium capture. Record cache-populating and
+cache-reusing runs when the cache format changes.
 
-Only static local fixture dependencies covered by that fingerprint are eligible.
+Keys include browser HTML, source bytes, the resource directory, physical fonts,
+geometry, DPI, browser and rasterizer versions, locale, and a fingerprint of
+bundled, fixture and system fonts and the browser helpers. Each entry also
+records the content hashes of the local resources requested by Chromium.
+Changing an unrelated fixture keeps that entry eligible. Changing or removing
+a recorded dependency causes a fresh capture. Each suite fingerprints its
+inputs at startup and keeps that snapshot for the run.
+
+Only static HTML fixtures under `test/fixtures/html_to_pdf/` with local
+dependencies covered by the snapshot are eligible.
 The authored source remains part of the identity, while resource eligibility is
 checked against the final transformed browser HTML. Known local placeholder
 substitutions can therefore reuse references. Image-map navigation links are
@@ -293,7 +300,7 @@ treated like anchor links. Base64 SVG images are checked recursively for resourc
 dependencies; malformed encodings, scripts, animation and external XML declarations
 remain ineligible.
 Before storing a fresh capture, the helper also checks every observed Chromium
-request against that fingerprint and its generated capture inputs.
+request against the dependency snapshot and its generated capture inputs.
 Network resources, ambiguous resource syntax, external inputs and alternate
 browser executables use fresh captures. Fontconfig reuse is limited to the
 helper's exact generated declaration of fingerprinted local font directories;

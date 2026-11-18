@@ -899,6 +899,33 @@ alias NativeElixirPdfUtilities.HtmlToPdf
 
 `break-inside: avoid` is best effort when the whole block is taller than a page. Use it for a bounded approval or totals block, and let long content paginate.
 
+### Number pages within each chapter
+
+A named element with a forced page break starts a page group. Add the following
+rules to a print stylesheet to place a continuation label on the second page
+of each chapter.
+
+```css
+@page {
+  margin: 24pt;
+}
+
+@page :nth(2 of chapter) {
+  @top-right {
+    content: "Chapter continued";
+  }
+}
+
+.chapter {
+  page: chapter;
+  break-before: page;
+}
+```
+
+Use `<section class="chapter">` around each chapter. A chapter with a single
+page has no continuation label. For the second sheet of the entire document,
+use `@page :nth(2)`.
+
 ## Labels
 
 ### Print one stock label per page

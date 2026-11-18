@@ -41,7 +41,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserReferenceCacheTest do
       artifacts: [pdf, page],
       pages: [page],
       vector_pages: [],
-      embedded_fonts: "independent font inspection"
+      embedded_fonts: "independent font inspection",
+      dependencies: %{}
     }
 
     %{directory: directory, reference: reference}
@@ -106,6 +107,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserReferenceCacheTest do
     assert BrowserReferenceValidator.tree_identity([tree]) == before
   end
 
+  test "an unrelated fixture preserves a key while a changed observed resource invalidates its entry",
+       context do
+    directory = Paths.fixture("release-cache-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(directory)
+    on_exit(fn -> File.rm_rf!(directory) end)
+    asset = Path.join(directory, "ink.css")
+    unrelated = Path.join(directory, "other.html")
+    File.write!(asset, "p{color:red}")
+    identity = %{html: "<link href='ink.css'>", base: directory}
+    output = Path.join(context.directory, "restored")
+    File.mkdir_p!(output)
+
+    restart = fn ->
+      BrowserReferenceCache.stop()
+      {:ok, cache} = BrowserReferenceCache.start()
+      Process.unlink(cache)
+    end
+
+    restart.()
+    key = BrowserReferenceCache.key(identity)
+
+    assert {:ok, dependencies} =
+             BrowserReferenceCache.capture_dependencies(["file://" <> asset], [], output)
+
+    assert Map.keys(dependencies) == [asset]
+
+    assert :error =
+             BrowserReferenceCache.capture_dependencies(
+               ["https://example.test/ink.css"],
+               [],
+               output
+             )
+
+    :ok = BrowserReferenceCache.store(key, %{context.reference | dependencies: dependencies})
+    File.write!(unrelated, "<p>Unrelated</p>")
+    restart.()
+    assert BrowserReferenceCache.key(identity) == key
+    assert BrowserReferenceCache.restore(key, output)
+
+    File.write!(asset, "p{color:blue}")
+    restart.()
+    assert BrowserReferenceCache.key(identity) == key
+    assert BrowserReferenceCache.restore(key, output) == nil
+  end
+
   test "unsafe paths, missing pages and changed artifact bytes cannot be restored" do
     files = [
       {"chromium.pdf", "pdf", :crypto.hash(:sha256, "pdf")},
@@ -116,7 +162,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.BrowserReferenceCacheTest do
       files: files,
       pages: ["chromium-1.ppm"],
       vector_pages: [],
-      embedded_fonts: "fonts"
+      embedded_fonts: "fonts",
+      dependencies: %{}
     }
 
     assert BrowserReferenceValidator.cache_payload?(payload)
