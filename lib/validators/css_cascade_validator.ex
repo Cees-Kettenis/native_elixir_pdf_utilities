@@ -6,8 +6,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
   @sides ~w(top right bottom left)
   @font_controls NativeElixirPdfUtilities.Validators.CssFontControlsValidator.properties()
-  @simple NativeElixirPdfUtilities.Validators.CssPublishingValidator.properties() ++
-            ~w(outline-width outline-style outline-color outline-offset box-shadow border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize zoom field-sizing scrollbar-width scrollbar-color scrollbar-gutter box-sizing border-radius
+  @simple NativeElixirPdfUtilities.Validators.CssBorderShapeValidator.longhands() ++
+            NativeElixirPdfUtilities.Validators.CssGapRuleValidator.longhands() ++
+            NativeElixirPdfUtilities.Validators.CssAdvancedLayoutValidator.properties() ++
+            NativeElixirPdfUtilities.Validators.CssAnchorValidator.properties() ++
+            NativeElixirPdfUtilities.Validators.CssPublishingValidator.properties() ++
+            ~w(outline-width outline-style outline-color outline-offset box-shadow box-shadow-offset box-shadow-color box-shadow-blur box-shadow-spread box-shadow-position border-image-source border-image-slice border-image-width border-image-outset border-image-repeat image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color appearance content-visibility visibility resize zoom field-sizing scrollbar-width scrollbar-color scrollbar-gutter box-sizing border-radius
     text-transform word-spacing text-indent text-align-last text-justify hanging-punctuation quotes content counter-reset counter-increment counter-set letter-spacing
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter initial-letter-align initial-letter-wrap baseline-source alignment-baseline baseline-shift dominant-baseline width height min-width max-width min-height max-height orphans widows
     ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction unicode-bidi position z-index isolation opacity mix-blend-mode contain contain-intrinsic-width contain-intrinsic-height container-name container-type object-fit object-position overflow-x overflow-y overflow-clip-margin text-overflow block-ellipsis max-lines continue aspect-ratio border-collapse
@@ -87,6 +91,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             "clip-path" => [[:css_clip_path]],
             "filter" => [[:css_filter]],
             "backdrop-filter" => [[:css_backdrop_filter]],
+            "box-shadow" =>
+              Enum.map(
+                ~w(box_shadow box_shadow_offset box_shadow_color box_shadow_blur box_shadow_spread box_shadow_position)a,
+                &[&1]
+              ),
             "offset-path" => [[:css_offset_path]],
             "offset-position" => [[:css_offset_position]],
             "offset-anchor" => [[:css_offset_anchor]],
@@ -173,6 +182,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                   ~w(text-decoration-line text-decoration-color text-decoration-style text-decoration-thickness),
                 "columns" => ~w(column-count column-width),
                 "container" => ~w(container-name container-type),
+                "position-try" => ~w(position-try-order position-try-fallbacks),
                 "contain-intrinsic-size" => ~w(contain-intrinsic-width contain-intrinsic-height),
                 "column-rule" => ~w(column-rule-width column-rule-style column-rule-color),
                 "gap" => ~w(row-gap column-gap),
@@ -193,6 +203,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
                 Map.new(@sides, fn side ->
                   {"border-" <> side, Enum.map(~w(width color style), &"border-#{side}-#{&1}")}
                 end)
+              )
+              |> Map.merge(NativeElixirPdfUtilities.Validators.CssGapRuleValidator.shorthands())
+              |> Map.merge(
+                NativeElixirPdfUtilities.Validators.CssBorderShapeValidator.shorthands()
               )
   @aliases %{
     "font-stretch" => "font-width",
@@ -272,7 +286,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
     {canonical_property(property), mapped}
   end
 
-  @inherited ~w(scrollbar-color -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color font-size font-family font-style font-weight font-width line-height
+  @inherited ~w(wrap-through line-snap box-snap line-height-step scrollbar-color -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width image-orientation image-resolution image-rendering color-scheme print-color-adjust forced-color-adjust color accent-color font-size font-family font-style font-weight font-width line-height
     dominant-baseline letter-spacing word-spacing text-indent text-align-last text-justify hanging-punctuation text-align text-transform quotes white-space white-space-collapse text-wrap-mode text-wrap-style tab-size word-break overflow-wrap line-break
     text-emphasis-style text-emphasis-color text-emphasis-position text-shadow text-underline-offset text-underline-position text-decoration-skip-ink initial-letter-align initial-letter-wrap orphans widows caption-side border-collapse border-spacing empty-cells list-style-type list-style-position
     list-style-image visibility block-ellipsis ruby-align ruby-position ruby-merge ruby-overhang writing-mode text-orientation text-combine-upright direction math-style math-shift math-depth) ++
@@ -383,6 +397,29 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
 
       rule |> Map.put(:order, index) |> Map.put(:layer_order, layer_order)
     end)
+  end
+
+  @doc "Combines custom function definitions in tree scope and cascade layer order."
+  @spec function_definitions([map()]) :: map()
+  def function_definitions(entries) do
+    if Enum.any?(entries, &(get_in(&1, [:prepared, :cascade, :functions]) not in [nil, []])) do
+      entries
+      |> Enum.map(fn entry ->
+        functions =
+          if Map.get(entry.prepared, :stylesheet_applicable, true),
+            do: get_in(entry, [:prepared, :cascade, :functions]) || [],
+            else: []
+
+        put_in(entry, [:prepared, :rules], functions)
+      end)
+      |> layer_rules()
+      |> Enum.sort_by(fn record ->
+        {Enum.map(record.layer_order, &{0, &1}) ++ [{1, 0}], record.order}
+      end)
+      |> Map.new(&{{Map.get(&1, :shadow_scope_id), &1.name}, &1})
+    else
+      %{}
+    end
   end
 
   @doc "Orders validated author declarations including encapsulation, layers and scope proximity."
@@ -561,7 +598,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
             NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.resolve_value(
               value,
               context,
-              budget
+              budget,
+              declaration
             )
 
           nil ->
@@ -613,6 +651,21 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
       with {:ok, prepared} <- prepare_values(ordinary, context, budget),
            do: {:ok, %{}, %{}, prepared}
     else
+      contextual =
+        for declaration <- custom,
+            [name] <- [declaration.cascade_targets],
+            is_map_key(declaration, :css_locals) or
+              NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.contains?(
+                elem(declaration.declaration, 1)
+              ),
+            into: %{},
+            do: {name, declaration}
+
+      context =
+        if contextual == %{},
+          do: context,
+          else: Map.put(context, :_css_custom_declarations, contextual)
+
       resolve_custom_loop(
         custom,
         context,

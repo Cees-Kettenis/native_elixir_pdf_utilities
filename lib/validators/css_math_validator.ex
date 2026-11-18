@@ -337,6 +337,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
           {:ok, map()} | :error | {:error, Diagnostics.detailed_error()}
   def scalar_dependencies(value), do: calculation_dependencies(value, %{}, %{})
 
+  @doc "Collects length units from a static calculation of any numeric type."
+  @spec typed_dependencies(String.t()) :: {:ok, map()} | :error | {:error, term()}
+  def typed_dependencies(value), do: calculation_dependencies(value, :any, %{})
+
   defp calculation_dependencies(value, expected_type, context) do
     cond do
       not (is_binary(value) and String.valid?(value)) ->
@@ -364,12 +368,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssMathValidator do
               })
 
             environment =
-              if expected_type == %{},
+              if expected_type in [%{}, :any],
                 do: Map.delete(environment, :percentage_basis),
                 else: environment
 
             case evaluate(value, environment) do
-              {:ok, _, ^expected_type} ->
+              {:ok, _, type} when type == expected_type or expected_type == :any ->
                 dependencies = collector |> Process.get() |> Enum.reverse() |> Enum.uniq()
                 {:ok, %{units: List.delete(dependencies, "%"), percentage?: "%" in dependencies}}
 

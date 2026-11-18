@@ -7,7 +7,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssBoxPaintValidator do
     WriterValidator
   }
 
-  @properties ~w(outline outline-width outline-style outline-color outline-offset box-shadow -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width -webkit-text-stroke)
+  @shadow_longhands ~w(box-shadow-offset box-shadow-color box-shadow-blur box-shadow-spread box-shadow-position)
+  @shadow_fields ~w(box_shadow_offset box_shadow_color box_shadow_blur box_shadow_spread box_shadow_position)a
+  @properties @shadow_longhands ++
+                ~w(outline outline-width outline-style outline-color outline-offset box-shadow -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width -webkit-text-stroke)
   @fields [
     :outline_width,
     :outline_style,
@@ -44,7 +47,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssBoxPaintValidator do
 
     case property do
       "box-shadow" ->
-        shadows(style, source)
+        shadows(Map.drop(style, @shadow_fields), source)
+
+      property when property in @shadow_longhands ->
+        shadow_longhand(style, property, source)
 
       property
       when property in ["outline-color", "-webkit-text-fill-color", "-webkit-text-stroke-color"] ->
@@ -149,6 +155,104 @@ defmodule NativeElixirPdfUtilities.Validators.CssBoxPaintValidator do
     if String.downcase(source, :ascii) == "currentcolor",
       do: {:ok, :current_color},
       else: HtmlValidator.parse_css_color(source, style)
+  end
+
+  defp shadow_longhand(style, property, source) do
+    entries = HtmlValidator.split_css_comma(source, true)
+    HtmlValidator.reserve_render_resource(:max_entries, length(entries), :style)
+
+    parsed =
+      Enum.map(entries, fn entry ->
+        case {property, HtmlValidator.split_css_tokens(entry)} do
+          {"box-shadow-position", ["inset"]} ->
+            {:ok, true}
+
+          {"box-shadow-position", ["outset"]} ->
+            {:ok, false}
+
+          {"box-shadow-position", _} ->
+            :error
+
+          {"box-shadow-offset", ["none"]} ->
+            {:ok, nil}
+
+          {"box-shadow-offset", [x]} ->
+            with {:ok, x} <- shadow_length(x, :signed_length, style), do: {:ok, {x, 0.0}}
+
+          {"box-shadow-offset", [x, y]} ->
+            with {:ok, x} <- shadow_length(x, :signed_length, style),
+                 {:ok, y} <- shadow_length(y, :signed_length, style),
+                 do: {:ok, {x, y}}
+
+          {"box-shadow-offset", _} ->
+            :error
+
+          {"box-shadow-color", _} ->
+            paint(String.trim(entry), style)
+
+          {"box-shadow-blur", [length]} ->
+            shadow_length(length, :length, style)
+
+          {"box-shadow-spread", [length]} ->
+            shadow_length(length, :signed_length, style)
+
+          _ ->
+            :error
+        end
+      end)
+
+    if parsed != [] and Enum.all?(parsed, &match?({:ok, _}, &1)) do
+      key = String.to_existing_atom(String.replace(property, "-", "_"))
+      {:ok, Map.put(style, key, Enum.map(parsed, &elem(&1, 1)))}
+    else
+      :error
+    end
+  end
+
+  defp shadow_length(source, policy, style) do
+    with {:ok, length} <- CssLengthValidator.prepare(source, policy),
+         do: CssLengthValidator.resolve(length, nil, style)
+  end
+
+  @doc "Combines coordinated lists using the offset list as the shadow layer count."
+  @spec computed_shadows(map()) :: [map()]
+  def computed_shadows(style) do
+    existing = Map.get(style, :box_shadow, [])
+
+    lists = Map.take(style, @shadow_fields)
+
+    if lists == %{} do
+      existing
+    else
+      offsets = Map.get(lists, :box_shadow_offset) || Enum.map(existing, &{&1.x, &1.y})
+      colors = Map.get(lists, :box_shadow_color) || Enum.map(existing, & &1.color)
+      blurs = Map.get(lists, :box_shadow_blur) || Enum.map(existing, & &1.blur)
+      spreads = Map.get(lists, :box_shadow_spread) || Enum.map(existing, & &1.spread)
+      positions = Map.get(lists, :box_shadow_position) || Enum.map(existing, & &1.inset)
+
+      offsets
+      |> Enum.with_index()
+      |> Enum.flat_map(fn
+        {nil, _index} ->
+          []
+
+        {{x, y}, index} ->
+          [
+            %{
+              x: x,
+              y: y,
+              color: cycle(colors, index, :current_color),
+              blur: cycle(blurs, index, 0.0),
+              spread: cycle(spreads, index, 0.0),
+              inset: cycle(positions, index, false)
+            }
+          ]
+      end)
+    end
+  end
+
+  defp cycle(values, index, default) do
+    if values == [], do: default, else: Enum.at(values, rem(index, length(values)))
   end
 
   defp shadows(style, source) do

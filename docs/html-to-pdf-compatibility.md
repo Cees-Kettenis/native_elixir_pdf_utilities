@@ -126,6 +126,72 @@ position. Static `zoom` scales computed box and text lengths.
 Block, flex and grid reading flows can set the logical text order in the PDF
 without moving the artwork. Scopes are resolved per page.
 
+### Advanced static layout
+
+Named anchors on boxes can position callouts within a containing block.
+`anchor()`, `anchor-size()`, `position-area` and `position-try` use the
+initial print geometry. A fallback can use a different area, flip a placement
+or select a named `@position-try` rule. Scoped names stay within their
+subtree. Static visibility checks can omit missing, hidden or overflowing
+callouts.
+
+Named flows move in-flow element or child content into block regions of equal
+definite widths. Regions can have different definite heights and live on
+different pages. Region breaks advance the flow and the last region uses its
+authored overflow policy. The selected Regions edition has no region-only
+style rules.
+
+Definite positioned exclusions reserve line space within their containing
+block. `wrap-through:none` skips that reservation. `shape-padding` reduces
+the usable line band of a definite `shape-inside` reference box.
+
+`line-grid:create` sets a grid from the selected font and line height.
+`line-snap` aligns line baselines or whole line boxes, and `box-snap` aligns
+block edges or text baselines. `line-height-step` and `block-step-size`
+control line and block rhythm independently.
+
+`grid-lanes` and `inline-grid-lanes` pack static cards into rows or columns
+with explicit spans and `fit-tolerance`. Grid and grid lanes can paint solid
+or patterned gap rules with break, visibility and inset controls. The
+renderer accepts a single width, style and color per rule axis.
+
+Selected border contours and corner shapes use bounded vector paths.
+`border-clip` and `border-limit` can restrict the visible part of an edge.
+Box-shadow longhands coordinate their layers using the offset list.
+
+### Declarative CSS values
+
+Use `@custom-media` and `@custom-selector` for aliases within a stylesheet.
+A selector alias has the specificity of its most specific branch.
+Circular aliases are ignored. Media tests use the print viewport.
+
+Use `@function` for static custom functions with typed parameters, defaults,
+and optional `returns` types. Definitions follow cascade layers and tree
+scope. Missing or invalid results default through the consuming property.
+`@mixin` and `@apply` expand within a stylesheet in declaration order.
+`@contents` accepts an authored block or a fallback, and `@private` keeps
+local values out of the element's public custom properties. URL tokens in
+function results and mixin arguments are unsupported. Author resource
+references directly in declarations so they retain their original owner.
+
+`@when`, `@else`, and the semicolon-separated branches of `if()` support
+static media and feature tests. `if()` can also check custom-property values.
+`first-valid()` selects the first valid whole value. `inherit()` reads a
+parent's custom property, and `sibling-index()` and `sibling-count()` use
+the element's tree position.
+
+`progress()`, `calc-mix()`, and the static interpolation functions accept
+numeric and dimensional values. Color interpolation uses the supported
+color spaces. Transform mixing and interpolation support compatible
+operation lists, including interpolation from identity. The renderer
+evaluates numeric easing, steps, and cubic Bézier easings without an
+animation timeline.
+
+`random()` and `random-item()` share a base within a render according to
+their named, element, and property cache keys. Specify `fixed <number>` for
+a reproducible base across renders. `cycle()` selects the value after the
+inherited value in its list, or starts with the first value.
+
 ### Positioning and transforms
 
 Static, relative, absolute, fixed and printed sticky positioning are supported.

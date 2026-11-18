@@ -24,6 +24,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Validators.CssCascadeValidator
   alias NativeElixirPdfUtilities.Validators.CssSourceContextValidator
   alias NativeElixirPdfUtilities.Validators.CssValueValidator
   alias NativeElixirPdfUtilities.Validators.FormValidator
@@ -467,6 +468,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       )
                     )
 
+                  functions = CssCascadeValidator.function_definitions(stylesheet_entries)
+
+                  compiled_rules =
+                    if functions == %{},
+                      do: compiled_rules,
+                      else: Map.put(compiled_rules, :functions, functions)
+
+                  position_tries =
+                    Enum.reduce(stylesheet_entries, %{}, fn entry, acc ->
+                      Map.merge(acc, get_in(entry.prepared, [:cascade, :position_tries]) || %{})
+                    end)
+
+                  compiled_rules =
+                    if position_tries == %{},
+                      do: compiled_rules,
+                      else: Map.put(compiled_rules, :position_tries, position_tries)
+
+                  declarative_document = make_ref()
+
+                  css_scope_parents =
+                    Map.new(composition.roots, fn {scope, root} ->
+                      parent = root.host_tree_scope_id
+                      {scope, if(is_map_key(composition.roots, parent), do: parent)}
+                    end)
+
                   compute_styles = fn cache, query_scope, query_sizes ->
                     root_id =
                       case ResourceContext.current() do
@@ -479,6 +505,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       options: style_opts,
                       cache: cache,
                       root_selector_id: root_id,
+                      root_children: children,
+                      declarative_document: declarative_document,
+                      css_scope_parents: css_scope_parents,
                       root_canvas_key: make_ref(),
                       image_maps: image_maps,
                       url_context: url_context,
@@ -493,15 +522,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                           Map.merge(context, %{query_scope: query_scope, query_sizes: query_sizes})
 
                     context =
-                      if :maps.get(:positional_dependent, compiled_rules.selectors, false),
-                        do:
-                          NativeElixirPdfUtilities.HtmlToPdf.CssSelector.prepare_context(
-                            context,
-                            dom,
-                            children,
-                            composition
-                          ),
-                        else: context
+                      if :maps.get(:positional_dependent, compiled_rules.selectors, false) or
+                           map_size(composition.roots) > 0,
+                         do:
+                           NativeElixirPdfUtilities.HtmlToPdf.CssSelector.prepare_context(
+                             context,
+                             dom,
+                             children,
+                             composition
+                           ),
+                         else: context
 
                     style_opts = Keyword.put(style_opts, :__render_cache__, cache)
 
@@ -544,6 +574,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                            %{
                              type: :document,
                              children: styled_children,
+                             _named_regions:
+                               RenderCache.fetch(
+                                 cache,
+                                 {:named_regions, context.root_canvas_key},
+                                 fn -> false end
+                               ),
+                             _line_grid_enabled:
+                               RenderCache.fetch(
+                                 cache,
+                                 {:line_grid, context.root_canvas_key},
+                                 fn -> false end
+                               ),
                              publishing_base_style: root_style,
                              css_page_rules:
                                Enum.flat_map(stylesheet_entries, fn entry ->
@@ -773,12 +815,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          )
                        )
 
+                     functions = CssCascadeValidator.function_definitions(context_entries)
+
+                     compiled =
+                       if functions == %{},
+                         do: compiled,
+                         else: Map.put(compiled, :functions, functions)
+
                      RenderCache.run(fn cache ->
                        context = %{
                          rules: compiled,
                          cache: cache,
                          root_selector_id: cache,
                          root_children: children,
+                         position_viewport: media_context,
                          source_budget: budget,
                          source_selectors:
                            for(
@@ -2971,6 +3021,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           _ ->
             style
+        end
+
+      style =
+        if NativeElixirPdfUtilities.HtmlToPdf.AnchorLayout.track?(style) do
+          Map.put(style, :_anchor_tree_scope, :maps.get(:tree_scope_id, node, nil))
+        else
+          style
         end
 
       RenderCache.fetch_partition(rules.cache, :cascade_styles, node._selector_id, fn ->
@@ -5786,6 +5843,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               layer_order: :maps.get(:layer_order, rule, [])
             }
             |> then(fn matched ->
+              if is_map_key(rule, :css_locals) or is_map_key(rule, :css_media_aliases),
+                do: Map.merge(matched, Map.take(rule, [:css_locals, :css_media_aliases])),
+                else: matched
+            end)
+            |> then(fn matched ->
               case :maps.get(:source_declarations, rule, nil) do
                 nil ->
                   matched
@@ -6026,6 +6088,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             :layer,
             :layer_order,
             :definition_scope,
+            :css_locals,
+            :css_media_aliases,
             :encapsulation
           ])
         end)
@@ -6050,6 +6114,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
            do:
              style
              |> Map.put(:_css_attributes, node.attributes)
+             |> Map.put(:_css_functions, :maps.get(:functions, rules.rules, %{}))
+             |> Map.put(:_css_element, node._selector_id)
+             |> Map.put(:_css_node_scope, :maps.get(:shadow_scope_id, node, nil))
+             |> Map.put(:_css_scope_parents, :maps.get(:css_scope_parents, rules, %{}))
+             |> Map.put(
+               :_css_random_document,
+               :maps.get(:declarative_document, rules, rules.cache)
+             )
+             |> Map.put(
+               :_css_siblings,
+               NativeElixirPdfUtilities.HtmlToPdf.CssSelector.sibling_index_count(
+                 node,
+                 ancestors,
+                 rules
+               )
+             )
              |> Map.put(
                :_css_control_value,
                NativeElixirPdfUtilities.Validators.HtmlFormValidator.css_control_value(node)
@@ -6075,7 +6155,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok,
            validated
            |> NativeElixirPdfUtilities.Validators.CssDisplayValidator.compute_style()
-           |> Map.drop([:_cascade_ua, :_cascade_inherited])
+           |> Map.drop([
+             :_cascade_ua,
+             :_cascade_inherited,
+             :_css_functions,
+             :_css_element,
+             :_css_node_scope,
+             :_css_scope_parents,
+             :_css_random_document,
+             :_css_siblings
+           ])
            |> resolve_rem_values()
            |> resolve_font_relative_defaults()
            |> Map.delete(:_inherited_color)
@@ -6130,6 +6219,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                  else: {:ok, style}
                ),
              style = style |> apply_border_styles() |> resolve_auto_margin_values() do
+          if is_map_key(style, :flow_into) or is_map_key(style, :flow_from) do
+            RenderCache.fetch(rules.cache, {:named_regions, rules.root_canvas_key}, fn -> true end)
+          end
+
+          if is_map_key(style, :line_snap) or is_map_key(style, :box_snap) do
+            RenderCache.fetch(rules.cache, {:line_grid, rules.root_canvas_key}, fn -> true end)
+          end
+
+          style =
+            case style do
+              %{position_try_fallbacks: [_ | _]} ->
+                Map.put(style, :_position_tries, Map.get(rules.rules, :position_tries, %{}))
+
+              _ ->
+                style
+            end
+
           style =
             case style do
               %{field_sizing: :content} ->
@@ -6278,6 +6384,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                           :_css_attributes,
                           :_css_control_value,
                           :_css_attribute_case,
+                          :_css_functions,
+                          :_css_element,
+                          :_css_node_scope,
+                          :_css_scope_parents,
+                          :_css_random_document,
+                          :_css_siblings,
                           :_root_element
                         ]),
                       else: Map.delete(style, :_root_element)

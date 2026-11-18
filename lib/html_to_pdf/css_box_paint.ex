@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint do
   @moduledoc "Static outline and box shadow paint, with blur delegated to the existing SVG converter."
   alias NativeElixirPdfUtilities.HtmlToPdf.{
+    BorderShape,
     DrawingGeometry,
     PageGeometry,
     PngDecoder,
@@ -16,6 +17,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint do
   def present?(style) do
     case style do
       %{box_shadow: [_ | _]} -> true
+      %{box_shadow_offset: [_ | _]} -> true
       %{outline_style: pattern} when pattern != :none -> true
       _ -> false
     end
@@ -24,13 +26,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint do
   @doc "Places outer shadows below background paint, inset shadows above it and outlines after the border."
   @spec boxes(map(), map(), [map()]) :: [map()]
   def boxes(style, rect, artwork) do
-    shadows = Map.get(style, :box_shadow, []) |> Enum.reverse()
+    shadows =
+      style
+      |> NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.computed_shadows()
+      |> Enum.reverse()
+
     {outer, inner} = Enum.split_with(shadows, &(not &1.inset))
 
     {borders, background} =
       Enum.split_with(
         artwork,
-        &(Map.get(&1, :stroke_width, 0) > 0 or Map.get(&1, :role) == :border_image)
+        &(Map.get(&1, :stroke_width, 0) > 0 or
+            Map.get(&1, :role) in [:border_image, :shaped_border])
       )
 
     Enum.flat_map(outer, &shadow(style, rect, &1)) ++
@@ -127,8 +134,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint do
       height = Float.ceil((host.height + 2 * pad) / 0.75) * 0.75
       frame = %{x: left, y: bottom, width: width, height: height, border_radius: 0.0}
       frame_path = path(frame)
-      host_path = path(host)
-      hole = if silhouette.width > 0 and silhouette.height > 0, do: path(silhouette), else: ""
+
+      {host_path, hole} =
+        if BorderShape.shaped?(style) do
+          {outline, cast} = BorderShape.shadow_contours(style, rect, shadow)
+          {serialize_path(outline), serialize_path(cast)}
+        else
+          {path(host),
+           if(silhouette.width > 0 and silhouette.height > 0, do: path(silhouette), else: "")}
+        end
+
       shape = if shadow.inset, do: frame_path <> " " <> hole, else: hole
       clip = if shadow.inset, do: host_path, else: frame_path <> " " <> host_path
 
@@ -235,6 +250,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBoxPaint do
           )
       end
 
+    serialize_path(commands)
+  end
+
+  defp serialize_path(commands) do
     Enum.map_join(commands, " ", fn {operation, coordinates} ->
       Enum.at(["M", "L", "", "C", "Z"], operation) <>
         Enum.map_join(coordinates, " ", &to_string/1)

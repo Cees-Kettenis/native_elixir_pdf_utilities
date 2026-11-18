@@ -139,6 +139,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end
   end
 
+  @doc false
+  @spec fragment_regions([map()], number(), [number()]) :: {:ok, [page()]} | {:error, term()}
+  def fragment_regions(boxes, width, heights) do
+    maximum = Enum.max(heights)
+
+    reserves =
+      heights
+      |> Enum.with_index(1)
+      |> Map.new(fn {height, index} ->
+        {index, %{top: 0.0, bottom: maximum - height}}
+      end)
+
+    context = %{reserves: reserves, page_offset: 0, minimum_pages: %{}, direction: :ltr}
+    fragment_columns(boxes, width, maximum, context)
+  end
+
   @doc "Measures the remaining physical page height after an already validated source prefix."
   @spec remaining_height([map()], {number(), number()}, map(), number(), number()) ::
           {:ok, number()} | {:error, term()}

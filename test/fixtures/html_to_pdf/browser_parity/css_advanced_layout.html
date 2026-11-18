@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+html, body { margin:0; padding:0 }
+.panel { position:relative; margin:16px; width:160px; height:96px; background:#eee }
+.pin { anchor-name:--pin; position:absolute; left:48px; top:64px; width:48px; height:20px; background:#365 }
+.tip { position:absolute; position-anchor:--pin; position-area:bottom center;
+  position-try-fallbacks:top center; width:24px; height:20px; background:#a43 }
+.packing { display:grid-lanes; grid-template-columns:48px 48px; gap:8px; fit-tolerance:0 }
+.a { background:#365; height:32px }
+.b { background:#a43; height:16px }
+.c { background:#456; height:16px }
+.corner { width:56px; height:32px; border-radius:12px; corner-shape:bevel; background:#365 }
+</style></head>
+<body>
+<div class=panel><div class=pin></div><div class=tip></div></div>
+<div class="panel packing"><div class=a></div><div class=b></div><div class=c></div></div>
+<div class=panel><div class=corner></div></div>
+</body></html>

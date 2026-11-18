@@ -49,4 +49,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDimensionsBrowserParityTest do
           do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
     end
   end
+
+  test "static declarative values match an independently reduced Chromium reference" do
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Paths.fixture("html_to_pdf/browser_parity/css_declarative_values.html"),
+        chromium_transform: &declarative_reference/1,
+        max_changed_ratio: 0.001,
+        max_average_delta: 0.001,
+        render_opts: [fonts: []]
+      )
+
+    assert stats.page_count == 1
+  end
+
+  defp declarative_reference(source) do
+    String.replace(
+      source,
+      ~r|/\* declarative styles start \*/.*?/\* declarative styles end \*/|s,
+      """
+      .first  { margin-left: 6px; width: 50px; background: #2255aa }
+      .second { width: 30px; background: #112244 }
+      .third  { width: 70px; background: rgb(50% 50% 50%) }
+      .fourth { width: 40px; background: #336633; transform: translateX(6px) }
+      """
+    )
+  end
 end

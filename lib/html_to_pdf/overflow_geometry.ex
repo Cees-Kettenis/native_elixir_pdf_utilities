@@ -71,8 +71,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OverflowGeometry do
           {left, bottom, right, top}
         end
 
-      %{x: left, y: bottom, width: max(right - left, 0.0), height: max(top - bottom, 0.0)}
+      clip = %{x: left, y: bottom, width: max(right - left, 0.0), height: max(top - bottom, 0.0)}
+
+      if x != :visible and y != :visible and amount == 0.0 and reference == :padding_box and
+           (is_map_key(style, :border_shape) or is_map_key(style, :corner_top_left_shape) or
+              is_map_key(style, :corner_top_right_shape) or
+              is_map_key(style, :corner_bottom_right_shape) or
+              is_map_key(style, :corner_bottom_left_shape)) do
+        shaped_clip(style, clip)
+      else
+        clip
+      end
     end
+  end
+
+  defp shaped_clip(style, clip) do
+    zero = %{top: 0.0, right: 0.0, bottom: 0.0, left: 0.0}
+    border = Map.get(style, :border_widths, zero)
+    width = clip.width + border.left + border.right
+    height = clip.height + border.top + border.bottom
+
+    rect = %{
+      x: clip.x - border.left,
+      y: clip.y - border.bottom,
+      width: width,
+      height: height,
+      border_widths: border,
+      border_styles: Map.get(style, :border_styles, %{}),
+      border_radius: Map.get(style, :border_radius, 0.0)
+    }
+
+    rect =
+      case NativeElixirPdfUtilities.Validators.CssBorderRadiusValidator.used_radii(
+             style,
+             width,
+             height
+           ) do
+        {:ok, nil} -> rect
+        {:ok, radii} -> Map.put(rect, :border_radii, radii)
+        error -> throw({:render_resource_limit, error})
+      end
+
+    {_outer, inner} = NativeElixirPdfUtilities.HtmlToPdf.BorderShape.contours(style, rect)
+    inner
   end
 
   @doc "Unions actual font outlines and transformed paint extents in the containing coordinate space."

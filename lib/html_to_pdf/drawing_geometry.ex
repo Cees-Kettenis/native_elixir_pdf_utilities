@@ -333,6 +333,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
   defp translate_clip(clip, delta_x, delta_y) do
     translated = %{clip | x: clip.x + delta_x, y: clip.y + delta_y}
 
+    translated =
+      if is_map_key(clip, :path_commands),
+        do: %{
+          translated
+          | path_commands:
+              NativeElixirPdfUtilities.HtmlToPdf.PathGeometry.transform(
+                clip.path_commands,
+                {1, 0, 0, 1, delta_x, delta_y}
+              )
+        },
+        else: translated
+
     case Map.get(clip, :inner_clip) do
       nil -> translated
       inner -> Map.put(translated, :inner_clip, translate_clip(inner, delta_x, delta_y))
@@ -356,6 +368,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry do
           [Map.update(box, :css_parent_clips, [{scope.id, clip}], &[{scope.id, clip} | &1])]
 
         %{type: type} when type in [:drawing_group, :glyph_group] ->
+          [overflow_group(box, clip)]
+
+        %{clip: %{path_commands: _}} ->
+          [overflow_group(box, clip)]
+
+        _ when is_map_key(clip, :path_commands) ->
           [overflow_group(box, clip)]
 
         _ ->

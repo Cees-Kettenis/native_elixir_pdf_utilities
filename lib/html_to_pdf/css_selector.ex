@@ -765,6 +765,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
   # The stylesheet cache lives only within this render. Fresh selector identities
   # prevent reuse across style computations, documents or changed child lists.
+  @doc "Returns an element’s one-based sibling index and total element sibling count."
+  @spec sibling_index_count(map(), [map()], map()) :: {pos_integer(), pos_integer()}
+  def sibling_index_count(node, ancestors, context) do
+    case Map.get(selector_positions(ancestors, context, node), identity(node)) do
+      {index, count, _, _} -> {index, count}
+      nil -> {1, 1}
+    end
+  end
+
   defp selector_positions(ancestors, context, node) do
     parent = selector_parent(node, ancestors, context)
 

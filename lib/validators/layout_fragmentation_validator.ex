@@ -11,7 +11,8 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
       "auto" => :auto,
       "avoid" => :avoid,
       "avoid-page" => :avoid_page,
-      "avoid-column" => :avoid_column
+      "avoid-column" => :avoid_column,
+      "avoid-region" => :avoid_region
     }
 
     values =
@@ -22,6 +23,7 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
             "page" => :page,
             "always" => :page,
             "column" => :column,
+            "region" => :region,
             "left" => :left,
             "right" => :right,
             "recto" => :recto,
@@ -49,6 +51,8 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
             :avoid,
             :avoid_page,
             :avoid_column,
+            :avoid_region,
+            :region,
             :page,
             :column,
             :left,
@@ -61,6 +65,8 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
               :avoid,
               :avoid_page,
               :avoid_column,
+              :avoid_region,
+              :region,
               :page,
               :column,
               :left,
@@ -68,7 +74,13 @@ defmodule NativeElixirPdfUtilities.Validators.LayoutFragmentationValidator do
               :recto,
               :verso
             ] and
-            Map.get(style, :break_inside, :auto) in [:auto, :avoid, :avoid_page, :avoid_column]
+            Map.get(style, :break_inside, :auto) in [
+              :auto,
+              :avoid,
+              :avoid_page,
+              :avoid_column,
+              :avoid_region
+            ]
 
         if valid?,
           do: :ok,

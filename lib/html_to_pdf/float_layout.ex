@@ -232,6 +232,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FloatLayout do
         if f.side == :right, do: min(right, left), else: right
       end)
 
+    {left, right} =
+      Enum.reduce(active, {left, right}, fn
+        {%{side: side}, _, _}, band when side in [:left, :right] ->
+          band
+
+        {%{side: side}, start, stop}, band ->
+          NativeElixirPdfUtilities.HtmlToPdf.ExclusionLayout.available(side, band, start, stop)
+      end)
+
     if right - left < minimum and active != [] do
       next = active |> Enum.map(fn {float, _, _} -> float.bottom end) |> Enum.max()
 
@@ -305,15 +314,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FloatLayout do
   @doc "Adds a nonpainting exclusion marker using the actual line-measurement callback."
   @spec inherit_exclusions([map()], map(), number(), number(), number(), function()) :: [map()]
   def inherit_exclusions(runs, style, x, top, width, measure) do
-    case Process.get(@context) do
-      context
+    context = Process.get(@context)
+    exclusions = NativeElixirPdfUtilities.HtmlToPdf.ExclusionLayout.active(style)
+
+    case {context, exclusions} do
+      {context, []}
       when (context == nil or :erlang.map_get(:floats, context) == []) and
              (not is_map_key(style, :shape_inside) or
                 :erlang.map_get(:shape_inside, style) == :auto) ->
         runs
 
-      context ->
-        floats = if context == nil, do: [], else: context.floats
+      {context, exclusions} ->
+        floats = if context == nil, do: exclusions, else: context.floats ++ exclusions
 
         inside =
           if Map.get(style, :shape_inside, :auto) == :auto do

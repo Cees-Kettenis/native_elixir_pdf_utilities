@@ -77,7 +77,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowShape do
 
         %{
           geometry: geometry(shape, reference_box(float, shape.reference), style),
-          clip: %{x: x, top: top, width: width, height: height}
+          clip: %{x: x, top: top, width: width, height: height},
+          padding: length_value(Map.get(style, :shape_padding, 0.0), width, style)
         }
 
       _ ->
@@ -442,8 +443,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowShape do
     if bottom >= clip.top or top <= clip.top - clip.height do
       {clip.x, clip.x + clip.width}
     else
-      top = min(top, clip.top)
-      bottom = max(bottom, clip.top - clip.height)
+      padding = Map.get(shape, :padding, 0.0)
+      top = min(top, clip.top) + padding
+      bottom = max(bottom, clip.top - clip.height) - padding
 
       interval =
         case shape.geometry do
@@ -481,8 +483,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowShape do
           nil
 
         {left, right} ->
-          left = max(left, clip.x)
-          right = min(right, clip.x + clip.width)
+          left = max(left + padding, clip.x)
+          right = min(right - padding, clip.x + clip.width)
           if right > left, do: {left, right}
       end
     end
@@ -580,6 +582,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FlowShape do
         case shape.geometry do
           {:ellipse, _, cy, _, ry} -> [cy + ry, cy + height / 2, cy - ry + height]
           {:polygon, points, _} -> Enum.flat_map(points, fn {_, y} -> [y, y + height] end)
+        end
+
+      knots =
+        case Map.get(shape, :padding, 0.0) do
+          padding when padding > 0 -> Enum.flat_map(knots, &[&1 - padding, &1 + padding, &1])
+          _ -> knots
         end
 
       knots =

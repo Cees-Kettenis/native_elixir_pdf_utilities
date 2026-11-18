@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  @page { size: 240px 120px; margin: 0 }
+  body { margin: 10px }
+  .row { height: 22px }
+  .swatch { height: 16px }
+  /* declarative styles start */
+  @custom-media --wide (width > 200px);
+  @custom-selector :--first #other, .first;
+  @function --span(--base <length>, --units <number>: 2) returns <length> {
+    result: calc(var(--base) * var(--units));
+  }
+  @mixin --trim(--left <length>) {
+    @private { --inset: calc(var(--left) + 2px) }
+    margin-left: var(--inset);
+    @contents;
+  }
+  @when media((--wide)) {
+    :--first {
+      @apply --trim(4px) { background: #2255aa };
+      width: --span(25px);
+    }
+  }
+  @else { :--first { width: 150px; background: red } }
+  .first { width: 90px }
+  .second {
+    width: first-valid(invalid, calc(15px * sibling-index()));
+    background: if(supports(display: grid): #112244; else: red);
+  }
+  .third {
+    width: calc-mix(40px 25%, 80px);
+    background: color-interpolate(.5 in srgb, 0: black, 1: white);
+  }
+  .fourth {
+    width: random(fixed .5, 20px, 60px);
+    background: random-item(fixed .75, red, #336633);
+    transform: transform-interpolate(.5, 0: translateX(0px), 1: translateX(12px));
+  }
+  /* declarative styles end */
+</style>
+<div class="row swatch first"></div>
+<div class="row swatch second"></div>
+<div class="row swatch third"></div>
+<div class="row swatch fourth"></div>

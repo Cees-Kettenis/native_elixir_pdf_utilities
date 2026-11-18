@@ -248,7 +248,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
           {name, _} when name in ["media", "font-face", "page"] and not rule.block ->
             {String.duplicate(" ", byte_size(rule.source)), namespaces, false}
 
-          {name, _} when name in ["layer", "scope", "supports", "container"] ->
+          {name, _} when name in ["layer", "scope", "supports", "container", "when", "else"] ->
             {rule.source, namespaces,
              if(name == "layer" and not rule.block, do: prelude, else: false)}
 
@@ -262,9 +262,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
 
           {name, _}
           when name in [
+                 "custom-media",
+                 "custom-selector",
+                 "function",
+                 "mixin",
                  "font-face",
                  "page",
                  "counter-style",
+                 "position-try",
                  "font-feature-values",
                  "font-palette-values"
                ] ->
@@ -533,6 +538,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
   @spec split(String.t(), String.t()) :: [String.t()]
   def split(source, delimiter) do
     Enum.map(segments(source, delimiter), & &1.text)
+  end
+
+  @doc "Splits grammar terms at top-level delimiters and trims whitespace around each term."
+  @spec split_trimmed(String.t(), String.t()) :: [String.t()]
+  def split_trimmed(source, delimiter) do
+    Enum.map(split(source, delimiter), &HtmlValidator.trim_css_whitespace/1)
   end
 
   defp segments(source, delimiter) do

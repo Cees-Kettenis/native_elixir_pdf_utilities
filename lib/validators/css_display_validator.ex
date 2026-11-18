@@ -20,6 +20,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssDisplayValidator do
     "inline-flex" => {:inline_flex, true},
     "grid" => {:grid, true},
     "inline-grid" => {:inline_grid, true},
+    "grid-lanes" => {:grid, true},
+    "inline-grid-lanes" => {:inline_grid, true},
     "table" => {:table, true},
     "inline-table" => {:inline_table, true},
     "list-item" => {:list_item, false},
@@ -114,9 +116,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssDisplayValidator do
               properties = %{display: display}
 
               properties =
-                if String.starts_with?(canonical, "run-in"),
-                  do: Map.put(properties, :_display_outer, :run_in),
-                  else: properties
+                cond do
+                  String.starts_with?(canonical, "run-in") ->
+                    Map.put(properties, :_display_outer, :run_in)
+
+                  canonical in ["grid-lanes", "inline-grid-lanes"] ->
+                    Map.put(properties, :_grid_lanes, true)
+
+                  true ->
+                    properties
+                end
 
               properties = if root?, do: Map.put(properties, :_flow_root, true), else: properties
 

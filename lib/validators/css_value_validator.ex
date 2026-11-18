@@ -37,7 +37,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   @underline_properties NativeElixirPdfUtilities.Validators.CssTextDecorationValidator.properties()
   @source_wide_keywords ~w(inherit initial unset revert revert-layer)
   @publishing_properties NativeElixirPdfUtilities.Validators.CssPublishingValidator.properties()
-  @source_layout_properties @publishing_properties ++
+  @anchor_properties NativeElixirPdfUtilities.Validators.CssAnchorValidator.properties() ++
+                       ["position-try"]
+  @border_shape_properties NativeElixirPdfUtilities.Validators.CssBorderShapeValidator.properties()
+  @gap_rule_properties NativeElixirPdfUtilities.Validators.CssGapRuleValidator.properties()
+  @advanced_layout_properties NativeElixirPdfUtilities.Validators.CssAdvancedLayoutValidator.properties()
+  @source_layout_properties @border_shape_properties ++
+                              @gap_rule_properties ++
+                              @advanced_layout_properties ++
+                              @anchor_properties ++
+                              @publishing_properties ++
                               NativeElixirPdfUtilities.Validators.CssMaskValidator.properties() ++
                               NativeElixirPdfUtilities.Validators.CssBorderImageValidator.properties() ++
                               NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.properties() ++
@@ -113,7 +122,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             NativeElixirPdfUtilities.Validators.CssSubstitutionValidator.resolve_value(
               value,
               style,
-              budget
+              budget,
+              declaration
             )
 
           validate_computed_declaration(style, property, value, resolved, budget)
@@ -352,6 +362,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             variables != [] and
                 property in @source_symbolic_properties ->
               {:ok, Map.put(tokens, :kind, :substitution_tokens)}
+
+            property in ~w(top right bottom left width height min-width max-width min-height max-height) and
+                String.starts_with?(String.downcase(value, :ascii), ["anchor(", "anchor-size("]) ->
+              with {:ok, anchor} <-
+                     NativeElixirPdfUtilities.Validators.CssAnchorValidator.function(
+                       value,
+                       String.to_existing_atom(String.replace(property, "-", "_")),
+                       %{}
+                     ),
+                   do: {:ok, Map.merge(tokens, %{kind: :anchor_position, anchor: anchor})}
 
             property in ~w(width height min-width max-width min-height max-height font-size) ->
               case HtmlValidator.prepare_css_length_source(value) do
@@ -1547,7 +1567,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             )
 
           property
-          when property in ~w(outline outline-width outline-style outline-color outline-offset box-shadow -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width -webkit-text-stroke) ->
+          when property in ~w(outline outline-width outline-style outline-color outline-offset box-shadow box-shadow-offset box-shadow-color box-shadow-blur box-shadow-spread box-shadow-position -webkit-text-fill-color -webkit-text-stroke-color -webkit-text-stroke-width -webkit-text-stroke) ->
             NativeElixirPdfUtilities.Validators.CssBoxPaintValidator.prepare(
               style,
               property,
@@ -2046,6 +2066,42 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
           property when property in ["top", "right", "bottom", "left"] ->
             put_position_offset(style, property, value)
 
+          property when property in @border_shape_properties ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssBorderShapeValidator.prepare(
+                     style,
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
+          property when property in @gap_rule_properties ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssGapRuleValidator.prepare(
+                     style,
+                     property,
+                     value
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
+          property when property in @advanced_layout_properties ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssAdvancedLayoutValidator.prepare(
+                     property,
+                     value,
+                     style
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
+          property when property in @anchor_properties ->
+            with {:ok, fields} <-
+                   NativeElixirPdfUtilities.Validators.CssAnchorValidator.property(
+                     property,
+                     value,
+                     style
+                   ),
+                 do: {:ok, Map.merge(style, fields)}
+
           "z-index" ->
             put_z_index(style, value)
 
@@ -2470,6 +2526,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
         :_flow_root,
         :_display_role,
         :_display_outer,
+        :_grid_lanes,
         :table_section
       ])
       |> Map.merge(properties)
@@ -2600,8 +2657,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_size(style, property, value) do
-    with {:ok, size} <- HtmlValidator.parse_css_size(value, property, Map.get(style, :font_size)),
-         do: {:ok, Map.put(style, property, size)}
+    result =
+      if String.starts_with?(String.downcase(value, :ascii), "anchor-size("),
+        do:
+          NativeElixirPdfUtilities.Validators.CssAnchorValidator.function(value, property, style),
+        else: HtmlValidator.parse_css_size(value, property, Map.get(style, :font_size))
+
+    with {:ok, size} <- result, do: {:ok, Map.put(style, property, size)}
   end
 
   @doc "Prepares a background size through the shared intrinsic-size and length parser."
@@ -2668,8 +2730,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
   end
 
   defp put_position_offset(style, property, value) do
-    with {:ok, offset} <- parse_position_offset(value) do
-      side = String.to_existing_atom(property)
+    side = String.to_existing_atom(property)
+
+    result =
+      if String.starts_with?(String.downcase(value, :ascii), ["anchor(", "anchor-size("]),
+        do: NativeElixirPdfUtilities.Validators.CssAnchorValidator.function(value, side, style),
+        else: parse_position_offset(value)
+
+    with {:ok, offset} <- result do
       offsets = style |> Map.get(:offsets, edges(:auto)) |> Map.put(side, offset)
       {:ok, Map.put(style, :offsets, offsets)}
     end

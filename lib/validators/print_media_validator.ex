@@ -173,6 +173,12 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
     end
   end
 
+  alias NativeElixirPdfUtilities.Validators.{
+    CssAliasValidator,
+    CssConditionalValueValidator,
+    MediaConditionValidator
+  }
+
   @doc "Returns the environment part of a stylesheet cache key, omitting invariant media types."
   @spec cache_context(String.t(), context() | nil | :unpositioned) ::
           context() | nil | :unpositioned | :print
@@ -193,7 +199,8 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
           <<"@", name::binary>> ->
             case HtmlValidator.parse_css_identifier(name) do
               {:ok, name, query} ->
-                (String.downcase(name, :ascii) == "media" and String.contains?(query, "(")) or
+                (String.downcase(name, :ascii) in ["media", "when", "else"] and
+                   String.contains?(query, "(")) or
                   media_context_required?(rule.declarations)
 
               _ ->
@@ -215,7 +222,9 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
           String.t(),
           context() | nil | :unpositioned
         ) :: boolean()
-  def matches_stylesheet?(query, css, context) do
+  def matches_stylesheet?(query, css, context), do: matches_stylesheet?(query, css, context, %{})
+
+  defp matches_stylesheet?(query, css, context, aliases) do
     if String.contains?(query, "(") and
          Regex.match?(@page_candidate, css) do
       throw(
@@ -230,33 +239,43 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       )
     end
 
-    matches?(query, context)
+    matches?(query, context, aliases)
   end
 
   @doc "Selects bounded nested media blocks without changing their source order. Nil retains the legacy media-type-only API."
   @spec select_rules(String.t(), context() | nil | :unpositioned) ::
           {:ok, String.t()} | {:error, :invalid_css}
-  def select_rules(css, context) do
-    with {:ok, selected, _records} <- select_media(css, context, 0, :active, 0),
+  def select_rules(css, context),
+    do: select_rules(css, context, CssAliasValidator.definitions(css, :media))
+
+  @doc false
+  @spec select_rules(String.t(), context() | nil | :unpositioned, map()) :: {:ok, String.t()}
+  def select_rules(css, context, aliases) do
+    with {:ok, selected, _records} <- select_media(css, context, 0, :active, 0, aliases),
          do: {:ok, selected}
   end
 
   @doc false
   @spec project_source_rules(String.t(), context() | nil | :unpositioned) ::
           {:ok, String.t(), [map()]} | {:error, :invalid_css}
-  def project_source_rules(css, context) do
-    select_media(css, context, 0, :source, 0)
-  end
+  def project_source_rules(css, context),
+    do: project_source_rules(css, context, CssAliasValidator.definitions(css, :media))
 
-  defp select_media(css, context, depth, mode, origin) do
+  @doc false
+  @spec project_source_rules(String.t(), context() | nil | :unpositioned, map()) ::
+          {:ok, String.t(), [map()]}
+  def project_source_rules(css, context, aliases),
+    do: select_media(css, context, 0, :source, 0, aliases)
+
+  defp select_media(css, context, depth, mode, origin, aliases) do
     alias NativeElixirPdfUtilities.Validators.CssSyntaxValidator
     HtmlValidator.check_render_resource(:max_depth, depth, :css)
     HtmlValidator.reserve_render_resource(:max_work, byte_size(css), :css)
 
-    {output, records, cursor} =
+    {output, records, cursor, _chain} =
       css
       |> CssSyntaxValidator.block_items(origin == 0)
-      |> Enum.reduce({[], [], 0}, fn rule, {output, records, cursor} ->
+      |> Enum.reduce({[], [], 0, nil}, fn rule, {output, records, cursor, chain} ->
         selector =
           if rule.kind == :rule, do: HtmlValidator.trim_css_whitespace(rule.selectors), else: ""
 
@@ -266,7 +285,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               case HtmlValidator.parse_css_identifier(name) do
                 {:ok, name, query} ->
                   name = String.downcase(name, :ascii)
-                  if name in ["media", "supports"], do: {name, query}
+                  if name in ["media", "supports", "when", "else"], do: {name, query}
 
                 _ ->
                   nil
@@ -276,17 +295,37 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               nil
           end
 
-        {replacement, new_records} =
+        {replacement, new_records, next_chain} =
           if is_tuple(media) do
             {kind, query} = media
             body_at = rule.offset + byte_size(rule.selectors) + 1
 
+            trimmed = HtmlValidator.trim_css_whitespace(query)
+
             active =
-              rule.block and HtmlValidator.trim_css_whitespace(query) != "" and
-                if(kind == "media",
-                  do: matches_stylesheet?(query, rule.declarations, context),
-                  else: NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(query)
-                )
+              rule.block and
+                case kind do
+                  "media" ->
+                    trimmed != "" and
+                      matches_stylesheet?(query, rule.declarations, context, aliases)
+
+                  "supports" ->
+                    trimmed != "" and
+                      NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(query)
+
+                  "when" ->
+                    CssConditionalValueValidator.matches?(trimmed, context, aliases, %{})
+
+                  "else" ->
+                    chain == false and
+                      (trimmed == "" or
+                         CssConditionalValueValidator.matches?(trimmed, context, aliases, %{}))
+                end
+
+            next_chain =
+              if kind == "else" and is_nil(chain),
+                do: nil,
+                else: active or (kind == "else" and chain)
 
             {:ok, selected, children} =
               if rule.block and (active or mode == :source),
@@ -296,7 +335,8 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
                     context,
                     depth + if(kind == "media", do: 1, else: 0),
                     mode,
-                    origin + body_at
+                    origin + body_at,
+                    aliases
                   ),
                 else: {:ok, "", []}
 
@@ -321,27 +361,27 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
                       selected <> if(rule.closed, do: " ", else: ""),
                   else: String.duplicate(" ", byte_size(rule.source))
 
-              {projected, [record | children]}
+              {projected, [record | children], next_chain}
             else
-              {selected, []}
+              {selected, [], next_chain}
             end
           else
-            if rule.kind == :rule and rule.block do
+            if rule.kind == :rule and rule.block and not definition_rule?(selector) do
               body_at = rule.offset + byte_size(rule.selectors) + 1
 
               {:ok, body, children} =
-                select_media(rule.declarations, context, depth, mode, origin + body_at)
+                select_media(rule.declarations, context, depth, mode, origin + body_at, aliases)
 
-              {rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: ""), children}
+              {rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: ""), children, nil}
             else
-              {rule.source, []}
+              {rule.source, [], nil}
             end
           end
 
         before = binary_part(css, cursor, rule.offset - cursor)
 
         {[replacement, before | output], [new_records | records],
-         rule.offset + byte_size(rule.source)}
+         rule.offset + byte_size(rule.source), next_chain}
       end)
 
     tail = binary_part(css, cursor, byte_size(css) - cursor)
@@ -350,15 +390,41 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
      records |> Enum.reverse() |> List.flatten()}
   end
 
+  defp definition_rule?(selector) do
+    case selector do
+      <<"@", tail::binary>> ->
+        case HtmlValidator.parse_css_identifier(tail) do
+          {:ok, name, _} -> String.downcase(name, :ascii) in ["function", "mixin"]
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
   @doc "Evaluates a media query list against a validated print context. Unknown features do not match."
   @spec matches?(String.t(), context() | nil | :unpositioned) :: boolean()
-  def matches?(query, context) do
+  def matches?(query, context), do: matches?(query, context, %{})
+
+  @doc "Matches media queries with the active stylesheet's custom media aliases."
+  @spec matches?(String.t(), context() | nil | :unpositioned, map()) :: boolean()
+  def matches?(query, context, aliases) do
     query =
       query
       |> NativeElixirPdfUtilities.HtmlToPdf.CssParser.strip_comments()
       |> HtmlValidator.trim_css_whitespace()
-      |> String.downcase(:ascii)
 
+    query = if map_size(aliases) == 0, do: String.downcase(query, :ascii), else: query
+
+    if map_size(aliases) > 0 and String.contains?(query, "--") do
+      alias_truth(query, context, aliases, []) == true
+    else
+      ordinary_match?(String.downcase(query, :ascii), context)
+    end
+  end
+
+  defp ordinary_match?(query, context) do
     if context in [nil, :unpositioned] do
       if context == :unpositioned and String.contains?(query, "(") do
         throw(
@@ -376,6 +442,50 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       query in ["", "print", "only print", "all", "only all"]
     else
       query == "" or Enum.any?(HtmlValidator.split_css_comma(query), &condition(&1, context, 0))
+    end
+  end
+
+  defp alias_truth(query, context, aliases, stack) do
+    HtmlValidator.check_render_resource(:max_depth, length(stack), :css)
+    HtmlValidator.reserve_render_resource(:max_work, byte_size(query), :css)
+
+    case String.downcase(String.trim(query), :ascii) do
+      "true" when stack != [] ->
+        true
+
+      "false" when stack != [] ->
+        false
+
+      _ ->
+        HtmlValidator.split_css_comma(query)
+        |> Enum.reduce(false, fn condition, previous ->
+          truth =
+            MediaConditionValidator.truth(
+              condition,
+              context,
+              fn value, context ->
+                case HtmlValidator.parse_css_identifier(value) do
+                  {:ok, "--" <> _ = name, ""} ->
+                    with {:ok, alias_query} <- Map.fetch(aliases, name),
+                         false <- name in stack do
+                      alias_truth(alias_query, context, aliases, [name | stack])
+                    else
+                      _ -> :unknown
+                    end
+
+                  _ ->
+                    if is_map(context), do: feature(value, context), else: :unknown
+                end
+              end,
+              true
+            )
+
+          cond do
+            previous == true or truth == true -> true
+            previous == :unknown or truth == :unknown -> :unknown
+            true -> false
+          end
+        end)
     end
   end
 

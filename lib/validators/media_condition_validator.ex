@@ -6,9 +6,16 @@ defmodule NativeElixirPdfUtilities.Validators.MediaConditionValidator do
   @doc "Evaluates a media query with parse-invalid propagation and bounded nesting."
   @spec evaluate(String.t(), map(), (String.t(), map() -> boolean() | :unknown)) :: boolean()
   def evaluate(query, context, feature) do
-    case parse(query, 0, true) do
-      {:ok, expression} -> resolve(expression, context, feature) == true
-      :invalid -> false
+    truth(query, context, feature, true) == true
+  end
+
+  @doc "Returns an unknown result for invalid conditions or unrecognized features."
+  @spec truth(String.t(), map(), (String.t(), map() -> boolean() | :unknown), boolean()) ::
+          boolean() | :unknown
+  def truth(query, context, feature, media_types?) do
+    case parse(query, 0, media_types?) do
+      {:ok, expression} -> resolve(expression, context, feature)
+      :invalid -> :unknown
     end
   end
 

@@ -261,7 +261,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout do
                           do: count - index - 1,
                           else: index
 
-                      page.boxes
+                      boxes =
+                        case style do
+                          %{line_snap: policy} when policy in [:baseline, :contain] ->
+                            NativeElixirPdfUtilities.HtmlToPdf.LineRhythm.align_column(
+                              page.boxes,
+                              used_height,
+                              policy
+                            )
+
+                          _ ->
+                            page.boxes
+                        end
+
+                      boxes
                       |> DrawingGeometry.translate_boxes(
                         x + physical * (column_width + gap),
                         top - used_height

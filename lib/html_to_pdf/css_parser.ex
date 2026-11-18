@@ -154,7 +154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                      ) do
                 parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
 
-                {:ok, rules, cascade} = parse_rules(parsed_css, namespaces)
+                {:ok, rules, cascade} = parse_rules(parsed_css, namespaces, media_context)
 
                 with {:ok, registrations} <-
                        CssPropertyRegistrationValidator.prepare(
@@ -170,6 +170,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                      cascade: %{
                        layers: Enum.filter(cascade.layers, &Map.get(&1, :condition_active, true)),
                        registrations: registrations,
+                       functions: Enum.filter(cascade.functions, & &1.condition_active),
+                       position_tries:
+                         position_tries(cascade.position_tries, & &1.condition_active),
                        font_definitions:
                          NativeElixirPdfUtilities.Validators.CssFontRuleValidator.prepare(
                            Enum.filter(cascade.font_rules, &Map.get(&1, :condition_active, true))
@@ -225,7 +228,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         projection = source_projection(css) |> Map.put(:descriptor, descriptor)
 
         with {:ok, projected, media} <- source_media_projection(projection, media_context),
-             {:ok, selected_css} <- PrintMediaValidator.select_rules(projected, media_context),
+             {:ok, selected_css} <-
+               PrintMediaValidator.select_rules(projection.text, media_context),
              {:ok, counter_styles} <-
                NativeElixirPdfUtilities.Validators.CssCounterStyleValidator.prepare(selected_css),
              {:ok, fonts} <- source_font_records(projected, projection, media),
@@ -233,7 +237,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
              {:ok, publishing_pages} <- CssPageValidator.rules(selected_css),
              rules_css = mask_source_blocks(projected, @font_face_rule_regex),
              rules_css = mask_source_blocks(rules_css, @page_rule_regex),
-             {:ok, cascade} <- CssStylesheetValidator.prepare(rules_css, projection.namespaces),
+             {:ok, cascade} <-
+               CssStylesheetValidator.prepare(
+                 rules_css,
+                 projection.namespaces,
+                 stylesheet_settings(rules_css, media_context, media)
+               ),
              {:ok, rules} <- source_rules(cascade.rules, rules_css, projection, media),
              {:ok, registrations} <-
                CssPropertyRegistrationValidator.prepare(
@@ -267,6 +276,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                    &(source_active?(&1.offset, media) and Map.get(&1, :condition_active, true))
                  ),
                registrations: registrations,
+               functions:
+                 Enum.filter(
+                   cascade.functions,
+                   &(&1.condition_active and source_active?(&1.offset, media))
+                 ),
+               position_tries:
+                 position_tries(cascade.position_tries, fn rule ->
+                   rule.condition_active and source_active?(rule.offset, media)
+                 end),
                font_definitions:
                  NativeElixirPdfUtilities.Validators.CssFontRuleValidator.prepare(
                    Enum.filter(
@@ -339,6 +357,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
+  defp position_tries(records, active?) do
+    for record <- records,
+        active?.(record),
+        {:ok, declarations} <- [parse_declarations(record.declarations)],
+        into: %{} do
+      {record.name,
+       NativeElixirPdfUtilities.Validators.CssAnchorValidator.try_declarations(declarations)}
+    end
+  end
+
   @doc false
   @spec style_declaration_records(String.t()) :: {:ok, [map()]} | {:error, {atom(), map()}}
   @spec style_declaration_records(String.t(), PrintMediaValidator.context() | nil | :unpositioned) ::
@@ -350,7 +378,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
            {:ok, projected, media} <- source_media_projection(projection, media_context),
            rules_css = mask_source_blocks(projected, @font_face_rule_regex),
            rules_css = mask_source_blocks(rules_css, @page_rule_regex),
-           {:ok, cascade} <- CssStylesheetValidator.prepare(rules_css, projection.namespaces) do
+           {:ok, cascade} <-
+             CssStylesheetValidator.prepare(
+               rules_css,
+               projection.namespaces,
+               stylesheet_settings(rules_css, media_context, media)
+             ) do
         {records, _cursor} =
           Enum.map_reduce(cascade.rules, 0, fn rule, _cursor ->
             offset = rule.offset
@@ -477,7 +510,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         )
         |> Map.put(
           :active,
-          source_active?(base, media) and Map.get(source, :condition_active, true)
+          source_active?(base, media) and Map.get(source, :condition_active, true) and
+            Enum.all?(Map.get(source, :application_offsets, []), &source_active?(&1, media))
         )
       end)
 
@@ -983,8 +1017,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp parse_rules(css, namespaces) do
-    {:ok, cascade} = CssStylesheetValidator.prepare(css, namespaces)
+  defp stylesheet_settings(css, media, records) do
+    alias NativeElixirPdfUtilities.Validators.CssMixinValidator
+
+    if CssMixinValidator.candidate?(css, "mixin") or CssMixinValidator.candidate?(css, "private") do
+      inactive =
+        for record <- records,
+            not record.active,
+            do: {record.body_offset, record.body_offset + record.body_length}
+
+      %{media: media, inactive: inactive}
+    end
+  end
+
+  defp parse_rules(css, namespaces, media) do
+    {:ok, cascade} =
+      CssStylesheetValidator.prepare(css, namespaces, stylesheet_settings(css, media, []))
+
     {:ok, rules} = sources_to_rules(cascade.rules, namespaces)
     {:ok, rules, cascade}
   end
@@ -1016,7 +1065,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
     metadata =
       source
-      |> Map.take([:layer, :scopes, :container_queries])
+      |> Map.take([:layer, :scopes, :container_queries, :css_locals, :css_media_aliases])
       |> Map.reject(fn {_key, value} -> value == [] end)
 
     {:ok, Map.merge(%{selectors: selectors, declarations: declarations, order: order}, metadata)}

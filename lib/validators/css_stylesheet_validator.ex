@@ -3,18 +3,41 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
 
   alias NativeElixirPdfUtilities.Validators.{
+    CssAliasValidator,
+    CssFunctionValidator,
+    CssMixinValidator,
+    PrintMediaValidator,
     CssSyntaxValidator,
     CssSelectorValidator,
     HtmlValidator
   }
 
   @doc "Prepares nested style rules, layer declarations and scoped rules with authored byte spans."
-  @spec prepare(String.t(), map()) :: {:ok, map()}
-  def prepare(source, namespaces \\ %{}) do
+  @spec prepare(String.t(), map(), map() | nil) :: {:ok, map()}
+  def prepare(source, namespaces \\ %{}, settings \\ nil) do
     RenderCache.fetch_stylesheet(
-      {__MODULE__, source, namespaces},
+      {__MODULE__, source, namespaces, settings},
       fn ->
-        state = %{rules: [], layers: [], registrations: [], font_rules: []}
+        state = %{
+          rules: [],
+          layers: [],
+          registrations: [],
+          font_rules: [],
+          position_tries: [],
+          functions: []
+        }
+
+        settings = settings || %{}
+        inactive = Map.get(settings, :inactive, [])
+
+        active = fn offset ->
+          Enum.all?(inactive, fn {start, finish} -> offset < start or offset >= finish end)
+        end
+
+        location = fn offset ->
+          lines = source |> binary_part(0, offset) |> String.split("\n")
+          %{line: length(lines), column: String.length(List.last(lines)) + 1}
+        end
 
         context = %{
           parent: nil,
@@ -26,6 +49,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
           scopes: [],
           container_queries: [],
           namespaces: namespaces,
+          selector_aliases: CssAliasValidator.definitions(source, :selector),
+          media_aliases: CssAliasValidator.definitions(source, :media),
+          media: Map.get(settings, :media),
+          mixins: CssMixinValidator.definitions(source, active),
+          declarative?:
+            CssMixinValidator.candidate?(source, "private") or
+              CssMixinValidator.candidate?(source, "mixin"),
+          application_offsets: [],
+          mixin_stack: [],
+          mixin_conditions: %{},
+          contents: nil,
+          css_locals: %{},
+          active: active,
+          location: location,
           origin: 0,
           depth: 0
         }
@@ -45,6 +82,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
   defp flatten(source, context, state) do
     HtmlValidator.check_render_resource(:max_depth, context.depth, :css)
     items = CssSyntaxValidator.block_items(source, context.depth == 0)
+
+    context =
+      if context.declarative? and context.parent do
+        locals = CssMixinValidator.private_properties(items, context.origin, context.active)
+        %{context | css_locals: Map.merge(context.css_locals, locals)}
+      else
+        context
+      end
 
     {state, pending} =
       Enum.reduce(items, {state, []}, fn item, {state, pending} ->
@@ -82,10 +127,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
         layer: context.layer,
         scopes: context.scopes,
         container_queries: context.container_queries,
-        condition_active: context.condition_active,
+        condition_active:
+          context.condition_active and context.active.(context.origin + first.offset),
         resolved_selectors: true,
         parsed_selectors: context.parsed_selectors
       }
+
+      rule =
+        if context.css_locals == %{} and context.media_aliases == %{} and
+             context.application_offsets == [],
+           do: rule,
+           else:
+             Map.merge(
+               rule,
+               Map.take(context, [:css_locals, :application_offsets])
+               |> Map.put(:css_media_aliases, context.media_aliases)
+             )
 
       %{state | rules: [rule | state.rules]}
     end
@@ -102,7 +159,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
     child = %{context | origin: body_at, depth: context.depth + 1}
 
     case at_rule(prelude) do
-      {"layer", body} ->
+      {"layer", body} when context.mixin_stack == [] ->
         case layer_names(body, context.layer, rule.block, rule_at) do
           {:ok, paths} ->
             events =
@@ -162,6 +219,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
             state
         end
 
+      {kind, _}
+      when kind in ["media", "when", "else", "supports"] and
+             rule.block and context.mixin_stack != [] ->
+        if Map.get(context.mixin_conditions, body_at, false),
+          do: flatten(rule.declarations, child, state),
+          else: state
+
       {"supports", body} when rule.block ->
         active =
           context.condition_active and
@@ -182,6 +246,99 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
 
         %{state | font_rules: [record | state.font_rules]}
 
+      {"position-try", body} when rule.block and is_nil(context.parent) ->
+        case NativeElixirPdfUtilities.Validators.CssAnchorValidator.name(body) do
+          {:ok, name} ->
+            record = %{
+              name: name,
+              declarations: rule.declarations,
+              offset: rule_at,
+              condition_active: context.condition_active
+            }
+
+            %{state | position_tries: [record | state.position_tries]}
+
+          :error ->
+            state
+        end
+
+      {"apply", body} when not is_nil(context.parent) ->
+        case CssMixinValidator.application(body, rule, context) do
+          {:ok, mixin, arguments} ->
+            {:ok, _projected, records} =
+              PrintMediaValidator.project_source_rules(
+                mixin.source,
+                context.media,
+                context.media_aliases
+              )
+
+            conditions = Map.new(records, &{mixin.offset + &1.body_offset, &1.active})
+
+            contents =
+              if rule.block,
+                do:
+                  {rule.declarations, body_at, context.css_locals, context.contents,
+                   context.mixin_conditions},
+                else: nil
+
+            flatten(
+              mixin.source,
+              %{
+                child
+                | origin: mixin.offset,
+                  css_locals: Map.merge(context.css_locals, arguments),
+                  mixin_stack: [mixin.name | context.mixin_stack],
+                  application_offsets: [rule_at | context.application_offsets],
+                  contents: contents,
+                  mixin_conditions: conditions
+              },
+              state
+            )
+
+          :error ->
+            state
+        end
+
+      {"contents", ""} when context.mixin_stack != [] ->
+        case context.contents do
+          {source, origin, locals, contents, conditions} ->
+            flatten(
+              source,
+              %{
+                child
+                | origin: origin,
+                  css_locals: locals,
+                  contents: contents,
+                  mixin_conditions: conditions
+              },
+              state
+            )
+
+          nil when rule.block ->
+            flatten(rule.declarations, child, state)
+
+          nil ->
+            state
+        end
+
+      {"function", body} when rule.block and is_nil(context.parent) ->
+        case CssFunctionValidator.definition(body, :function) do
+          {:ok, definition} ->
+            record =
+              Map.merge(definition, %{
+                body: rule.declarations,
+                offset: rule_at,
+                layer: context.layer,
+                condition_active: context.condition_active,
+                media_aliases: context.media_aliases
+              })
+
+            %{state | functions: [record | state.functions]}
+
+          :error ->
+            state
+        end
+
       {"property", body} when rule.block and is_nil(context.parent) ->
         registration = %{
           name: body,
@@ -196,11 +353,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
         state
 
       nil ->
+        expanded = CssAliasValidator.selector(prelude, context.selector_aliases)
+
         selector =
           cond do
-            context.scope_top -> scoped_selector(prelude)
-            context.parent -> nested_selector(prelude, context.parent)
-            true -> elem(replace_nesting(prelude, ":where(:scope)"), 0)
+            context.scope_top -> scoped_selector(expanded)
+            context.parent -> nested_selector(expanded, context.parent)
+            true -> elem(replace_nesting(expanded, ":where(:scope)"), 0)
           end
 
         case CssSelectorValidator.parse(selector, %{namespaces: context.namespaces}) do
@@ -332,6 +491,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
               {:ok, nil}
             else
               body = binary_part(block.text, 1, block.length - if(block.closed, do: 2, else: 1))
+              body = CssAliasValidator.selector(body, context.selector_aliases)
 
               body =
                 if index == 1,
