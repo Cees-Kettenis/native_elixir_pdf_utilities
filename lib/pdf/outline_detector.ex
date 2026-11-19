@@ -2,6 +2,7 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
 
@@ -19,67 +20,72 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
 
   @doc false
   @spec from_paginated_headings([map()]) :: [map()]
-  def from_paginated_headings(pages) do
-    headings =
-      pages
-      |> Enum.with_index(1)
-      |> Enum.flat_map(fn {page, page_number} ->
-        Enum.flat_map(page.boxes, fn box ->
-          case Map.get(box, :outline_anchor) do
-            %{title: title, level: level} = anchor ->
-              page_height = elem(page.size, 1)
-              top = min(max(outline_top(box), 0.0), page_height * 1.0)
-
-              [
-                %{
-                  anchor_id: Map.get(anchor, :id, make_ref()),
-                  level: level,
-                  item: %{
-                    title: title,
-                    page: page_number,
-                    view: {:fit_h, top},
-                    open: Map.get(anchor, :open, true),
-                    children: []
-                  }
-                }
-              ]
-
-            _ ->
-              []
-          end
-        end)
-      end)
-
-    headings |> Enum.uniq_by(& &1.anchor_id) |> nest()
-  end
+  def from_paginated_headings(pages), do: page_bookmarks(pages, :headings)
 
   @doc "Builds outlines explicitly requested by CSS bookmark declarations."
   @spec from_css_bookmarks([map()]) :: [map()]
-  def from_css_bookmarks(pages) do
-    pages = Enum.map(pages, fn page -> %{page | boxes: css_bookmark_sources(page.boxes, [])} end)
-    from_paginated_headings(pages)
+  def from_css_bookmarks(pages), do: page_bookmarks(pages, :css)
+
+  defp page_bookmarks(pages, kind) do
+    pages
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {page, number} ->
+      axis =
+        case {kind, page.boxes} do
+          {:headings, [%{role: :page_orientation}]} -> :fit_v
+          _ -> :fit_h
+        end
+
+      page_anchors(page.boxes, [], %{kind: kind, axis: axis, size: page.size, page: number})
+    end)
+    |> Enum.uniq_by(& &1.anchor_id)
+    |> nest()
   end
 
-  defp css_bookmark_sources(boxes, transforms) do
+  defp page_anchors(boxes, transforms, context) do
     Enum.flat_map(boxes, fn box ->
+      sources =
+        case context.kind do
+          :css -> Map.get(box, :css_bookmark_anchors, [])
+          :headings -> List.wrap(Map.get(box, :outline_anchor))
+        end
+
       anchors =
-        Enum.map(Map.get(box, :css_bookmark_anchors, []), fn anchor ->
-          {_, top} =
+        Enum.map(sources, fn anchor ->
+          {x, y} =
             Enum.reduce(transforms, {Map.get(box, :x, 0.0), outline_top(box)}, fn matrix,
                                                                                   {x, y} ->
-              NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry.transform_point(x, y, matrix)
+              DrawingGeometry.transform_point(x, y, matrix)
             end)
 
-          %{type: :flow_marker, y: top, height: 0.0, outline_anchor: anchor}
+          {coordinate, limit} =
+            if context.axis == :fit_v,
+              do: {x, elem(context.size, 0)},
+              else: {y, elem(context.size, 1)}
+
+          %{
+            anchor_id: Map.get(anchor, :id, make_ref()),
+            level: anchor.level,
+            item: %{
+              title: anchor.title,
+              page: context.page,
+              view: {context.axis, min(max(coordinate, 0.0), limit * 1.0)},
+              open: Map.get(anchor, :open, true),
+              children: []
+            }
+          }
         end)
 
       nested =
         case box do
+          %{role: :embedded_viewport_host} when context.kind == :headings ->
+            []
+
           %{type: :drawing_group, transform: matrix, boxes: children} ->
-            css_bookmark_sources(children, [matrix | transforms])
+            page_anchors(children, [matrix | transforms], context)
 
           %{boxes: children} ->
-            css_bookmark_sources(children, transforms)
+            page_anchors(children, transforms, context)
 
           _ ->
             []

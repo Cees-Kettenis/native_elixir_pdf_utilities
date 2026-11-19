@@ -2336,6 +2336,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
 
         group = %{
           type: :drawing_group,
+          role: :page_orientation,
           x: 0.0,
           y: 0.0,
           width: width,

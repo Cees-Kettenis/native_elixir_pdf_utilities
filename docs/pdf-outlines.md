@@ -76,8 +76,9 @@ If no suitable text or existing bookmarks are found, detection returns a
 
 When creating a PDF from HTML, use `outlines: :headings` to turn visible
 `h1` through `h6` elements into bookmarks. Their hierarchy follows heading
-levels. Hidden and empty headings are skipped. You can also pass an exact
-bookmark list. See the [HTML example](html-to-pdf-examples.md#create-bookmarks-from-headings).
+levels. Hidden and empty headings are skipped. On a quarter-turned printed page,
+the destination fits the page vertically at the rotated heading position.
+You can also pass an exact bookmark list. See the [HTML example](html-to-pdf-examples.md#create-bookmarks-from-headings).
 
 ## Merge and transform behavior
 

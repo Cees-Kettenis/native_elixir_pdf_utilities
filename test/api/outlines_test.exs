@@ -42,6 +42,43 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, []} = Outlines.get(none)
   end
 
+  test "semantic headings retain their page and reading position after print rotation" do
+    render = fn rules ->
+      html = """
+      <style>@page{size:220pt 280pt;margin:20pt}#{rules}
+      body,h1,h2{margin:0} .next{break-before:page}</style>
+      <h1>Alpha</h1><h2>Beta</h2><h2 hidden>Hidden</h2><h2 class=next>Gamma</h2>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+      assert {:ok, [root]} = Outlines.get(pdf)
+      assert %{title: "Alpha", page: 1, children: [first, second]} = root
+      assert %{title: "Beta", page: 1, children: []} = first
+      assert %{title: "Gamma", page: 2, children: []} = second
+      Enum.map([root, first, second], & &1.view)
+    end
+
+    assert [{:fit_h, alpha}, {:fit_h, beta}, {:fit_h, gamma}] = render.("")
+    assert alpha > beta
+
+    assert [{:fit_v, l1}, {:fit_v, l2}, {:fit_v, l3}] =
+             render.("@page{page-orientation:rotate-left}")
+
+    for {x, y} <- [{l1, alpha}, {l2, beta}, {l3, gamma}], do: assert_in_delta(x, 280 - y, 0.001)
+
+    assert [{:fit_v, ^alpha}, {:fit_v, ^beta}, {:fit_v, ^gamma}] =
+             render.("@page{page-orientation:rotate-right}")
+
+    assert [{:fit_v, ^l1}, {:fit_v, ^l2}, {:fit_h, ^gamma}] =
+             render.("@page:first{page-orientation:rotate-left}")
+  end
+
+  test "headings in an embedded document stay out of the parent bookmark tree" do
+    html = "<h1>Parent</h1><iframe srcdoc='<h2>Child</h2>'></iframe>"
+    assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+    assert {:ok, [%{title: "Parent", children: []}]} = Outlines.get(pdf)
+  end
+
   test "preserves heading line breaks in semantic outline titles" do
     html = "<h1>Quarterly <span>sales</span><br><strong>Regional</strong> <em>report</em></h1>"
 
