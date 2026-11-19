@@ -301,14 +301,14 @@ These subsets are test assets; the library's bundled STIX face is unmodified.
 
 ## Unicode line breaking and emoji data
 
-The Elixir line-break tables retain the Unicode 15.0 automaton from
-`unicode-linebreak` 0.1.5 under its
+The Elixir line breaker uses Unicode 17.0 data and UAX #14 revision 55.
+The project retains the notice for its earlier Unicode 15.0 line-break data
+from `unicode-linebreak` 0.1.5 under the
 [Apache 2.0 license](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/unicode-linebreak-APACHE-2.0.txt).
 ECMAScript Unicode string-property tables retain the generated data previously
 provided by `regress` 0.12 under its
 [MIT license](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/unicode-string-properties-MIT.txt).
-Both are immutable data used by Elixir code. Their Rust implementations are not
-included in this library.
+The package contains generated data and Elixir code.
 
 Unicode 17 character-property tables and Unicode 16 UTS46 host-admission tables
 retain the [Unicode License v3](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/unicode-character-properties-UNICODE-3.0.txt).

@@ -177,10 +177,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   `{width, height}` in CSS pixels and `:image_selection_density` as a positive
   number, defaulting to the effective page area and density 1. Pictures compose
   inline by default and accept authored `display:block` for block placement.
-  Stream compression and TrueType font subsetting are enabled by default to keep
-  PDFs small. Set `compress_streams: false` or `subset_fonts: false` to opt out.
-  Subsetting retains the original glyph IDs for PDF character mapping and keeps
-  the full font when its license forbids subsetting.
+  Stream compression and font subsetting are enabled by default to keep PDFs
+  small. Set `compress_streams: false` or `subset_fonts: false` to opt out.
+  TrueType subsetting preserves original glyph IDs. Fonts with embedding
+  permissions that prohibit subsetting require the full font program.
   Metadata supports title, author, subject, keywords, producer, creation date,
   and modification date. An HTML `<title>` supplies the PDF title when
   `metadata[:title]` is not set.
@@ -200,7 +200,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   Set `:outlines` to `:headings` to turn visible `h1` through `h6` elements
   into nested PDF bookmarks using their final positions after pagination. An
   exact outline list accepted by `NativeElixirPdfUtilities.Outlines.put/2` may
-  also be supplied. Outlines are omitted by default.
+  also be supplied. Omitting `:outlines` or passing `nil` uses CSS-authored
+  bookmarks when present. Pass `false` to disable them.
 
   `:page_size` accepts the CSS named sizes `:a5`, `:a4`, `:a3`, `:b5`, `:b4`,
   `:jis_b5`, `:jis_b4`, `:letter`, `:legal`, and `:ledger`, optionally paired

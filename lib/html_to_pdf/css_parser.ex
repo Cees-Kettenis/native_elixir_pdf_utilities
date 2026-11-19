@@ -732,12 +732,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   @doc """
   Extracts active local font declarations from `@font-face` rules.
 
-  Sources must use `url(...)` with a TrueType or OpenType source. Remote URLs,
-  data URIs, WOFF/WOFF2 sources, and unsupported descriptors are rejected.
-  Relative paths are returned unchanged for the style layer to resolve against
-  the stylesheet location or renderer `:base_url`. Supported sources retain
-  their declared order so loading can fall back when an earlier file is
-  unavailable or invalid.
+  Returns supported `url(...)` sources in declaration order, including TrueType,
+  OpenType, WOFF and WOFF2. Relative paths and remote references are passed to
+  resource resolution. Remote references require caller-approved assets or a
+  resolver. The renderer can try the next supported source when a font is missing
+  or invalid.
   """
   @spec font_faces(String.t()) ::
           {:ok, [font_face()]}

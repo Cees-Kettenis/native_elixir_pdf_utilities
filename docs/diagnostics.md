@@ -93,8 +93,8 @@ Breaking changes require a new major version.
 | --- | --- |
 | `Pdf.Reader` | Reads validated PDF objects and resolves references |
 | HTML/CSS, style, layout, pagination, font and writer stages | Use validated output from the preceding stage |
-| `PdfWriter.render/2` | Validates pages, drawings and font fields. Supply approved, parsed TrueType fonts; it does not decode font files |
-| Writer font bounds | Metrics must fit TrueType integer fields. PDF permits at most 65,535 nonzero CIDs |
+| `PdfWriter.render/2` | Validates pages, drawings and font fields. Supply prepared font faces, including TrueType and OpenType CFF. Decode font files during font preparation |
+| Writer font bounds | TrueType metrics must fit the encoded integer fields. PDF permits at most 65,535 nonzero CIDs |
 | `Tokenizer.new/1` | Takes a binary and returns state directly. Token-reading functions return lexical diagnostics |
 | Font measurement/encoding helpers | Require valid inputs. Invalid constructor/helper arguments are programming errors |
 

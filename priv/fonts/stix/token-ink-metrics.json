@@ -1,7 +1,7 @@
 {
   "font": "STIXTwoMath-Regular.ttf",
   "font_sha256": "49b22767985171bce579307b21d98f4d35012fa39e316acc4ffcab8644dfb69b",
-  "generator": "scripts/data/math-token-metrics/generate.py",
+  "generator": "https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/8c7ea9206657d1d887cc77c6633ab49ca0d4d075/scripts/data/math-token-metrics/generate.py",
   "freetype": "2.15.0",
   "load_flags": [
     "FT_LOAD_TARGET_LIGHT",

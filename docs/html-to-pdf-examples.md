@@ -301,7 +301,9 @@ alias NativeElixirPdfUtilities.HtmlToPdf
 
 The Printing group stays together. The Delivery group is too tall for a page and splits between rows, with column headings repeated on each continuation page. Collapsed borders retain the bottom edge at page breaks.
 
-Individual table rows do not split across pages. Keep each row small enough to fit on a fresh page with its heading. See [table page breaks](html-to-pdf-compatibility.md#table-page-breaks) for the exact behavior.
+A fitting row stays together. An ordinary row taller than a fresh page can continue
+at whole lines or between indivisible items, with the table heading repeated.
+See [table page breaks](html-to-pdf-compatibility.md#table-page-breaks).
 
 ## Flex and grid
 

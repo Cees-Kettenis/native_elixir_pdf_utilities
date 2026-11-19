@@ -27,7 +27,10 @@ Rendering checks the supported subset, not complete HTML validity.
 
 Supports initial disclosure states, hidden/inert content, declarative shadow
 roots, slots and named template replacement. Scripts and later DOM updates do
-not run. Hidden or replaced source content still requires valid, authorized resources.
+not run. Ordinary images inside hidden or `display:none` content, a closed dialog,
+or the closed body of a disclosure can be skipped. Visible inert content still
+loads its images. Named template replacement validates the resources of the
+source content it replaces.
 
 ### Forms
 
@@ -226,7 +229,7 @@ avoidance. `shape-outside` accepts circles, ellipses, rounded insets, polygons,
 reference boxes and images, with margins and alpha thresholds. Shape images use
 the ordinary image permissions and resource budgets. Selected `shape-inside`
 behavior supports basic shapes in boxes with a definite height; complete
-exclusions, multiple inside intervals and shape padding remain unsupported.
+exclusions and multiple inside intervals remain unsupported.
 
 Multi-column blocks support column counts and preferred widths, normal or
 explicit gaps, rules, spanning blocks, column breaks and bounded balancing.
@@ -273,7 +276,7 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | `:subset_fonts` | `true` | Embed only needed TrueType or CFF outlines when permitted |
 | `:forms` | `:interactive` | Editable fields or `:static` artwork |
 | `:metadata` | HTML title | Document information such as title and author |
-| `:outlines` | Disabled | `:headings` or an explicit bookmark list |
+| `:outlines` | CSS-authored bookmarks | Omit or pass `nil` to use CSS. Pass `false` to disable bookmarks, `:headings` for visible headings, or a list for explicit bookmarks |
 | `:page_furniture` | Disabled | Header/footer templates and page-number tokens |
 
 ### Page size and margins
