@@ -314,6 +314,9 @@ Unicode 17 character-property tables and Unicode 16 UTS46 host-admission tables
 retain the [Unicode License v3](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/unicode-character-properties-UNICODE-3.0.txt).
 The generated modules record the original Unicode data URLs and SHA-256 hashes.
 
+Locale-specific quotation marks come from ICU 78 CLDR data. The package includes
+the [ICU 78 copyright and license notice](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/icu-78-quotation-LICENSE.txt).
+
 Rounded native control contours adapt Skia's conic subdivision and quadratic
 conversion algorithms under its [BSD 3-Clause license](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/HEAD/priv/licenses/skia-BSD-3-Clause.txt).
 Source references and adaptation notes are retained in `DrawingGeometry`.

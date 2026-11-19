@@ -3,7 +3,7 @@ defmodule NativeElixirPdfUtilities.PackageContentsTest do
 
   alias NativeElixirPdfUtilities.TestSupport.Paths
 
-  test "Hex packages retain temporal picker sources, licenses and provenance" do
+  test "Hex packages retain temporal picker assets and the notices for bundled data" do
     directory =
       Paths.project("tmp/package-contents-#{System.unique_integer([:positive, :monotonic])}")
 
@@ -27,9 +27,14 @@ defmodule NativeElixirPdfUtilities.PackageContentsTest do
     assert {:ok, files} = :erl_tar.extract({:binary, contents}, [:compressed, :memory])
     files = Map.new(files, fn {path, bytes} -> {List.to_string(path), bytes} end)
 
-    for name <- ~w(calendar_icon.svg time_icon.svg LICENSE.chromium README.md) do
-      path = "priv/html_to_pdf/temporal/" <> name
-
+    for path <- ~w(
+          priv/html_to_pdf/temporal/calendar_icon.svg
+          priv/html_to_pdf/temporal/time_icon.svg
+          priv/html_to_pdf/temporal/LICENSE.chromium
+          priv/html_to_pdf/temporal/README.md
+          priv/licenses/icu-78-quotation-LICENSE.txt
+          priv/licenses/unicode-character-properties-UNICODE-3.0.txt
+        ) do
       assert Map.fetch(files, path) == {:ok, File.read!(Paths.project(path))},
              "Hex archive omitted or changed #{path}"
     end
