@@ -38,8 +38,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
     FontValidator.with_budget(fn ->
       with :ok <- HtmlValidator.validate_font_fallback_input(styled_tree, unsupported_glyphs),
            prepared <- prepare_candidates(styled_tree),
-           :ok <-
-             HtmlValidator.validate_font_coverage(
+           {:ok, prepared} <-
+             HtmlValidator.prepare_font_coverage(
                prepared,
                unsupported_glyphs,
                @replacement_character
@@ -47,7 +47,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         {:ok,
          %{
            prepared
-           | children: resolve_prepared_nodes(prepared.children, unsupported_glyphs)
+           | children: resolve_prepared_nodes(prepared.children)
          }}
       else
         {:error, {reason, diagnostic}} ->
@@ -200,49 +200,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
     end
   end
 
-  defp resolve_prepared_nodes(nodes, unsupported_glyphs) do
-    Enum.flat_map(nodes, &resolve_prepared_node(&1, unsupported_glyphs))
+  defp resolve_prepared_nodes(nodes) do
+    Enum.flat_map(nodes, &resolve_prepared_node/1)
   end
 
-  defp resolve_prepared_node(node, unsupported_glyphs) do
+  defp resolve_prepared_node(node) do
     case node do
       %{
         type: :text,
         style: style,
-        _font_candidates: candidates,
         _font_graphemes: graphemes
       } ->
-        node = Map.drop(node, [:_font_candidates, :_font_graphemes])
+        node = Map.delete(node, :_font_graphemes)
 
         resolved =
           Enum.reduce(graphemes, [], fn grapheme, runs ->
-            {font_face, text} =
-              case grapheme.layout_whitespace? do
-                true ->
-                  {List.first(candidates), grapheme.text}
-
-                false ->
-                  case NativeElixirPdfUtilities.Validators.FontRenderingValidator.select_face(
-                         candidates,
-                         grapheme.text
-                       ) do
-                    nil when unsupported_glyphs == :replace ->
-                      replacement_face =
-                        Enum.find(
-                          candidates,
-                          &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
-                            &1,
-                            @replacement_character
-                          )
-                        )
-
-                      {replacement_face, @replacement_character}
-
-                    font_face ->
-                      {font_face, grapheme.text}
-                  end
-              end
-
+            text = grapheme.displayed
             source = Map.get(grapheme, :source_characters)
 
             source =
@@ -250,18 +223,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                 do: [%{displayed: text, fragments: Enum.flat_map(source, & &1.fragments)}],
                 else: source
 
-            # Coverage admission prepared this face in the active font budget.
-            {:ok, font_face} =
-              NativeElixirPdfUtilities.Validators.FontRenderingValidator.prepare_grapheme(
-                font_face,
-                text
-              )
-
             append_run(
               runs,
               node,
               style,
-              font_face,
+              grapheme.font_face,
               text,
               source,
               Map.get(grapheme, :publishing_offset)
@@ -276,14 +242,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         element =
           case element do
             %{style: %{_list_marker: markers} = style} ->
-              markers = resolve_prepared_nodes(markers, unsupported_glyphs)
+              markers = resolve_prepared_nodes(markers)
               %{element | style: Map.put(style, :_list_marker, markers)}
 
             _ ->
               element
           end
 
-        [%{element | children: resolve_prepared_nodes(children, unsupported_glyphs)}]
+        [%{element | children: resolve_prepared_nodes(children)}]
     end
   end
 

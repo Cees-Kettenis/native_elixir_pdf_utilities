@@ -11,7 +11,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectedFontLigatureBrowserParityTe
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(fixture,
         artifact_dir:
           "tmp/test_artifacts/selected_font_ligature_browser_parity/selected-latin-browser",
+        # The library replaces missing clusters with U+FFFD. Compare that glyph
+        # in the same declared face, independent of Chromium's installed CJK fonts.
+        chromium_transform: &String.replace(&1, "A漢V", "A�V"),
         render_opts: [
+          system_font_discovery: false,
           fonts: [
             %{
               family: "ProofMono",
@@ -54,7 +58,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectedFontLigatureBrowserParityTe
           {"width_search", {12, 91, 30, 16}},
           {"unicode_composite", {12, 107, 30, 16}},
           {"woff_reconstruction", {12, 123, 30, 16}},
-          {"cff_embedding", {168, 75, 108, 64}}
+          {"cff_embedding", {168, 75, 108, 64}},
+          {"replacement", {168, 32, 48, 21}}
         ],
         # Skia emits CFF as unhinted Type 3 paths, so Poppler's font and vector
         # rasterizers differ at glyph edges. Keep every original region at 1%.
@@ -71,7 +76,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectedFontLigatureBrowserParityTe
     assert stats.page_count == 1
     assert stats.scripting == :disabled
     assert [%{regions: regions}] = stats.pages
-    assert length(regions) == 5
+    assert length(regions) == 6
     for region <- regions, do: assert(region.native_ink_pixels >= region.minimum_ink_pixels)
     native_pdf = File.read!(Path.join(stats.artifact_dir, "native.pdf"))
 

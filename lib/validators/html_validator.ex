@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   alias NativeElixirPdfUtilities.Validators.PageGeometryValidator
   alias NativeElixirPdfUtilities.Validators.MimeValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
+  alias NativeElixirPdfUtilities.Validators.FontRenderingValidator
   alias NativeElixirPdfUtilities.Validators.LanguageValidator
   alias NativeElixirPdfUtilities.Validators.HtmlMetadataValidator
   alias NativeElixirPdfUtilities.Validators.HtmlUrlValidator
@@ -6575,15 +6576,30 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   @spec validate_font_coverage(term(), term(), String.t()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_font_coverage(styled_tree, unsupported_glyphs, replacement_character) do
+    with {:ok, _prepared} <-
+           prepare_font_coverage(styled_tree, unsupported_glyphs, replacement_character),
+         do: :ok
+  end
+
+  @doc "Selects and validates the effective displayed text and face for each prepared grapheme."
+  @spec prepare_font_coverage(term(), term(), String.t()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_font_coverage(styled_tree, unsupported_glyphs, replacement_character) do
     case styled_tree do
       %{type: :document, children: children}
       when is_list(children) and unsupported_glyphs in [:replace, :error] and
              is_binary(replacement_character) ->
-        validate_font_coverage_nodes(children, unsupported_glyphs, replacement_character)
+        {:ok,
+         %{
+           styled_tree
+           | children: prepare_coverage_nodes(children, unsupported_glyphs, replacement_character)
+         }}
 
       _ ->
         invalid_styled_document("font fallback requires prepared font candidates")
     end
+  catch
+    {:font_coverage_error, error} -> error
   end
 
   @doc false
@@ -9112,89 +9128,73 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
     end)
   end
 
-  defp validate_font_coverage_nodes(nodes, unsupported_glyphs, replacement_character) do
-    Enum.reduce_while(nodes, :ok, fn node, :ok ->
-      case node do
-        %{type: :text, _font_candidates: candidates, _font_graphemes: graphemes}
-        when is_list(candidates) and candidates != [] and is_list(graphemes) ->
-          case validate_supported_graphemes(
-                 graphemes,
-                 candidates,
-                 unsupported_glyphs,
-                 replacement_character
-               ) do
-            :ok -> {:cont, :ok}
-            {:error, {_reason, _diagnostic}} = error -> {:halt, error}
+  defp prepare_coverage_nodes(nodes, policy, replacement) do
+    Enum.map(nodes, fn
+      %{type: :text, _font_candidates: [_ | _] = candidates, _font_graphemes: graphemes} = node
+      when is_list(graphemes) ->
+        selected =
+          Enum.map(graphemes, &prepare_displayed_grapheme(&1, candidates, policy, replacement))
+
+        node |> Map.delete(:_font_candidates) |> Map.put(:_font_graphemes, selected)
+
+      %{type: :element, children: children} = node when is_list(children) ->
+        node =
+          case node do
+            %{style: %{_list_marker: markers} = style} ->
+              %{
+                node
+                | style: %{
+                    style
+                    | _list_marker: prepare_coverage_nodes(markers, policy, replacement)
+                  }
+              }
+
+            _ ->
+              node
           end
 
-        %{type: :element, children: children} when is_list(children) ->
-          markers = node |> Map.get(:style, %{}) |> Map.get(:_list_marker, [])
+        %{node | children: prepare_coverage_nodes(children, policy, replacement)}
 
-          case validate_font_coverage_nodes(
-                 markers ++ children,
-                 unsupported_glyphs,
-                 replacement_character
-               ) do
-            :ok -> {:cont, :ok}
-            {:error, {_reason, _diagnostic}} = error -> {:halt, error}
-          end
-
-        _ ->
-          {:halt, invalid_styled_document("font fallback requires prepared font candidates")}
-      end
+      _ ->
+        throw(
+          {:font_coverage_error,
+           invalid_styled_document("font fallback requires prepared font candidates")}
+        )
     end)
   end
 
-  defp validate_supported_graphemes(
-         graphemes,
-         candidates,
-         unsupported_glyphs,
-         replacement_character
-       ) do
-    Enum.reduce_while(graphemes, :ok, fn grapheme, :ok ->
-      case grapheme do
-        %{text: text, layout_whitespace?: layout_whitespace?}
-        when is_binary(text) and is_boolean(layout_whitespace?) ->
-          selected =
-            if layout_whitespace?,
-              do: hd(candidates),
-              else:
-                NativeElixirPdfUtilities.Validators.FontRenderingValidator.select_face(
-                  candidates,
-                  text
-                )
+  defp prepare_displayed_grapheme(grapheme, candidates, policy, replacement) do
+    case grapheme do
+      %{text: source, layout_whitespace?: whitespace}
+      when is_binary(source) and is_boolean(whitespace) ->
+        selected =
+          if whitespace,
+            do: hd(candidates),
+            else: FontRenderingValidator.select_face(candidates, source)
 
-          supported? = selected != nil
-
-          replacement =
-            if not supported? and unsupported_glyphs == :replace,
-              do:
-                Enum.find(
-                  candidates,
-                  &NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
-                    &1,
-                    replacement_character
-                  )
-                )
-
-          case supported? or replacement != nil do
-            true ->
-              case NativeElixirPdfUtilities.Validators.FontRenderingValidator.validate_execution(
-                     selected || replacement,
-                     text
-                   ) do
-                :ok -> {:cont, :ok}
-                error -> {:halt, error}
-              end
-
-            false ->
-              {:halt, unsupported_glyph(text)}
+        {face, displayed} =
+          if selected == nil and policy == :replace do
+            {Enum.find(candidates, &FontRenderingValidator.supports_text?(&1, replacement)),
+             replacement}
+          else
+            {selected, source}
           end
 
-        _ ->
-          {:halt, invalid_styled_document("font fallback requires prepared graphemes")}
-      end
-    end)
+        with true <- face != nil,
+             :ok <- FontRenderingValidator.validate_execution(face, displayed),
+             {:ok, face} <- FontRenderingValidator.prepare_grapheme(face, displayed) do
+          Map.merge(grapheme, %{font_face: face, displayed: displayed})
+        else
+          false -> throw({:font_coverage_error, unsupported_glyph(source)})
+          error -> throw({:font_coverage_error, error})
+        end
+
+      _ ->
+        throw(
+          {:font_coverage_error,
+           invalid_styled_document("font fallback requires prepared graphemes")}
+        )
+    end
   end
 
   defp invalid_styled_document(message) do

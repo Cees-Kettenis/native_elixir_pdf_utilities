@@ -19,6 +19,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallbackTest do
     assert Enum.all?(fragments, &(&1.owner.node_id == node.node_id))
   end
 
+  test "replacement keeps the source glyph owner and validates the prepared face" do
+    node = %{type: :text, node_id: make_ref(), text: "漢", style: text_style()}
+    owned = NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator.prepare_tree(node)
+    assert {:ok, %{children: [run]}} = FontFallback.resolve(%{type: :document, children: [owned]})
+    assert run.text == "�"
+
+    assert [%{displayed: "�", fragments: [%{text: "漢", offset: 0, owner: owner}]}] =
+             run.style._source_glyph_characters
+
+    assert owner.node_id == node.node_id
+
+    prepared = %{
+      type: :document,
+      children: [
+        %{
+          type: :text,
+          _font_candidates: [run.style.font_face],
+          _font_graphemes: [%{text: "漢", layout_whitespace?: false}]
+        }
+      ]
+    }
+
+    assert :ok =
+             NativeElixirPdfUtilities.Validators.HtmlValidator.validate_font_coverage(
+               prepared,
+               :replace,
+               "�"
+             )
+  end
+
   test "list markers receive font coverage and fallback without changing content" do
     style = text_style()
     marker = %{type: :text, text: "◦", style: style}

@@ -4560,6 +4560,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
              }}} = HtmlToPdf.render("<p>漢</p>", unsupported_glyphs: :ignore)
   end
 
+  test "active font features shape the displayed replacement and retain strict source diagnostics" do
+    opts = [system_font_discovery: false]
+
+    for feature <- ["font-kerning:none", "font-feature-settings:'kern' 0"] do
+      raw = "<p style=\"#{feature}\">A漢<span>V</span>漢</p>"
+      literal = String.replace(raw, "漢", "�")
+      assert {:ok, pdf} = HtmlToPdf.render(raw, opts)
+      assert {:ok, ^pdf} = HtmlToPdf.render(literal, [unsupported_glyphs: :error] ++ opts)
+      assert {:ok, text} = Text.extract(pdf, layout: false)
+      assert String.replace(text, ~r/\s/u, "") == "A�V�"
+
+      assert {:error,
+              {:unsupported_glyph, %{stage: :font, operation: :resolve_fonts, source: "漢"}}} =
+               HtmlToPdf.render(raw, [unsupported_glyphs: :error] ++ opts)
+    end
+  end
+
+  test "replacement policy preserves shaping errors for covered graphemes" do
+    assert {:error, {:unsupported_font, diagnostic}} =
+             HtmlToPdf.render(
+               "<p style='font-family:DejaVu Sans;font-variant-caps:small-caps'>ß</p>",
+               system_font_discovery: false
+             )
+
+    assert diagnostic.stage == :font and diagnostic.operation == :resolve_fonts
+    assert diagnostic.message =~ "multi-scalar synthetic capitalization"
+  end
+
   test "render_file writes a PDF for a supported paragraph" do
     input_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.html")
     output_path = Path.join(System.tmp_dir!(), "native-elixir-pdf-html-to-pdf-test.pdf")
