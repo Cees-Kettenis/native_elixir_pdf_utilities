@@ -115,8 +115,11 @@ defmodule ManualWeb.RouterTest do
     svg =
       ~s(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>)
 
+    maximum = NativeElixirPdfUtilities.Limits.get(:max_raster_dimension)
+
     for {params, width, height, disposition} <- [
           {%{"svg" => svg}, 20, 10, "inline"},
+          {%{"svg" => svg, "width" => to_string(maximum), "height" => "1"}, maximum, 1, "inline"},
           {%{"svg" => svg, "width" => "40", "height" => ""}, 40, 20, "inline"},
           {%{"svg" => svg, "height" => "30"}, 60, 30, "inline"},
           {%{
@@ -157,8 +160,7 @@ defmodule ManualWeb.RouterTest do
           {%{"svg_file" => upload(<<255>>, "invalid.svg")}, ":invalid_document", "UTF-8"},
           {%{
              "svg" => valid,
-             "width" =>
-               to_string(NativeElixirPdfUtilities.Limits.get(:max_raster_dimension) + 1)
+             "width" => to_string(NativeElixirPdfUtilities.Limits.get(:max_raster_dimension) + 1)
            }, ":resource_limit_exceeded", "limit"}
         ] do
       response = post("/svg-to-png", params)
@@ -167,9 +169,13 @@ defmodule ManualWeb.RouterTest do
       assert response.resp_body =~ reason
       assert response.resp_body =~ message
 
-      if reason != ":invalid_input" do
-        assert response.resp_body =~ "operation: :svg_to_png"
-        assert response.resp_body =~ "stage: :"
+      assert response.resp_body =~ "operation: :svg_to_png"
+      assert response.resp_body =~ "stage: :"
+
+      if reason == ":resource_limit_exceeded" do
+        assert response.resp_body =~ "stage: :limits"
+        assert response.resp_body =~ "NativeElixirPdfUtilities.Validators.SvgValidator"
+        assert response.resp_body =~ "max_raster_dimension"
       end
     end
   end

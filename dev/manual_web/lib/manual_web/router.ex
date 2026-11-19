@@ -273,12 +273,12 @@ defmodule ManualWeb.Router do
       |> send_resp(200, png)
     else
       {:error, {reason, diagnostic}} ->
-        send_error(
-          conn,
-          {:error,
-           {reason,
-            Diagnostics.with_context(diagnostic, operation: :svg_to_png, module: __MODULE__)}}
-        )
+        diagnostic =
+          diagnostic
+          |> Map.put(:operation, :svg_to_png)
+          |> Diagnostics.with_context(module: __MODULE__)
+
+        send_error(conn, {:error, {reason, diagnostic}})
     end
   end
 
