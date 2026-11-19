@@ -2553,7 +2553,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
               {"shrinking_radial", {342, 560, 45, 32}},
               {"petite_caps", {442, 424, 45, 32}},
               {"synthetic_unicase", {442, 492, 45, 32}},
-              {"optical_size", {442, 526, 90, 64}}
+              {"optical_size", {442, 526, 90, 64}},
+              {"fallback_small", {342, 634, 66, 64}},
+              {"fallback_large", {412, 634, 66, 64}}
             ]
 
         assets =
@@ -2756,7 +2758,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
     if fixture_name == "font_supplementary_unicode.html" do
       assert page_count == 2
-      assert length(Enum.at(pages, 1).regions) == 23
+      assert length(Enum.at(pages, 1).regions) == 25
 
       for engine <- ["native", "chromium"] do
         assert {:ok, extracted} =
@@ -2764,6 +2766,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
                    Path.join(artifact_dir, engine <> ".pdf"),
                    actual_text: true
                  )
+
+        # The unused final family in the control gives it an independent lookup
+        # with identical fonts. Both engines must paint the same large instance.
+        page = PdfVisualCompare.read_ppm!(Path.join(artifact_dir, "#{engine}-2.ppm"))
+
+        for y <- 634..697 do
+          row = fn left -> binary_part(page.pixels, (y * page.width + left) * 3, 66 * 3) end
+          assert row.(412) == row.(484), "#{engine} optical fallback differs at row #{y}"
+        end
 
         spans = Enum.at(extracted.pages, 1).spans
 

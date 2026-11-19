@@ -547,6 +547,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontControlsTest do
     assert none.variation_coordinates["opsz"] == 12
   end
 
+  test "a variable fallback uses each text run's optical size regardless of request order" do
+    css = """
+    <style>
+    @font-face{font-family:Main;src:url(main.ttf);unicode-range:U+78}
+    @font-face{font-family:Axes;src:url(axes.ttf)}
+    p{font-family:Main,Axes}
+    </style>
+    """
+
+    opts = [
+      system_font_discovery: false,
+      assets: %{
+        "main.ttf" => {:file, Paths.fixture("fonts/selected-container-sans.ttf")},
+        "axes.ttf" => {:file, FontCorpus.path("selected-control-axes.ttf")}
+      }
+    ]
+
+    manifest = File.read!(Paths.fixture("fonts/font-control-axes.json")) |> :json.decode()
+    bounds = Map.new(manifest["instances"], &{&1["opsz"], &1["bounds"]})
+
+    for sizes <- [[30, 60, 30], [60, 30, 60]],
+        {controls, fixed} <- [
+          {"", nil},
+          {"font-optical-sizing:none", 12},
+          {"font-variation-settings:'opsz' 72", 72}
+        ] do
+      html = css <> Enum.map_join(sizes, &"<p style=\"font-size:#{&1}px;#{controls}\">H</p>")
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, opts)
+
+      assert {:ok, resolved} =
+               NativeElixirPdfUtilities.HtmlToPdf.FontFallback.resolve(styled, :error)
+
+      faces =
+        Enum.map(resolved.children, fn paragraph -> hd(paragraph.children).style.font_face end)
+
+      for {face, size} <- Enum.zip(faces, sizes) do
+        expected = fixed || size
+        assert face.family == "Axes"
+        assert face.variation_coordinates["opsz"] == expected
+        assert {:ok, glyphs} = Font.glyph_bounds(face)
+        assert Tuple.to_list(elem(glyphs, face.cmap[?H])) == Map.fetch!(bounds, expected)
+      end
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+      assert {:ok, %{pages: [page]}} = Text.extract_spans(pdf)
+      assert Enum.map_join(page.spans, & &1.text) == "HHH"
+      assert length(Enum.uniq_by(page.spans, & &1.font_resource)) == if(fixed, do: 1, else: 2)
+    end
+  end
+
   test "petite fallback, unicase synthesis, missing capitals and emoji requests preserve explicit feature precedence" do
     data = File.read!(FontCorpus.path("selected-control-axes.ttf"))
     assert {:ok, [font]} = Font.load_configured_faces([%{family: "Controls", data: data}])

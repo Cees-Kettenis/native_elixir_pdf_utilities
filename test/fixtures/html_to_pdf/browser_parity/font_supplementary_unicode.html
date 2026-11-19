@@ -18,6 +18,8 @@ p { margin:0 0 12pt; }
 @font-face{font-family:FormatColr;src:url("../../../../tmp/font-corpus/selected-colr.ttf") format("truetype");}
 @font-face{font-family:FormatPaint;src:url("../../../../tmp/font-corpus/selected-colr-v1.ttf") format("truetype");}
 @font-face{font-family:FormatSvg;src:url("../../../../tmp/font-corpus/selected-svg-gzip.ttf") format("truetype");}
+@font-face{font-family:OpticalPrimary;src:url("../../../../tmp/font-corpus/selected-colr.ttf");unicode-range:U+78;}
+.optical-fallback{position:absolute;top:550pt;font-family:OpticalPrimary,FormatOptical;line-height:60pt;}
 @font-face{font-family:FormatOptical;src:url("../../../../tmp/font-corpus/selected-control-axes.ttf") format("truetype");}
 @font-face{font-family:FormatAdjusted;src:url("../../fonts/selected-transformed.woff2");size-adjust:125%;ascent-override:80%;descent-override:20%;line-gap-override:0%;}
 @font-palette-values --FormatBrand{font-family:FormatColr;base-palette:dark;override-colors:0 #148a35;}
@@ -89,5 +91,8 @@ quantized CPAL record colors; the native branch selects the gzip SVG font. -->
 <div style="position:absolute;left:420pt;top:340pt;font-family:FormatWoff2;font-variant-caps:petite-caps">H</div>
 <div style="position:absolute;left:420pt;top:408pt;font-family:FormatWoff2;font-variant-caps:unicase">H</div>
 <div style="position:absolute;left:420pt;top:442pt;font-family:FormatOptical;font-optical-sizing:auto;font-size:48pt;line-height:60pt">H</div>
+<div class="optical-fallback" style="left:320pt;font-size:30px">H</div>
+<div class="optical-fallback" style="left:390pt;font-size:60px">H</div>
+<div class="optical-fallback" style="left:462pt;font-size:60px;font-family:OpticalPrimary,FormatOptical,serif">H</div>
 </div>
 </div></body></html>

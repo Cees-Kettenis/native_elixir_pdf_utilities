@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
+  alias NativeElixirPdfUtilities.Validators.FontRenderingValidator
   alias NativeElixirPdfUtilities.Validators.FontValidator
   alias NativeElixirPdfUtilities.Validators.HtmlLineBreakValidator
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
@@ -65,7 +66,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
     %{document | children: children}
   end
 
-  defp prepare_candidate_node(node, {cached_registry, cached_candidates} = cache) do
+  defp prepare_candidate_node(node, {cached_context, cached_candidates} = cache) do
     case node do
       %{type: :text, style: style} ->
         registry = Map.fetch!(style, :_font_registry)
@@ -74,13 +75,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
         weight = Map.fetch!(style, :font_weight)
         font_style = Map.fetch!(style, :font_style)
 
-        # Keep the registry out of map keys: hashing its font payloads per node
-        # would cost more than the candidate lookup being cached.
-        cached_candidates = if registry == cached_registry, do: cached_candidates, else: %{}
+        # Compare shared font data and scoped definitions outside the hashed key.
+        context = {registry, Map.get(style, :_font_definitions)}
+        cached_candidates = if context == cached_context, do: cached_candidates, else: %{}
 
         key =
-          {families, weight, font_style, Map.get(style, :_text_language),
-           Map.get(style, :font_controls, %{}), Map.get(style, :writing_mode, :horizontal_tb),
+          {families, FontRenderingValidator.rendering_request(style),
+           Map.get(style, :_text_language, "und"), Map.get(style, :writing_mode, :horizontal_tb),
            Map.get(style, :text_orientation, :mixed),
            Map.get(style, :text_combine_upright, :none)}
 
@@ -95,7 +96,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
               candidates =
                 [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]
                 |> then(fn fonts ->
-                  case NativeElixirPdfUtilities.Validators.FontRenderingValidator.prepare_candidates(
+                  case FontRenderingValidator.prepare_candidates(
                          fonts,
                          style
                        ) do
@@ -124,7 +125,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                   selected,
                   text
                 ) or
-                  NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(
+                  FontRenderingValidator.supports_text?(
                     selected,
                     text
                   )) do
@@ -182,7 +183,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
           |> Map.put(:_font_candidates, candidates)
           |> Map.put(:_font_graphemes, graphemes)
 
-        {prepared, {registry, cached_candidates}}
+        {prepared, {context, cached_candidates}}
 
       %{type: :element, children: children} = element ->
         {children, cache} = Enum.map_reduce(children, cache, &prepare_candidate_node/2)

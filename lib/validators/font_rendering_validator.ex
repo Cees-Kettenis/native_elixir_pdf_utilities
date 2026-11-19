@@ -48,6 +48,15 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
     end
   end
 
+  @doc "Identifies the CSS request used to instantiate a physical face within a set of scoped font definitions."
+  @spec rendering_request(map(), map() | nil) :: tuple()
+  def rendering_request(style, definitions \\ nil) do
+    {Map.get(style, :font_controls, %{}), Map.get(style, :font_weight, 400),
+     Map.get(style, :font_style, :normal), Map.get(style, :font_width, 100),
+     Map.get(style, :font_oblique), Map.get(style, :font_size, 12), definitions,
+     Map.get(style, :_font_family_scope)}
+  end
+
   defp prepare_face(font, style) do
     ordinary? =
       Map.get(style, :font_controls, %{}) == %{} and not Map.has_key?(font, :rendering_source) and
@@ -62,11 +71,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
     if Map.get(font, :type) == :built_in or ordinary? do
       {:ok, font}
     else
-      request =
-        {Map.get(style, :font_controls, %{}), Map.get(style, :font_weight, 400),
-         Map.get(style, :font_style, :normal), Map.get(style, :font_width, 100),
-         Map.get(style, :font_oblique), Map.get(style, :font_size, 12),
-         Map.get(style, :_font_definitions), Map.get(style, :_font_family_scope)}
+      request = rendering_request(style, Map.get(style, :_font_definitions))
 
       if Map.get(font, :rendering_request) == request do
         {:ok, font}
