@@ -23,6 +23,9 @@ Paths follow the module after `NativeElixirPdfUtilities`:
 | `NativeElixirPdfUtilities.Merge` | `lib/merge.ex` |
 | `NativeElixirPdfUtilities.HtmlToPdf.Layout` | `lib/html_to_pdf/layout.ex` |
 
+Public entry points use `lib/<api>.ex`; implementations live under their owning
+namespace directory.
+
 ## Execution paths
 
 ```mermaid
@@ -47,6 +50,47 @@ flowchart LR
 | `Limits` | All configurable resource ceilings |
 
 Extract components when they have a clear responsibility and contract.
+
+## Code and contracts
+
+- Public functions require `@doc` and `@spec`. Controllers and public HTTP
+  endpoints require Swagger/OpenAPI definitions.
+- Use `case`, `cond` or `with` instead of guarded function-head branching.
+  Create a `defp` only when it reduces real duplication, simplifies complex code
+  or names a non-obvious business rule. Keep simple, single-use logic inline.
+- Reuse shared helpers for number parsing, date formatting, string cleanup and
+  other common operations.
+- Validators own all input, option, document-structure and semantic validation.
+  APIs, parsers, readers, writers and execution modules delegate to them and rely
+  on their guarantees. When moving a check, remove it from the consumer; retain
+  only distinct internal invariants. Explain any exception before implementing
+  validation elsewhere.
+
+### Resource limits
+
+Define tunable resource and complexity limits in `NativeElixirPdfUtilities.Limits`.
+Use generic budgets that describe the resource and its lifetime, and reuse them
+across features and loops. Avoid separate memory ceilings for each parser or loop
+when the same budget fits. Add a limit when an existing budget cannot represent a
+meaningful constraint, and document what it protects. There is no fixed setting
+count; keep settings useful and avoid redundant controls.
+
+Keep format- and protocol-mandated bounds fixed and identify them as
+non-configurable invariants, such as the maximum PDF CID value of 65,535.
+
+### Public failures
+
+Return explainable public failures as `{:error, {reason, diagnostic}}`, building
+maps with `NativeElixirPdfUtilities.Diagnostics`. Include actionable `:stage`,
+`:reason` and `:message` fields, plus `:operation`, `:module`, `:source`, `:line`
+and `:column` when available. Ordinary caller/input failures return recoverable
+results; reserve exceptions for programmer errors that cannot reasonably use
+that contract.
+
+Preserve the shared tuple shape, fields and types. Change them only when the
+existing contract cannot express correct debugging information; prefer additional
+detail in `:message` and `:source`. See [testing](testing.md#test-organization) for
+failure coverage.
 
 ## Tests and fixtures
 

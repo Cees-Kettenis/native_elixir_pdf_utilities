@@ -30,7 +30,11 @@ performance measurements or the full matrix. Results, warnings and source
 snapshots are under `.quality/checks/<check>/logs/<run>/`. Restart affected
 checks after changing their inputs.
 
-Run focused checks while working and the full matrix before submitting a PR.
+For changes beyond documentation, run focused checks while working and the full
+matrix before submitting a PR. Documentation-only changes, including edits limited
+to `@doc` and `@spec`, are exempt from all tests and the quality matrix when no
+executable code, configuration, tests or fixtures change. Review the content and
+state that exemption in the handoff.
 
 ## Full quality matrix
 
@@ -93,8 +97,9 @@ Keep browser cases and performance thresholds unchanged.
 | `N/A` | Expected for canonical-only checks, or tests already included in coverage |
 
 A successful exit can include warnings. Report commands, runtimes, results and
-unresolved issues in the PR. Fix failures, rerun affected checks and require the
-complete matrix to pass before review readiness.
+unresolved issues in the PR. For changes beyond documentation, fix failures,
+rerun affected checks and require the complete matrix to pass before review
+readiness.
 
 Counts include plain `warning:` messages and `file:line[:column]: Warning:`
 diagnostics, with terminal colours ignored. Project and third-party warnings both
@@ -377,6 +382,11 @@ Paths are relative to `test/`; grouped `html_to_pdf/` entries name sibling direc
 | `support/` | Shared builders, paths, geometry and browser helpers |
 
 `*_browser_parity_test.exs` suites and individual `:browser_parity` cases compare with Chromium.
+
+New or changed public failure modes need focused tests asserting the shared
+`{:error, {reason, diagnostic}}` shape and the actionable diagnostic fields.
+Follow the [public failure contract](architecture.md#public-failures), including
+available source and operation context.
 
 ## Naming
 
