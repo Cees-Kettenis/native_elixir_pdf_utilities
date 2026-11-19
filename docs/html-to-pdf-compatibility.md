@@ -459,9 +459,13 @@ do not become HTML box properties.
 | Path checks | Traversal and symlinks checked; use trusted directories or approved bytes |
 | Explicit file paths | Caller-configured asset mappings, fonts and stylesheets are trusted |
 | Other sources | Supported data URIs; remote resources are never fetched |
-| Resolver request | `%{reference: reference, kind: kind}`; kind is `:image`, `:background_image` or `:font` |
+| Resolver request | `%{reference: reference, kind: kind}`; kind is `:image`, `:background_image`, `:font` or `:color_profile` |
 | Resolver return | `{:ok, bytes}`, `:not_found` or `{:error, reason}` |
 | Callback execution | Disposable operation worker; shares [operation limits](resource-limits.md#operation-allowance) |
+
+A top-level stylesheet can request ICC profile bytes with `:color_profile` for an
+`@color-profile` URL. Embedded child documents resolve profile URLs through their
+local resource policy and do not call the resolver.
 
 [Asset examples](html-to-pdf-examples.md#load-local-images).
 

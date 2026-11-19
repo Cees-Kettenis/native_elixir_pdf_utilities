@@ -85,7 +85,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @typedoc "Context supplied to a caller-provided asset resolver."
   @type asset_request :: %{
           required(:reference) => String.t(),
-          required(:kind) => :image | :background_image | :font
+          required(:kind) => :image | :background_image | :font | :color_profile
         }
   @typedoc "A callback that supplies bytes without giving the renderer network access."
   @type asset_resolver ::
