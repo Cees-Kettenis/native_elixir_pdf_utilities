@@ -259,7 +259,7 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesGlobalStateTest do
              PdfValidator.validate_xref_revision(base.xref, %{}, 1, opts)
 
     assert diagnostic.stage == :limits
-    assert diagnostic.message == "xref revision count exceeds the limit"
+    assert diagnostic.message == "2 xref revisions exceed max_entries (1)"
 
     assert {:error, {:invalid_pdf_input, diagnostic}} =
              PdfValidator.validate_xref_revision(base.xref, %{base.xref => true}, 1, opts)
@@ -268,6 +268,41 @@ defmodule NativeElixirPdfUtilities.Pdf.ReaderCrossReferencesGlobalStateTest do
     assert diagnostic.message == "xref revision chain contains a cycle"
     Limits.install(%{limits | max_entries: 2})
     assert :ok = PdfValidator.validate_xref_revision(base.xref, %{}, 1, opts)
+  end
+
+  test "incremental metadata, no-op writes and hybrid xrefs share the reader's revision depth" do
+    alias NativeElixirPdfUtilities.Info
+
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    depth = 8
+
+    for name <- ["classic-xref.pdf", "hybrid-xref.pdf"] do
+      Limits.install(%{limits | max_depth: depth})
+      source = File.read!(Path.join(@fixture_directory, name))
+      assert {:ok, %{xref_revisions: 1}} = Reader.read(source)
+
+      pdf =
+        Enum.reduce(2..depth, source, fn revision, current ->
+          assert {:ok, updated} = Info.put(current, title: Integer.to_string(revision))
+          updated
+        end)
+
+      assert {:ok, %{xref_revisions: ^depth}} = Reader.read(pdf)
+      assert {:ok, %{title: "8"}} = Info.get(pdf)
+      assert {:ok, ^pdf} = Info.put(pdf, [])
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :incremental_write, message: write}}} =
+               Info.put(pdf, title: "Next")
+
+      assert write == "9 xref revisions exceed max_depth (8)"
+      Limits.install(%{limits | max_depth: depth - 1})
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits, message: read}}} =
+               Reader.read(pdf)
+
+      assert read == "8 xref revisions exceed max_depth (7)"
+    end
   end
 
   test "selects active generations and removes objects freed by later revisions" do

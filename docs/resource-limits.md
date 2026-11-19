@@ -81,6 +81,10 @@ outlives operation workers, including negative discovery results with tiny byte
 payloads. All persistent cache types reuse the same setting. Temporary layout
 measurements use the operation's shared entry allowance instead.
 
+PDF cross-reference history counts the original revision and each incremental update
+against `max_depth`. A hybrid table and its supplemental stream form one revision.
+An operation that returns the original PDF without an update consumes no new revision.
+
 Input, output and decoded bytes describe different resources. A compressed
 source can fit the input allowance while exceeding its decoded allowance.
 Intermediate filter output counts too. Generated PDFs must also fit the input

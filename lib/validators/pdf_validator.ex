@@ -127,15 +127,30 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @spec validate_xref_revision(integer(), map(), non_neg_integer(), [diagnostic_option()]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_xref_revision(offset, seen, depth, opts) do
-    cond do
-      Map.has_key?(seen, offset) ->
-        error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle", opts)
+    if Map.has_key?(seen, offset) do
+      error(:xref, :invalid_pdf_input, "xref revision chain contains a cycle", opts)
+    else
+      validate_revision_count(depth + 1, :limits, opts)
+    end
+  end
 
-      depth >= Limits.get(:max_entries) ->
-        error(:limits, :resource_limit_exceeded, "xref revision count exceeds the limit", opts)
+  @doc "Checks both recursive history depth and the number of retained revision offsets."
+  @spec validate_revision_count(pos_integer(), :limits | :incremental_write, [diagnostic_option()]) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_revision_count(count, stage, opts) do
+    depth = Limits.get(:max_depth)
+    entries = Limits.get(:max_entries)
+    {setting, limit} = if depth <= entries, do: {:max_depth, depth}, else: {:max_entries, entries}
 
-      true ->
-        :ok
+    if count <= limit do
+      :ok
+    else
+      error(
+        stage,
+        :resource_limit_exceeded,
+        "#{count} xref revisions exceed #{setting} (#{limit})",
+        opts
+      )
     end
   end
 
