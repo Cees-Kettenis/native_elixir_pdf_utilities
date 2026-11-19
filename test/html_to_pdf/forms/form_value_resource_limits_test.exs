@@ -247,6 +247,51 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueResourceLimitsGlobalStateT
     end
   end
 
+  test "form workers receive only unspent render work and return one cumulative receipt" do
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
+
+    original = Limits.effective()
+
+    for {operation, source, values, state} <- [
+          {:url, "https://example.test", [], :valid_url},
+          {:pattern, "a", [], :matched},
+          {:pattern, "(a)+", [], :matched},
+          {:pattern, "[", [], :invalid_pattern}
+        ] do
+      Limits.install(original)
+      assert {:ok, initial} = HtmlFormValueValidator.prepare(operation, source, values)
+      assert {:ok, ^state, receipt} = FormValueBackend.run(initial)
+      cost = receipt.compile + receipt.matches
+      assert cost > 0
+
+      for adjustment <- [0, -1] do
+        grant = cost + adjustment
+        Limits.install(%{original | max_work: 3 + grant})
+
+        HtmlValidator.with_render_budget(fn ->
+          HtmlValidator.reserve_render_resource(:max_work, 3, :html)
+          assert {:ok, request} = HtmlFormValueValidator.prepare(operation, source, values)
+          assert request.limits.max_work == grant
+          reply = FormValueBackend.run(request)
+
+          if adjustment == 0 do
+            assert {:ok, ^state} = HtmlFormValueValidator.result(reply)
+            assert ResourceBudgetValidator.remaining(:max_work) == 0
+          else
+            assert reply == {:limit, :max_work}
+
+            assert {:error, {:resource_limit_exceeded, diagnostic}} =
+                     HtmlFormValueValidator.result(reply)
+
+            assert diagnostic.operation == :initial_form_value
+          end
+        end)
+
+        refute ResourceBudgetValidator.active?()
+      end
+    end
+  end
+
   test "URL validation uses the same work allowance as pattern matching" do
     source = "https://example.test"
     original = Limits.effective()

@@ -15,6 +15,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
             %{prepared | tree: tree}
 
           source ->
+            charge(byte_size(source))
+
             case :re.compile("(*NO_START_OPT)(*NO_AUTO_POSSESS)" <> source, [:unicode]) do
               {:ok, regex} -> regex
               {:error, {message, _offset}} -> throw({:unsupported_pattern, to_string(message)})
@@ -60,6 +62,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
   end
 
   defp compile_node(node, cache) do
+    charge(1)
+
     case node do
       {:chars, expression} ->
         case Map.fetch(cache, expression) do
@@ -67,6 +71,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
             {{:character, regex}, cache}
 
           :error ->
+            charge(byte_size(expression))
+
             case :re.compile("(*NO_START_OPT)(*NO_AUTO_POSSESS)\\A(?:" <> expression <> ")\\z", [
                    :unicode
                  ]) do
@@ -117,6 +123,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormPatternMatcher do
   end
 
   defp capture_indices(node) do
+    charge(1)
+
     case node do
       {:capture, index, child} -> [index | capture_indices(child)]
       {:sequence, children} -> Enum.flat_map(children, &capture_indices/1)

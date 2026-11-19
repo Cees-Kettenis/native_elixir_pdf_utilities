@@ -6,43 +6,46 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
   @spec prepare(binary(), map()) ::
           {:ok, binary(), non_neg_integer()} | :invalid_pattern | {:limit, atom()}
   def prepare(source, limits) do
-    case prepare_source(source, limits, false) do
+    case prepare_source(source, limits, false, 0) do
       {:ok, expression, work, _native_required?} -> {:ok, expression, work}
+      {:invalid_pattern, _work} -> :invalid_pattern
       result -> result
     end
   end
 
   @doc "Prepares an OTP expression or native tree for backwards assertions and quantified capture resets."
   @spec prepare_execution(binary(), map()) ::
-          {:ok, binary() | map(), non_neg_integer()} | :invalid_pattern | {:limit, atom()}
+          {:ok, binary() | map(), non_neg_integer()}
+          | {:invalid_pattern, non_neg_integer()}
+          | {:limit, atom()}
   def prepare_execution(source, limits) do
-    native? = String.contains?(source, ["(?<=", "(?<!"])
+    scan_work = byte_size(source)
 
-    case prepare_source(source, limits, native?) do
-      {:ok, _expression, work, true} when not native? ->
-        # Only patterns needing ECMAScript capture resets pay for a second
-        # syntax pass. Charge both passes against the immutable request budget.
-        remaining = %{
-          limits
-          | max_work: limits.max_work - work
-        }
+    if scan_work > limits.max_work do
+      {:limit, :max_work}
+    else
+      native? = String.contains?(source, ["(?<=", "(?<!"])
 
-        case prepare_source(source, remaining, true) do
-          {:ok, tree, extra_work, _} -> {:ok, tree, work + extra_work}
-          result -> result
-        end
+      case prepare_source(source, limits, native?, scan_work) do
+        {:ok, _expression, work, true} when not native? ->
+          # Capture resets need another syntax pass under the same grant.
+          case prepare_source(source, limits, true, work) do
+            {:ok, tree, total, _} -> {:ok, tree, total}
+            result -> result
+          end
 
-      {:ok, expression, work, _} ->
-        {:ok, expression, work}
+        {:ok, expression, work, _} ->
+          {:ok, expression, work}
 
-      result ->
-        result
+        result ->
+          result
+      end
     end
   end
 
-  defp prepare_source(source, limits, native?) do
+  defp prepare_source(source, limits, native?, initial_work) do
     key = {__MODULE__, :budget}
-    previous = Process.put(key, {0, limits})
+    previous = Process.put(key, {initial_work, limits})
     state_key = {__MODULE__, :syntax}
 
     previous_state =
@@ -70,7 +73,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlPatternSyntaxValidator do
 
       {:ok, prepared, elem(Process.get(key), 0), state.native_required?}
     catch
-      :invalid_pattern -> :invalid_pattern
+      :invalid_pattern -> {:invalid_pattern, elem(Process.get(key), 0)}
       {:pattern_limit, limit} -> {:limit, limit}
     after
       if is_nil(previous), do: Process.delete(key), else: Process.put(key, previous)

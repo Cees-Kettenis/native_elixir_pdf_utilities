@@ -6,7 +6,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
   alias NativeElixirPdfUtilities.Validators.{
     HtmlValidator,
     HtmlPatternSyntaxValidator,
-    HtmlUrlValidator
+    HtmlUrlValidator,
+    ResourceBudgetValidator
   }
 
   @doc "Prepares bounded UTF-8 input and an immutable Elixir form-value work budget."
@@ -30,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
          operation: operation,
          source: source,
          values: values,
-         limits: Limits.effective(),
+         limits: %{Limits.effective() | max_work: ResourceBudgetValidator.remaining(:max_work)},
          timeout: Limits.get(:max_operation_timeout_ms)
        }}
     else
@@ -83,8 +84,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
 
         :pattern ->
           case HtmlPatternSyntaxValidator.prepare_execution(request.source, limits) do
-            :invalid_pattern ->
-              {:invalid_pattern, byte_size(request.source), 0}
+            {:invalid_pattern, compile} ->
+              {:invalid_pattern, compile, 0}
 
             {:limit, limit} ->
               throw({:form_limit, limit})
@@ -98,8 +99,10 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
               if expression_bytes > limits.max_operation_memory_bytes,
                 do: throw({:form_limit, :max_operation_memory_bytes})
 
+              matching_limits = %{limits | max_work: limits.max_work - compile}
+
               {mismatch, work} =
-                FormPatternMatcher.match_values(expression, request.values, limits)
+                FormPatternMatcher.match_values(expression, request.values, matching_limits)
 
               {if(mismatch, do: :mismatched, else: :matched), compile, work}
           end

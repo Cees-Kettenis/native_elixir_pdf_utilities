@@ -192,6 +192,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ElixirPatternCompatibilityTest do
                | max_work: work
              })
 
+    # The scan and first syntax pass fit exactly. The required capture-reset
+    # pass must stop before it can consume another work unit.
+    assert {:limit, :max_work} =
+             HtmlPatternSyntaxValidator.prepare_execution(source, %{
+               limits
+               | max_work: byte_size(source) + work
+             })
+
     assert Process.get(key) == :enclosing_context
   end
 
