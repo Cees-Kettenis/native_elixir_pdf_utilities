@@ -45,6 +45,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontMetricTest do
              })
   end
 
+  test "configured metric overrides set normal line height and render searchable text" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+
+    configured = %{
+      family: "Report",
+      data: File.read!(FontCorpus.path("selected-variable.ttf")),
+      size_adjust: 110,
+      ascent_override: "85%",
+      descent_override: 20,
+      line_gap_override: 0
+    }
+
+    assert {:ok, [font]} = Font.load_configured_faces([configured])
+    assert {:ok, face} = FontMetricValidator.prepare(font, %{})
+    assert HtmlValidator.normal_line_height(%{font_face: face, font_size: 30}) == 34.5
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<p style='font:30pt Report'>Hx0<br>Hx0</p>",
+               fonts: [configured],
+               system_font_discovery: false
+             )
+
+    assert {:ok, text} = Text.extract(pdf)
+    assert String.split(text) == ["Hx0", "Hx0"]
+  end
+
   test "metric descriptor failures, used-size limits and public paint metadata retain diagnostics" do
     assert {:ok, %{ascent_override: :normal}} =
              FontMetricValidator.prepare_descriptor("ascent-override", "normal")

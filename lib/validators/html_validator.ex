@@ -200,13 +200,11 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
       if Map.has_key?(font, :metric_scale), do: Font.line_size(font, font_size), else: font_size
 
     %{
-      type: :embedded,
       ascent: ascent,
       descent: descent,
       line_gap: line_gap,
       units_per_em: units_per_em
-    } =
-      Map.get(font, :layout_metrics, font)
+    } = Font.line_metrics(font)
 
     ascent_pixels = round(ascent / units_per_em * font_size / 0.75)
     descent_pixels = round(-descent / units_per_em * font_size / 0.75)

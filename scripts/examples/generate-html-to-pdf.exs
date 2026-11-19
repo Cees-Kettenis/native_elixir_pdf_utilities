@@ -4,6 +4,12 @@
 repository = Path.expand("../..", __DIR__)
 guide_path = Path.join(repository, "docs/html-to-pdf-examples.md")
 output_dir = Path.join(repository, "docs/assets/html-to-pdf-examples")
+
+System.put_env(
+  "REPORT_FONT_PATH",
+  Path.join(repository, "test/fixtures/fonts/selected-variable.ttf")
+)
+
 guide = File.read!(guide_path)
 File.mkdir_p!(output_dir)
 

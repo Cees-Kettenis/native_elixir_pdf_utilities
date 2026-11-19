@@ -1285,15 +1285,15 @@ containing block supplies the space width even when a nested span changes fonts.
 
 ### Variable fonts and controls
 
-Supply licensed font bytes, then select a static instance through CSS or the font
-configuration. The PDF contains the selected outlines and Unicode mapping.
+Set `REPORT_FONT_PATH` to a licensed variable font with weight and width axes.
+The PDF embeds the selected instance and its Unicode mapping.
 
 ```elixir
-font_bytes = File.read!("report-variable.woff2")
+font_bytes = File.read!(System.fetch_env!("REPORT_FONT_PATH"))
 
 {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render("""
 <p style='font-family:Report;font-weight:650;
-          font-variation-settings:"wdth" 110;font-kerning:none'>Report 2026</p>
+          font-variation-settings:"wdth" 110;font-kerning:none'>Hx0</p>
 """, fonts: [%{family: "Report", data: font_bytes}],
      system_font_discovery: false)
 ```
@@ -1307,9 +1307,12 @@ and coordinates are clamped to the font's declared axis ranges.
 Font metric options use percentages, including numeric values:
 
 ```elixir
-font = %{family: "Report", data: font_bytes,
+font = %{family: "Report", data: File.read!(System.fetch_env!("REPORT_FONT_PATH")),
          size_adjust: 110, ascent_override: "85%",
          descent_override: 20, line_gap_override: 0}
+
+{:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(
+  "<p style='font-family:Report'>Hx0</p>", fonts: [font], system_font_discovery: false)
 ```
 
 The equivalent `@font-face` descriptors use CSS percentages. These affect used
