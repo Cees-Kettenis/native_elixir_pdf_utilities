@@ -8,25 +8,25 @@ defmodule NativeElixirPdfUtilities.Validators.CssSupportsValidator do
   }
 
   @doc "Evaluates static supports conditions through the owning declaration and selector validators."
-  @spec matches?(String.t()) :: boolean()
-  def matches?(source) do
+  @spec matches?(String.t(), map()) :: boolean()
+  def matches?(source, namespaces \\ %{}) do
     values =
       source
       |> CssSyntaxValidator.components()
       |> Enum.reject(&(&1.kind == :comment or Regex.match?(~r/\A[ \t\n\r\f]+\z/, &1.text)))
 
-    condition(values, 0)
+    condition(values, 0, namespaces)
   end
 
-  defp condition(values, depth) do
+  defp condition(values, depth, namespaces) do
     HtmlValidator.check_render_resource(:max_depth, depth, :css)
 
     case values do
       [%{kind: :token, text: keyword}, term] ->
-        keyword?(keyword, "not") and not term_matches?(term, depth + 1)
+        keyword?(keyword, "not") and not term_matches?(term, depth + 1, namespaces)
 
       [term] ->
-        term_matches?(term, depth + 1)
+        term_matches?(term, depth + 1, namespaces)
 
       [term, %{kind: :token, text: keyword}, next | tail] ->
         operator =
@@ -54,8 +54,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSupportsValidator do
 
           valid and
             if(operator == :and,
-              do: Enum.all?(terms, &term_matches?(&1, depth + 1)),
-              else: Enum.any?(terms, &term_matches?(&1, depth + 1))
+              do: Enum.all?(terms, &term_matches?(&1, depth + 1, namespaces)),
+              else: Enum.any?(terms, &term_matches?(&1, depth + 1, namespaces))
             )
         else
           false
@@ -66,7 +66,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSupportsValidator do
     end
   end
 
-  defp term_matches?(term, depth) do
+  defp term_matches?(term, depth, namespaces) do
     case term do
       %{kind: :block, opener: "(", closed: true} ->
         body = binary_part(term.text, 1, term.length - 2) |> HtmlValidator.trim_css_whitespace()
@@ -124,7 +124,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSupportsValidator do
                 &(&1.kind == :comment or Regex.match?(~r/\A[ \t\n\r\f]+\z/, &1.text))
               )
 
-            condition(values, depth)
+            condition(values, depth, namespaces)
         end
 
       %{kind: :block, opener: opener, closed: true} ->
@@ -136,7 +136,13 @@ defmodule NativeElixirPdfUtilities.Validators.CssSupportsValidator do
 
             case String.downcase(name, :ascii) do
               "selector" ->
-                match?({:ok, _}, CssSelectorValidator.parse(argument))
+                match?(
+                  {:ok, [_]},
+                  CssSelectorValidator.parse(argument, %{
+                    namespaces: namespaces,
+                    feature_query: true
+                  })
+                )
 
               name when name in ["font-tech", "font-format"] ->
                 case HtmlValidator.parse_css_identifier(argument) do

@@ -99,9 +99,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssFunctionValidator do
   end
 
   @doc "Evaluates conditional function descriptors and keeps the last definition of each local."
-  @spec body(String.t(), map() | nil | :unpositioned, map()) :: {:ok, map()}
-  def body(source, media, aliases) do
-    with {:ok, selected} <- PrintMediaValidator.select_rules(source, media, aliases) do
+  @spec body(String.t(), map() | nil | :unpositioned, map(), map()) :: {:ok, map()}
+  def body(source, media, aliases, namespaces \\ %{}) do
+    with {:ok, selected} <- PrintMediaValidator.select_rules(source, media, aliases, namespaces) do
       descriptors =
         for %{declaration: {name, value}} <- CssSyntaxValidator.declarations(selected),
             name == "result" or String.starts_with?(name, "--"),

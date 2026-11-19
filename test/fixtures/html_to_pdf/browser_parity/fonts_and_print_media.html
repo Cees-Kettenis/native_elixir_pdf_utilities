@@ -38,6 +38,10 @@
       #viewport-values {position:absolute;left:36pt;top:300pt;width:calc(2vw + 2vh + 2svw + 2svh + 2lvw + 2lvh + 2dvw + 2dvh + 2vi + 2vb);height:20pt;background:#bca7ce;font-size:10pt}
       #condition-values {position:absolute;left:210pt;top:300pt;width:90pt;height:20pt;background:red;font-size:10pt}
       @media print and (color:8) and (prefers-color-scheme:light) { @supports font-format(truetype) { #condition-values {background:#83b88f} } }
+      #selector-values {position:absolute;left:210pt;top:340pt;font-size:10pt}
+      @supports selector(p :is(em, span)) {#selector-values::before {content:"Selector match"}}
+      @supports selector(p, span) {#selector-values::after {content:"Invalid list"}}
+      @supports selector(:where(p, :not-real)) {#selector-values::after {content:"Invalid branch"}}
     </style>
   </head>
   <body>
@@ -49,5 +53,6 @@
     <div id="root-unit-values">Root units</div>
     <div id="viewport-values">Viewport</div>
     <div id="condition-values">Print conditions</div>
+    <div id="selector-values"></div>
   </body>
 </html>

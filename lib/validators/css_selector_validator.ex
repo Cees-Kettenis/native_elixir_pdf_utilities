@@ -1,6 +1,10 @@
 defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
   @moduledoc false
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, CssSyntaxValidator}
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    CssSyntaxValidator,
+    CssPseudoValidator
+  }
 
   @state_atoms %{
     "empty" => :empty,
@@ -430,9 +434,15 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
                 shadow_function(source, keyword, part, context)
 
               double or keyword in ["before", "after", "first-line", "first-letter"] ->
-                case NativeElixirPdfUtilities.Validators.CssPseudoValidator.parse(keyword, rest) do
-                  {:ok, kind} -> {:ok, %{part | pseudo_element: kind}}
-                  :error -> {:error, :invalid_css}
+                case CssPseudoValidator.parse(keyword, rest) do
+                  {:ok, kind} ->
+                    if Map.get(context, :feature_query, false) and
+                         not CssPseudoValidator.paint_ready?(kind),
+                       do: {:error, :invalid_css},
+                       else: {:ok, %{part | pseudo_element: kind}}
+
+                  :error ->
+                    {:error, :invalid_css}
                 end
 
               keyword in ["host", "host-context"] ->
@@ -548,6 +558,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
       nested = nested_context(context)
       nested = if keyword == "has", do: Map.put(nested, :in_has, true), else: nested
 
+      forgiving = keyword in ["is", "where"] and not Map.get(context, :feature_query, false)
+
       result =
         body
         |> split_selector_list()
@@ -576,14 +588,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
                        ))
                  ),
                  do:
-                   if(keyword in ["is", "where"],
+                   if(forgiving,
                      do: {:cont, {:ok, selectors}},
                      else: {:halt, {:error, :invalid_css}}
                    ),
                  else: {:cont, {:ok, [selector | selectors]}}
 
             _ ->
-              if keyword in ["is", "where"],
+              if forgiving,
                 do: {:cont, {:ok, selectors}},
                 else: {:halt, {:error, :invalid_css}}
           end

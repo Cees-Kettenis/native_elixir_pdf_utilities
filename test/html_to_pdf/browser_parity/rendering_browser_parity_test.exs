@@ -2680,7 +2680,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
           Keyword.put(thresholds, :regions, [
             {"print viewport", {34, 298, 146, 24}},
             {"print conditions", {208, 298, 96, 24}},
-            {"root font units", {34, 338, 70, 18}}
+            {"root font units", {34, 338, 70, 18}},
+            {"selector conditions", {208, 338, 120, 18}}
           ]),
         else: thresholds
 
@@ -2740,7 +2741,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
                    layout: false
                  )
 
-        for label <- ["Print-ready report", "Viewport", "Print conditions", "Root units"],
+        refute String.replace(text, ~r/\s/u, "") =~ "Invalid"
+
+        for label <- [
+              "Print-ready report",
+              "Viewport",
+              "Print conditions",
+              "Root units",
+              "Selector match"
+            ],
             do: assert(String.replace(text, ~r/\s/u, "") =~ String.replace(label, ~r/\s/u, ""))
       end
     end

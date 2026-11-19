@@ -135,6 +135,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
 
       rule =
         if context.css_locals == %{} and context.media_aliases == %{} and
+             context.namespaces == %{} and
              context.application_offsets == [],
            do: rule,
            else:
@@ -142,6 +143,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
                rule,
                Map.take(context, [:css_locals, :application_offsets])
                |> Map.put(:css_media_aliases, context.media_aliases)
+               |> Map.put(:css_namespaces, context.namespaces)
              )
 
       %{state | rules: [rule | state.rules]}
@@ -229,7 +231,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
       {"supports", body} when rule.block ->
         active =
           context.condition_active and
-            NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(body)
+            NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(
+              body,
+              context.namespaces
+            )
 
         flatten(rule.declarations, %{child | condition_active: active}, state)
 
@@ -269,7 +274,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
               PrintMediaValidator.project_source_rules(
                 mixin.source,
                 context.media,
-                context.media_aliases
+                context.media_aliases,
+                context.namespaces
               )
 
             conditions = Map.new(records, &{mixin.offset + &1.body_offset, &1.active})
@@ -330,7 +336,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
                 offset: rule_at,
                 layer: context.layer,
                 condition_active: context.condition_active,
-                media_aliases: context.media_aliases
+                media_aliases: context.media_aliases,
+                namespaces: context.namespaces
               })
 
             %{state | functions: [record | state.functions]}

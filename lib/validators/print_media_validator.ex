@@ -243,34 +243,42 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   end
 
   @doc "Selects bounded nested media blocks without changing their source order. Nil retains the legacy media-type-only API."
-  @spec select_rules(String.t(), context() | nil | :unpositioned) ::
-          {:ok, String.t()} | {:error, :invalid_css}
-  def select_rules(css, context),
-    do: select_rules(css, context, CssAliasValidator.definitions(css, :media))
+  @spec select_rules(String.t(), context() | nil | :unpositioned, map() | nil, map() | nil) ::
+          {:ok, String.t()}
+  def select_rules(css, context, aliases \\ nil, namespaces \\ nil) do
+    aliases = aliases || CssAliasValidator.definitions(css, :media)
 
-  @doc false
-  @spec select_rules(String.t(), context() | nil | :unpositioned, map()) :: {:ok, String.t()}
-  def select_rules(css, context, aliases) do
-    with {:ok, selected, _records} <- select_media(css, context, 0, :active, 0, aliases),
+    with {:ok, selected, _records} <-
+           select_media(css, context, 0, :active, 0, aliases, namespaces),
          do: {:ok, selected}
   end
 
   @doc false
-  @spec project_source_rules(String.t(), context() | nil | :unpositioned) ::
-          {:ok, String.t(), [map()]} | {:error, :invalid_css}
-  def project_source_rules(css, context),
-    do: project_source_rules(css, context, CssAliasValidator.definitions(css, :media))
-
-  @doc false
-  @spec project_source_rules(String.t(), context() | nil | :unpositioned, map()) ::
+  @spec project_source_rules(
+          String.t(),
+          context() | nil | :unpositioned,
+          map() | nil,
+          map() | nil
+        ) ::
           {:ok, String.t(), [map()]}
-  def project_source_rules(css, context, aliases),
-    do: select_media(css, context, 0, :source, 0, aliases)
+  def project_source_rules(css, context, aliases \\ nil, namespaces \\ nil) do
+    aliases = aliases || CssAliasValidator.definitions(css, :media)
+    select_media(css, context, 0, :source, 0, aliases, namespaces)
+  end
 
-  defp select_media(css, context, depth, mode, origin, aliases) do
+  defp select_media(css, context, depth, mode, origin, aliases, namespaces) do
     alias NativeElixirPdfUtilities.Validators.CssSyntaxValidator
     HtmlValidator.check_render_resource(:max_depth, depth, :css)
     HtmlValidator.reserve_render_resource(:max_work, byte_size(css), :css)
+
+    # Projected callers supply the original bindings. Standalone stylesheet
+    # callers retain their source offsets and only need bindings for qualified names.
+    namespaces =
+      namespaces ||
+        if(String.contains?(css, "|"),
+          do: elem(CssSyntaxValidator.stylesheet_projection(css), 1),
+          else: %{}
+        )
 
     {output, records, cursor, _chain} =
       css
@@ -311,15 +319,30 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
                   "supports" ->
                     trimmed != "" and
-                      NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(query)
+                      NativeElixirPdfUtilities.Validators.CssSupportsValidator.matches?(
+                        query,
+                        namespaces
+                      )
 
                   "when" ->
-                    CssConditionalValueValidator.matches?(trimmed, context, aliases, %{})
+                    CssConditionalValueValidator.matches?(
+                      trimmed,
+                      context,
+                      aliases,
+                      %{},
+                      namespaces
+                    )
 
                   "else" ->
                     chain == false and
                       (trimmed == "" or
-                         CssConditionalValueValidator.matches?(trimmed, context, aliases, %{}))
+                         CssConditionalValueValidator.matches?(
+                           trimmed,
+                           context,
+                           aliases,
+                           %{},
+                           namespaces
+                         ))
                 end
 
             next_chain =
@@ -336,7 +359,8 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
                     depth + if(kind == "media", do: 1, else: 0),
                     mode,
                     origin + body_at,
-                    aliases
+                    aliases,
+                    namespaces
                   ),
                 else: {:ok, "", []}
 
@@ -370,7 +394,15 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               body_at = rule.offset + byte_size(rule.selectors) + 1
 
               {:ok, body, children} =
-                select_media(rule.declarations, context, depth, mode, origin + body_at, aliases)
+                select_media(
+                  rule.declarations,
+                  context,
+                  depth,
+                  mode,
+                  origin + body_at,
+                  aliases,
+                  namespaces
+                )
 
               {rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: ""), children, nil}
             else

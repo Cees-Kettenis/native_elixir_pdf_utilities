@@ -93,6 +93,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
             Map.merge(context, %{
               _css_definition_scope: Map.get(declaration, :definition_scope),
               _css_media_aliases: Map.get(declaration, :css_media_aliases, %{}),
+              _css_namespaces: Map.get(declaration, :css_namespaces, %{}),
               _css_locals: Map.get(declaration, :css_locals, %{})
             })
           else
@@ -343,7 +344,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
              CssFunctionValidator.body(
                function.body,
                Map.get(context, :_position_viewport),
-               function.media_aliases
+               function.media_aliases,
+               Map.get(function, :namespaces, %{})
              ),
            {result, locals} when is_binary(result) <- Map.pop(locals, "result") do
         locals =
@@ -363,6 +365,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
             _css_call_stack: [signature | stack],
             _css_definition_scope: Map.get(function, :shadow_scope_id),
             _css_media_aliases: function.media_aliases,
+            _css_namespaces: Map.get(function, :namespaces, %{}),
             _css_property: "result",
             _css_function_type: function.type,
             _cascade_inherited: %{_custom_properties: external},
@@ -417,7 +420,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssSubstitutionValidator do
                        test,
                        Map.get(context, :_position_viewport),
                        Map.get(context, :_css_media_aliases, %{}),
-                       properties
+                       properties,
+                       Map.get(context, :_css_namespaces, %{})
                      ),
                    do: {:halt, resolve_nested(branch, context, depth)},
                    else: {:cont, acc}

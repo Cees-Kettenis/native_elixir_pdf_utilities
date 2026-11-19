@@ -10,8 +10,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssConditionalValueValidator do
   }
 
   @doc "Evaluates the shared static condition grammar used by if(), @when and @else."
-  @spec matches?(String.t(), map() | nil | :unpositioned, map(), map()) :: boolean()
-  def matches?(source, media, aliases, properties) do
+  @spec matches?(String.t(), map() | nil | :unpositioned, map(), map(), map()) :: boolean()
+  def matches?(source, media, aliases, properties, namespaces \\ %{}) do
     MediaConditionValidator.truth(
       source,
       %{},
@@ -27,7 +27,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssConditionalValueValidator do
                 PrintMediaValidator.matches?("(" <> argument <> ")", media, aliases)
 
             "supports" ->
-              CssSupportsValidator.matches?("(" <> argument <> ")")
+              CssSupportsValidator.matches?("(" <> argument <> ")", namespaces)
 
             "style" ->
               style_query(argument, properties)

@@ -145,7 +145,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                 css |> strip_comments() |> CssSyntaxValidator.stylesheet_projection()
 
               with {:ok, active_css} <-
-                     PrintMediaValidator.select_rules(projected, media_context),
+                     PrintMediaValidator.select_rules(projected, media_context, nil, namespaces),
                    {:ok, font_faces} <- parse_font_faces(active_css, css),
                    {:ok, page_options} <- parse_page_rules(active_css, css),
                    {:ok, publishing_pages} <- CssPageValidator.rules(active_css),
@@ -231,7 +231,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
         with {:ok, projected, media} <- source_media_projection(projection, media_context),
              {:ok, selected_css} <-
-               PrintMediaValidator.select_rules(projection.text, media_context),
+               PrintMediaValidator.select_rules(
+                 projection.text,
+                 media_context,
+                 nil,
+                 projection.namespaces
+               ),
              {:ok, counter_styles} <-
                NativeElixirPdfUtilities.Validators.CssCounterStyleValidator.prepare(selected_css),
              {:ok, fonts} <- source_font_records(projected, projection, media),
@@ -431,7 +436,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
   defp source_media_projection(projection, media_context) do
     with {:ok, projected, media} <-
-           PrintMediaValidator.project_source_rules(projection.text, media_context) do
+           PrintMediaValidator.project_source_rules(
+             projection.text,
+             media_context,
+             nil,
+             projection.namespaces
+           ) do
       records =
         Enum.map(media, fn record ->
           record
@@ -1068,7 +1078,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
 
     metadata =
       source
-      |> Map.take([:layer, :scopes, :container_queries, :css_locals, :css_media_aliases])
+      |> Map.take([
+        :layer,
+        :scopes,
+        :container_queries,
+        :css_locals,
+        :css_media_aliases,
+        :css_namespaces
+      ])
       |> Map.reject(fn {_key, value} -> value == [] end)
 
     {:ok, Map.merge(%{selectors: selectors, declarations: declarations, order: order}, metadata)}

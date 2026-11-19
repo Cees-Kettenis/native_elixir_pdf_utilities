@@ -51,6 +51,10 @@ or page furniture. Unsupported widget transforms return diagnostics.
 | Generated content | `::before`, `::after`, `::marker`, replacement content, images, quotes, attribute fallbacks, nested counters and visual `@counter-style` definitions |
 | Printing | Print media queries, static `@supports`, named pages, margin boxes, cross-references, footnotes and page/column floats |
 
+`@supports selector(...)` tests one complex selector in the stylesheet's namespace context.
+It evaluates to false if any nested selector is unsupported or a pseudo-element
+lacks static paint support.
+
 Shadow styles support `:host()`, `:host-context()`, `::slotted()` and explicit
 `::part()` exports. Matching uses authored tree relationships across slot composition.
 Malformed declarations and invalid selector rules are discarded; unknown at-rules

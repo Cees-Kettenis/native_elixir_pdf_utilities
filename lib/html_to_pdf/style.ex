@@ -5998,7 +5998,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             }
             |> then(fn matched ->
               if is_map_key(rule, :css_locals) or is_map_key(rule, :css_media_aliases),
-                do: Map.merge(matched, Map.take(rule, [:css_locals, :css_media_aliases])),
+                do:
+                  Map.merge(
+                    matched,
+                    Map.take(rule, [:css_locals, :css_media_aliases, :css_namespaces])
+                  ),
                 else: matched
             end)
             |> then(fn matched ->
@@ -6244,6 +6248,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             :definition_scope,
             :css_locals,
             :css_media_aliases,
+            :css_namespaces,
             :encapsulation
           ])
         end)
