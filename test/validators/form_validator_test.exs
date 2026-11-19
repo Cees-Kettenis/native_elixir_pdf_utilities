@@ -128,11 +128,15 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
   end
 
   test "flatten follows each page's annotation order across nested fields and repeated widgets" do
-    pdf = overlapping_widgets_pdf()
-    {:ok, context} = Reader.read_validated(pdf)
-    {:ok, form} = FormValidator.inspect_document(context)
-
-    for selected <- [:all, ["group.blue", "group.red"], ["group.red"], ["group.blue"]] do
+    for {rect, selected} <- [
+          {[10, 10, 60, 60], :all},
+          {[10, 10, 60, 60], ["group.blue", "group.red"]},
+          {[60, 10, 85, 60], ["group.red"]},
+          {[60, 10, 85, 60], ["group.blue"]}
+        ] do
+      pdf = overlapping_widgets_pdf(rect)
+      {:ok, context} = Reader.read_validated(pdf)
+      {:ok, form} = FormValidator.inspect_document(context)
       fields = Enum.filter(form.fields, &(selected == :all or &1.name in selected))
       widgets = fields |> Enum.flat_map(& &1.widgets) |> Map.new(&{&1.ref, &1})
 
@@ -176,7 +180,102 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
     end
   end
 
-  defp overlapping_widgets_pdf() do
+  test "selective flattening rejects a visible layer reversal on either page" do
+    pdf = overlapping_widgets_pdf([10, 10, 60, 60])
+
+    for name <- ["group.red", "group.blue"],
+        {operation, result} <- [
+          {:flatten, Forms.flatten(pdf, fields: [name])},
+          {:fill, Forms.fill(pdf, %{name => "Filled"}, flatten: true)}
+        ] do
+      assert {:error, {:unsupported_form, diagnostic}} = result
+      assert diagnostic.module == Forms and diagnostic.operation == operation
+      assert diagnostic.reason == :unsupported_form and diagnostic.stage == :forms
+      assert diagnostic.source == if(name == "group.red", do: "page 1", else: "page 2")
+      assert diagnostic.message =~ "overlapping retained annotation"
+    end
+  end
+
+  @tag :tmp_dir
+  test "flattening a lower widget keeps the live upper field and its visible color", %{
+    tmp_dir: directory
+  } do
+    alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
+    source = overlapping_widgets_pdf([10, 10, 60, 60])
+    assert {:ok, context} = Reader.read_validated(source)
+    [_, second] = context.pages
+    {id, generation} = second.ref
+    assert {:ok, annotations} = Reader.resolve(context.document, second.dictionary["Annots"])
+
+    assert {:ok, source} =
+             IncrementalWriter.write(context, [
+               {id, generation,
+                {:value, Map.put(second.dictionary, "Annots", Enum.reverse(annotations))}}
+             ])
+
+    assert {:ok, partial} = Forms.flatten(source, fields: ["group.blue"])
+    assert {:ok, [%{name: "group.red"}]} = Forms.fields(partial)
+    assert {:ok, full} = Forms.flatten(source)
+    assert {:ok, []} = Forms.fields(full)
+
+    for pdf <- [source, partial, full] do
+      pages = PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: Path.join(directory, "paint"))
+      assert length(pages) == 2
+
+      for page <- pages do
+        assert binary_part(page.pixels, (70 * page.width + 30) * 3, 3) == <<255, 0, 0>>
+      end
+    end
+  end
+
+  test "retained non-widget annotations use resolved flags and normalized rectangles" do
+    disjoint = [60, 10, 85, 60]
+
+    for flags <- [0, 2, 32, {:name, "bad"}] do
+      pdf =
+        overlapping_widgets_pdf(disjoint, %{
+          "Rect" => [55, 55, 15, 15],
+          "F" => flags
+        })
+
+      case flags do
+        0 ->
+          assert {:error, {:unsupported_form, _}} = Forms.flatten(pdf, fields: ["group.red"])
+
+        {:name, "bad"} ->
+          assert {:error, {:invalid_form, %{stage: :forms}}} =
+                   Forms.flatten(pdf, fields: ["group.red"])
+
+        _ ->
+          assert {:ok, _} = Forms.flatten(pdf, fields: ["group.red"])
+      end
+    end
+  end
+
+  test "only links without a visible border or normal appearance can overlap a selected upper widget" do
+    base = %{"Subtype" => {:name, "Link"}, "Rect" => [20, 20, 40, 40], "Border" => [0, 0, 0]}
+
+    for {changes, safe?} <- [
+          {%{}, true},
+          {%{"BS" => %{"W" => 0.0}, "Border" => [0, 0, 2]}, true},
+          {%{"BS" => %{}}, false},
+          {%{"BS" => 42}, false},
+          {%{"AP" => %{"N" => %{}}}, false},
+          {%{"Border" => nil}, false}
+        ] do
+      pdf = overlapping_widgets_pdf([60, 10, 85, 60], Map.merge(base, changes))
+      result = Forms.flatten(pdf, fields: ["group.red"])
+
+      if safe? do
+        assert {:ok, output} = result
+        assert {:ok, [%{name: "group.blue"}]} = Forms.fields(output)
+      else
+        assert {:error, {:unsupported_form, %{source: "page 1"}}} = result
+      end
+    end
+  end
+
+  defp overlapping_widgets_pdf(blue_rect, note \\ %{}) do
     {:ok, pdf} = PdfWriter.render(List.duplicate(%{size: {100.0, 100.0}, boxes: []}, 2))
     {:ok, context} = Reader.read_validated(pdf)
     next = context.document.trailer["Size"]
@@ -211,7 +310,7 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
             "Type" => {:name, "Annot"},
             "Subtype" => {:name, "Widget"},
             "Parent" => ref.(parent),
-            "Rect" => [10, 10, 60, 60],
+            "Rect" => if(parent == 1, do: [10, 10, 60, 60], else: blue_rect),
             "F" => 4,
             "AP" => %{"N" => ref.(appearance)}
           }}}
@@ -248,12 +347,15 @@ defmodule NativeElixirPdfUtilities.FormValidatorTest do
           [
             {next + 9, 0,
              {:value,
-              %{
-                "Type" => {:name, "Annot"},
-                "Subtype" => {:name, "Text"},
-                "Rect" => [80, 80, 90, 90],
-                "Contents" => {:string, "Keep me"}
-              }}},
+              Map.merge(
+                %{
+                  "Type" => {:name, "Annot"},
+                  "Subtype" => {:name, "Text"},
+                  "Rect" => [80, 80, 90, 90],
+                  "Contents" => {:string, "Keep me"}
+                },
+                note
+              )}},
             {next + 10, 0, {:value, [ref.(4), ref.(6)]}},
             {catalog_id, catalog_gen,
              {:value, Map.put(context.catalog, "AcroForm", %{"Fields" => [ref.(0)]})}}

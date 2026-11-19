@@ -290,19 +290,124 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end)
     |> case do
       {:ok, placements} ->
-        ordered =
-          placements
-          |> Enum.group_by(& &1.widget.page)
-          |> Enum.sort_by(&elem(&1, 0))
-          |> Enum.flat_map(fn {_page, placements} ->
-            order = hd(placements).annots |> Enum.with_index() |> Map.new()
-            Enum.sort_by(placements, &Map.fetch!(order, &1.widget.ref))
-          end)
+        placements
+        |> Enum.group_by(& &1.widget.page)
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.reduce_while({:ok, []}, fn {page, placements}, {:ok, pages} ->
+          case order_flattened_widgets(context.document, placements) do
+            {:ok, ordered} ->
+              {:cont, {:ok, [ordered | pages]}}
 
-        {:ok, ordered}
+            {:error, {reason, diagnostic}} ->
+              {:halt,
+               {:error, {reason, Diagnostics.with_context(diagnostic, source: "page #{page}")}}}
+          end
+        end)
+        |> case do
+          {:ok, pages} -> {:ok, pages |> Enum.reverse() |> List.flatten()}
+          error -> error
+        end
 
       failure ->
         failure
+    end
+  end
+
+  # Page content paints below the entire live annotation array. Only a retained
+  # annotation preceding a selected, visible widget can reverse their order.
+  defp order_flattened_widgets(document, placements) do
+    selected = Map.new(placements, &{&1.widget.ref, &1})
+
+    hd(placements).annots
+    |> Enum.reverse()
+    |> Enum.reduce_while({[], [], 0}, fn ref, {ordered, painted, count} = state ->
+      case Map.fetch(selected, ref) do
+        {:ok, %{stream: nil} = placement} ->
+          {:cont, {[placement | ordered], painted, count}}
+
+        {:ok, placement} ->
+          {:cont, {[placement | ordered], [placement.widget.rect | painted], count + 1}}
+
+        :error when count == 0 ->
+          {:cont, state}
+
+        :error ->
+          case validate_retained_annotation(document, ref, painted, count) do
+            :ok -> {:cont, state}
+            error -> {:halt, error}
+          end
+      end
+    end)
+    |> case do
+      {ordered, _, _} -> {:ok, ordered}
+      error -> error
+    end
+  end
+
+  defp validate_retained_annotation(document, ref, painted, count) do
+    with {:ok, annotation} <- PdfValidator.dictionary(document, ref),
+         {:ok, flags} <- PdfValidator.optional_entry(document, annotation, "F", 0) do
+      cond do
+        not is_integer(flags) or flags < 0 ->
+          error(:invalid_form, "retained annotation F flags must be a non-negative integer")
+
+        hidden_flags(flags) ->
+          :ok
+
+        true ->
+          with {:ok, [x0, y0, x1, y1]} <-
+                 PdfValidator.number_array(document, annotation["Rect"], 4),
+               :ok <-
+                 NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+                   :max_work,
+                   count,
+                   :forms
+                 ) do
+            {left, bottom, right, top} = {min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)}
+
+            overlaps? =
+              Enum.any?(painted, fn [widget_left, widget_bottom, widget_right, widget_top] ->
+                max(left, widget_left) < min(right, widget_right) and
+                  max(bottom, widget_bottom) < min(top, widget_top)
+              end)
+
+            if overlaps? and not borderless_link?(document, annotation) do
+              error(
+                :unsupported_form,
+                "flattening would move a widget behind an overlapping retained annotation"
+              )
+            else
+              :ok
+            end
+          end
+      end
+    end
+  end
+
+  # A link with no normal appearance and zero border width has no resting paint.
+  # A BS dictionary takes precedence over the legacy Border array.
+  defp borderless_link?(document, annotation) do
+    with true <- PdfValidator.named?(document, annotation["Subtype"], "Link"),
+         {:ok, appearance} <- PdfValidator.optional_entry(document, annotation, "AP", %{}),
+         true <- is_map(appearance),
+         {:ok, nil} <- PdfValidator.optional_entry(document, appearance, "N", nil),
+         {:ok, style} <- PdfValidator.optional_entry(document, annotation, "BS", nil) do
+      width =
+        case style do
+          nil ->
+            with {:ok, [_, _, width | _]} <- PdfValidator.resolve(document, annotation["Border"]),
+                 do: PdfValidator.resolve(document, width)
+
+          style when is_map(style) ->
+            PdfValidator.optional_entry(document, style, "W", 1)
+
+          _ ->
+            :invalid
+        end
+
+      width == {:ok, 0}
+    else
+      _ -> false
     end
   end
 

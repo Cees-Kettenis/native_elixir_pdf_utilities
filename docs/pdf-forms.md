@@ -191,7 +191,7 @@ and field-tree entries. Other fields remain editable.
 
 | Detail | Behavior |
 | --- | --- |
-| Stacking | Uses page annotation order |
+| Stacking | Uses page annotation order. If a visible selected widget overlaps an earlier retained annotation that can paint, flattening returns `:unsupported_form`. Selecting both overlapping fields preserves their order. |
 | Geometry | Preserves appearance transforms, page rotation and resource names |
 | Hidden / NoView widgets | Removed without painting |
 | Print flag | Screen visibility wins: print-only widgets omitted; screen-only widgets become page content |
