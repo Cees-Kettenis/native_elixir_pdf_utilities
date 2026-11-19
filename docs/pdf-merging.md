@@ -34,6 +34,9 @@ metadata and form configuration.
 
 ## Errors and limits
 
+A source with an optional-content configuration (`/OCProperties`) returns
+`:unsupported_pdf_feature` because its layer visibility depends on the source catalog.
+
 An empty list returns `:empty_pdf_list`. Encrypted, malformed, or unsupported
 inputs return a [diagnostic](diagnostics.md). Reader and preparation failures
 retain their original reason, stage, and message, with `:operation` set to

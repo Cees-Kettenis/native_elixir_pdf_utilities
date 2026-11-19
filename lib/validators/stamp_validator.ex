@@ -96,6 +96,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_overlay(target_context, overlay_context, options) do
     with {:ok, options} <- normalize_options(options, @overlay_option_keys),
+         :ok <- PdfValidator.validate_artwork_import(overlay_context),
          {:ok, fit} <- fit_mode(Map.get(options, :fit, :exact)),
          {:ok, opacity} <- opacity(Map.get(options, :opacity, 1.0)),
          {:ok, target_pages} <-

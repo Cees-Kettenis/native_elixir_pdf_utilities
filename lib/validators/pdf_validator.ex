@@ -984,6 +984,29 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end)
   end
 
+  @doc "Checks that importing page artwork without its source catalog preserves layer visibility."
+  @spec validate_artwork_import(context()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_artwork_import(context) do
+    case context do
+      %{catalog: %{"OCProperties" => entry}} ->
+        with {:ok, properties} <- resolve(context.document, entry) do
+          if is_nil(properties) do
+            :ok
+          else
+            error(
+              :optional_content,
+              :unsupported_pdf_feature,
+              "page import cannot preserve layer visibility from the source catalog's OCProperties",
+              []
+            )
+          end
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
   @doc "Checks whether a direct or indirect value resolves to the expected PDF name."
   @spec named?(document(), value(), binary()) :: boolean()
   def named?(document, value, expected) do

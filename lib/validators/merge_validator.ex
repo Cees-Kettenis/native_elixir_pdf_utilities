@@ -118,7 +118,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
         object_by_ref = Map.new(objects, &{{&1.obj, &1.gen}, &1})
 
-        with :ok <- validate_serializable_objects(objects),
+        with :ok <- PdfValidator.validate_artwork_import(pdf_context),
+             :ok <- validate_serializable_objects(objects),
              {:ok, objects} <-
                normalize_named_link_destinations(
                  document,

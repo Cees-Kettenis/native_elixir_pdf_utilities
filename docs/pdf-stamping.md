@@ -86,7 +86,9 @@ equal counts. `:pages` selects the target pages and defaults to `:all`.
 
 `:opacity` defaults to `1.0` and fades the composed overlay, not the target.
 Only artwork and its resources are imported. Overlay annotations, bookmarks,
-metadata, and interactive forms are not copied.
+metadata, and interactive forms are not copied. If the overlay source specifies
+layer visibility through `/OCProperties`, the operation returns
+`:unsupported_pdf_feature`. A layered PDF can still serve as the target.
 
 ## Coordinates and page geometry
 

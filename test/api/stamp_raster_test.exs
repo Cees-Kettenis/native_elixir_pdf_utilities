@@ -16,6 +16,94 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
     {:ok, artifact_dir: directory}
   end
 
+  test "importing artwork diagnoses source layer settings and stamping preserves target visibility",
+       %{
+         artifact_dir: directory
+       } do
+    alias NativeElixirPdfUtilities.{Merge, Split, Transform}
+    alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, Reader}
+
+    page = %{size: {100.0, 100.0}, boxes: []}
+    assert {:ok, blank} = PdfWriter.render([page, page])
+    assert {:ok, context} = Reader.read_validated(blank)
+    {catalog_id, generation} = context.catalog_ref
+    [first, _second] = context.pages
+    {page_id, page_generation} = first.ref
+    layer_id = context.document.trailer["Size"]
+    layer = {:ref, {layer_id, 0}}
+    stream = layer_id + 1
+    config = layer_id + 2
+
+    dictionary =
+      Map.merge(first.dictionary, %{
+        "Contents" => {:ref, {stream, 0}},
+        "Resources" => %{"Properties" => %{"Swatch" => layer}}
+      })
+
+    paint = "1 0 0 rg 10 10 20 20 re f /OC /Swatch BDC 0 0 1 rg 40 40 20 20 re f EMC"
+
+    layers =
+      for {state, color} <- [{"OFF", <<255, 255, 255>>}, {"ON", <<0, 0, 255>>}] do
+        properties = %{"OCGs" => [layer], "D" => %{"BaseState" => {:name, state}}}
+        entry = if state == "OFF", do: properties, else: {:ref, {config, 0}}
+
+        assert {:ok, layered} =
+                 IncrementalWriter.write(context, [
+                   {catalog_id, generation,
+                    {:value, Map.put(context.catalog, "OCProperties", entry)}},
+                   {page_id, page_generation, {:value, dictionary}},
+                   {layer_id, 0,
+                    {:value, %{"Type" => {:name, "OCG"}, "Name" => {:string, "Swatch"}}}},
+                   {stream, 0, {:stream, %{}, paint}},
+                   {config, 0, {:value, properties}}
+                 ])
+
+        assert {:ok, stamped} = Stamp.overlay(layered, blank)
+        assert {:ok, reopened} = Reader.read_validated(stamped)
+        assert reopened.catalog["OCProperties"] == entry
+        assert {:ok, ^properties} = Reader.resolve(reopened.document, entry)
+
+        assert [%{width: 100, pixels: pixels}, _] =
+                 PdfVisualCompare.rasterize_pdf!(stamped, artifact_dir: directory)
+
+        assert binary_part(pixels, (80 * 100 + 20) * 3, 3) == <<255, 0, 0>>
+        assert binary_part(pixels, (50 * 100 + 50) * 3, 3) == color
+
+        for {module, operation, result} <- [
+              {Merge, :merge, Merge.merge([blank, layered])},
+              {Transform, :pick_pages, Transform.pick_pages(layered, [2, 1])},
+              {Transform, :rotate_pages, Transform.rotate_pages(layered, 90)},
+              {Transform, :delete_pages, Transform.delete_pages(layered, [1])},
+              {Split, :split_by_page, Split.by_page(layered)},
+              {Stamp, :overlay_pdf, Stamp.overlay(blank, layered)}
+            ] do
+          assert {:error, {:unsupported_pdf_feature, diagnostic}} = result
+          assert diagnostic.stage == :optional_content
+          assert diagnostic.reason == :unsupported_pdf_feature
+          assert diagnostic.module == module
+          assert diagnostic.operation == operation
+          assert diagnostic.message =~ "layer visibility"
+          if module == Merge, do: assert(diagnostic.source == "merge input 2")
+        end
+
+        layered
+      end
+
+    assert {:error, {:unsupported_pdf_feature, %{source: "merge input 1"}}} = Merge.merge(layers)
+
+    for entry <- [nil, {:ref, {config, 0}}] do
+      assert {:ok, ordinary} =
+               IncrementalWriter.write(context, [
+                 {catalog_id, generation,
+                  {:value, Map.put(context.catalog, "OCProperties", entry)}},
+                 {config, 0, {:value, nil}}
+               ])
+
+      assert {:ok, _} = Merge.merge([ordinary])
+      assert {:ok, _} = Stamp.overlay(blank, ordinary)
+    end
+  end
+
   test "overlay opacity applies to composed artwork even when source alpha is explicit", %{
     artifact_dir: directory
   } do
