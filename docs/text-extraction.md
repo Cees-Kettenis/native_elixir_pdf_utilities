@@ -20,7 +20,8 @@ For a binary already in memory, use `Text.extract(pdf)`.
 
 Both omit pages with no painted text. A document with no extractable painted
 text returns `:no_extractable_text`. Extraction fails if shown text cannot be
-decoded reliably; it does not return a partial result.
+decoded reliably. `max_output_bytes` bounds the complete UTF-8 result, including
+inserted spaces, line breaks and page separators.
 
 ## Replacement text
 

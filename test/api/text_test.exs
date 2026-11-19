@@ -1322,13 +1322,75 @@ defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
                }}} = Text.extract(pdf)
 
       assert message == "reconstructed layout whitespace exceeds the limit; page 1"
-      assert {:ok, _text} = Text.extract(pdf, layout: false)
+
+      if content == List.last(excessive_gaps) do
+        assert {:error, {:resource_limit_exceeded, _}} = Text.extract(pdf, layout: false)
+        Limits.install(%{original_limits | max_output_bytes: 7})
+        assert {:ok, "A B C D"} = Text.extract(pdf, layout: false)
+        Limits.install(%{original_limits | max_output_bytes: 5})
+      else
+        assert {:ok, "A B"} = Text.extract(pdf, layout: false)
+      end
     end
 
     within_limit =
       page_pdf("BT /F1 12 Tf 1 0 0 1 0 20 Tm (A) Tj 1 0 0 1 26 20 Tm (B) Tj ET")
 
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} = Text.extract(within_limit)
+    assert message =~ "including separators"
+    Limits.install(%{original_limits | max_output_bytes: 7})
     assert {:ok, "A     B"} = Text.extract(within_limit)
+  end
+
+  @tag :tmp_dir
+  test "the final text byte limit includes page, line and word separators", %{tmp_dir: directory} do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    replacement =
+      page_pdf(
+        "BT /F1 12 Tf 1 0 0 1 0 60 Tm /Span << /ActualText <FEFF00E9> >> BDC (x) Tj EMC 1 0 0 1 0 40 Tm (B) Tj 1 0 0 1 0 20 Tm (C) Tj ET"
+      )
+
+    for {source, layout, expected} <- [
+          {replacement, true, "é\nB\nC"},
+          {replacement, false, "é B C"},
+          {shared_content_pages_pdf(2, "BT /F1 12 Tf (ABC) Tj ET"), true, "ABC\fABC"},
+          {shared_content_pages_pdf(2, "BT /F1 12 Tf (ABC) Tj ET"), false, "ABC\nABC"},
+          {page_pdf("BT /F1 12 Tf 1 0 0 1 0 40 Tm (A) Tj 1 0 0 1 0 20 Tm (B) Tj ET"), true,
+           "A\nB"},
+          {page_pdf("BT /F1 12 Tf 1 0 0 1 0 40 Tm (A) Tj 1 0 0 1 0 20 Tm (B) Tj ET"), false,
+           "A B"}
+        ] do
+      path = Path.join(directory, "input.pdf")
+      File.write!(path, source)
+      limit = byte_size(expected)
+      Limits.install(%{original | max_output_bytes: limit})
+      assert {:ok, ^expected} = Text.extract(source, layout: layout)
+      assert {:ok, ^expected} = Text.extract_file(path, layout: layout)
+      Limits.install(%{original | max_output_bytes: limit - 1})
+
+      for {op, result} <- [
+            {:extract, Text.extract(source, layout: layout)},
+            {:extract_file, Text.extract_file(path, layout: layout)}
+          ] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+        assert diagnostic.stage == :limits and diagnostic.operation == op
+        assert diagnostic.message =~ "including separators"
+        if op == :extract_file, do: assert(diagnostic.source == path)
+      end
+    end
+  end
+
+  test "layout trims trailing text and projected spaces before allocating them" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    source = page_pdf("BT /F1 12 Tf (A) Tj 1 0 0 1 26 0 Tm (  ) Tj ET")
+    Limits.install(%{original | max_output_bytes: 5})
+    assert {:ok, "A"} = Text.extract(source)
+
+    blank = page_pdf("BT /F1 12 Tf (   ) Tj ET")
+    assert {:ok, ""} = Text.extract(blank)
   end
 
   test "rejects malformed xrefs, bad stream lengths, and encrypted PDFs" do
@@ -2445,9 +2507,24 @@ defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
 
     font = "<< /Type /Font /ToUnicode 7 0 R >>"
 
-    for content <- ["(AA) Tj", "[(A) 0 (A)] TJ", "(A) Tj (A) '", "(A) Tj 0 0 (A) \""] do
+    for {content, expected} <- [
+          {"(AA) Tj", "ffiffi"},
+          {"[(A) 0 (A)] TJ", "ffiffi"},
+          {"(A) Tj (A) '", "ffi ffi"},
+          {"(A) Tj 0 0 (A) \"", "ffi ffi"}
+        ] do
       source = page_pdf("BT /F1 10 Tf #{content} ET", font: font, cmap: cmap)
-      assert {:ok, _} = Text.extract(source, layout: false)
+      assert {:ok, _} = Text.extract_spans(source)
+
+      if byte_size(expected) > 6 do
+        assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+                 Text.extract(source, layout: false)
+
+        assert message =~ "including separators"
+        Limits.install(%{original | max_output_bytes: byte_size(expected)})
+      end
+
+      assert {:ok, ^expected} = Text.extract(source, layout: false)
       Limits.install(%{original | max_output_bytes: 5})
 
       for extract <- [&Text.extract/1, &Text.extract_spans/1] do

@@ -187,6 +187,19 @@ defmodule NativeElixirPdfUtilities.Validators.TextValidator do
     end
   end
 
+  @doc "Admits the complete extracted UTF-8 output through the indicated page."
+  @spec validate_output_size(non_neg_integer(), pos_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_output_size(bytes, page_number) do
+    if bytes <= Limits.get(:max_output_bytes),
+      do: :ok,
+      else:
+        resource_limit_error(
+          "extracted text including separators exceeds max_output_bytes",
+          page_number
+        )
+  end
+
   @doc false
   @spec validate_layout_whitespace([{pos_integer(), non_neg_integer()}]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}

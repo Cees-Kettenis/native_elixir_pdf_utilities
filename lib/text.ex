@@ -169,26 +169,7 @@ defmodule NativeElixirPdfUtilities.Text do
             error(:text_extraction, :no_extractable_text, "PDF contains no extractable text")
 
           pages ->
-            case request.options.layout do
-              true ->
-                projections = Enum.map(pages, &layout_page_projection/1)
-
-                case TextValidator.validate_layout_whitespace(
-                       Enum.map(projections, &{&1.page_number, &1.whitespace_bytes})
-                     ) do
-                  :ok ->
-                    {:ok, projections |> Enum.map(&render_layout_page/1) |> Enum.join("\f")}
-
-                  {:error, _} = projection_error ->
-                    text_error(projection_error, :extract)
-                end
-
-              false ->
-                {:ok,
-                 pages
-                 |> Enum.map(fn {_page_number, spans} -> plain_page(spans) end)
-                 |> Enum.join("\n")}
-            end
+            project_pages(pages, request.options.layout)
         end
       else
         {:error, _} = extraction_error -> text_error(extraction_error, :extract)
@@ -713,6 +694,40 @@ defmodule NativeElixirPdfUtilities.Text do
     end
   end
 
+  defp project_pages(pages, layout?) do
+    separator = if layout?, do: "\f", else: "\n"
+
+    pages
+    |> Enum.reduce_while({:ok, [], 0, 0}, fn {number, spans},
+                                             {:ok, rendered, bytes, whitespace} ->
+      {parts, page_bytes, spaces} =
+        if layout? do
+          layout_page_projection(spans)
+        else
+          parts = plain_page(spans)
+          {parts, IO.iodata_length(parts), 0}
+        end
+
+      total = bytes + page_bytes + if(rendered == [], do: 0, else: byte_size(separator))
+      whitespace = whitespace + spaces
+
+      with :ok <- TextValidator.validate_layout_whitespace([{number, whitespace}]),
+           :ok <- TextValidator.validate_output_size(total, number) do
+        page = if layout?, do: render_layout_page(parts), else: parts
+        {:cont, {:ok, [page | rendered], total, whitespace}}
+      else
+        error -> {:halt, text_error(error, :extract)}
+      end
+    end)
+    |> case do
+      {:ok, rendered, _, _} ->
+        {:ok, rendered |> Enum.reverse() |> Enum.intersperse(separator) |> IO.iodata_to_binary()}
+
+      error ->
+        error
+    end
+  end
+
   defp plain_page(spans) do
     spans
     |> Enum.map_reduce(nil, fn span, previous_source_index ->
@@ -723,10 +738,9 @@ defmodule NativeElixirPdfUtilities.Text do
       {[separator, span.text], span.source_index}
     end)
     |> elem(0)
-    |> IO.iodata_to_binary()
   end
 
-  defp layout_page_projection({page_number, spans}) do
+  defp layout_page_projection(spans) do
     min_x = spans |> Enum.map(& &1.x) |> Enum.min()
 
     lines =
@@ -735,22 +749,17 @@ defmodule NativeElixirPdfUtilities.Text do
       |> group_lines([])
       |> Enum.map(fn line -> line.spans |> Enum.sort_by(& &1.x) |> project_line(min_x) end)
 
-    %{
-      page_number: page_number,
-      lines: lines,
-      whitespace_bytes: Enum.sum(Enum.map(lines, & &1.whitespace_bytes))
-    }
+    # Each line separator contributes one UTF-8 byte to the returned page.
+    bytes = Enum.reduce(lines, length(lines) - 1, &(&1.bytes + &2))
+    {lines, bytes, Enum.sum(Enum.map(lines, & &1.whitespace_bytes))}
   end
 
-  defp render_layout_page(projection) do
-    projection.lines
+  defp render_layout_page(lines) do
+    lines
     |> Enum.map(fn line ->
-      line.parts
-      |> Enum.map(fn {spaces, text} -> [String.duplicate(" ", spaces), text] end)
-      |> IO.iodata_to_binary()
-      |> String.trim_trailing()
+      Enum.map(line.parts, fn {spaces, text} -> [String.duplicate(" ", spaces), text] end)
     end)
-    |> Enum.join("\n")
+    |> Enum.intersperse("\n")
   end
 
   defp visual_spans(spans) do
@@ -803,7 +812,23 @@ defmodule NativeElixirPdfUtilities.Text do
         {[{spaces, span.text} | parts], max(span.end_x, span.x), false, whitespace_bytes + spaces}
       end)
 
-    %{parts: Enum.reverse(parts), whitespace_bytes: whitespace_bytes}
+    parts = trim_line_end(parts)
+    bytes = Enum.reduce(parts, 0, fn {spaces, text}, sum -> sum + spaces + byte_size(text) end)
+    %{parts: parts, bytes: bytes, whitespace_bytes: whitespace_bytes}
+  end
+
+  # Trim the reversed parts before expanding any coordinate-derived spaces.
+  defp trim_line_end(parts) do
+    case parts do
+      [] ->
+        []
+
+      [{spaces, text} | rest] ->
+        case String.trim_trailing(text) do
+          "" -> trim_line_end(rest)
+          trimmed -> Enum.reverse(rest, [{spaces, trimmed}])
+        end
+    end
   end
 
   defp text_state(page, actual_text) do

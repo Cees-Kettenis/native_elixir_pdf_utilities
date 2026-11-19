@@ -71,4 +71,4 @@ Text extraction bounds aggregate decoded UTF-8 operands with `max_output_bytes` 
 expanded ToUnicode mapping keys and UTF-8 destinations with
 `max_decoded_bytes`. Both are configurable through `Limits`. Mapping
 allocations count overwritten entries; cached font aliases reuse their mappings.
-Output separators and reconstructed layout whitespace have separate bounds.
+The final UTF-8 string, including reconstructed spaces and separators, must also fit `max_output_bytes`.
