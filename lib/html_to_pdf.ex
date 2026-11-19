@@ -270,39 +270,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   @doc """
   Reads an HTML file, renders it to PDF, and writes the PDF to `output_path`.
 
-  Returns `:ok` after writing the output file or `{:error, {reason, diagnostic}}` if reading,
-  rendering, or writing fails. Rendering options are the same as `render/2`.
+  The file is staged on the destination filesystem. A top-level call authorizes
+  a single rename after its final deadline and memory checks. A
+  failed render, timeout, or write leaves the previous file in place. Once
+  authorized, the rename can complete even if the caller exits. Concurrent
+  successful writes leave the last installed PDF at the path.
+
+  The destination must be a regular file or a new path in a writable directory.
+  Output symlinks are followed. A replacement keeps the ordinary permission
+  bits. Ownership and extended permissions follow filesystem creation rules.
+  Other hard links keep the previous file.
+
+  Returns `:ok` after installation or `{:error, {reason, diagnostic}}` on failure.
+  Rendering options are the same as `render/2`.
   """
   @spec render_file(String.t(), String.t(), [render_option()]) ::
           :ok | {:error, detailed_error_reason()}
   def render_file(input_path, output_path, opts \\ []) do
-    NativeElixirPdfUtilities.Operation.run(__MODULE__, :render_file, fn ->
-      case HtmlValidator.validate_paths(input_path, output_path) do
-        {:ok, %{input_path: input_path, output_path: output_path}} ->
-          case NativeElixirPdfUtilities.FileReader.read(
-                 input_path,
-                 NativeElixirPdfUtilities.Limits.get(:max_input_bytes)
-               ) do
-            {:ok, html} ->
-              case render(html, opts) do
-                {:ok, pdf_binary} ->
-                  case File.write(output_path, pdf_binary) do
-                    :ok ->
-                      :ok
-
-                    {:error, reason} ->
-                      file_error(reason, :write, output_path)
-                  end
-
-                {:error, {reason, detail}} ->
-                  {:error,
-                   {reason,
-                    Diagnostics.with_context(detail,
-                      operation: :render_file,
-                      module: __MODULE__,
-                      source: input_path
-                    )}}
-              end
+    result =
+      NativeElixirPdfUtilities.AtomicFile.replace(output_path, fn prepare_output ->
+        NativeElixirPdfUtilities.Operation.run(__MODULE__, :render_file, fn ->
+          with {:ok, _paths} <- HtmlValidator.validate_paths(input_path, output_path),
+               {:ok, html} <-
+                 NativeElixirPdfUtilities.FileReader.read(
+                   input_path,
+                   NativeElixirPdfUtilities.Limits.get(:max_input_bytes)
+                 ),
+               {:ok, bytes} <- render(html, opts) do
+            with {:ok, staged} <- prepare_output.() do
+              File.write(staged, bytes, [:exclusive])
+            end
+          else
+            {:error, {:invalid_path, diagnostic}} ->
+              {:error,
+               {:invalid_path,
+                Diagnostics.with_context(diagnostic, operation: :render_file, module: __MODULE__)}}
 
             {:error, {reason, diagnostic}} ->
               {:error,
@@ -316,13 +318,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
             {:error, reason} ->
               file_error(reason, :read, input_path)
           end
+        end)
+      end)
 
-        {:error, {reason, diagnostic}} ->
-          {:error,
-           {reason,
-            Diagnostics.with_context(diagnostic, operation: :render_file, module: __MODULE__)}}
-      end
-    end)
+    case result do
+      {:error, reason} when is_atom(reason) -> file_error(reason, :write, output_path)
+      result -> result
+    end
   end
 
   defp do_render(html, opts) do

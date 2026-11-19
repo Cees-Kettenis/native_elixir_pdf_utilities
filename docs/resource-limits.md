@@ -41,6 +41,10 @@ operations. Form-value helpers check their own observed working set against the
 same memory setting. Sequential helper peaks are not added after their workers
 have exited.
 
+`HtmlToPdf.render_file/3` stages the PDF within the operation allowance.
+After a successful top-level operation, a filesystem rename installs the file.
+A timeout before installation leaves the previous destination intact.
+
 Observed excess returns `:resource_limit_exceeded`. Unexpected worker exits,
 including GC heap kills, return `:operation_worker_failed`. Sampling can miss
 peaks and excludes native allocations, persistent caches and helper processes.
