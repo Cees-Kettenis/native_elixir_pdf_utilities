@@ -852,14 +852,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
       :drawing_group_start ->
         transform =
-          if Map.get(box, :role) in [:frameset_viewport, :iframe_viewport] do
+          if Map.get(box, :role) in [:frameset_viewport, :iframe_viewport, :page_writing_mode] do
             {a, b, c, d, x, y} = box.transform
             # Original Chromium clips use .23999999 * 3.125 rather than an
             # exact .75 scale. Keep only paint below those half-pixel ties.
-            # Iframe client clipping needs the vertical tie adjustment too.
+            # Iframe clips and page writing canvases also use the vertical adjustment.
             # Layout and transported annotation geometry retain their real bounds.
             {a, b, c, d, x - @raster_boundary_bias,
-             if(Map.get(box, :role) == :iframe_viewport, do: y + @raster_boundary_bias, else: y)}
+             if(Map.get(box, :role) == :frameset_viewport, do: y, else: y + @raster_boundary_bias)}
           else
             box.transform
           end

@@ -2261,6 +2261,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   # These fixtures have dedicated browser cases in this module or sibling test modules.
   # Keep the inventory explicit so an unassigned new fixture still fails this check.
   @dedicated_fixtures ~w(
+    vertical_page_break.html
     css_advanced_print_paint.html
     publishing_pages.html
     publishing_running.html

@@ -7,6 +7,84 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.WritingModeTest do
   alias NativeElixirPdfUtilities.TestSupport.OpenTypeFixture
   alias NativeElixirPdfUtilities.Validators.{CssWritingModeValidator, WriterValidator}
 
+  test "forced breaks place vertical document text and links on the requested pages" do
+    alias NativeElixirPdfUtilities.Pdf.Reader
+
+    for mode <- ["vertical-rl", "vertical-lr"],
+        {breaks, furniture} <- [
+          {"p + p { break-before: page }", ""},
+          {"p:first-child { break-after: page }", "@page { @top-center { content: 'Header' } }"}
+        ] do
+      html = """
+      <!doctype html><html style="writing-mode:#{mode}"><head><style>
+      @page {size:240pt 180pt; margin:16pt} body,p {margin:0; font:10pt/12pt DejaVu Sans}
+      #{breaks} #{furniture}
+      </style></head><body><p><a href="https://example.org/first">First</a></p>
+      <p><a href="https://example.org/next">Next</a></p></body></html>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, %{pages: [first, next]}} = Text.extract_spans(pdf)
+      assert {:ok, context} = Reader.read_validated(pdf)
+
+      for {spans, page, word} <-
+            Enum.zip([[first.spans, next.spans], context.pages, ["First", "Next"]]) do
+        expected = if furniture == "", do: word, else: word <> "Header"
+        assert Enum.map_join(spans, & &1.text) == expected
+        start = hd(spans)
+        assert_in_delta start.x, if(mode == "vertical-rl", do: 215.25, else: 24.75), 0.01
+        assert_in_delta start.y, 15.75, 0.01
+        assert_in_delta start.x, start.end_x, 0.01
+        assert start.end_y > start.y
+
+        assert {:ok, annotations} = Reader.resolve(context.document, page.dictionary["Annots"])
+        assert annotations != []
+
+        for ref <- annotations do
+          assert {:ok, annotation} = Reader.resolve(context.document, ref)
+
+          assert annotation["A"]["URI"] ==
+                   {:string, "https://example.org/" <> String.downcase(word)}
+
+          [left, bottom, right, top] = annotation["Rect"]
+          assert left - 0.01 <= start.x and start.x <= right + 0.01
+          assert bottom < 180 - start.y and 180 - start.y <= top + 0.01
+        end
+      end
+    end
+  end
+
+  test "outer and adjacent forced breaks preserve document page boundaries" do
+    for {mode, content, expected} <- [
+          {"vertical-rl", "<p style='break-before:page;break-after:page'>Only</p>", ["Only"]},
+          {"vertical-lr",
+           "<p style='break-after:page'>One</p><p style='break-before:page'>Two</p>",
+           ["One", "Two"]},
+          {"horizontal-tb",
+           "<p>First</p><div style='writing-mode:vertical-rl;break-before:page;break-after:page'><p>Inner</p></div><p>Last</p>",
+           ["First", "Inner", "Last"]}
+        ] do
+      html = "<!doctype html><html style='writing-mode:#{mode}'><body>#{content}</body></html>"
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{pages: pages}} = Text.extract_spans(pdf)
+      assert Enum.map(pages, fn page -> Enum.map_join(page.spans, & &1.text) end) == expected
+    end
+  end
+
+  test "paragraphs in a perpendicular or atomic flow stay together across internal break requests" do
+    for display <- ["block", "inline-block"] do
+      html = """
+      <style>div {display:#{display};writing-mode:vertical-rl;height:100pt}
+      p {margin:0} p + p {break-before:page}</style><div><p>First</p><p>Next</p></div>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+      assert Enum.map_join(spans, & &1.text) == "FirstNext"
+      assert hd(spans).x > List.last(spans).x
+    end
+  end
+
   test "orientation and combination grammar shares computed-style and paint admission" do
     assert "text-combine-upright" in CssWritingModeValidator.properties()
 

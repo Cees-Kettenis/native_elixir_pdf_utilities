@@ -1167,7 +1167,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
             if(
               Map.get(box, :viewport_paint_role, Map.get(box, :role)) in [
                 :frameset_viewport,
-                :iframe_viewport
+                :iframe_viewport,
+                :page_writing_mode
               ],
               do: Map.put(start, :role, Map.get(box, :viewport_paint_role, Map.get(box, :role))),
               else: start
@@ -1665,9 +1666,14 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                 "overflow clipping must preserve the containing coordinate plane"
               )
 
-            Map.get(box, :viewport_paint_role) not in [nil, :iframe_viewport, :frameset_viewport] ->
+            Map.get(box, :viewport_paint_role) not in [
+              nil,
+              :iframe_viewport,
+              :frameset_viewport,
+              :page_writing_mode
+            ] ->
               drawing_group_error(
-                "drawing_group viewport paint role must identify an existing iframe or frameset viewport"
+                "drawing_group viewport paint role must identify an iframe, frameset or document writing viewport"
               )
 
             not Enum.all?([width, height, a, b, c, d, e, f, baseline], &bounded_number?/1) ->

@@ -6,6 +6,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssPaginationBrowserParityTest do
   @moduletag :browser_parity
   @moduletag :css_affine_pagination
   @fixtures_dir Paths.fixture("html_to_pdf/browser_parity")
+
+  test "vertical document fragments start at the right edge of successive pages" do
+    stats =
+      PdfVisualCompare.assert_browser_match!(Path.join(@fixtures_dir, "vertical_page_break.html"),
+        artifact_dir: Paths.project("tmp/browser_parity/vertical_page_break"),
+        max_changed_ratio: 0.001,
+        max_average_delta: 0.001
+      )
+
+    assert stats.page_count == 2
+  end
+
   for name <-
         ~w(html_css_affine_positioned_tracks) do
     @fixture name

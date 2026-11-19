@@ -556,6 +556,9 @@ line would contain a single word. Alignment and percentage indents continue to
 use the containing block's full width.
 
 `writing-mode` supports horizontal, vertical and sideways directions.
+Forced page breaks between paragraphs apply in a vertical document. In a
+horizontal document, paragraphs inside a vertical block stay on the same page.
+Put a break on the block itself to move it to another page.
 `text-orientation` selects mixed, upright or sideways glyphs. Use
 `text-combine-upright: all` or `digits 2`, `digits 3`, `digits 4` to fit selected
 text into one vertical em box. Font `vert` and `vrt2` features supply vertical

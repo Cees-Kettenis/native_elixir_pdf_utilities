@@ -102,41 +102,116 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.WritingModeLayout do
         Map.get(margin, :left, 0) + Map.get(margin, :right, 0)
 
     with {:ok, boxes, bottom} <- callback.(logical, 0.0, 0.0, inline) do
-      block_size = max(-bottom, 0.0)
-      boxes = DrawingGeometry.translate_boxes(boxes, 0, block_size)
-      {pa, pb, pc, pd} = basis(parent)
-      {ca, cb, cc, cd} = basis(mode)
-      # The writing bases are orthogonal, so their inverses are transposes.
-      {a, b, c, d} = {pa * ca + pb * cb, pc * ca + pd * cb, pa * cc + pb * cd, pc * cc + pd * cd}
-      xs = [0, a * inline, c * block_size, a * inline + c * block_size]
-      ys = [0, b * inline, d * block_size, b * inline + d * block_size]
-      width = Enum.max(xs) - Enum.min(xs)
-      height = Enum.max(ys) - Enum.min(ys)
-      e = x - Enum.min(xs)
-      f = top - Enum.max(ys)
-      paint_height = Float.ceil(block_size / 0.75) * 0.75
+      document_flow? = Map.get(source, :tag) in ["html", "body"] and parent == :horizontal_tb
+      right_edge = if document_flow? and mode in [:vertical_rl, :sideways_rl], do: x + available
 
-      group = %{
-        type: HtmlValidator.reserve_layout_box(:drawing_group),
-        role: :writing_mode,
+      plane = %{
+        parent: parent,
+        mode: mode,
         x: x,
-        y: top - height,
-        width: inline,
-        height: paint_height,
-        transform: {a, b, c, d, e, f},
-        boxes: boxes,
-        writing_extent: %{width: width, height: height}
+        right_edge: right_edge,
+        inline: inline,
+        style: block.style,
+        document_flow?: document_flow?
       }
 
-      boxes =
-        NativeElixirPdfUtilities.Validators.CssTransformValidator.mark_border_box(
-          block.style,
-          [group],
-          %{x: x, top: top, width: width, height: height}
-        )
+      group = fn children, start_y, end_y, physical_top ->
+        paint_fragment(plane, children, start_y, end_y, physical_top)
+      end
 
-      {:ok, boxes, top - height}
+      cond do
+        not Enum.any?(boxes, &(&1.type == :page_break)) ->
+          {paint, next_top} = group.(boxes, 0.0, bottom, top)
+          {:ok, paint, next_top}
+
+        document_flow? ->
+          fragments(boxes, 0.0, bottom, top, x, group, [])
+
+        true ->
+          # A perpendicular block flow has no page break point between its paragraphs.
+          # The block's own breaks still participate in its parent's pagination.
+          {before, boxes} = Enum.split_while(boxes, &(&1.type == :page_break))
+
+          {after_breaks, content} =
+            boxes |> Enum.reverse() |> Enum.split_while(&(&1.type == :page_break))
+
+          children = content |> Enum.reject(&(&1.type == :page_break)) |> Enum.reverse()
+          {paint, next_top} = group.(children, 0.0, bottom, top)
+
+          if source.style.display in [
+               :inline,
+               :inline_block,
+               :inline_grid,
+               :inline_flex,
+               :inline_table
+             ] do
+            {:ok, paint, next_top}
+          else
+            before = Enum.map(before, &%{&1 | x: x, y: top})
+            after_breaks = Enum.reverse(after_breaks) |> Enum.map(&%{&1 | x: x, y: next_top})
+            {:ok, before ++ paint ++ after_breaks, next_top}
+          end
+      end
     end
+  end
+
+  defp fragments(boxes, start_y, bottom, top, x, group, acc) do
+    case Enum.split_while(boxes, &(&1.type != :page_break)) do
+      {content, [marker | rest]} ->
+        {paint, next_top} =
+          if content == [], do: {[], top}, else: group.(content, start_y, marker.y, top)
+
+        acc = [%{marker | x: x, y: next_top} | Enum.reverse(paint, acc)]
+        fragments(rest, marker.y, bottom, next_top, x, group, acc)
+
+      {content, []} ->
+        {paint, next_top} =
+          if content == [] and acc != [],
+            do: {[], top},
+            else: group.(content, start_y, bottom, top)
+
+        {:ok, Enum.reverse(acc, paint), next_top}
+    end
+  end
+
+  defp paint_fragment(plane, children, start_y, end_y, top) do
+    block_size = max(start_y - end_y, 0.0)
+    boxes = DrawingGeometry.translate_boxes(children, 0, -end_y)
+    {pa, pb, pc, pd} = basis(plane.parent)
+    {ca, cb, cc, cd} = basis(plane.mode)
+    inline = plane.inline
+    # The writing bases are orthogonal, so their inverses are transposes.
+    {a, b, c, d} = {pa * ca + pb * cb, pc * ca + pd * cb, pa * cc + pb * cd, pc * cc + pd * cd}
+    xs = [0, a * inline, c * block_size, a * inline + c * block_size]
+    ys = [0, b * inline, d * block_size, b * inline + d * block_size]
+    width = Enum.max(xs) - Enum.min(xs)
+    height = Enum.max(ys) - Enum.min(ys)
+    x = if plane.right_edge, do: plane.right_edge - width, else: plane.x
+    e = x - Enum.min(xs)
+    f = top - Enum.max(ys)
+    paint_height = Float.ceil(block_size / 0.75) * 0.75
+
+    group = %{
+      type: HtmlValidator.reserve_layout_box(:drawing_group),
+      role: :writing_mode,
+      viewport_paint_role: if(plane.document_flow?, do: :page_writing_mode),
+      x: x,
+      y: top - height,
+      width: inline,
+      height: paint_height,
+      transform: {a, b, c, d, e, f},
+      boxes: boxes,
+      writing_extent: %{width: width, height: height}
+    }
+
+    boxes =
+      NativeElixirPdfUtilities.Validators.CssTransformValidator.mark_border_box(
+        plane.style,
+        [group],
+        %{x: x, top: top, width: width, height: height}
+      )
+
+    {boxes, top - height}
   end
 
   defp basis(mode) do
