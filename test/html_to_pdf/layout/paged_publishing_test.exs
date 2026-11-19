@@ -88,6 +88,112 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedPublishingTest do
     assert text =~ "Blank"
   end
 
+  test "physical and relative page breaks use the same spread as the printed side labels" do
+    for {dir, expected} <- [
+          {"ltr", [left: "L", right: "R", recto: "R", verso: "L"]},
+          {"rtl", [left: "L", right: "R", recto: "L", verso: "R"]}
+        ],
+        {value, side} <- expected,
+        {property, selector} <- [{"before", ".next"}, {"after", ".start"}] do
+      html = """
+      <html dir="#{dir}"><head><style>
+      @page{size:160pt 140pt;margin:20pt}
+      @page:left{@top-center{content:'L'}}@page:right{@top-center{content:'R'}}
+      @page:blank{@bottom-center{content:'Blank'}}
+      p{direction:ltr;margin:0}#{selector}{break-#{property}:#{value}}
+      </style></head><body><p class=start>Start</p><p class=next>Next</p></body></html>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{pages: pages}} = Text.extract_spans(pdf)
+      labels = Enum.map(pages, fn page -> Enum.map_join(page.spans, & &1.text) end)
+      first = if dir == "ltr", do: "R", else: "L"
+      assert length(labels) == if(first == side, do: 3, else: 2)
+      assert hd(labels) =~ first
+      assert hd(labels) =~ "Start"
+      assert List.last(labels) =~ side
+      assert List.last(labels) =~ "Next"
+      if length(labels) == 3, do: assert(Enum.at(labels, 1) =~ "Blank")
+    end
+  end
+
+  test "a leading forced break chooses the first printed side across named page geometry" do
+    for selector <- ["html", "body", "section p"] do
+      html = """
+      <html><head><style>
+      @page{size:160pt 140pt;margin:20pt;@bottom-center{content:counter(page) '/' counter(pages)}}
+      @page:left{@top-left{content:'Left'}}@page:right{@top-left{content:'Right'}}
+      @page:first{@top-right{content:'First'}}@page:blank{@top-right{content:'Blank'}}
+      @page wide:right{size:220pt 140pt}#{selector}{break-before:left}
+      .next{page:wide;break-before:recto}
+      </style></head><body><section><p>Start</p></section><p class=next>Next</p></body></html>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert pdf =~ "/MediaBox [0 0 220 140]"
+      assert {:ok, %{pages: [first, second]}} = Text.extract_spans(pdf)
+
+      for marker <- ~w(Start Left First 1/2),
+          do: assert(Enum.map_join(first.spans, & &1.text) =~ marker)
+
+      for marker <- ~w(Next Right 2/2),
+          do: assert(Enum.map_join(second.spans, & &1.text) =~ marker)
+    end
+  end
+
+  test "vertical block flow defines recto independently of inline direction" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
+
+    for {mode, recto, verso} <- [
+          {:vertical_rl, :left, :right},
+          {:vertical_lr, :right, :left},
+          {:sideways_rl, :left, :right},
+          {:sideways_lr, :right, :left}
+        ],
+        direction <- [:ltr, :rtl],
+        {initial, first} <- [left: :left, right: :right, recto: recto, verso: verso, page: verso] do
+      assert %{recto: ^recto, first: ^first} =
+               PageGeometry.prepare_spread(%{
+                 children: [],
+                 document_recto: PageGeometry.recto(%{writing_mode: mode, direction: direction}),
+                 document_break_before: initial
+               }).page_spread
+    end
+
+    for {css, label} <- [{"vertical-rl", "Left"}, {"vertical-lr", "Right"}] do
+      html = """
+      <style>@page{size:160pt 140pt;margin:20pt}
+      @page:left{@top-center{content:'Left'}}@page:right{@top-center{content:'Right'}}
+      body{writing-mode:#{css}}</style><body><p>A</p></body>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{pages: [page]}} = Text.extract_spans(pdf)
+      assert Enum.map_join(page.spans, & &1.text) =~ label
+    end
+  end
+
+  test "leading in-flow content determines the spread without page furniture" do
+    html = """
+    <html dir="rtl"><body>
+    <div style="position:absolute">Positioned</div><div style="float:left">Float</div>
+    <section><p style="break-before:right">Start</p><p style="break-before:recto">Next</p></section>
+    </body></html>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, %{pages: [first, second]}} = Text.extract_spans(pdf)
+    assert Enum.map_join(first.spans, & &1.text) =~ "Start"
+    assert Enum.map_join(second.spans, & &1.text) =~ "Next"
+  end
+
+  test "pagination diagnoses malformed page-side metadata on supplied layout trees" do
+    layout = %{type: :layout, boxes: [], page_size: {100, 100}, page_spread: %{recto: :left}}
+
+    assert {:error, {:invalid_layout, %{source: :page_spread, operation: :paginate}}} =
+             NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(layout)
+  end
+
   test "a forced blank sheet uses its own geometry during mixed-width pagination" do
     html = """
     <style>@page{size:220pt 160pt;margin:20pt}

@@ -6325,6 +6325,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           check_render_resource(:max_entries, length(boxes), :pagination)
 
           with true <- Keyword.keyword?(opts),
+               :ok <- validate_page_spread(layout_tree),
                {:ok, margins} <- margins_result,
                :ok <- validate_page_size(page_size),
                :ok <- validate_margins(margins),
@@ -6366,6 +6367,27 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           invalid_pagination()
       end
     end)
+  end
+
+  defp validate_page_spread(tree) do
+    case Map.fetch(tree, :page_spread) do
+      :error ->
+        :ok
+
+      {:ok, %{recto: recto, first: first}}
+      when recto in [:left, :right] and first in [:left, :right] ->
+        :ok
+
+      _ ->
+        Diagnostics.error(
+          :pagination,
+          :invalid_layout,
+          "page spread requires left or right recto and first sides",
+          module: __MODULE__,
+          operation: :paginate,
+          source: :page_spread
+        )
+    end
   end
 
   defp validate_pagination_clips(boxes) do

@@ -595,6 +595,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                                  fn -> false end
                                ),
                              publishing_base_style: root_style,
+                             document_recto:
+                               NativeElixirPdfUtilities.HtmlToPdf.PageGeometry.recto(
+                                 body_style || root_canvas_style || root_style
+                               ),
+                             document_break_before:
+                               Map.get(root_canvas_style || %{}, :break_before, :auto),
                              css_page_rules:
                                Enum.flat_map(stylesheet_entries, fn entry ->
                                  if Map.get(entry, :shadow_scope_id) != nil do

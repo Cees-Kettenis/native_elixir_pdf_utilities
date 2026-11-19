@@ -366,13 +366,19 @@ defmodule NativeElixirPdfUtilities.Validators.CssPageValidator do
   end
 
   @doc "Cascades matching page rules by page specificity, importance and source order."
-  @spec select([map()], String.t(), pos_integer(), boolean(), :ltr | :rtl) :: map()
-  @spec select([map()], String.t(), pos_integer(), boolean(), :ltr | :rtl, map()) :: map()
+  @spec select([map()], String.t(), pos_integer(), boolean(), :ltr | :rtl | PageGeometry.side()) ::
+          map()
+  @spec select(
+          [map()],
+          String.t(),
+          pos_integer(),
+          boolean(),
+          :ltr | :rtl | PageGeometry.side(),
+          map()
+        ) :: map()
   def select(rules, name, number, blank, direction \\ :ltr, group_positions \\ %{}) do
-    side =
-      if rem(number, 2) == 1,
-        do: if(direction == :rtl, do: "left", else: "right"),
-        else: if(direction == :rtl, do: "right", else: "left")
+    first = if direction in [:rtl, :left], do: :left, else: :right
+    side = Atom.to_string(PageGeometry.page_side(number, first))
 
     {page, boxes} =
       rules

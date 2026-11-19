@@ -12,6 +12,97 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageGeometry do
   # Fixed CSS length invariant: one pixel is 1/96 inch, or 0.75 PDF points.
   @css_pixel_points 0.75
 
+  @type side :: :left | :right
+  @type spread :: %{recto: side(), first: side()}
+
+  @doc "Determines the recto side from the principal writing mode."
+  @spec recto(map()) :: side()
+  def recto(style) do
+    case Map.get(style, :writing_mode) do
+      mode when mode in [:vertical_rl, :sideways_rl] -> :left
+      mode when mode in [:vertical_lr, :sideways_lr] -> :right
+      _ -> if Map.get(style, :direction) == :rtl, do: :left, else: :right
+    end
+  end
+
+  @doc "Propagates the first in-flow page break to the document before splitting it into named pages."
+  @spec prepare_spread(map()) :: map()
+  def prepare_spread(tree) do
+    if Map.has_key?(tree, :page_spread) do
+      tree
+    else
+      recto = Map.get(tree, :document_recto, :right)
+
+      {value, children} =
+        leading_break(tree.children, Map.get(tree, :document_break_before, :auto))
+
+      first =
+        case value do
+          :page -> opposite(recto)
+          value when value in [:left, :right, :recto, :verso] -> break_side(value, recto)
+          _ -> recto
+        end
+
+      Map.merge(tree, %{children: children, page_spread: %{recto: recto, first: first}})
+    end
+  end
+
+  defp leading_break(nodes, inherited) do
+    {skipped, flow} =
+      Enum.split_while(nodes, fn
+        %{style: %{position: position}} when position in [:absolute, :fixed] ->
+          true
+
+        %{style: %{float: float}} when float in [:left, :right, :inline_start, :inline_end] ->
+          true
+
+        %{type: :text, text: text, style: style} ->
+          Map.get(style, :white_space, :normal) in [:normal, :nowrap] and
+            HtmlValidator.trim_ascii_whitespace(text) == ""
+
+        _ ->
+          false
+      end)
+
+    case flow do
+      [%{type: :element, style: style, children: children} = node | rest] ->
+        value = Map.get(style, :break_before)
+        forced = value in [:left, :right, :recto, :verso, :page]
+        {break_value, children} = leading_break(children, if(forced, do: value, else: inherited))
+
+        # Keep the authored break for named page group membership. Its forced
+        # transition has already selected the first sheet, including preceding floats.
+        node =
+          if forced,
+            do: %{
+              node
+              | style: Map.merge(style, %{break_before: :auto, document_start_break: value})
+            },
+            else: node
+
+        {break_value, skipped ++ [%{node | children: children} | rest]}
+
+      _ ->
+        {inherited, nodes}
+    end
+  end
+
+  @doc "Resolves a forced break to a physical side in the document's page progression."
+  @spec break_side(:left | :right | :recto | :verso, side()) :: side()
+  def break_side(value, recto) do
+    case value do
+      :recto -> recto
+      :verso -> opposite(recto)
+      side -> side
+    end
+  end
+
+  @doc "Returns the physical side of a numbered sheet, starting at the first printed page."
+  @spec page_side(pos_integer(), side()) :: side()
+  def page_side(number, first), do: if(rem(number, 2) == 1, do: first, else: opposite(first))
+
+  defp opposite(side), do: if(side == :left, do: :right, else: :left)
+
   @doc "Rounds page margins to the renderer's CSS pixel grid."
   @spec snap_css_pixel_margins(margins()) :: margins()
   def snap_css_pixel_margins(margins) do

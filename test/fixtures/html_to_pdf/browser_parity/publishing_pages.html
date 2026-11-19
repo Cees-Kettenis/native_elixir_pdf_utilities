@@ -1,5 +1,5 @@
 <!doctype html><html><head><style>
 @page {size:240pt 180pt;margin:30pt;@top-center{content:'Report';font:10pt/12pt 'DejaVu Sans'}@bottom-center{content:counter(page) '/' counter(pages);font:10pt/12pt 'DejaVu Sans'}}
-@page wide {size:300pt 180pt;@top-center{content:'Wide report'}}
-html,body{margin:0;padding:0;font:10pt/12pt 'DejaVu Sans'}p{margin:0}section{page:wide}
+@page wide {size:300pt 180pt}@page wide:left {@top-center{content:'Wide report'}}
+html,body{margin:0;padding:0;font:10pt/12pt 'DejaVu Sans'}p{margin:0}section{page:wide;break-before:left}
 </style></head><body><p>First report page</p><section><p>Second report page</p></section></body></html>

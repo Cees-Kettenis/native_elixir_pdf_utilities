@@ -289,6 +289,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
         page_size,
         margins,
         Map.get(layout_tree, :publishing_context),
+        Map.get(layout_tree, :page_spread, %{recto: :right, first: :right}),
         pagination_order
       )
       |> restore_atomic_overflow(
@@ -1058,7 +1059,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
     end)
   end
 
-  defp groups_to_pages(groups, headers, page_size, margins, publishing, pagination_order) do
+  defp groups_to_pages(groups, headers, page_size, margins, publishing, spread, pagination_order) do
     {_width, page_height} = page_size
     content_top = page_height - margins.top
 
@@ -1067,6 +1068,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
       page_count: 0,
       current_boxes: [],
       current_y: content_top,
+      page_spread: spread,
       position_delta: 0.0,
       clip_origins: %{},
       pagination_order: pagination_order
@@ -1685,17 +1687,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
 
   defp force_break(value, state, page_size, margins) do
     state = page_break(state, page_size, margins)
-    rtl = get_in(state, [:publishing, :direction]) == :rtl
-    desired_odd = value in [:right, :recto]
-    desired_odd = if rtl and value in [:recto, :verso], do: not desired_odd, else: desired_odd
+    number = (get_in(state, [:publishing, :page_offset]) || 0) + state.page_count + 1
+    side = PageGeometry.page_side(number, state.page_spread.first)
 
-    offset =
-      case state do
-        %{publishing: p} -> p.page_offset
-        _ -> 0
-      end
-
-    if rem(offset + state.page_count + 1, 2) == 1 == desired_odd do
+    if side == PageGeometry.break_side(value, state.page_spread.recto) do
       state
     else
       page_break(mark_blank(state), page_size, margins)

@@ -25,7 +25,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           {:ok, map(), [map()]} | {:error, term()}
   def prepare(tree, opts, explicit, layout) do
     CssColor.with_profiles(Map.get(tree, :css_color_profiles, %{}), fn ->
-      prepare_pages(tree, opts, explicit, layout)
+      prepare_pages(PageGeometry.prepare_spread(tree), opts, explicit, layout)
     end)
   end
 
@@ -46,6 +46,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
         collect(tree, %{
           options: opts,
           page_layout: {base, explicit},
+          first_side: tree.page_spread.first,
           nodes: %{},
           targets: %{},
           strings: [],
@@ -105,6 +106,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
         notes: [],
         floats: [],
         counter_styles: Map.get(style, :_counter_styles, %{}),
+        first_side: :right,
         page_rules: []
       })
 
@@ -696,7 +698,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           name,
           number,
           false,
-          Map.get(first_style(tree), :direction, :ltr),
+          tree.page_spread.first,
           positioned
         )
 
@@ -711,7 +713,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
              Map.put(measured, :publishing_context, %{
                reserves: state.reserves,
                page_offset: length(pages),
-               direction: Map.get(first_style(tree), :direction, :ltr),
                minimum_pages: state.minimum_pages
              }),
            {:ok, placed} <-
@@ -770,7 +771,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
                 name,
                 n,
                 false,
-                Map.get(first_style(tree), :direction, :ltr)
+                tree.page_spread.first
               ),
               opts,
               explicit,
@@ -789,7 +790,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
         name,
         number,
         false,
-        Map.get(first_style(tree), :direction, :ltr),
+        tree.page_spread.first,
         group_positions(positions, length(pages))
       )
 
@@ -802,8 +803,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
            |> Map.put(:publishing_context, %{
              reserves: state.reserves,
              page_offset: number - 1,
-             minimum_pages: state.minimum_pages,
-             direction: Map.get(first_style(tree), :direction, :ltr)
+             minimum_pages: state.minimum_pages
            }),
          {:ok, fragments} <- Pagination.paginate(measured, options) do
       [first | rest] = fragments
@@ -952,7 +952,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
 
       groups =
         if MapSet.member?(tracked, authored) and
-             (Map.get(style, :break_before) in [:page, :left, :right, :recto, :verso] or
+             (Map.has_key?(style, :document_start_break) or
+                Map.get(style, :break_before) in [:page, :left, :right, :recto, :verso] or
                 Map.get(style, :break_after) in [:page, :left, :right, :recto, :verso]),
            do: [{authored, make_ref()} | parent_groups],
            else: parent_groups
@@ -1151,7 +1152,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           page.page_name,
           target,
           Map.get(page, :blank, false),
-          Map.get(node.style, :direction, :ltr),
+          registry.first_side,
           Map.get(page, :page_groups, %{})
         )
 
@@ -1513,7 +1514,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
             sheet.page_name,
             number,
             number <= count and sheet.blank,
-            Map.get(base, :direction, :ltr),
+            registry.first_side,
             group_positions(Map.get(sheet, :page_groups, %{}), max(number - count, 0))
           )
 
@@ -1551,7 +1552,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
             sheet.page_name,
             page,
             Map.get(sheet, :blank, false),
-            Map.get(node.style, :direction, :ltr),
+            registry.first_side,
             Map.get(sheet, :page_groups, %{})
           )
 
@@ -1601,7 +1602,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
             page.page_name,
             n,
             Map.get(page, :blank, false),
-            Map.get(base, :direction, :ltr),
+            tree.page_spread.first,
             Map.get(page, :page_groups, %{})
           )
 
@@ -1657,7 +1658,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           page.page_name,
           number,
           Map.get(page, :blank, false),
-          Map.get(base, :direction, :ltr),
+          registry.first_side,
           Map.get(page, :page_groups, %{})
         )
 

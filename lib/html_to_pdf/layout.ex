@@ -205,6 +205,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     HtmlValidator.with_render_budget(fn ->
       case HtmlValidator.prepare_layout_input(styled_tree, opts) do
         {:ok, %{page_size: page_size, margins: margins}} ->
+          styled_tree =
+            if viewport == nil, do: PageGeometry.prepare_spread(styled_tree), else: styled_tree
+
           NativeElixirPdfUtilities.Validators.HtmlFormValidator.with_layout_mode(
             Keyword.get(
               opts,
@@ -472,7 +475,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                       group_math_glyphs(boxes)
 
                   {page_width, page_height} = layout_page_size
-                  link_metadata = Map.take(styled_tree, [:link_scope, :link_expected_targets])
+
+                  link_metadata =
+                    Map.take(styled_tree, [:link_scope, :link_expected_targets, :page_spread])
 
                   link_metadata =
                     case root_targets do
