@@ -28,7 +28,7 @@ end
 defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsGlobalStateTest do
   use ExUnit.Case, async: false
 
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Merge, Outlines, Stamp}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Info, Limits, Merge, Outlines, Stamp}
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
   alias NativeElixirPdfUtilities.HtmlToPdf.Font
   alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
@@ -400,6 +400,38 @@ defmodule NativeElixirPdfUtilities.Pdf.WriterReadbackLimitsGlobalStateTest do
       assert diagnostic.message =~ "max_entries"
       Limits.install(ctx.limits)
       assert {:ok, _} = operation.()
+    end
+  end
+
+  test "metadata updates and fresh reads admit their own cumulative entry costs", ctx do
+    page = %{size: {100, 100}, boxes: []}
+    assert {:ok, classic} = PdfWriter.render([page, page])
+    compressed = File.read!(Paths.fixture("pdf_reader/object-stream.pdf"))
+
+    for input <- [classic, compressed] do
+      Limits.install(ctx.limits)
+      write = fn -> Info.put(input, title: "Readback") end
+
+      assert {{:ok, updated}, write_entries} =
+               ResourceBudget.measure_operation(:max_entries, write)
+
+      read = fn -> Info.get(updated) end
+
+      assert {{:ok, %{title: "Readback"}}, read_entries} =
+               ResourceBudget.measure_operation(:max_entries, read)
+
+      for {operation, entries} <- [{write, write_entries}, {read, read_entries}] do
+        Limits.install(%{ctx.limits | max_entries: entries - 1})
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = operation.()
+        assert diagnostic.message =~ "max_entries"
+
+        Limits.install(%{ctx.limits | max_entries: entries})
+        assert {:ok, _} = operation.()
+      end
+
+      Limits.install(%{ctx.limits | max_entries: max(write_entries, read_entries)})
+      assert {:ok, revised} = write.()
+      assert {:ok, %{title: "Readback"}} = Info.get(revised)
     end
   end
 

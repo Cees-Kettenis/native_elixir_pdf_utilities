@@ -88,8 +88,13 @@ An operation that returns the original PDF without an update consumes no new rev
 Input, output and decoded bytes describe different resources. A compressed
 source can fit the input allowance while exceeding its decoded allowance.
 Intermediate filter output counts too. Generated PDFs must also fit the input
-ceiling so the library can read its own output. Splitting checks cumulative
-output before retaining another result.
+ceiling. Splitting checks cumulative output before retaining another result.
+
+Entry and work allowances apply separately to each operation. For example,
+a metadata update reads the original PDF and appends a revision. A later read
+parses the revised file, which can require a larger allowance even when the
+write succeeded. For workflows with tight limits, check the write and read
+against representative documents.
 
 Counts and work estimates are deterministic guards, not measurements of CPU time
 or exact heap usage. A larger byte budget does not remove the entry, depth, work,
