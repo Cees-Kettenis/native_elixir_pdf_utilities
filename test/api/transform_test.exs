@@ -430,6 +430,55 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     assert link_target_pages(first, 1) == []
   end
 
+  test "an omitted or null Dest keeps the named GoTo action through page imports" do
+    for {entry, target} <- [
+          {"", 3},
+          {"/Dest null", 3},
+          {"/Dest 20 0 R", 3},
+          {"/Dest [4 0 R /Fit]", 2}
+        ] do
+      source =
+        three_page_pdf(
+          "/Annots [16 0 R 17 0 R]",
+          [
+            {16, "<< /Subtype /Link /Rect [0 0 10 10] #{entry} /A << /S /GoTo /D (target) >> >>"},
+            {17,
+             "<< /Subtype /Link /Rect [0 20 10 30] /A << /S /URI /URI (https://example.org/) >> >>"},
+            {18, "<< /Names [(target) [5 0 R /Fit]] >>"},
+            {20, "null"}
+          ],
+          "/Names << /Dests 18 0 R >>"
+        )
+
+      assert {:ok, merged} = Merge.merge([source, source])
+      assert link_target_pages(merged, 4) == [target + 3]
+      assert {:ok, reordered} = Transform.pick_pages(source, [3, 2, 1])
+      assert link_target_pages(reordered, 3) == [4 - target]
+      assert {:ok, deleted} = Transform.pick_pages(source, [1])
+      assert link_target_pages(deleted, 1) == []
+      assert {:ok, context} = Reader.read_validated(deleted)
+      assert [page] = context.pages
+      assert {:ok, [uri]} = Reader.resolve(context.document, page.dictionary["Annots"])
+
+      assert {:ok, %{"A" => %{"URI" => {:string, "https://example.org/"}}}} =
+               Reader.resolve(context.document, uri)
+    end
+  end
+
+  test "a cyclic explicit destination retains its resolution error even with a valid action" do
+    source =
+      three_page_pdf("/Annots [16 0 R]", [
+        {16,
+         "<< /Subtype /Link /Rect [0 0 10 10] /Dest 17 0 R /A << /S /GoTo /D [4 0 R /Fit] >> >>"},
+        {17, "17 0 R"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, diagnostic}} = Transform.pick_pages(source, [1, 2])
+    assert diagnostic.operation == :pick_pages
+    assert diagnostic.stage == :resolution
+    assert diagnostic.message =~ "cycle"
+  end
+
   test "preserves direct named annotations in direct and indirect arrays" do
     annotations =
       "[<< /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >> " <>
@@ -726,8 +775,10 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     Enum.flat_map(annotations, fn annotation ->
       assert {:ok, annotation} = Reader.resolve(document, annotation)
 
+      assert {:ok, explicit} = Reader.resolve(document, Map.get(annotation, "Dest"))
+
       destination =
-        case Map.get(annotation, "Dest") do
+        case explicit do
           nil ->
             case Reader.resolve(document, Map.get(annotation, "A")) do
               {:ok, action} when is_map(action) ->

@@ -186,9 +186,9 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
       dictionary when is_map(dictionary) ->
         if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link") do
-          case link_destination(document, dictionary) do
-            {:ok, {_location, destination}} -> named_destination?(document, destination)
-            :none -> false
+          case PdfValidator.link_destination(document, dictionary) do
+            {:ok, {_location, {kind, _name}}} when kind in [:name, :string, :hex] -> true
+            _ -> false
           end
         else
           Enum.any?(dictionary, fn {_key, value} -> named_link_destination?(document, value) end)
@@ -196,37 +196,6 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
       _ ->
         false
-    end
-  end
-
-  defp link_destination(document, dictionary) do
-    case Map.fetch(dictionary, "Dest") do
-      {:ok, destination} ->
-        {:ok, {:destination, destination}}
-
-      :error ->
-        case Map.get(dictionary, "A") do
-          nil ->
-            :none
-
-          action ->
-            case PdfValidator.resolve(document, action) do
-              {:ok, action} when is_map(action) ->
-                if PdfValidator.named?(document, Map.get(action, "S"), "GoTo"),
-                  do: {:ok, {{:action, action}, Map.get(action, "D")}},
-                  else: :none
-
-              _ ->
-                :none
-            end
-        end
-    end
-  end
-
-  defp named_destination?(document, destination) do
-    case PdfValidator.resolve(document, destination) do
-      {:ok, {kind, value}} when kind in [:name, :string, :hex] and is_binary(value) -> true
-      _ -> false
     end
   end
 
@@ -272,36 +241,23 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   end
 
   defp normalize_named_link_dictionary(document, named_destinations, dictionary) do
-    case link_destination(document, dictionary) do
-      {:ok, {location, destination}} ->
-        case PdfValidator.resolve(document, destination) do
-          {:ok, {kind, _name} = named_destination} when kind in [:name, :string, :hex] ->
-            case OutlineValidator.resolve_named_destination(
-                   document,
-                   named_destination,
-                   named_destinations
-                 ) do
-              {:ok, nil} ->
-                {:ok, dictionary}
+    case PdfValidator.link_destination(document, dictionary) do
+      {:ok, {location, {kind, _name} = named}} when kind in [:name, :string, :hex] ->
+        with {:ok, destination} <-
+               OutlineValidator.resolve_named_destination(document, named, named_destinations) do
+          case {destination, location} do
+            {nil, _} ->
+              {:ok, dictionary}
 
-              {:ok, destination} ->
-                case location do
-                  :destination ->
-                    {:ok, Map.put(dictionary, "Dest", destination)}
+            {destination, :destination} ->
+              {:ok, Map.put(dictionary, "Dest", destination)}
 
-                  {:action, action} ->
-                    {:ok, Map.put(dictionary, "A", Map.put(action, "D", destination))}
-                end
-
-              {:error, _error} = destination_error ->
-                destination_error
-            end
-
-          _ ->
-            {:ok, dictionary}
+            {destination, {:action, action}} ->
+              {:ok, Map.put(dictionary, "A", Map.put(action, "D", destination))}
+          end
         end
 
-      :none ->
+      _ ->
         {:ok, dictionary}
     end
   end

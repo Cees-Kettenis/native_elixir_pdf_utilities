@@ -1007,6 +1007,36 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end
   end
 
+  @doc "Resolves a link's explicit destination or local GoTo action, treating a PDF null as absent."
+  @spec link_destination(document(), map()) ::
+          :none
+          | {:ok, {:destination | {:action, map()}, value()}}
+          | {:error, {atom(), Diagnostics.diagnostic()}}
+  def link_destination(document, annotation) do
+    with {:ok, nil} <- optional_entry(document, annotation, "Dest", nil),
+         {:ok, action} <- optional_entry(document, annotation, "A", nil) do
+      case action do
+        nil ->
+          :none
+
+        action when is_map(action) ->
+          if named?(document, Map.get(action, "S"), "GoTo") do
+            with {:ok, target} <- resolve(document, Map.get(action, "D")) do
+              {:ok, {{:action, action}, target}}
+            end
+          else
+            :none
+          end
+
+        _ ->
+          error(:annotations, :invalid_pdf_input, "link action must resolve to a dictionary", [])
+      end
+    else
+      {:ok, destination} -> {:ok, {:destination, destination}}
+      {:error, _} = error -> error
+    end
+  end
+
   @doc "Checks whether a direct or indirect value resolves to the expected PDF name."
   @spec named?(document(), value(), binary()) :: boolean()
   def named?(document, value, expected) do

@@ -221,48 +221,11 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
   end
 
   defp link_destination_status(document, dictionary, selected_refs, all_page_refs) do
-    case Map.get(dictionary, "Dest") do
-      nil ->
-        action_destination_status(
-          document,
-          Map.get(dictionary, "A"),
-          selected_refs,
-          all_page_refs
-        )
-
-      destination ->
-        destination_status(document, destination, selected_refs, all_page_refs)
-    end
-  end
-
-  defp action_destination_status(document, action, selected_refs, all_page_refs) do
-    case action do
-      nil ->
+    case PdfValidator.link_destination(document, dictionary) do
+      :none ->
         {:ok, true}
 
-      action ->
-        case PdfValidator.resolve(document, action) do
-          {:ok, action} when is_map(action) ->
-            if PdfValidator.named?(document, Map.get(action, "S"), "GoTo"),
-              do:
-                destination_status(document, Map.get(action, "D"), selected_refs, all_page_refs),
-              else: {:ok, true}
-
-          _ ->
-            error(:annotations, :invalid_pdf_input, "link action must resolve to a dictionary")
-        end
-    end
-  end
-
-  defp destination_status(document, destination, selected_refs, all_page_refs) do
-    resolved =
-      case destination do
-        {:ref, _ref} -> PdfValidator.resolve(document, destination)
-        destination -> {:ok, destination}
-      end
-
-    case resolved do
-      {:ok, [{:ref, ref} | _rest]} ->
+      {:ok, {_location, [{:ref, ref} | _rest]}} ->
         cond do
           Map.has_key?(selected_refs, ref) ->
             {:ok, true}
@@ -274,11 +237,14 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
             error(:annotations, :invalid_pdf_input, "link destination references an unknown page")
         end
 
-      {:ok, {kind, _value}} when kind in [:name, :string, :hex] ->
+      {:ok, {_location, {kind, _value}}} when kind in [:name, :string, :hex] ->
         {:ok, false}
 
-      _ ->
+      {:ok, _} ->
         error(:annotations, :invalid_pdf_input, "link destination is malformed")
+
+      {:error, _} = error ->
+        error
     end
   end
 
