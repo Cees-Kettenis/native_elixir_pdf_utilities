@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.HtmlToPdf.Font
 
   alias NativeElixirPdfUtilities.Validators.{
     CssFontControlsValidator,
@@ -204,9 +205,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
             if selected == font.variation_coordinates do
               {:ok, font}
             else
-              FontValidator.memo({:selected_instance, font.id, selected}, fn ->
-                FontValidator.prepare_font_instance(font, selected, nil)
-              end)
+              FontValidator.prepare_font_instance(font, selected, nil)
             end
           else
             {:ok, font}
@@ -388,6 +387,26 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
   @doc "Checks selected synthetic glyph coverage through the same face preparation used for painting."
   @spec supports_text?(map(), String.t()) :: boolean()
   def supports_text?(font, text) do
+    eligible_for_shaping?(font, text) and covers_text?(font, text)
+  end
+
+  defp eligible_for_shaping?(font, text) do
+    not Map.has_key?(font, :unicode_cmap) or Font.supports_text?(font, text) or
+      case text do
+        <<_base::utf8, rest::binary>> when rest != "" ->
+          # CSS Fonts 4 §5.3 also admits a cluster through its single
+          # canonically equivalent character in the effective character map.
+          case String.normalize(text, :nfc) do
+            <<scalar::utf8>> -> Map.get(font.unicode_cmap, scalar, 0) != 0
+            _ -> false
+          end
+
+        _ ->
+          false
+      end
+  end
+
+  defp covers_text?(font, text) do
     selected =
       if Map.has_key?(font, :synthetic_variants) do
         case prepare_grapheme(font, text) do

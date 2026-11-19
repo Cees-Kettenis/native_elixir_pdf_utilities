@@ -1892,21 +1892,15 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     with_budget(fn ->
       case font do
         %{type: :embedded, data: data, family: family} when is_binary(data) ->
-          with {:ok, bytes, metadata} <-
-                 NativeElixirPdfUtilities.Validators.FontVariationValidator.prepare(
-                   Map.get(font, :variation_source, data),
-                   settings,
-                   named_instance
-                 ),
-               {:ok, parsed} <- prepare_ttf(bytes) do
-            hash = NativeElixirPdfUtilities.HtmlToPdf.FontCache.identity(family, bytes)
+          source = Map.get(font, :variation_source, data)
 
-            {:ok,
-             font
-             |> Map.drop([:cff, :outline_format])
-             |> Map.merge(parsed)
-             |> Map.merge(metadata)
-             |> Map.merge(%{data: bytes, id: hash, pdf_name: "Instance-" <> hash})}
+          # Only physical instance data is shared. CSS faces using the same
+          # source can declare different Unicode ranges and metric overrides.
+          with {:ok, physical} <-
+                 memo({:selected_instance, source, settings, named_instance, family}, fn ->
+                   instance_attributes(source, settings, named_instance, family)
+                 end) do
+            {:ok, font |> Map.drop([:cff, :outline_format]) |> Map.merge(physical)}
           end
 
         _ ->
@@ -1919,6 +1913,23 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           )
       end
     end)
+  end
+
+  defp instance_attributes(source, settings, named_instance, family) do
+    with {:ok, bytes, metadata} <-
+           NativeElixirPdfUtilities.Validators.FontVariationValidator.prepare(
+             source,
+             settings,
+             named_instance
+           ),
+         {:ok, parsed} <- prepare_ttf(bytes) do
+      hash = NativeElixirPdfUtilities.HtmlToPdf.FontCache.identity(family, bytes)
+
+      {:ok,
+       parsed
+       |> Map.merge(metadata)
+       |> Map.merge(%{data: bytes, id: hash, pdf_name: "Instance-" <> hash})}
+    end
   end
 
   @doc "Parses static TrueType and CFF OpenType metrics, character maps and embedding permissions."

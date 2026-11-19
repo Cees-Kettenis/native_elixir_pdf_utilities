@@ -170,6 +170,85 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontSelectionTest do
     assert hd(styled.children).style.font_face.data == File.read!(mono)
   end
 
+  test "shaped clusters respect the declared character map and preserve PDF font selection" do
+    css = """
+    <style>
+    @font-face{font-family:Primary;src:url(primary.ttf);unicode-range:U+41,U+C1}
+    @font-face{font-family:Alternate;src:url(alternate.ttf)}
+    p{font-family:Primary,Alternate}
+    </style>
+    """
+
+    directory = Path.join(:code.priv_dir(:native_elixir_pdf_utilities), "fonts/dejavu")
+
+    opts = [
+      system_font_discovery: false,
+      assets: %{
+        "primary.ttf" => {:file, Path.join(directory, "DejaVuSans.ttf")},
+        "alternate.ttf" => {:file, Path.join(directory, "DejaVuSansMono.ttf")}
+      }
+    ]
+
+    runs = [
+      {"A", "Primary"},
+      {"BΩ", "Alternate"},
+      {"A\u0301", "Primary"},
+      {"Ω\uFE0E", "Alternate"},
+      {"A\uFE0E", "Primary"},
+      {"A\u0338", "Alternate"}
+    ]
+
+    html = css <> Enum.map_join(runs, fn {text, _} -> "<p>#{text}</p>" end) <> "<p>AΩA</p>"
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, opts)
+    assert {:ok, resolved} = FontFallback.resolve(styled, :error)
+
+    for {{text, family}, paragraph} <- Enum.zip(runs, resolved.children) do
+      assert Enum.map_join(paragraph.children, & &1.text) == text
+      assert Enum.all?(paragraph.children, &(&1.style.font_face.family == family))
+    end
+
+    assert Enum.map(List.last(resolved.children).children, &{&1.text, &1.style.font_face.family}) ==
+             [{"A", "Primary"}, {"Ω", "Alternate"}, {"A", "Primary"}]
+
+    assert {:ok, pdf} = HtmlToPdf.render(css <> "<p>AΩA</p>", opts)
+    assert {:ok, %{pages: [%{spans: [a, omega, last]}]}} = Text.extract_spans(pdf)
+    assert {a.text, omega.text, last.text} == {"A", "Ω", "A"}
+    assert a.font_resource == last.font_resource
+    refute a.font_resource == omega.font_resource
+  end
+
+  test "two declared ranges of one variable font retain their repertoires after instantiation" do
+    html = """
+    <style>
+    @font-face{font-family:Shared;src:url(axes.ttf);unicode-range:U+48}
+    @font-face{font-family:Shared;src:url(axes.ttf);unicode-range:U+78}
+    p{font-family:Shared;font-size:30px}
+    </style><p>HxH</p>
+    """
+
+    opts = [
+      assets: %{
+        "axes.ttf" =>
+          {:file,
+           NativeElixirPdfUtilities.TestSupport.FontCorpus.path("selected-control-axes.ttf")}
+      },
+      system_font_discovery: false
+    ]
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, opts)
+    assert {:ok, resolved} = FontFallback.resolve(styled, :error)
+    runs = hd(resolved.children).children
+    assert Enum.map_join(runs, & &1.text) == "HxH"
+
+    for run <- runs do
+      assert run.style.font_face.family == "Shared"
+      assert run.style.font_face.variation_coordinates["opsz"] == 30
+      assert Font.supports_text?(run.style.font_face, run.text)
+    end
+  end
+
   test "inherited widths, relative fractional weights and shorthand reset share validation" do
     html = """
     <div style='font-weight:450.5;font-stretch:condensed;font-style:oblique 10deg'>

@@ -59,7 +59,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectedFontLigatureBrowserParityTe
           {"unicode_composite", {12, 107, 30, 16}},
           {"woff_reconstruction", {12, 123, 30, 16}},
           {"cff_embedding", {168, 75, 108, 64}},
-          {"replacement", {168, 32, 48, 21}}
+          {"replacement", {168, 32, 48, 21}},
+          {"restricted Greek fallback", {168, 12, 36, 21}}
         ],
         # Skia emits CFF as unhinted Type 3 paths, so Poppler's font and vector
         # rasterizers differ at glyph edges. Keep every original region at 1%.
@@ -76,7 +77,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectedFontLigatureBrowserParityTe
     assert stats.page_count == 1
     assert stats.scripting == :disabled
     assert [%{regions: regions}] = stats.pages
-    assert length(regions) == 6
+    assert length(regions) == 7
     for region <- regions, do: assert(region.native_ink_pixels >= region.minimum_ink_pixels)
     native_pdf = File.read!(Path.join(stats.artifact_dir, "native.pdf"))
 
