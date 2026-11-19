@@ -437,13 +437,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
   } do
     Limits.install(Map.put(Limits.effective(), :max_input_bytes, 20))
 
-    assert {:error, {:resource_limit_exceeded, %{stage: :html, message: message}}} =
+    assert {:error, {:resource_limit_exceeded, %{stage: :file, message: message, source: source}}} =
              HtmlValidator.with_render_budget(fn ->
                assert {:ok, _} = HtmlParser.parse_detailed("<p>Parent</p>")
                run(root, &EmbeddedResource.load_html("children/child.html", &1))
              end)
 
-    assert message =~ "max_input_bytes"
+    assert source == Path.join(root, "children/child.html")
+    assert message =~ "7-byte read limit"
 
     Limits.install(Map.put(Limits.defaults(), :max_entries, 12))
 
@@ -472,12 +473,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
 
     assert {:error, {:resource_limit_exceeded, %{stage: :css, message: message}}} =
              run(root, fn context ->
-               for _ <- 1..3 do
-                 assert {:ok, bytes} =
-                          AssetLoader.resolve_local("children/style.css", :stylesheet, context)
+               assert {:ok, ^css} =
+                        AssetLoader.resolve_local("children/style.css", :stylesheet, context)
 
-                 assert {:ok, _} = CssParser.prepare_stylesheet(bytes)
-               end
+               assert {:ok, _} = CssParser.prepare_stylesheet(css)
+
+               # A new file read is denied before delivery. Previously retained
+               # bytes still incur the CSS parser's normal cache-hit charge.
+               assert {:error, {:resource_limit_exceeded, %{stage: :file}}} =
+                        AssetLoader.resolve_local("children/style.css", :stylesheet, context)
+
+               CssParser.prepare_stylesheet(css)
              end)
 
     assert message =~ "max_input_bytes"
@@ -544,6 +550,73 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContextTest do
 
     assert {:error, {:resource_limit_exceeded, %{stage: :font}}} =
              run(root, &AssetLoader.resolve_local("shared.bin", :font, &1))
+  end
+
+  test "authorized child reads use the remaining input allowance before returning bytes", %{
+    root: root
+  } do
+    path = Path.join(root, "sample.txt")
+    File.write!(path, "text")
+    Limits.install(%{Limits.effective() | max_input_bytes: 7})
+
+    for load <- [
+          &AssetLoader.resolve_local("sample.txt", :stylesheet, &1),
+          &AssetLoader.resolve_local("sample.txt", :color_profile, &1),
+          &AssetLoader.resolve_local("sample.txt", :font, &1),
+          fn _ ->
+            AssetLoader.resolve("profile", :color_profile, assets: %{"profile" => {:file, path}})
+          end,
+          &EmbeddedResource.load_initial("sample.txt", &1),
+          &EmbeddedResource.load_file("sample.txt", "text/plain", &1)
+        ] do
+      for used <- [3, 4, 7] do
+        result =
+          run(root, fn context ->
+            HtmlValidator.reserve_render_resource(:max_input_bytes, used, :html)
+            load.(context)
+          end)
+
+        if used == 3 do
+          assert result == {:ok, "text"} or match?({:ok, %{bytes: "text"}}, result)
+        else
+          assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+          assert diagnostic.stage in [:file, :font]
+        end
+      end
+    end
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :file}}} =
+             run(root, fn context ->
+               HtmlValidator.reserve_render_resource(:max_input_bytes, 7, :html)
+               EmbeddedResource.load_object_html("children/child.html", context)
+             end)
+  end
+
+  test "fresh font paths identify already admitted bytes across chunks and notice same-size edits",
+       %{root: root} do
+    font = :binary.copy("abcd", 5_000)
+    path = Path.join(root, "font.bin")
+    File.write!(path, font)
+    Limits.install(%{Limits.effective() | max_input_bytes: byte_size(font)})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :font}}} =
+             run(root, fn context ->
+               FontValidator.reserve_source(font)
+               assert {:ok, ^font} = AssetLoader.resolve_local("font.bin", :font, context)
+               File.write!(path, binary_part(font, 0, byte_size(font) - 1) <> "X")
+               AssetLoader.resolve_local("font.bin", :font, context)
+             end)
+
+    Limits.install(%{Limits.effective() | max_work: byte_size(font) - 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
+             run(root, fn context ->
+               FontValidator.reserve_source(font)
+               AssetLoader.resolve_local("font.bin", :font, context)
+             end)
+
+    assert message =~ "max_work"
+    refute message =~ "max_input_bytes"
   end
 
   test "all child images share the supplied count source and decoded storage budgets", %{

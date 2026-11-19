@@ -39,6 +39,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontLimitsTest do
              FileValidator.validate_info(%File.Stat{type: :directory}, 10, path)
   end
 
+  test "cold and cached font snapshots report exhausted shared input as a limit", %{path: path} do
+    alias NativeElixirPdfUtilities.Validators.HtmlValidator
+
+    File.write!(path, "font")
+    Limits.install(%{Limits.effective() | max_input_bytes: 4})
+
+    for state <- [:cold, :warm] do
+      if state == :warm, do: assert({:ok, "font"} == FontCache.fetch_bundled(path, &{:ok, &1}))
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
+               HtmlValidator.with_render_budget(fn ->
+                 HtmlValidator.reserve_render_resource(:max_input_bytes, 4, :html)
+                 FontCache.fetch_bundled(path, fn _ -> flunk("no font bytes remain") end)
+               end)
+
+      assert message =~ "max_input_bytes"
+    end
+  end
+
   test "per-font limits apply before parsing configured bytes and file snapshots", %{path: path} do
     Limits.install(%{Limits.effective() | max_input_bytes: 3})
     File.write!(path, "1234")

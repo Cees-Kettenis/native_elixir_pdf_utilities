@@ -5495,7 +5495,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       _ ->
         RenderCache.fetch_stylesheet({:file, path}, fn ->
-          NativeElixirPdfUtilities.FileReader.read(path, Limits.get(:max_input_bytes))
+          NativeElixirPdfUtilities.FileReader.read(path, :remaining_input)
         end)
     end
   end
@@ -5507,8 +5507,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
       {:file, path} when is_binary(path) ->
         case read_stylesheet(path) do
-          {:ok, css} -> {:ok, css}
-          {:error, _reason} -> {:error, :invalid_document}
+          {:error, reason} when is_atom(reason) ->
+            Diagnostics.error(
+              :style,
+              :invalid_document,
+              "configured stylesheet file could not be read"
+            )
+
+          result ->
+            result
         end
     end
   end
@@ -5893,15 +5900,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             {:ok, source} ->
               {:cont, {:ok, acc ++ [{:configured, source}]}}
 
-            {:error, :invalid_document} ->
-              {:halt,
-               {:error,
-                {:invalid_document,
-                 Diagnostics.diagnostic(
-                   :style,
-                   :invalid_document,
-                   "configured stylesheet file could not be read"
-                 )}}}
+            {:error, _} = error ->
+              {:halt, error}
           end
         end)
     end

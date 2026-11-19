@@ -6,7 +6,8 @@ defmodule NativeElixirPdfUtilities.Validators.FileValidator do
   @doc false
   @spec validate_read(term(), term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_read(path, maximum_bytes) do
-    case is_binary(path) and path != "" and is_integer(maximum_bytes) and maximum_bytes > 0 do
+    case is_binary(path) and path != "" and
+           (maximum_bytes == :remaining_input or (is_integer(maximum_bytes) and maximum_bytes > 0)) do
       true ->
         :ok
 
@@ -22,7 +23,7 @@ defmodule NativeElixirPdfUtilities.Validators.FileValidator do
   @doc false
   @spec validate_info(
           File.Stat.t() | %{type: atom(), size: non_neg_integer()},
-          pos_integer(),
+          non_neg_integer(),
           String.t()
         ) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -39,7 +40,7 @@ defmodule NativeElixirPdfUtilities.Validators.FileValidator do
   end
 
   @doc false
-  @spec validate_size(non_neg_integer(), pos_integer(), String.t()) ::
+  @spec validate_size(non_neg_integer(), non_neg_integer(), String.t()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_size(size, maximum_bytes, path) do
     case size <= maximum_bytes do

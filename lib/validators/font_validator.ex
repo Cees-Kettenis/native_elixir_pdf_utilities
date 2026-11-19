@@ -814,6 +814,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
           Process.put(key, %{
             budget_id: make_ref(),
             sources: MapSet.new(),
+            admitted_sources: %{},
             faces: MapSet.new(),
             memo: %{}
           })
@@ -914,13 +915,26 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @doc false
   @spec read_limit() :: pos_integer()
   def read_limit do
-    used = source_bytes()
-    check(:max_input_bytes, used + 1)
+    remaining =
+      min(
+        Limits.get(:max_input_bytes) - source_bytes(),
+        NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_input_bytes)
+      )
 
-    min(
-      Limits.get(:max_input_bytes) - used,
-      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_input_bytes)
-    )
+    if remaining <= 0 do
+      throw(
+        {:font_resource_limit,
+         Diagnostics.error(
+           :font,
+           :resource_limit_exceeded,
+           "font source exceeds remaining max_input_bytes",
+           operation: :load_registry,
+           module: __MODULE__
+         )}
+      )
+    end
+
+    remaining
   end
 
   @doc "Returns cumulative checked source bytes in the current font scope, or zero outside one."
@@ -982,9 +996,27 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
     # admission by exact payload so later stages need no additional SHA pass.
     memo({:source_admission, data}, fn ->
       fingerprint = cached_fingerprint || :crypto.hash(:sha256, data)
-      reserve_source_fingerprint(fingerprint, byte_size(data))
+      size = byte_size(data)
+      reserve_source_fingerprint(fingerprint, size)
+      key = {__MODULE__, :budget}
+      budget = Process.get(key)
+
+      sources =
+        Map.update(
+          budget.admitted_sources,
+          size,
+          %{fingerprint => data},
+          &Map.put(&1, fingerprint, data)
+        )
+
+      Process.put(key, %{budget | admitted_sources: sources})
+      :ok
     end)
   end
+
+  @doc "Previously admitted font bytes indexed by byte length and content fingerprint."
+  @spec admitted_sources() :: map()
+  def admitted_sources, do: Process.get({__MODULE__, :budget}).admitted_sources
 
   @doc false
   @spec reserve_source_fingerprint(binary(), non_neg_integer()) :: :ok
@@ -1035,7 +1067,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   @spec source_result(term()) :: term()
   def source_result(result) do
     case result do
-      {:error, {:resource_limit_exceeded, diagnostic}} ->
+      {:error, {:resource_limit_exceeded, %{stage: :file} = diagnostic}} ->
         diagnostic = %{
           diagnostic
           | stage: :font,

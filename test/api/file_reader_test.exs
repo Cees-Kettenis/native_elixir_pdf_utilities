@@ -38,6 +38,54 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
              FileReader.read(root, 1)
   end
 
+  test "an empty authorized file still fits an exhausted operation", %{root: root} do
+    path = Path.join(root, "empty.css")
+    File.write!(path, "")
+    Limits.install(%{Limits.effective() | max_input_bytes: 1})
+
+    HtmlValidator.with_render_budget(fn ->
+      HtmlValidator.reserve_render_resource(:max_input_bytes, 1, :html)
+      assert {:ok, ""} = FileReader.read(path, :remaining_input)
+      File.write!(path, "x")
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :file, source: ^path}}} =
+               FileReader.read(path, :remaining_input)
+    end)
+  end
+
+  test "remaining-byte admission rejects a new oversized source before opening it", %{root: root} do
+    exact = Path.join(root, "exact.txt")
+    excess = Path.join(root, "excess.txt")
+    File.write!(exact, "yes")
+    File.write!(excess, "more")
+    Limits.install(%{Limits.effective() | max_input_bytes: 5})
+
+    task =
+      Task.async(fn ->
+        receive do
+          :read -> :ok
+        end
+
+        HtmlValidator.with_render_budget(fn ->
+          HtmlValidator.reserve_render_resource(:max_input_bytes, 2, :html)
+          assert {:ok, "yes"} = FileReader.read(exact, :remaining_input)
+          FileReader.read(excess, :remaining_input)
+        end)
+      end)
+
+    :erlang.trace_pattern({:file, :open, 2}, true, [:local])
+
+    try do
+      :erlang.trace(task.pid, true, [:call])
+      send(task.pid, :read)
+      assert {:error, {:resource_limit_exceeded, %{source: ^excess}}} = Task.await(task)
+      assert_receive {:trace, _, :call, {:file, :open, [^exact, _]}}
+      refute_receive {:trace, _, :call, {:file, :open, [^excess, _]}}
+    after
+      :erlang.trace_pattern({:file, :open, 2}, false, [:local])
+    end
+  end
+
   @tag skip: match?({:win32, _}, :os.type())
   test "FIFO inputs and symlinks return diagnostics without waiting for a writer", %{root: root} do
     fifo = Path.join(root, "input.fifo")
