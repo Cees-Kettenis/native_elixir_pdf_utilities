@@ -161,7 +161,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterGlobalStateTest do
 
         assert_receive {:staged, ^pid, directory}, 5_000
         {:monitored_by, monitors} = Process.info(pid, :monitored_by)
-        [guard] = monitors -- [parent]
+
+        [guard] =
+          Enum.filter(monitors, &(:proc_lib.translate_initial_call(&1) == {SvgStaging, :init, 1}))
+
         {pid, monitor, directory, Process.monitor(guard)}
       end
 
