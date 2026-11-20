@@ -41,6 +41,35 @@ defmodule NativeElixirPdfUtilities.CollectionBoundaryTest do
     end
   end
 
+  test "direct writer reports improper page and box lists before preparing effects" do
+    page = %{size: {100, 60}, boxes: []}
+    box = %{type: :flow_marker, x: 0, y: 0, width: 0, height: 0}
+
+    group = %{
+      type: :drawing_group,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      transform: {1, 0, 0, 1, 0, 0},
+      boxes: [box | :bad]
+    }
+
+    for {pages, kind} <- [
+          {[page | :bad], :pages},
+          {[%{page | boxes: [box | :bad]}], :boxes},
+          {[%{page | boxes: [group]}], :boxes},
+          {[%{page | boxes: [Map.put(group, :css_effect, %{})]}], :boxes}
+        ] do
+      assert {:error, {:invalid_pdf_input, diagnostic}} = PdfWriter.render(pages)
+
+      assert %{reason: :invalid_pdf_input, module: PdfWriter, stage: :pdf, operation: :write_pdf} =
+               diagnostic
+
+      assert diagnostic.message =~ "#{kind} must be a proper list"
+    end
+  end
+
   test "nested field names, keywords and choice values return public diagnostics" do
     assert {:ok, pdf} =
              HtmlToPdf.render(

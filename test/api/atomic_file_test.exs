@@ -61,6 +61,35 @@ defmodule NativeElixirPdfUtilities.AtomicFileTest do
     end
   end
 
+  @tag skip: match?({:win32, _}, :os.type()) or System.cmd("id", ["-u"]) == {"0\n", 0}
+  test "a restricted output directory returns a write diagnostic and preserves the PDF", %{
+    tmp_dir: dir
+  } do
+    restricted = Path.join(dir, "restricted")
+    File.mkdir!(restricted)
+    input = Path.join(restricted, "source.html")
+    output = Path.join(restricted, "existing.pdf")
+    File.write!(input, "<p>New</p>")
+    assert {:ok, original} = HtmlToPdf.render("<p>Original</p>")
+    File.write!(output, original)
+    File.chmod!(restricted, 0o555)
+
+    try do
+      assert File.stat!(output).access == :read_write
+      assert :ok = HtmlToPdf.render_file(input, Path.join(dir, "allowed.pdf"))
+
+      for denied <- [output, Path.join(restricted, "new.pdf")] do
+        assert {:error, {:eacces, diagnostic}} = HtmlToPdf.render_file(input, denied)
+        assert %{module: HtmlToPdf, stage: :file, operation: :write, source: ^denied} = diagnostic
+      end
+
+      assert File.read!(output) == original
+      assert Enum.sort(File.ls!(restricted)) == ["existing.pdf", "source.html"]
+    after
+      File.chmod!(restricted, 0o755)
+    end
+  end
+
   test "failed writes and failed installation clean up and retain the old output", %{tmp_dir: dir} do
     path = Path.join(dir, "result")
     File.write!(path, "original")

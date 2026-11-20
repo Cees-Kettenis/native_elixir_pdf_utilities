@@ -44,6 +44,11 @@ have exited.
 `HtmlToPdf.render_file/3` stages the PDF within the operation allowance.
 After a successful top-level operation, a filesystem rename installs the file.
 A timeout before installation leaves the previous destination intact.
+The output directory must permit creating and renaming files even when the
+destination already exists. If you previously granted access only to a
+preallocated PDF, use a writable output directory or grant those permissions
+on its parent. A denied installation returns a write diagnostic with the
+output path and filesystem reason.
 
 Observed excess returns `:resource_limit_exceeded`. Unexpected worker exits,
 including GC heap kills, return `:operation_worker_failed`. Sampling can miss

@@ -59,6 +59,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGradient do
   def prepare(gradient, width, height, style) do
     with {:ok, geometry, basis} <- geometry(gradient, width, height, style),
          {:ok, stops} <- CssGradientValidator.used_stops(gradient, basis, style) do
+      first = hd(stops)
+      last = List.last(stops)
+      collapsed? = gradient.repeating? and first.position == last.position
+      space = if collapsed?, do: "srgb", else: gradient.space
+
       {segments, _, _} =
         Enum.reduce(stops, {[], nil, nil}, fn stop, {segments, left, hint} ->
           case stop do
@@ -76,7 +81,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGradient do
                     CssColor.interpolation_segment(
                       left.color,
                       color,
-                      gradient.space,
+                      space,
                       gradient.hue
                     ),
                   hint: hint
@@ -86,9 +91,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGradient do
               end
           end
         end)
-
-      first = Enum.find(stops, &Map.has_key?(&1, :color))
-      last = List.last(stops)
 
       {:ok,
        %{
@@ -101,8 +103,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGradient do
            CssColor.interpolation_segment(first.color, first.color, gradient.space, gradient.hue),
          last_color:
            CssColor.interpolation_segment(last.color, last.color, gradient.space, gradient.hue),
-         average:
-           CssColor.interpolation_segment(first.color, last.color, gradient.space, gradient.hue)
+         average: if(collapsed?, do: average_color(segments))
        }}
     end
   end
@@ -110,6 +111,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGradient do
   @doc "Samples a prepared gradient at a point measured from its top-left corner."
   @spec sample(map(), number(), number()) :: {number(), number(), number(), number()}
   def sample(plan, x, y) do
+    plan.average || sample_gradient(plan, x, y)
+  end
+
+  defp sample_gradient(plan, x, y) do
     value =
       case plan.geometry do
         {:linear, dx, dy, start, length} ->
@@ -135,9 +140,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGradient do
 
     color =
       cond do
-        plan.repeating? and plan.first == plan.last ->
-          CssColor.sample_interpolation(plan.average, 0.5)
-
         value < plan.first ->
           CssColor.sample_interpolation(plan.first_color, 0.0)
 
@@ -176,6 +178,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssGradient do
 
     [r, g, b] = CssColor.to_srgb(color.space, color.channels)
     {r, g, b, min(max(color.alpha, 0.0), 1.0)}
+  end
+
+  # CSS Images 3 §3.3 gives each adjacent pair equal weight for a zero period.
+  # The prepared sRGB midpoint already includes the pair's premultiplied alpha.
+  defp average_color(segments) do
+    {red, green, blue, total_alpha} =
+      Enum.reduce(segments, {0.0, 0.0, 0.0, 0.0}, fn segment, {r, g, b, a} ->
+        %{channels: [x, y, z], alpha: alpha} = CssColor.sample_interpolation(segment.colors, 0.5)
+        {r + x * alpha, g + y * alpha, b + z * alpha, a + alpha}
+      end)
+
+    if total_alpha == 0 do
+      {0.0, 0.0, 0.0, 0.0}
+    else
+      [r, g, b] =
+        CssColor.to_srgb("srgb", [red / total_alpha, green / total_alpha, blue / total_alpha])
+
+      {r, g, b, total_alpha / length(segments)}
+    end
   end
 
   defp geometry(gradient, width, height, style) do

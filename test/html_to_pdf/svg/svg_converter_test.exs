@@ -140,6 +140,53 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterGlobalStateTest do
     assert Path.wildcard(Path.join(System.tmp_dir!(), "nepu-svg-#{System.pid()}-*")) == before
   end
 
+  test "staging follows each converter worker through cancellation and concurrent reads" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.SvgStaging
+    parent = self()
+
+    jobs =
+      for content <- ["font", "bounds"] do
+        {pid, monitor} =
+          spawn_monitor(fn ->
+            SvgStaging.with_directory(fn directory ->
+              path = Path.join(directory, "input")
+              File.write!(path, content, [:exclusive])
+              send(parent, {:staged, self(), directory})
+
+              receive do
+                :finish -> send(parent, {:read, File.read!(path)})
+              end
+            end)
+          end)
+
+        assert_receive {:staged, ^pid, directory}, 5_000
+        {:monitored_by, monitors} = Process.info(pid, :monitored_by)
+        [guard] = monitors -- [parent]
+        {pid, monitor, directory, Process.monitor(guard)}
+      end
+
+    [{first, worker1, dir1, guard1}, {second, worker2, dir2, guard2}] = jobs
+    refute dir1 == dir2
+    Process.exit(first, :kill)
+    assert_receive {:DOWN, ^worker1, :process, ^first, :killed}
+    assert_receive {:DOWN, ^guard1, :process, _, :normal}
+    refute File.exists?(dir1)
+    assert File.read!(Path.join(dir2, "input")) == "bounds"
+    send(second, :finish)
+    assert_receive {:read, "bounds"}
+    assert_receive {:DOWN, ^worker2, :process, ^second, :normal}
+    assert_receive {:DOWN, ^guard2, :process, _, :normal}
+    refute File.exists?(dir2)
+  end
+
+  @tag :tmp_dir
+  test "staging never removes a directory it could not create", %{tmp_dir: dir} do
+    assert {:error, :eexist} =
+             GenServer.start(NativeElixirPdfUtilities.HtmlToPdf.SvgStaging, {self(), dir})
+
+    assert File.dir?(dir)
+  end
+
   test "converter allocation retains the canonical SVG raster and surface limits" do
     source =
       "<svg xmlns='http://www.w3.org/2000/svg' width='8' height='4'><rect width='8' height='4'/></svg>"

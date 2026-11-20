@@ -23,6 +23,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
           :invalid_document
           | :invalid_encoding
           | :invalid_options
+          | :unsupported_font
           | :unsupported_glyph
           | :resource_limit_exceeded
   @replacement_character "\uFFFD"

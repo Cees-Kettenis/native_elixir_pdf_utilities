@@ -560,6 +560,27 @@ defmodule NativeElixirPdfUtilities.InfoGlobalStateTest do
     assert diagnostic.message =~ "2-level limit"
   end
 
+  test "reads information fields and dates within one decoded byte allowance" do
+    original = Limits.effective()
+    dictionary = "<< /Title <FEFF754C> /Author (Ada) /ModDate (D:2026) >>"
+    source = pdf(base_objects() ++ [{4, dictionary}], "/Info 4 0 R")
+    total = byte_size("界AdaD:2026")
+    Limits.install(%{original | max_decoded_bytes: total})
+
+    assert {:ok, %{title: "界", author: "Ada", modification_date: ~N[2026-01-01 00:00:00]}} =
+             Info.get(source)
+
+    for ceiling <- [total - 1, 2] do
+      Limits.install(%{original | max_decoded_bytes: ceiling})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Info.get(source)
+      assert diagnostic.stage == :limits and diagnostic.operation == :get_info
+      assert diagnostic.module == Info and diagnostic.message =~ "max_decoded_bytes"
+    end
+
+    date_only = pdf(base_objects() ++ [{4, "<< /CreationDate (D:2026) >>"}], "/Info 4 0 R")
+    assert {:error, {:resource_limit_exceeded, %{operation: :get_info}}} = Info.get(date_only)
+  end
+
   test "enforces information value and aggregate byte limits" do
     original_limits = Limits.effective()
 

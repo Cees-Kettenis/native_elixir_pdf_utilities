@@ -15,6 +15,8 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.CollectionValidator
 
+  alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
+
   @field_keys %{
     title: "Title",
     author: "Author",
@@ -88,15 +90,17 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
   @spec prepare_info(PdfValidator.context()) ::
           {:ok, info()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_info(context) do
-    with {:ok, document, dictionary} <- information_dictionary(context) do
-      @field_keys
-      |> Enum.reduce_while({:ok, %{}}, fn {field, key}, {:ok, info} ->
-        case normalized_existing_value(document, dictionary, field, key) do
-          {:ok, value} -> {:cont, {:ok, Map.put(info, field, value)}}
-          {:error, _} = info_error -> {:halt, info_error}
-        end
-      end)
-    end
+    ResourceBudgetValidator.with_budget(fn ->
+      with {:ok, document, dictionary} <- information_dictionary(context) do
+        @field_keys
+        |> Enum.reduce_while({:ok, %{}}, fn {field, key}, {:ok, info} ->
+          case normalized_existing_value(document, dictionary, field, key) do
+            {:ok, value} -> {:cont, {:ok, Map.put(info, field, value)}}
+            {:error, _} = info_error -> {:halt, info_error}
+          end
+        end)
+      end
+    end)
   end
 
   @doc """
@@ -208,19 +212,37 @@ defmodule NativeElixirPdfUtilities.Validators.InfoValidator do
     end
   end
 
+  @doc "Decodes and charges the UTF-8 bytes retained from one PDF metadata string."
+  @spec decode_metadata_text(binary()) ::
+          {:ok, String.t()} | :error | {:error, {atom(), Diagnostics.diagnostic()}}
+  def decode_metadata_text(bytes) do
+    case InfoCodec.decode_text(bytes, ResourceBudgetValidator.remaining(:max_decoded_bytes)) do
+      {:ok, text} ->
+        with :ok <- ResourceBudgetValidator.reserve(:max_decoded_bytes, byte_size(text), :limits),
+             do: {:ok, text}
+
+      :limit_exceeded ->
+        limit_error("decoded PDF metadata exceeds max_decoded_bytes")
+
+      :error ->
+        :error
+    end
+  end
+
   defp decode_existing_value(field, value) do
     case {field, value} do
       {field, {kind, bytes}} when field in @text_fields and kind in [:string, :hex] ->
-        case InfoCodec.decode_text(bytes) do
-          {:ok, text} -> {:ok, text}
+        case decode_metadata_text(bytes) do
           :error -> error(:info, "PDF information field #{field} has invalid text encoding")
+          result -> result
         end
 
       {field, {kind, bytes}} when field in @date_fields and kind in [:string, :hex] ->
-        with {:ok, date_text} <- InfoCodec.decode_text(bytes),
+        with {:ok, date_text} <- decode_metadata_text(bytes),
              {:ok, date_time, _date} <- PdfDateValidator.parse_date(date_text) do
           {:ok, date_time}
         else
+          {:error, _} = failure -> failure
           _ -> error(:info, "PDF information field #{field} has an invalid PDF date")
         end
 

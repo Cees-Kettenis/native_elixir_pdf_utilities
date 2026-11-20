@@ -242,7 +242,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
       text = if in_range, do: generate(definition, ordinal), else: nil
 
       if text == nil do
-        representation(definition.fallback, ordinal, definitions, visited)
+        {_fallback, text} = representation(definition.fallback, ordinal, definitions, visited)
+        {definition, text}
       else
         {left, right} =
           if ordinal < 0 and definition.system != :cyclic, do: definition.negative, else: {"", ""}
@@ -278,6 +279,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
       }
 
       case name do
+        "decimal-leading-zero" ->
+          %{default | pad: {2, "0"}}
+
         name when name in ~w(lower-alpha lower-latin upper-alpha upper-latin lower-greek) ->
           symbols =
             if name == "lower-greek",

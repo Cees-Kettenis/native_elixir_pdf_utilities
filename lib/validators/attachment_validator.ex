@@ -2,8 +2,13 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.{Diagnostics, Limits}
-  alias NativeElixirPdfUtilities.Pdf.InfoCodec
-  alias NativeElixirPdfUtilities.Validators.{MimeValidator, PdfValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    InfoValidator,
+    MimeValidator,
+    PdfValidator,
+    ResourceBudgetValidator
+  }
 
   @doc false
   @spec prepare(term(), term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
@@ -47,6 +52,10 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   @doc false
   @spec inspect_document(PdfValidator.context()) :: {:ok, map()} | {:error, {atom(), map()}}
   def inspect_document(context) do
+    ResourceBudgetValidator.with_budget(fn -> inspect_files(context) end)
+  end
+
+  defp inspect_files(context) do
     document = context.document
 
     with {:ok, names_value} <-
@@ -225,9 +234,9 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   defp text(value) do
     case value do
       {kind, bytes} when kind in [:string, :hex] ->
-        case InfoCodec.decode_text(bytes) do
-          {:ok, text} -> {:ok, text}
+        case InfoValidator.decode_metadata_text(bytes) do
           :error -> error("attachment text has invalid encoding")
+          result -> result
         end
 
       _ ->
@@ -237,9 +246,16 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
 
   defp existing_mime(value) do
     case value do
-      nil -> {:ok, nil}
-      {:name, mime} -> MimeValidator.validate(mime)
-      _ -> error("embedded file Subtype must be a MIME name")
+      nil ->
+        {:ok, nil}
+
+      {:name, mime} ->
+        with {:ok, mime} <- MimeValidator.validate(mime),
+             :ok <- ResourceBudgetValidator.reserve(:max_decoded_bytes, byte_size(mime), :limits),
+             do: {:ok, mime}
+
+      _ ->
+        error("embedded file Subtype must be a MIME name")
     end
   end
 

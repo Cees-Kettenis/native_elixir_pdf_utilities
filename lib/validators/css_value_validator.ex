@@ -110,12 +110,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
       case declaration_pair(declaration) do
         {"--" <> _ = property, value} ->
           with {:ok, _references} <- HtmlValidator.parse_css_variable_references(value),
-               do:
-                 validate_resolved(
-                   style,
-                   property,
-                   CssCascadeValidator.custom_value(style, property, value)
-                 )
+               do: validate_resolved(style, property, value)
 
         {property, value} ->
           resolved =
@@ -1430,6 +1425,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
             )
 
           "--" <> _custom_property ->
+            value = CssCascadeValidator.custom_value(style, property, value)
             properties = style |> Map.get(:_custom_properties, %{}) |> Map.put(property, value)
             {:ok, Map.put(style, :_custom_properties, properties)}
 

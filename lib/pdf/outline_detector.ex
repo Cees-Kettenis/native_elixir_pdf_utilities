@@ -31,8 +31,8 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
     |> Enum.with_index(1)
     |> Enum.flat_map(fn {page, number} ->
       axis =
-        case {kind, page.boxes} do
-          {:headings, [%{role: :page_orientation}]} -> :fit_v
+        case page.boxes do
+          [%{role: :page_orientation}] -> :fit_v
           _ -> :fit_h
         end
 

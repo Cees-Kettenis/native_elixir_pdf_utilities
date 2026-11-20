@@ -403,7 +403,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator d
   @spec prepare_source_completion_style(map(), map()) :: map()
   def prepare_source_completion_style(node, style) do
     if source_completion?(node) and Map.get(node, :namespace, :html) == :html and
-         Map.get(node, :tag) not in ~w(base style script title meta link template source) and
+         Map.get(node, :tag) not in ~w(head base style script title meta link template source) and
          Map.get(style, :form_kind) != :hidden do
       style =
         Map.drop(style, [

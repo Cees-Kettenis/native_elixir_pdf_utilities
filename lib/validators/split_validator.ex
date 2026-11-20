@@ -114,7 +114,7 @@ defmodule NativeElixirPdfUtilities.Validators.SplitValidator do
         {:ok, []}
 
       _ ->
-        with {:ok, source} <- AssemblyValidator.prepare_source(context) do
+        with {:ok, source} <- AssemblyValidator.prepare_source(context, Stream.concat(groups)) do
           groups
           |> Enum.reduce_while({:ok, [], 0}, fn group, {:ok, prepared, object_writes} ->
             case prepare_group(source, group, object_writes) do

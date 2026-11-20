@@ -357,7 +357,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                           :caller ->
                             PrintMediaValidator.renderer_context(opts)
                         end),
-                     {:ok, entries} <- stylesheet_entries(dom.children, opts, media_context),
+                     {:ok, entries} <-
+                       stylesheet_entries(dom.children, opts, media_context, :prepare),
                      shadow_entries <-
                        composition.roots
                        |> Enum.sort_by(fn {_scope, root} -> root.order end)
@@ -1137,6 +1138,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           {:ok, [stylesheet_entry()]}
           | {:error, :invalid_document | :invalid_stylesheet_options | {atom(), map()}}
   def load_stylesheets(dom, opts) do
+    HtmlValidator.with_render_budget(fn -> document_stylesheets(dom, opts, :load) end)
+  end
+
+  defp document_stylesheets(dom, opts, mode) do
     NativeElixirPdfUtilities.Validators.HtmlRecoveryValidator.with_render_options(opts, fn ->
       font_options = Font.normalize_options(opts)
 
@@ -1147,7 +1152,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
           with {:ok, media_context} <-
                  PrintMediaValidator.renderer_context(opts),
-               do: stylesheet_entries(children, opts, media_context)
+               do: stylesheet_entries(children, opts, media_context, mode)
 
         {:error, {:invalid_options, _diagnostic}} ->
           {:error, :invalid_stylesheet_options}
@@ -1162,10 +1167,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @spec prepare_stylesheets(term(), [render_option()]) ::
           {:ok, [map()]} | {:error, atom() | {atom(), map()}}
   def prepare_stylesheets(dom, opts) do
-    with {:ok, entries} <- load_stylesheets(dom, opts),
-         {:ok, media_context} <-
-           PrintMediaValidator.renderer_context(opts),
-         do: prepare_stylesheet_entries(entries, media_context)
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, entries} <- document_stylesheets(dom, opts, :prepare),
+           {:ok, media_context} <- PrintMediaValidator.renderer_context(opts),
+           do: prepare_stylesheet_entries(entries, media_context)
+    end)
   end
 
   defp prepare_stylesheet_entries(entries, media_context, source? \\ false) do
@@ -1180,14 +1186,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       fn ->
         Enum.reduce_while(entries, {:ok, []}, fn entry, {:ok, prepared_entries} ->
           prepared =
-            if source?,
-              do:
+            case entry do
+              %{prepared: parsed} ->
+                {:ok, parsed}
+
+              _ when source? ->
                 CssParser.prepare_source_stylesheet(
                   entry.css,
                   :maps.get(:descriptor, entry, nil),
                   media_context
-                ),
-              else: CssParser.prepare_stylesheet(entry.css, media_context)
+                )
+
+              _ ->
+                CssParser.prepare_stylesheet(entry.css, media_context)
+            end
 
           with {:ok, prepared} <- prepared,
                prepared =
@@ -1530,10 +1542,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       %{type: :element, tag: tag, attributes: attributes, children: children}
       when is_binary(tag) and is_map(attributes) and is_list(children) ->
         case tag do
-          tag when tag in ["base", "style", "meta", "title"] ->
-            {:ok, [], counters, counters}
-
-          "head" ->
+          tag when tag in ["base", "style", "meta"] ->
             {:ok, [], counters, counters}
 
           "noframes" ->
@@ -1913,6 +1922,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     )
 
                   {:ok, [skipped], counters, counters}
+
+                :none when tag in ["head", "title"] ->
+                  {:ok, [], counters, counters}
 
                 :none ->
                   {:ok, [%{type: :element, tag: tag, style: element_style, children: []}],
@@ -3383,6 +3395,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         tag
         when tag in [
+               "head",
+               "title",
                "script",
                "template",
                "noembed",
@@ -5515,16 +5529,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             )
 
           result ->
-            result
+            with {:ok, css} <- result, do: admit_stylesheet_bytes(css)
         end
     end
   end
 
-  defp stylesheet_entries(children, opts, media_context) do
+  defp admit_stylesheet_bytes(css) do
+    HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(css), :css)
+    {:ok, css}
+  end
+
+  defp stylesheet_entries(children, opts, media_context, mode) do
     stylesheets = Keyword.get(opts, :stylesheets, [])
     base_url = Keyword.get(opts, :base_url)
 
-    with {:ok, configured_entries} <- configured_stylesheet_entries(stylesheets, base_url, opts) do
+    with {:ok, configured_entries} <-
+           configured_stylesheet_entries(stylesheets, base_url, opts, media_context, mode) do
       embedded_entries =
         children
         |> HtmlMetadataValidator.selected_document_style_nodes(media_context)
@@ -5545,7 +5565,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     end
   end
 
-  defp configured_stylesheet_entries(stylesheets, base_url, opts) do
+  defp configured_stylesheet_entries(stylesheets, base_url, opts, media_context, mode) do
     Enum.reduce_while(stylesheets, {:ok, []}, fn stylesheet, {:ok, acc} ->
       case stylesheet do
         {:css, css} when is_binary(css) ->
@@ -5576,7 +5596,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 trusted_local_resources: true
               }
 
-              {:cont, {:ok, acc ++ [entry]}}
+              # Admit each bounded file snapshot before reading the next one.
+              # A prepared entry carries its parse result through cascade binding.
+              result =
+                case mode do
+                  :prepare ->
+                    with {:ok, parsed} <- CssParser.prepare_stylesheet(css, media_context),
+                         do: {:ok, Map.put(entry, :prepared, parsed)}
+
+                  :load ->
+                    {:ok, _css} = admit_stylesheet_bytes(css)
+                    {:ok, entry}
+                end
+
+              case result do
+                {:ok, entry} -> {:cont, {:ok, acc ++ [entry]}}
+                error -> {:halt, error}
+              end
 
             {:error, {_reason, _diagnostic}} = error ->
               {:halt, error}
@@ -5886,10 +5922,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   end
 
   defp stylesheet_diagnostic_sources(dom, opts) do
-    with {:ok, configured} <- configured_stylesheet_sources(Keyword.get(opts, :stylesheets, [])),
-         {:ok, embedded} <- embedded_stylesheet_sources(dom, opts) do
-      {:ok, configured ++ embedded}
-    end
+    HtmlValidator.with_render_budget(fn ->
+      with {:ok, configured} <- configured_stylesheet_sources(Keyword.get(opts, :stylesheets, [])),
+           {:ok, embedded} <- embedded_stylesheet_sources(dom, opts) do
+        {:ok, configured ++ embedded}
+      end
+    end)
   end
 
   defp configured_stylesheet_sources(stylesheets) do

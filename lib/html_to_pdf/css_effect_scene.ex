@@ -19,45 +19,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectScene do
   @doc "Prepares effect groups while preserving native logical text and annotations."
   @spec prepare(term(), keyword()) :: {:ok, term()} | {:error, {atom(), map()}}
   def prepare(pages, opts) do
-    active =
-      is_list(pages) and
-        Enum.any?(pages, fn page ->
-          case page do
-            %{boxes: boxes} when is_list(boxes) -> scene_boxes?(boxes)
-            _ -> false
+    with {:ok, active} <- WriterValidator.effect_scene(pages) do
+      if active do
+        with {:ok, _context} <- WriterValidator.prepare(pages, opts) do
+          Enum.reduce_while(pages, {:ok, []}, fn page, {:ok, pages} ->
+            case prepare_boxes(page.boxes, page.size, opts, []) do
+              {:ok, boxes} -> {:cont, {:ok, [%{page | boxes: boxes} | pages]}}
+              error -> {:halt, error}
+            end
+          end)
+          |> case do
+            {:ok, pages} -> {:ok, Enum.reverse(pages)}
+            error -> error
           end
-        end)
-
-    admission =
-      if active, do: with({:ok, _} <- WriterValidator.prepare(pages, opts), do: :ok), else: :ok
-
-    if not active do
-      {:ok, pages}
-    else
-      with :ok <- admission do
-        Enum.reduce_while(pages, {:ok, []}, fn page, {:ok, pages} ->
-          case prepare_boxes(page.boxes, page.size, opts, []) do
-            {:ok, boxes} -> {:cont, {:ok, [%{page | boxes: boxes} | pages]}}
-            error -> {:halt, error}
-          end
-        end)
-        |> case do
-          {:ok, pages} -> {:ok, Enum.reverse(pages)}
-          error -> error
         end
+      else
+        {:ok, pages}
       end
     end
-  end
-
-  defp scene_boxes?(boxes) do
-    Enum.any?(boxes, fn box ->
-      case box do
-        %{css_effect: _} -> true
-        %{css_projection: _} -> true
-        %{boxes: children} when is_list(children) -> scene_boxes?(children)
-        _ -> false
-      end
-    end)
   end
 
   defp prepare_boxes(boxes, size, opts, preceding) do

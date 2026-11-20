@@ -183,6 +183,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkGlobalStateTest do
              )
 
     assert prepared.source =~ "xmlns="
+    assert {:ok, nil} = SvgRasterizer.measure_bounds(source, "unpainted")
     Limits.install(%{limits | max_work: 1_500})
     assert {:ok, _} = SvgValidator.validate_processing(source, %{mode: :image})
 
@@ -191,6 +192,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgParserWorkGlobalStateTest do
 
     assert diagnostic.message =~ "max_work"
     assert diagnostic.source == "SVG"
+
+    assert {:error, {:resource_limit_exceeded, bounds}} =
+             SvgRasterizer.measure_bounds(source, "unpainted")
+
+    assert bounds.message =~ "max_work" and bounds.source == "SVG"
+
+    assert {:error, {:resource_limit_exceeded, %{source: "SVG"}}} =
+             HtmlValidator.with_render_budget(fn ->
+               SvgRasterizer.measure_bounds(source, "unpainted")
+             end)
 
     assert {:error, {:resource_limit_exceeded, _}} =
              SvgParserWorkValidator.validate(prepared.source)

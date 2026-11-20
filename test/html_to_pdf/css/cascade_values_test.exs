@@ -35,6 +35,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CascadeValuesTest do
     assert nodes["a"].width == 3.0
   end
 
+  test "literal CSS-wide custom properties inherit, default and roll back before var substitution" do
+    keywords = ~w(initial inherit unset revert revert-layer)
+
+    children =
+      Enum.map_join(keywords, fn keyword ->
+        "<p id='#{keyword}' style='--unused:#{keyword};--tone:#{keyword};color:var(--tone,red)'>Text</p>"
+      end)
+
+    nodes =
+      CssStyles.by_id(
+        "<div style='--tone:blue'>#{children}</div>",
+        ["@layer base { #revert-layer { --tone:lime } }"]
+      )
+
+    assert nodes["initial"].color == {1, 0, 0}
+    assert nodes["inherit"].color == {0, 0, 1}
+    assert nodes["unset"].color == {0, 0, 1}
+    assert nodes["revert"].color == {0, 0, 1}
+    assert nodes["revert-layer"].color == {0, 1, 0}
+  end
+
   test "pending shorthand values project only their winning longhands and reset omitted components" do
     nodes =
       CssStyles.by_id("""

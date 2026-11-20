@@ -38,6 +38,22 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   @page_number_option_keys @text_option_keys ++ [:format, :numbering]
   @overlay_option_keys [:pages, :overlay_pages, :fit, :opacity]
 
+  @doc "Admits both source binaries against the same input allowance before either PDF is parsed."
+  @spec admit_overlay_inputs(term(), term()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def admit_overlay_inputs(target, overlay) do
+    if is_binary(target) and is_binary(overlay) do
+      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+        :max_input_bytes,
+        byte_size(target) + byte_size(overlay),
+        :limits,
+        module: __MODULE__,
+        operation: :overlay_pdf
+      )
+    else
+      error(:input, :invalid_pdf_input, "PDF input must be a binary")
+    end
+  end
+
   @doc false
   @spec prepare_text(PdfValidator.context(), term(), term(), :text | :watermark) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
@@ -96,7 +112,6 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_overlay(target_context, overlay_context, options) do
     with {:ok, options} <- normalize_options(options, @overlay_option_keys),
-         :ok <- PdfValidator.validate_artwork_import(overlay_context),
          {:ok, fit} <- fit_mode(Map.get(options, :fit, :exact)),
          {:ok, opacity} <- opacity(Map.get(options, :opacity, 1.0)),
          {:ok, target_pages} <-
@@ -106,7 +121,9 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
              Map.get(options, :overlay_pages, {:repeat, 1}),
              length(overlay_context.pages),
              length(target_pages)
-           ) do
+           ),
+         :ok <-
+           PdfValidator.validate_artwork_import(overlay_context, overlay_page_numbers, :overlay) do
       prepare_overlay_pages(
         target_context,
         target_pages,

@@ -1963,8 +1963,9 @@ end)
 {:ok, pdf} = HtmlToPdf.render(html, forms: :interactive, system_font_discovery: false)
 ```
 
-Field counts, appearances and document pages have separate
-[resource limits](resource-limits.md#shared-processing-budgets).
+Fields and widgets count toward the shared `max_entries` limit. Appearance
+output uses `max_output_bytes`, and `max_pages` bounds the document’s page count.
+See [resource limits](resource-limits.md#shared-processing-budgets).
 
 ### Language selectors
 

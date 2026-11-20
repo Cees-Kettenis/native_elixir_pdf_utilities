@@ -1474,7 +1474,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
          {"implicit scope", {20, 729, 555, 12}},
          {"independent variable line height", {20, 741, 555, 12}},
          {"independent shorthand line height", {20, 753, 555, 12}},
-         {"defaulted inherited line height", {350, 753, 220, 12}}
+         {"defaulted inherited line height", {350, 753, 220, 12}},
+         {"literal custom property defaults", {350, 525, 200, 12}}
        ],
        max_changed_ratio: 0.01,
        max_average_delta: 0.03
@@ -1629,10 +1630,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
         "color-mix(in oklab,red #{100 - percent}%,blue #{percent}%) #{percent}%"
       end)
 
-    String.replace(
-      html,
+    # CSS Images 3 CRD 2023-12-18 §3.3 gives collapsed repeats equal-length
+    # segments. Chromium prints the last stop here, so paint the specified
+    # independent premultiplied sRGB averages for these three swatches.
+    html
+    |> String.replace(
       "linear-gradient(to right in oklab,red,blue)",
       "linear-gradient(to right,#{stops})"
+    )
+    |> String.replace("repeating-linear-gradient(red 0pt,blue 0pt)", "rgb(50% 0% 50%)")
+    |> String.replace("repeating-linear-gradient(red 0pt,white 0pt,blue 0pt)", "rgb(75% 50% 75%)")
+    |> String.replace(
+      "repeating-radial-gradient(red 10%,transparent 10%,blue 10%)",
+      "rgb(50% 0% 50% / 50%)"
     )
   end
 
@@ -2669,9 +2679,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
                else: {name, %{max_changed_ratio: 0.18, max_average_delta: 0.05}}
           end)
 
+        # Measure the flat interior, away from captions and swatch edges.
+        collapsed = [
+          {"Zero pair", {90, 2240, 160, 30}},
+          {"Zero triple", {438, 2240, 160, 30}},
+          {"Zero alpha", {786, 2240, 160, 30}}
+        ]
+
+        flat_thresholds =
+          Map.new(collapsed, fn {name, {_, _, width, height}} ->
+            # The helper uses a strict inequality. One pixel is the first failing ratio.
+            {name, %{max_changed_ratio: 1 / (width * height), max_average_delta: 0.005}}
+          end)
+
         thresholds
-        |> Keyword.put(:regions, regions)
-        |> Keyword.put(:region_thresholds, region_thresholds)
+        |> Keyword.put(:regions, regions ++ collapsed)
+        |> Keyword.put(:region_thresholds, Map.merge(region_thresholds, flat_thresholds))
       else
         thresholds
       end
@@ -2730,6 +2753,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
                  NativeElixirPdfUtilities.Forms.fields(
                    File.read!(Path.join(artifact_dir, "native.pdf"))
                  )
+      end
+    end
+
+    if fixture_name == "generated_content_counters.html" do
+      # CSS Counter Styles 3 (2021-07-27), §§2, 3.1.7 and 6.1.
+      for file <- ["native.pdf", "chromium.pdf"] do
+        assert {:ok, text} =
+                 NativeElixirPdfUtilities.Text.extract_file(Path.join(artifact_dir, file))
+
+        text = String.replace(text, ~r/\s/u, "")
+
+        # HTML LS §15.3.1 and CSS Cascade 5 (2022-01-13), §6.1.
+        for label <- [
+              "[A]Firstbracket",
+              "[2]Fallbackbracket",
+              "01)Inheritedpad",
+              "Printedmetadatatitle"
+            ],
+            do: assert(text =~ label)
       end
     end
 

@@ -130,6 +130,8 @@
       .cascade-lineheight { --cascade-height:12pt;line-height:var(--cascade-height);--cascade-relative:0.75lh;font-size:var(--cascade-relative); }
       .cascade-font-height { --cascade-relative:0.75lh;font:var(--cascade-relative)/12pt "DejaVu Sans"; }
       .cascade-inherited-lineheight { position:absolute;left:330pt;top:228pt;width:200pt;height:12pt;line-height:var(--missing); }
+      @layer cascade-base { .cascade-literal { --tone:#064f80; } }
+      .cascade-literal { position:absolute;left:330pt;top:0;width:200pt; --tone:revert-layer; --fill:initial; color:var(--tone); background:var(--fill,#e8f2fa); }
     </style>
   </head>
   <body>
@@ -189,6 +191,7 @@
         <p class="cascade-row cascade-lineheight">Independent variable line height</p>
         <p class="cascade-row cascade-font-height">Independent shorthand line height</p>
         <div class="cascade-inherited-lineheight">Inherited line height</div>
+        <p class="cascade-row cascade-literal">Literal custom property defaults</p>
       </section>
     </main>
   </body>

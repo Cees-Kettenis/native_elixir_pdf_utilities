@@ -34,8 +34,9 @@ metadata and form configuration.
 
 ## Errors and limits
 
-A source with an optional-content configuration (`/OCProperties`) returns
-`:unsupported_pdf_feature` because its layer visibility depends on the source catalog.
+Unused layer definitions in the source catalog are supported. If a page resource
+or annotation refers to optional content, merging returns `:unsupported_pdf_feature`
+because the rebuilt catalog cannot preserve its layer visibility.
 
 An empty list returns `:empty_pdf_list`. Encrypted, malformed, or unsupported
 inputs return a [diagnostic](diagnostics.md). Reader and preparation failures

@@ -39,7 +39,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormValidator do
   defp prepare_uncached_source(source) do
     # Enter the bounded operation before opening its process-local allowances.
     # Reader.read then reuses this worker for parsing and subsequent decoding.
-    Operation.run(__MODULE__, :prepare_pdf_form, fn ->
+    Operation.run_with_shared_budget(__MODULE__, :prepare_pdf_form, fn ->
       HtmlValidator.with_render_budget(fn ->
         PdfValidator.with_reader_budget(fn ->
           with {:ok, document} <- Reader.read(source),

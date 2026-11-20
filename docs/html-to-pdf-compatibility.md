@@ -1,8 +1,8 @@
 # HTML and CSS support
 
 Render static reports, invoices, forms and labels. Start with the
-[examples](html-to-pdf-examples.md). Unsupported features return
-[diagnostics](diagnostics.md).
+[examples](html-to-pdf-examples.md). Rendering skips invalid CSS selector rules.
+An invalid value for a supported property can return a [diagnostic](diagnostics.md).
 
 ## HTML support
 

@@ -796,9 +796,8 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp project_line(spans, min_x) do
-    {parts, _current_x, _first?, whitespace_bytes} =
-      Enum.reduce(spans, {[], min_x, true, 0}, fn span,
-                                                  {parts, current_x, first?, whitespace_bytes} ->
+    {parts, _current_x, _first?} =
+      Enum.reduce(spans, {[], min_x, true}, fn span, {parts, current_x, first?} ->
         space_width = max(span.font_size * 0.25, 4.0)
         gap = span.x - current_x
 
@@ -809,11 +808,16 @@ defmodule NativeElixirPdfUtilities.Text do
             true -> 0
           end
 
-        {[{spaces, span.text} | parts], max(span.end_x, span.x), false, whitespace_bytes + spaces}
+        {[{spaces, span.text} | parts], max(span.end_x, span.x), false}
       end)
 
     parts = trim_line_end(parts)
-    bytes = Enum.reduce(parts, 0, fn {spaces, text}, sum -> sum + spaces + byte_size(text) end)
+
+    {bytes, whitespace_bytes} =
+      Enum.reduce(parts, {0, 0}, fn {spaces, text}, {bytes, whitespace} ->
+        {bytes + spaces + byte_size(text), whitespace + spaces}
+      end)
+
     %{parts: parts, bytes: bytes, whitespace_bytes: whitespace_bytes}
   end
 

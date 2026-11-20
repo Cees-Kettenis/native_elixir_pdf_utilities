@@ -76,6 +76,37 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceBudgetValidator do
     end
   end
 
+  @doc "Carries an active allowance through a synchronous bounded worker and restores its consumed totals to the waiting caller."
+  @spec with_worker(((-> term()) -> term()), (-> term())) :: term()
+  def with_worker(dispatch, fun) do
+    case snapshot() do
+      nil ->
+        dispatch.(fun)
+
+      before ->
+        receipt = make_ref()
+
+        case dispatch.(fn ->
+               restore_counters(before)
+               result = fun.()
+               {receipt, result, snapshot()}
+             end) do
+          {^receipt, result, totals} ->
+            restore_counters(totals)
+            result
+
+          failure ->
+            failure
+        end
+    end
+  end
+
+  defp restore_counters(totals) do
+    scope = Process.get(@scope)
+    Process.put(scope, Map.keys(totals))
+    Enum.each(totals, fn {limit, used} -> Process.put({scope, limit}, used) end)
+  end
+
   @doc "Identifies an active allowance when an explicitly passed standalone budget needs to join it."
   @spec active?() :: boolean()
   def active?, do: Process.get(@scope) != nil

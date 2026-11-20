@@ -2314,6 +2314,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert linked =~ "https://example.test"
   end
 
+  test "head and title display overrides paint the metadata title when both are visible" do
+    for {css, shown?} <- [
+          {"", false},
+          {"head { display:block }", false},
+          {"title { display:block }", false},
+          {"head, title { display:block }", true}
+        ] do
+      html = """
+      <html><head><title>Print &amp; archive</title><style>#{css}</style>
+      <script type="application/json">{"inert":"HiddenData"}</script></head>
+      <body>Body marker</body></html>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{title: "Print & archive"}} = NativeElixirPdfUtilities.Info.get(pdf)
+      assert {:ok, printed} = Text.extract(pdf)
+      assert printed =~ "Body marker"
+      assert printed =~ "Print & archive" == shown?
+      refute printed =~ "HiddenData"
+    end
+  end
+
   test "head noscript metadata preserves source order and caller precedence" do
     html =
       "<html><head><title>Fallback</title><meta name=author content=Before><noscript><meta name=author content=Active><meta name=description content=Subject><meta name=keywords content='one, two'></noscript><meta name=author content=After></head><body><p>Visible</p><template><noscript><meta name=author content=Unused></noscript></template></body></html>"

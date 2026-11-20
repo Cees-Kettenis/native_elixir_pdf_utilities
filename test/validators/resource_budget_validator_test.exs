@@ -182,6 +182,24 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceBudgetValidatorTest do
     end)
   end
 
+  test "a bounded child preserves prior reservations when it cannot start document work" do
+    Limits.install(%{Limits.effective() | max_operation_memory_bytes: 1})
+
+    ResourceBudgetValidator.with_budget(fn ->
+      assert :ok = ResourceBudgetValidator.reserve(:max_entries, 2, :writer)
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               Operation.run_with_shared_budget(__MODULE__, :import, fn ->
+                 flunk("unreachable")
+               end)
+
+      assert diagnostic.operation == :import and
+               diagnostic.message =~ "max_operation_memory_bytes"
+
+      assert ResourceBudgetValidator.snapshot() == %{max_entries: 2}
+    end)
+  end
+
   test "nested public operations share their worker's resource scope and completed operations release it" do
     Limits.install(Map.put(Limits.effective(), :max_work, 3))
 

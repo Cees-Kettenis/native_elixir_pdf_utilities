@@ -31,6 +31,54 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
     end
   end
 
+  test "layer import checks nested resources and retained annotations with catalog configuration" do
+    assert {:ok, context} = PdfValidator.validate(shared_document())
+    context = put_in(context.catalog["OCProperties"], %{"OCGs" => []})
+    [page] = context.pages
+    missing = {:ref, {999, 0}}
+
+    for resource <- [
+          %{
+            "XObject" => %{
+              "Nested" => %{
+                "Resources" => %{"Properties" => %{"Layer" => %{"Type" => {:name, "OCMD"}}}}
+              }
+            }
+          },
+          %{"XObject" => %{"Nested" => %{"OC" => %{"Type" => {:name, "OCG"}}}}}
+        ] do
+      input = %{context | pages: [%{page | resources: resource}]}
+
+      assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} =
+               PdfValidator.validate_artwork_import(input, :all, :overlay)
+    end
+
+    annotation = %{"OC" => %{"Type" => {:name, "OCG"}}}
+    page = put_in(page.dictionary["Annots"], [annotation])
+    annotated = %{context | pages: [page]}
+    assert :ok = PdfValidator.validate_artwork_import(annotated, :all, :overlay)
+
+    assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} =
+             PdfValidator.validate_artwork_import(annotated, :all, :pages)
+
+    assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} =
+             NativeElixirPdfUtilities.Validators.AssemblyValidator.prepare_source(annotated)
+
+    for entry <- [%{}, %{"OCGs" => 1}] do
+      input = put_in(context.catalog["OCProperties"], entry)
+
+      assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} =
+               PdfValidator.validate_artwork_import(input, :all, :pages)
+    end
+
+    for resource <- [%{"Type" => missing}, %{"OC" => missing}, missing] do
+      input = %{context | pages: [%{page | resources: resource}]}
+
+      assert {:error, {:invalid_pdf_input, %{stage: :resolution}}} =
+               PdfValidator.validate_artwork_import(input, :all, :overlay)
+    end
+  end
+
   test "normalizes Contents and rejects missing, cyclic, and non-stream references" do
     document = %{
       objects: %{

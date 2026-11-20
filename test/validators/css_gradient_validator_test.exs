@@ -89,6 +89,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssGradientValidatorTest do
     assert CssGradient.sample(plan, 50, 10) == {0.5, 0.0, 0.5, 1.0}
   end
 
+  test "collapsed repeats average every stop pair in premultiplied sRGB" do
+    for {source, expected} <- [
+          {"repeating-linear-gradient(red 0pt,white 0pt,blue 0pt)", {0.75, 0.5, 0.75, 1.0}},
+          {"repeating-radial-gradient(red 10%,transparent 10%,blue 10%)", {0.5, 0.0, 0.5, 0.5}},
+          {"repeating-conic-gradient(in oklab,red 0deg,white 0deg,blue 0deg)",
+           {0.75, 0.5, 0.75, 1.0}},
+          {"repeating-linear-gradient(transparent 0pt,transparent 0pt)", {0.0, 0.0, 0.0, 0.0}}
+        ] do
+      assert {:ok, gradient} = CssGradientValidator.prepare(source, @style)
+      assert {:ok, plan} = CssGradient.prepare(gradient, 100, 20, @style)
+      for point <- [1, 50, 99], do: assert(CssGradient.sample(plan, point, 10) == expected)
+    end
+  end
+
   test "radial circles and ellipses use their selected center, radii and corner extent" do
     for {source, point, expected} <- [
           {"radial-gradient(circle 20pt at 30pt 30pt, red, blue)", {40, 30},

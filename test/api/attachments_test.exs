@@ -98,6 +98,24 @@ defmodule NativeElixirPdfUtilities.AttachmentsGlobalStateTest do
     %{pdf: pdf}
   end
 
+  test "listing charges decoded name-tree keys, filenames, descriptions and MIME types together",
+       %{pdf: pdf} do
+    files =
+      for filename <- ["a.txt", "b.txt"], do: %{filename: filename, bytes: "", description: "界"}
+
+    assert {:ok, attached} = Attachments.embed(pdf, files)
+    total = 2 * byte_size("a.txta.txt界text/plain")
+    limits = Limits.effective()
+    Limits.install(%{limits | max_decoded_bytes: total})
+    assert {:ok, [first, second]} = Attachments.list(attached)
+    assert {first.filename, second.filename, second.description} == {"a.txt", "b.txt", "界"}
+
+    Limits.install(%{limits | max_decoded_bytes: total - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Attachments.list(attached)
+    assert diagnostic.stage == :limits and diagnostic.operation == :list
+    assert diagnostic.module == Attachments and diagnostic.message =~ "max_decoded_bytes"
+  end
+
   test "validates metadata and limits", %{pdf: pdf} do
     for attachment <- [
           nil,

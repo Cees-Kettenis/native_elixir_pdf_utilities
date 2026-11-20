@@ -2,7 +2,7 @@ defmodule NativeElixirPdfUtilities.Operation do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
-  alias NativeElixirPdfUtilities.Validators.OperationValidator
+  alias NativeElixirPdfUtilities.Validators.{OperationValidator, ResourceBudgetValidator}
 
   @scope_key {__MODULE__, :request}
 
@@ -94,6 +94,18 @@ defmodule NativeElixirPdfUtilities.Operation do
 
       _request ->
         fun.()
+    end
+  end
+
+  @doc "Runs bounded work with the calling preparation's cumulative resource counters."
+  @spec run_with_shared_budget(module(), atom(), (-> result)) ::
+          result | {:error, {atom(), Diagnostics.diagnostic()}}
+        when result: term()
+  def run_with_shared_budget(module, operation, fun) do
+    if Process.get(@scope_key) do
+      fun.()
+    else
+      ResourceBudgetValidator.with_worker(fn scoped -> run(module, operation, scoped) end, fun)
     end
   end
 

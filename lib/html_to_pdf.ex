@@ -15,10 +15,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
     * paginate layout boxes
     * write PDF bytes
 
-  The supported surface is a strict, document-oriented HTML/CSS subset.
-  Malformed structure and unsupported features return errors instead of using
-  browser-like guessing. Unsupported text graphemes are visibly replaced by
-  default. See the
+  The renderer supports a document-oriented HTML/CSS subset. It skips invalid
+  CSS selector rules. Invalid values for supported properties can return a CSS
+  diagnostic. Unsupported text graphemes are visibly replaced by default. See the
   [HTML-to-PDF compatibility guide](html-to-pdf-compatibility.html) for the
   current element, CSS, layout, image, and font support.
   """
@@ -144,6 +143,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
           | :resource_not_found
           | :resource_limit_exceeded
           | :unsupported_form
+          | :unsupported_font
           | :unsupported_glyph
           | :unsupported_html
           | File.posix()
@@ -276,7 +276,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
   authorized, the rename can complete even if the caller exits. Concurrent
   successful writes leave the last installed PDF at the path.
 
-  The destination must be a regular file or a new path in a writable directory.
+  The output directory must permit file creation and renaming, including when
+  replacing an existing writable regular file. If the filesystem denies the
+  write, the diagnostic identifies the output path and the `:write` operation.
   Output symlinks are followed. A replacement keeps the ordinary permission
   bits. Ownership and extended permissions follow filesystem creation rules.
   Other hard links keep the previous file.

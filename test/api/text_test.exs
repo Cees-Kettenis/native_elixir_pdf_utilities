@@ -1389,6 +1389,10 @@ defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
     Limits.install(%{original | max_output_bytes: 5})
     assert {:ok, "A"} = Text.extract(source)
 
+    far_right = page_pdf("BT /F1 12 Tf (A) Tj 1 0 0 1 140 0 Tm (  ) Tj ET")
+    assert {:ok, "A"} = Text.extract(far_right)
+    assert {:ok, "A   "} = Text.extract(far_right, layout: false)
+
     blank = page_pdf("BT /F1 12 Tf (   ) Tj ET")
     assert {:ok, ""} = Text.extract(blank)
   end

@@ -219,6 +219,40 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
              Text.extract_file_spans(path)
   end
 
+  test "configured stylesheets consume aggregate input as each file is admitted", %{root: root} do
+    alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
+    dom = %{type: :document, children: []}
+    first = Path.join(root, "first.css")
+    second = Path.join(root, "second.css")
+    File.write!(first, "/*a*/")
+    File.write!(second, "/*b*/")
+    opts = [stylesheets: [{:file, first}, {:file, second}]]
+    limits = Limits.effective()
+
+    for load <- [&Style.load_stylesheets/2, &Style.prepare_stylesheets/2] do
+      Limits.install(%{limits | max_input_bytes: 9})
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :file, source: ^second}}} =
+               load.(dom, opts)
+
+      repeated = [stylesheets: [{:file, first}, {:file, first}]]
+
+      RenderCache.with_stylesheets(fn ->
+        Limits.install(%{limits | max_input_bytes: 10})
+        assert {:ok, [%{css: "/*a*/"}, %{css: "/*a*/"}]} = load.(dom, repeated)
+        Limits.install(%{limits | max_input_bytes: 9})
+        assert {:error, {:resource_limit_exceeded, %{stage: :css}}} = load.(dom, repeated)
+      end)
+
+      Limits.install(%{limits | max_input_bytes: 10})
+      assert {:ok, [%{css: "/*a*/"}, %{css: "/*b*/"}]} = load.(dom, opts)
+    end
+
+    Limits.install(limits)
+    File.write!(second, <<255>>)
+    assert {:error, {:invalid_css, %{stage: :css}}} = Style.prepare_stylesheets(dom, opts)
+  end
+
   test "local image reads use remaining aggregate capacity and stop at count limits", %{
     root: root
   } do

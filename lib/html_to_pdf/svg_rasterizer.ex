@@ -182,22 +182,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
   end
 
   defp with_staging(operation) do
-    directory =
-      Path.join(
-        System.tmp_dir!(),
-        "nepu-svg-#{System.pid()}-" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
-      )
-
-    result =
-      with :ok <- File.mkdir(directory) do
-        try do
-          with :ok <- File.chmod(directory, 0o700), do: operation.(directory)
-        after
-          File.rm_rf(directory)
-        end
-      end
-
-    case result do
+    case NativeElixirPdfUtilities.HtmlToPdf.SvgStaging.with_directory(operation) do
       {:error, reason} when is_atom(reason) -> SvgConverterValidator.staging_error(reason)
       result -> result
     end

@@ -479,6 +479,25 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     assert diagnostic.message =~ "cycle"
   end
 
+  test "catalog-only layer definitions preserve imported text and page order" do
+    source =
+      three_page_pdf(
+        "",
+        [
+          {16, "<< /Type /OCG /Name (Unused layer) >>"},
+          {17, "[16 0 R]"}
+        ],
+        "/OCProperties << /OCGs 17 0 R /D << /BaseState /OFF >> >>"
+      )
+
+    assert {:ok, merged} = Merge.merge([source])
+    assert {:ok, "One\nTwo\nThree"} = Text.extract(merged, layout: false)
+    assert {:ok, picked} = Transform.pick_pages(source, [3, 1])
+    assert {:ok, "Three\nOne"} = Text.extract(picked, layout: false)
+    assert {:ok, [_, second, _]} = Split.by_page(source)
+    assert {:ok, "Two"} = Text.extract(second)
+  end
+
   test "preserves direct named annotations in direct and indirect arrays" do
     annotations =
       "[<< /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >> " <>

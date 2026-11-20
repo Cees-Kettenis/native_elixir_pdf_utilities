@@ -999,27 +999,123 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end)
   end
 
-  @doc "Checks that importing page artwork without its source catalog preserves layer visibility."
+  @doc "Checks selected artwork and retained annotations before discarding the source layer configuration."
   @spec validate_artwork_import(context()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_artwork_import(context) do
+  @spec validate_artwork_import(context(), :all | Enumerable.t()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  @spec validate_artwork_import(context(), :all | Enumerable.t(), :pages | :overlay) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_artwork_import(context, selection \\ :all, kind \\ :pages) do
     case context do
       %{catalog: %{"OCProperties" => entry}} ->
-        with {:ok, properties} <- resolve(context.document, entry) do
-          if is_nil(properties) do
-            :ok
-          else
-            error(
-              :optional_content,
-              :unsupported_pdf_feature,
-              "page import cannot preserve layer visibility from the source catalog's OCProperties",
-              []
-            )
-          end
-        end
+        with_reader_budget(fn ->
+          with_reference_resolution([], fn opts ->
+            with {:ok, properties} <- resolve(context.document, entry, opts) do
+              case properties do
+                nil ->
+                  :ok
+
+                %{"OCGs" => groups} ->
+                  check_selected_artwork(context, groups, selection, kind, opts)
+
+                _ ->
+                  layer_import_error()
+              end
+            end
+          end)
+        end)
 
       _ ->
         :ok
     end
+  end
+
+  defp check_selected_artwork(context, groups, selection, kind, opts) do
+    with {:ok, groups} <- resolve(context.document, groups, opts) do
+      if is_list(groups) do
+        selected = if selection == :all, do: :all, else: MapSet.new(selection)
+
+        roots =
+          for {page, index} <- Enum.with_index(context.pages, 1),
+              selected == :all or MapSet.member?(selected, index) do
+            annotations = if kind == :pages, do: page.dictionary["Annots"]
+            [page.resources, page.dictionary["Group"], annotations]
+          end
+
+        # Annotation page pointers and link destinations can lead back into
+        # the page tree. Only the selected pages contribute artwork here.
+        pages = MapSet.new(context.pages, & &1.ref)
+        check_layer_dependencies(roots, context.document, pages, MapSet.new(groups), opts)
+      else
+        layer_import_error()
+      end
+    end
+  end
+
+  # ISO 32000-1, 8.11.3: marked content binds to a named Properties resource.
+  # Forms, patterns, glyphs and annotation appearances can have nested resources.
+  # Their stream data and image pixels do not need to be decoded for this check.
+  defp check_layer_dependencies(values, document, seen, groups, opts) do
+    case values do
+      [] ->
+        :ok
+
+      [value | rest] ->
+        charge_reader_budget(:max_work, 1)
+
+        case value do
+          {:ref, ref} ->
+            cond do
+              MapSet.member?(groups, value) ->
+                layer_import_error()
+
+              MapSet.member?(seen, ref) ->
+                check_layer_dependencies(rest, document, seen, groups, opts)
+
+              true ->
+                with {:ok, resolved} <- resolve(document, value, opts) do
+                  check_layer_dependencies(
+                    [resolved | rest],
+                    document,
+                    MapSet.put(seen, ref),
+                    groups,
+                    opts
+                  )
+                end
+            end
+
+          dictionary when is_map(dictionary) ->
+            with {:ok, nil} <- resolve(document, dictionary["OC"], opts),
+                 {:ok, type} when type not in [{:name, "OCG"}, {:name, "OCMD"}] <-
+                   resolve(document, dictionary["Type"], opts) do
+              check_layer_dependencies(
+                Map.values(dictionary) ++ rest,
+                document,
+                seen,
+                groups,
+                opts
+              )
+            else
+              {:ok, _} -> layer_import_error()
+              {:error, _} = error -> error
+            end
+
+          array when is_list(array) ->
+            check_layer_dependencies(array ++ rest, document, seen, groups, opts)
+
+          _ ->
+            check_layer_dependencies(rest, document, seen, groups, opts)
+        end
+    end
+  end
+
+  defp layer_import_error do
+    error(
+      :optional_content,
+      :unsupported_pdf_feature,
+      "page import cannot preserve layer visibility from the source catalog's OCProperties",
+      []
+    )
   end
 
   @doc "Resolves a link's explicit destination or local GoTo action, treating a PDF null as absent."

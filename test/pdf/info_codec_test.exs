@@ -13,6 +13,20 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodecTest do
     assert InfoCodec.decode_text(<<0>>) == :error
   end
 
+  test "bounded decoding counts UTF-8 bytes across all PDF string encodings" do
+    for {source, expected} <- [
+          {<<0xEF, 0xBB, 0xBF, "💡">>, "💡"},
+          {<<0xFE, 0xFF, 0x75, 0x4C, 0xD8, 0x3D, 0xDC, 0xA1>>, "界💡"},
+          {<<0x80>>, "•"}
+        ] do
+      assert InfoCodec.decode_text(source, byte_size(expected)) == {:ok, expected}
+      assert InfoCodec.decode_text(source, byte_size(expected) - 1) == :limit_exceeded
+    end
+
+    assert InfoCodec.decode_text(<<0xFE, 0xFF, 0xD8, 0x00>>, 1) == :error
+    assert InfoCodec.decode_text(<<0>>, 1) == :error
+  end
+
   test "encodes ASCII as literal values and Unicode as UTF-16BE hexadecimal values" do
     assert InfoCodec.encode_text("Title") == {:string, "Title"}
 

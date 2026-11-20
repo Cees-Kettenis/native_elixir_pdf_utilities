@@ -225,6 +225,40 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetGlobalStateTest
     assert {:ok, _pdf} = PdfWriter.render([%{size: {100, 60}, boxes: [box]}])
   end
 
+  test "standalone page and appearance writers share decoding across distinct imports", %{
+    context: context
+  } do
+    draws =
+      for ending <- ["Q ", "Q\n"] do
+        pdf = source(context, [{%{}, "q "}, {%{}, ending}], [0, 1])
+        image = %{format: :pdf_form, data: pdf, width_px: 100, height_px: 60}
+        %{type: :image, x: 0, y: 0, width: 100, height: 60, image: image}
+      end
+
+    page = %{size: {100, 60}, boxes: draws}
+    repeated = %{page | boxes: List.duplicate(hd(draws), 2)}
+    limits = Limits.effective()
+
+    for write <- [
+          fn pages ->
+            with {:ok, pdf} <- PdfWriter.render(pages), do: Reader.read_validated(pdf)
+          end,
+          fn pages ->
+            with {:ok, objects, [_ref], _next} <- PdfWriter.appearance_objects(pages, 1),
+                 do: {:ok, objects}
+          end
+        ] do
+      Limits.install(%{limits | max_decoded_bytes: 5})
+      assert {:ok, _} = write.([repeated])
+      Limits.install(%{limits | max_decoded_bytes: 9})
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = write.([page])
+      assert diagnostic.stage == :limits and diagnostic.operation == :write_pdf
+      assert diagnostic.message =~ "max_decoded_bytes"
+      Limits.install(%{limits | max_decoded_bytes: 10})
+      assert {:ok, _} = write.([page])
+    end
+  end
+
   test "both writer entry points parse a repeated source once and ignore supplied preparation", %{
     context: context
   } do

@@ -67,5 +67,11 @@ The reader supports classic cross-reference tables, cross-reference streams,
 object streams, hybrid files, and incremental revisions. It reads the active
 revision, not the full edit history. Encrypted documents are rejected.
 
+Object zero must be a free entry with generation 65535. A qpdf 12.4.2
+object-stream export can use generation zero when there are no deleted objects.
+Reading that file returns `:invalid_pdf_input` at stage `:xref`. To export with
+a classic cross-reference table, use `qpdf --object-streams=disable input.pdf output.pdf`.
+See [qpdf’s cross-reference stream documentation](https://qpdf.readthedocs.io/en/stable/object-streams.html#cross-reference-stream-data).
+
 See [Checking a PDF](pdf-validation.md), [Diagnostics](diagnostics.md), and
 [Resource limits](resource-limits.md) for failure handling.

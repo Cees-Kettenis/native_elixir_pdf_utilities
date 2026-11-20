@@ -2244,6 +2244,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontGlobalStateTest do
     end
 
     test "bundled math metrics reflect STIX data and ordinary font loading stays lazy" do
+      # Start with an empty cache so earlier suites cannot evict individual
+      # bundled faces between the ordinary load and the warm low-work check.
+      cache = NativeElixirPdfUtilities.HtmlToPdf.FontCache
+      :ok = Supervisor.terminate_child(NativeElixirPdfUtilities.Supervisor, cache)
+      {:ok, _pid} = Supervisor.restart_child(NativeElixirPdfUtilities.Supervisor, cache)
+
       assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
       assert {:ok, _, font} = Font.resolve("math", 400, :normal, registry)
       assert {:ok, m} = Font.math_metrics(font)

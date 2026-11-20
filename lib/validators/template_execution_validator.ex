@@ -857,7 +857,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplateExecutionValidator do
 
       dormant_box? =
         node.type == :element and Map.get(style, :display) == :none and
-          Map.get(node, :tag) not in ~w(base style script title meta link template source) and
+          Map.get(node, :tag) not in ~w(head base style script title meta link template source) and
           Map.get(style, :form_kind) != :hidden
 
       dormant_box? or (text? and not MapSet.member?(actual, node.node_id)) or

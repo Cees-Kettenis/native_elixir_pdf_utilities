@@ -26,6 +26,50 @@ defmodule NativeElixirPdfUtilities.Pdf.InfoCodec do
     end
   end
 
+  @doc "Decodes a PDF metadata string within a UTF-8 byte allowance."
+  @spec decode_text(binary(), non_neg_integer()) :: {:ok, String.t()} | :error | :limit_exceeded
+  def decode_text(bytes, remaining) do
+    # A PDFDocEncoding byte or Unicode scalar expands to at most four UTF-8 bytes.
+    # Ordinary short metadata fits without a separate sizing pass.
+    if byte_size(bytes) * 4 <= remaining do
+      decode_text(bytes)
+    else
+      case bytes do
+        <<0xFE, 0xFF, encoded::binary>> ->
+          decode_bounded(encoded, :utf16, remaining, [])
+
+        <<0xEF, 0xBB, 0xBF, encoded::binary>> ->
+          if byte_size(encoded) <= remaining, do: decode_text(bytes), else: :limit_exceeded
+
+        encoded ->
+          decode_bounded(encoded, :pdf_doc, remaining, [])
+      end
+    end
+  end
+
+  defp decode_bounded(bytes, encoding, remaining, decoded) do
+    case {bytes, encoding} do
+      {<<>>, _} ->
+        {:ok, decoded |> Enum.reverse() |> IO.iodata_to_binary()}
+
+      {<<point::utf16, rest::binary>>, :utf16} ->
+        append_bounded(<<point::utf8>>, rest, encoding, remaining, decoded)
+
+      {<<byte, rest::binary>>, :pdf_doc} ->
+        with {:ok, text} <- TextEncoding.character("PDFDocEncoding", byte, %{}),
+             do: append_bounded(text, rest, encoding, remaining, decoded)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp append_bounded(text, rest, encoding, remaining, decoded) do
+    if byte_size(text) <= remaining,
+      do: decode_bounded(rest, encoding, remaining - byte_size(text), [text | decoded]),
+      else: :limit_exceeded
+  end
+
   @doc false
   @spec encode_text(String.t()) :: {:string, binary()} | {:hex, binary()}
   def encode_text(text) do

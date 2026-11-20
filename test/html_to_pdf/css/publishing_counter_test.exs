@@ -14,6 +14,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PublishingCounterTest do
     @counter-style repeat {system:symbolic;symbols:'*' '#'}
     @counter-style fixed {system:fixed 3;symbols:'A' 'B'}
     @counter-style roman {system:additive;additive-symbols:10 'X',5 'V',1 'I',0 'Z'}
+    @counter-style padded {system:extends decimal-leading-zero;suffix:')'}
     @counter-style inherited {system:extends binary;suffix:'!'}
     @counter-style cyclic {system:cyclic;symbols:'A' 'B'}
     """
@@ -22,6 +23,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PublishingCounterTest do
     assert CounterStyle.marker("binary", 3, styles) == "[0011]"
     assert CounterStyle.format("binary", -3, styles) == "(11)"
     assert CounterStyle.format("binary", 9, styles) == "9"
+    assert CounterStyle.marker("binary", 9, styles) == "[9]"
+    assert CounterStyle.marker("inherited", 9, styles) == "[9!"
+    assert CounterStyle.marker("padded", 1, styles) == "01)"
+
+    for ordinal <- [-12, -1, 0, 1, 10] do
+      assert CounterStyle.format("padded", ordinal, styles) ==
+               CounterStyle.format("decimal-leading-zero", ordinal, styles)
+    end
+
     assert CounterStyle.format("letters", 3, styles) == "aa"
     assert CounterStyle.format("repeat", 3, styles) == "**"
     assert CounterStyle.format("fixed", 3, styles) == "A"

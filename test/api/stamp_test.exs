@@ -658,6 +658,34 @@ defmodule NativeElixirPdfUtilities.StampTest do
              Stamp.overlay(pdf, small_overlay)
   end
 
+  test "admits both overlay inputs once before parsing, independently of the output size" do
+    target = one_page_pdf("Target", {300, 200})
+    source = one_page_pdf("Source", {300, 200})
+    assert {:ok, history} = Info.put(source, %{title: String.duplicate("x", 4096)})
+    total = byte_size(target) + byte_size(history)
+    original = Limits.effective()
+
+    for {left, right} <- [{nil, history}, {target, nil}] do
+      assert {:error, {:invalid_pdf_input, %{stage: :input, operation: :overlay_pdf}}} =
+               Stamp.overlay(left, right)
+    end
+
+    Limits.install(%{original | max_input_bytes: total - 1})
+
+    for input <- [target, :binary.copy("x", byte_size(target))] do
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Stamp.overlay(input, history)
+      assert diagnostic.stage == :limits and diagnostic.operation == :overlay_pdf
+      assert diagnostic.module == Stamp and diagnostic.message =~ "max_input_bytes"
+    end
+
+    for limit <- [total, total + 1] do
+      Limits.install(%{original | max_input_bytes: limit})
+      assert {:ok, output} = Stamp.overlay(target, history)
+      assert byte_size(output) < total
+      assert {:ok, "Target Source"} = Text.extract(output, layout: false)
+    end
+  end
+
   test "stops overlay decoding at the aggregate budget before reading later streams" do
     target = one_page_pdf("Target", {300, 200})
     Limits.install(%{Limits.effective() | max_decoded_bytes: 6})

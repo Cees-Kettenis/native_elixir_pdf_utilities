@@ -105,7 +105,9 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   """
   @spec prepare(PdfValidator.context()) ::
           {:ok, input_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare(pdf_context) do
+  @spec prepare(PdfValidator.context(), :all | Enumerable.t()) ::
+          {:ok, input_context()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare(pdf_context, selection \\ :all) do
     case pdf_context do
       %{document: document, pages: pages} ->
         objects =
@@ -118,7 +120,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
         object_by_ref = Map.new(objects, &{{&1.obj, &1.gen}, &1})
 
-        with :ok <- PdfValidator.validate_artwork_import(pdf_context),
+        with :ok <- PdfValidator.validate_artwork_import(pdf_context, selection),
              :ok <- validate_serializable_objects(objects),
              {:ok, objects} <-
                normalize_named_link_destinations(

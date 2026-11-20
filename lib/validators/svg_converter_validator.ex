@@ -9,6 +9,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
     SvgValidator,
     SvgFilterWorkValidator,
     SvgImageValidator,
+    SvgParserWorkValidator,
     SvgSceneValidator,
     SvgReferenceValidator,
     SvgViewportValidator
@@ -65,7 +66,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                dimensions,
                Keyword.put(options, :scale, scale)
              ),
-           :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(source),
+           :ok <- SvgParserWorkValidator.validate(source),
            :ok <- SvgFilterWorkValidator.reserve(work_root, dimensions, summary.filter_work),
            :ok <-
              HtmlValidator.reserve_render_resource(
@@ -117,20 +118,25 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   @doc "Admits a self-contained SVG for vector-bound measurement without allocating a raster or loading fonts."
   @spec prepare_bounds(term(), term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare_bounds(source, id, context \\ %{mode: :image}) do
-    with true <- is_binary(id) and id != "",
-         {:ok, context} <- SvgValidator.validate_context(context),
-         {:ok, source, summary, _fonts} <-
-           prepare_source(source, context, HtmlValidator.new_image_budget(), 0, nil),
-         :ok <- validate_capabilities(summary) do
-      if summary.text == [] do
-        {:ok, %{source: source, id: id}}
+    NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
+      with true <- is_binary(id) and id != "",
+           {:ok, context} <- SvgValidator.validate_context(context),
+           {:ok, source, summary, _fonts} <-
+             prepare_source(source, context, HtmlValidator.new_image_budget(), 0, nil) do
+        if summary.text == [] do
+          with :ok <- SvgParserWorkValidator.validate(source),
+               do: {:ok, %{source: source, id: id}}
+        else
+          invalid("SVG glyph bounds cannot recursively load text fonts: #{id}")
+        end
       else
-        invalid("SVG glyph bounds cannot recursively load text fonts: #{id}")
+        false -> invalid("SVG bounds require a nonempty element identifier")
+        error -> error
       end
-    else
-      false -> invalid("SVG bounds require a nonempty element identifier")
-      error -> error
-    end
+    end)
+  catch
+    {:render_resource_limit, {:error, {reason, diagnostic}}} ->
+      {:error, {reason, Diagnostics.with_context(diagnostic, source: "SVG")}}
   end
 
   @doc "Validates the existing SVG renderer's selected vector bounds."
@@ -555,7 +561,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
       "image/svg+xml" ->
         with {:ok, source, summary, fonts} <-
                prepare_source(data, context, budget, depth, image_font_options),
-             :ok <- NativeElixirPdfUtilities.Validators.SvgParserWorkValidator.validate(source),
+             :ok <- SvgParserWorkValidator.validate(source),
              {:ok, _} <- SvgValidator.validate_dimensions(summary.root, [], budget),
              {:ok, _} <- prepare_fonts(fonts, summary),
              do: {:ok, source, fonts, summary.filter_work}

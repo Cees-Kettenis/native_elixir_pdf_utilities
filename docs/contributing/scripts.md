@@ -32,6 +32,44 @@ and [testing](testing.md) for requirements. Paths below are relative to `scripts
 
 Raise `QUALITY_MATRIX_JOBS` for additional runtimes only when resources allow.
 
+## Variable-font and WOFF2 references
+
+The two six-glyph “Authored Variable” faces in `test/fixtures/fonts/` are the
+source artwork for `variable-fonts.json` and `variable-cff2-fonts.json`.
+The original binaries are in commit `229a20f77a77f4bf8af51eb66fec703b080fba59`
+at those same paths. Each manifest pins the corresponding source SHA-256.
+To edit the artwork in TTX, preserve its bounding boxes and timestamps:
+
+```sh
+fonts=test/fixtures/fonts
+out=tmp/font-references
+mkdir -p "$out"
+for face in selected-variable.ttf selected-variable-cff2.otf; do
+  ttx -q -o "$out/$face.ttx" "$fonts/$face"
+  ttx -q -b --no-recalc-timestamp -o "$out/$face" "$out/$face.ttx"
+  cmp "$fonts/$face" "$out/$face"
+done
+```
+
+Use fontTools 4.66.1 and Brotli 1.2.0. The following command regenerates both
+instance manifests, the three WOFF2 encodings in `woff2-fonts.json`, and their
+reference manifest. It samples four weight/width coordinates, reads serialized
+TrueType points and metrics, and records CFF2 pen commands at the original
+fractional blend coordinates.
+
+```sh
+python scripts/fixtures/build-font-references.py "$out/generated"
+for file in "$out"/generated/*; do cmp "$file" "$fonts/${file##*/}" || exit 1; done
+```
+
+The transformed and literal WOFF2 files use the DejaVu Sans and Mono subsets
+from `build-font-containers.py`. The CFF encoding uses the Sans derivative
+from `build-cff-fonts.py`. Keep `selected-container-LICENSE.txt` with these
+fixtures. The three “Authored WOFF2 Edges” inputs in `woff2-edge-fonts.json`
+are separate originals from the same commit. That manifest pins their encoded
+hashes, decoded table hashes and glyph geometry. The test corpus builds the
+multi-face wrappers from the registered inputs at suite startup.
+
 ## Regeneration rules
 
 | Concern | Rule |

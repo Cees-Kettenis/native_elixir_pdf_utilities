@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
           {:ok, MergeValidator.input_context()}
           | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare(context, page_numbers, rotations) do
-    with {:ok, source} <- prepare_source(context) do
+    with {:ok, source} <- prepare_source(context, page_numbers) do
       prepare_selection(source, page_numbers, rotations)
     end
   end
@@ -39,8 +39,10 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
   @doc false
   @spec prepare_source(PdfValidator.context()) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def prepare_source(context) do
-    with {:ok, input} <- MergeValidator.prepare(context) do
+  @spec prepare_source(PdfValidator.context(), :all | Enumerable.t()) ::
+          {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def prepare_source(context, selection \\ :all) do
+    with {:ok, input} <- MergeValidator.prepare(context, selection) do
       object_values =
         Map.new(input.objects, fn object ->
           {{object.obj, object.gen}, Map.get(object, :value_override, object.value)}

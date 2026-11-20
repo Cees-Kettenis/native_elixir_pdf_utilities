@@ -210,6 +210,40 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     {paint, canvas}
   end
 
+  @doc "Determines whether page artwork needs effect preparation and admits the list spines used by the scene traversal."
+  @spec effect_scene(term()) :: {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def effect_scene(pages) do
+    if is_list(pages), do: scan_scene(pages, :pages, false), else: {:ok, false}
+  end
+
+  defp scan_scene(nodes, kind, active) do
+    case nodes do
+      [] ->
+        {:ok, active}
+
+      [node | rest] ->
+        active =
+          active or
+            (kind == :boxes and is_map(node) and
+               (is_map_key(node, :css_effect) or is_map_key(node, :css_projection)))
+
+        case node do
+          %{boxes: children} when is_list(children) ->
+            with {:ok, active} <- scan_scene(children, :boxes, active),
+                 do: scan_scene(rest, kind, active)
+
+          _ ->
+            scan_scene(rest, kind, active)
+        end
+
+      _ ->
+        Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer #{kind} must be a proper list",
+          operation: :write_pdf,
+          module: NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+        )
+    end
+  end
+
   @doc """
   Validates pages and writer options and normalizes document metadata.
   """

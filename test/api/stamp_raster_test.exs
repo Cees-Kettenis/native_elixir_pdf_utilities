@@ -73,7 +73,7 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
               {Merge, :merge, Merge.merge([blank, layered])},
               {Transform, :pick_pages, Transform.pick_pages(layered, [2, 1])},
               {Transform, :rotate_pages, Transform.rotate_pages(layered, 90)},
-              {Transform, :delete_pages, Transform.delete_pages(layered, [1])},
+              {Transform, :delete_pages, Transform.delete_pages(layered, [2])},
               {Split, :split_by_page, Split.by_page(layered)},
               {Stamp, :overlay_pdf, Stamp.overlay(blank, layered)}
             ] do
@@ -84,6 +84,19 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
           assert diagnostic.operation == operation
           assert diagnostic.message =~ "layer visibility"
           if module == Merge, do: assert(diagnostic.source == "merge input 2")
+        end
+
+        assert {:ok, clean_page} = Transform.delete_pages(layered, [1])
+        assert {:ok, [range]} = Split.by_ranges(layered, [2..2])
+        assert {:ok, clean_overlay} = Stamp.overlay(blank, layered, overlay_pages: {:repeat, 2})
+        [clean, clean] = PdfVisualCompare.rasterize_pdf!(blank, artifact_dir: directory)
+
+        for {output, expected} <- [
+              {clean_page, [clean]},
+              {range, [clean]},
+              {clean_overlay, [clean, clean]}
+            ] do
+          assert PdfVisualCompare.rasterize_pdf!(output, artifact_dir: directory) == expected
         end
 
         layered
