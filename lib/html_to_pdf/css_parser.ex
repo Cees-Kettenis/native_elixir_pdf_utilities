@@ -743,27 +743,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           | {:error, :invalid_css}
           | {:error, {:resource_limit_exceeded, map()}}
   def font_faces(css) do
-    HtmlValidator.with_render_budget(fn ->
-      case HtmlValidator.validate_css_source(css) do
-        {:ok, css} ->
-          HtmlValidator.reserve_render_resource(
-            :max_input_bytes,
-            byte_size(css),
-            :css
-          )
-
-          case css |> strip_comments() |> PrintMediaValidator.select_rules(nil) do
-            {:ok, active_css} ->
-              case parse_font_faces(active_css, active_css) do
-                {:ok, font_faces} -> {:ok, font_faces}
-                {:error, {reason, _detail}} -> {:error, reason}
-              end
-          end
-
-        {:error, {:invalid_css, _diagnostic}} ->
-          {:error, :invalid_css}
-      end
-    end)
+    read_descriptors(css, &parse_font_faces(&1, &1))
   end
 
   @doc """
@@ -782,27 +762,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           | {:error, :invalid_css}
           | {:error, {:resource_limit_exceeded, map()}}
   def page_options(css) do
+    read_descriptors(css, fn active_css ->
+      with {:ok, options} <- parse_page_rules(active_css, css),
+           {:ok, _rules} <- CssPageValidator.rules(active_css),
+           do: {:ok, options}
+    end)
+  end
+
+  defp read_descriptors(css, read) do
     HtmlValidator.with_render_budget(fn ->
-      case HtmlValidator.validate_css_source(css) do
-        {:ok, css} ->
-          HtmlValidator.reserve_render_resource(
-            :max_input_bytes,
-            byte_size(css),
-            :css
-          )
-
-          with {:ok, active_css} <-
-                 css |> strip_comments() |> PrintMediaValidator.select_rules(nil) do
-            with {:ok, page_options} <- parse_page_rules(active_css, css),
-                 {:ok, _rules} <- CssPageValidator.rules(active_css) do
-              {:ok, page_options}
-            else
-              {:error, {reason, _detail}} -> {:error, reason}
-            end
-          end
-
-        {:error, {:invalid_css, _diagnostic}} ->
-          {:error, :invalid_css}
+      with {:ok, css} <- HtmlValidator.validate_css_source(css),
+           :ok <- HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(css), :css),
+           {:ok, active_css} <- css |> strip_comments() |> PrintMediaValidator.select_rules(nil),
+           {:ok, descriptors} <- read.(active_css) do
+        {:ok, descriptors}
+      else
+        {:error, {:resource_limit_exceeded, _diagnostic}} = error -> error
+        {:error, {reason, _diagnostic}} -> {:error, reason}
       end
     end)
   end

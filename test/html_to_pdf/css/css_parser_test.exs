@@ -1070,6 +1070,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserGlobalStateTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.Validators.CssSelectorValidator
 
+  test "descriptor readers preserve their error contracts across input limits" do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    css = "p{color:red}"
+    Limits.install(%{limits | max_input_bytes: byte_size(css)})
+
+    for read <- [&CssParser.font_faces/1, &CssParser.page_options/1] do
+      assert read.(css) == {:ok, []}
+      assert read.(<<255>>) == {:error, :invalid_css}
+    end
+
+    Limits.install(%{limits | max_input_bytes: byte_size(css) - 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = CssParser.parse_detailed(css)
+    assert diagnostic.stage == :css
+    assert diagnostic.message =~ "max_input_bytes"
+    assert CssParser.font_faces(css) == {:error, {:resource_limit_exceeded, diagnostic}}
+    assert CssParser.page_options(css) == {:error, {:resource_limit_exceeded, diagnostic}}
+  end
+
   test "positional selector arguments diagnose invalid grammar and excessive integers" do
     for expression <- [
           "",
