@@ -205,18 +205,16 @@ defmodule ManualWeb.Validator do
           error(:html_to_pdf, "select a supported missing-glyph policy")
 
         true ->
-          options = [page_size: {page_size, orientation}, unsupported_glyphs: unsupported_glyphs]
+          options = [
+            page_size: {page_size, orientation},
+            unsupported_glyphs: unsupported_glyphs,
+            outlines: outlines
+          ]
 
           options =
             if Map.get(params, "forms") == "static",
               do: Keyword.put(options, :forms, :static),
               else: options
-
-          options =
-            case outlines do
-              nil -> options
-              outlines -> Keyword.put(options, :outlines, outlines)
-            end
 
           case optional_text(Map.get(params, "margin")) do
             nil -> {:ok, options}
@@ -433,7 +431,7 @@ defmodule ManualWeb.Validator do
 
   defp html_outlines(params) do
     case Map.get(params, "outlines_mode", "none") do
-      "none" -> {:ok, nil}
+      "none" -> {:ok, false}
       "headings" -> {:ok, :headings}
       "exact" -> outline_items(Map.get(params, "outlines"), :html_to_pdf)
       _ -> error(:html_to_pdf, "select a supported outline mode")

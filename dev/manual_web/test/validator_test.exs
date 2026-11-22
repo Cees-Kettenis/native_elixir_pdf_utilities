@@ -62,7 +62,8 @@ defmodule ManualWeb.ValidatorTest do
             [
               margin: "20mm",
               page_size: {:letter, :landscape},
-              unsupported_glyphs: :error
+              unsupported_glyphs: :error,
+              outlines: false
             ]} =
              Validator.html_options(%{
                "page_size" => "letter",

@@ -217,6 +217,30 @@ defmodule ManualWeb.RouterTest do
     assert {:ok, [%{title: "Manual"}]} = Outlines.get(response.resp_body)
   end
 
+  test "HTML outline selection overrides CSS bookmarks in the returned PDF" do
+    html = "<style>p{bookmark-level:1}</style><h1>Heading</h1><p>CSS bookmark</p>"
+    params = %{"html" => html, "page_size" => "a4", "orientation" => "portrait"}
+    assert {:ok, library_default} = HtmlToPdf.render(html)
+    assert {:ok, [%{title: "CSS bookmark"}]} = Outlines.get(library_default)
+
+    for {selection, titles} <- [
+          {%{}, []},
+          {%{"outlines_mode" => "none"}, []},
+          {%{"outlines_mode" => "headings"}, ["Heading"]},
+          {%{"outlines_mode" => "exact", "outlines" => ~s([{"title":"Chosen","page":1}])},
+           ["Chosen"]}
+        ] do
+      response = post("/html-to-pdf", Map.merge(params, selection))
+      assert response.status == 200
+      assert {:ok, items} = Outlines.get(response.resp_body)
+      assert Enum.map(items, &{&1.title, &1.page}) == Enum.map(titles, &{&1, 1})
+    end
+
+    invalid = post("/html-to-pdf", Map.put(params, "outlines_mode", "unknown"))
+    assert invalid.status == 422
+    assert invalid.resp_body =~ "select a supported outline mode"
+  end
+
   test "merges uploaded PDFs and returns an attachment when requested" do
     first = outlined_page_pdf("First PDF")
     second = outlined_page_pdf("Second PDF")
