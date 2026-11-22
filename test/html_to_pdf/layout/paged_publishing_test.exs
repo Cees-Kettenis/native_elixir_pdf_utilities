@@ -1,6 +1,6 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedPublishingTest do
   use ExUnit.Case, async: true
-  alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+  alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.Validators.CssPageValidator
 
   test "all margin boxes are selectable and obey page-rule specificity" do
@@ -479,6 +479,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedPublishingTest do
     assert {:ok, extracted} = Text.extract_spans(pdf)
     body = Enum.find(hd(extracted.pages).spans, &(&1.text == "B"))
     assert_in_delta body.x, 30.0, 0.01
+  end
+
+  test "page orientation rotates editable widget bounds and preserves static artwork" do
+    render = fn orientation, mode ->
+      html = """
+      <style>@page{size:200pt 150pt;margin:18pt;page-orientation:#{orientation}}
+      body{margin:0}input{width:70pt;height:20pt}</style>
+      <input name="field" value="Initial"><a href="https://example.com">Link</a>
+      """
+
+      HtmlToPdf.render(html, forms: mode)
+    end
+
+    assert {:ok, upright} = render.("upright", :interactive)
+    assert {:ok, [%{widgets: [%{rect: [left, bottom, right, top]}]}]} = Forms.fields(upright)
+
+    for {orientation, expected} <- [
+          {"rotate-left", [150 - top, left, 150 - bottom, right]},
+          {"rotate-right", [bottom, 200 - right, top, 200 - left]}
+        ] do
+      assert {:ok, pdf} = render.(orientation, :interactive)
+
+      assert {:ok, [%{name: "field", value: "Initial", widgets: [%{page: 1, rect: actual}]}]} =
+               Forms.fields(pdf)
+
+      for {a, b} <- Enum.zip(actual, expected), do: assert_in_delta(a, b, 0.001)
+      assert pdf =~ "/Subtype /Link"
+      assert {:ok, filled} = Forms.fill(pdf, %{"field" => "Updated"})
+      assert {:ok, flat} = Forms.flatten(filled)
+      assert {:ok, text} = Text.extract(flat, layout: false)
+      assert text =~ "Updated"
+
+      assert {:ok, static} = render.(orientation, :static)
+      assert {:ok, []} = Forms.fields(static)
+      assert {:ok, text} = Text.extract(static, layout: false)
+      assert text =~ "Initial"
+      assert static =~ "/Subtype /Link"
+    end
   end
 
   test "rotated marked pages retain valid physical trim and bleed boxes" do

@@ -877,7 +877,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
     alias NativeElixirPdfUtilities.Validators.{EmbeddedFormValidator, HtmlFormValidator}
 
     if Enum.all?(pages, fn page ->
-         not scoped_boxes?(page.boxes)
+         not needs_materialization?(page.boxes, false)
        end) do
       {:ok, pages}
     else
@@ -1348,12 +1348,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
     end)
   end
 
-  # Layout scopes can survive inside genuine overflow and table fragment viewports.
-  defp scoped_boxes?(boxes) do
+  # Page orientation wraps controls in a transformed drawing even without a CSS transform.
+  defp needs_materialization?(boxes, oriented?) do
     Enum.any?(boxes, fn box ->
       Map.get(box, :css_transform_scopes, []) != [] or
         Map.get(box, :css_parent_clips, []) != [] or
-        (Map.get(box, :type) == :drawing_group and scoped_boxes?(Map.get(box, :boxes, [])))
+        (oriented? and is_map(Map.get(box, :form_control))) or
+        (Map.get(box, :type) == :drawing_group and
+           needs_materialization?(
+             Map.get(box, :boxes, []),
+             oriented? or Map.get(box, :role) == :page_orientation
+           ))
     end)
   end
 

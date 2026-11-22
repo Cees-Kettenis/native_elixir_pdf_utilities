@@ -26,6 +26,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedPublishingBrowserParityTest do
     assert stats.page_count == 2
   end
 
+  test "page orientation rotates form artwork on both physical sheets" do
+    # CSS Paged Media Level 3 (2023-09-14), §7.1.2 applies rotation after layout.
+    # :first selects the opposite quarter turn, so the two pages need their own print job.
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Paths.fixture("html_to_pdf/browser_parity/publishing_oriented_forms.html"),
+        native_renderer: fn html, opts ->
+          NativeElixirPdfUtilities.HtmlToPdf.render(
+            html,
+            Keyword.drop(opts, [:page_size, :margin])
+          )
+        end,
+        artifact_dir: "tmp/browser_parity/publishing_oriented_forms",
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.page_count == 2
+  end
+
   for {name, count} <- [{"running", 2}, {"notes", 1}, {"references", 2}] do
     @name name
     @count count
