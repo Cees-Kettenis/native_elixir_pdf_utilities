@@ -73,7 +73,7 @@ worker too; cancelling it stops its loader without blocking unrelated misses.
 
 | Setting | Default | Resource |
 | --- | ---: | --- |
-| `max_input_bytes` | 50,000,000 | Supplied document, stylesheet, font, image, attachment, dictionary and other source bytes |
+| `max_input_bytes` | 50,000,000 | Source bytes admitted across processing stages, including documents, stylesheets, fonts, images and attachments |
 | `max_output_bytes` | 50,000,000 | Generated PDF, split output, extracted/generated text and converted image bytes |
 | `max_decoded_bytes` | 100,000,000 | Decoded streams, images, fonts, expanded maps, CSS substitutions and extracted metadata |
 | `max_entries` | 1,000,000 | Parsed values, tokens, nodes, glyphs, fields, collections, intermediate layout entries and temporary cache entries |
@@ -106,6 +106,13 @@ Input, output and decoded bytes describe different resources. A compressed
 source can fit the input allowance while exceeding its decoded allowance.
 Intermediate filter output counts too. Generated PDFs must also fit the input
 ceiling. Splitting checks cumulative output before retaining another result.
+
+When `HtmlToPdf.CssParser.parse_detailed/1` parses a stylesheet, the whole
+stylesheet counts toward `max_input_bytes`. Each style rule's declaration block
+counts again when parsed. For example, `p{color:red}` uses 12 bytes for the
+stylesheet and 9 for `color:red`. A limit of 21 admits it. A limit of 20
+returns `:resource_limit_exceeded`. A separate top-level call starts with a
+fresh allowance.
 
 Entry and work allowances apply separately to each operation. For example,
 a metadata update reads the original PDF and appends a revision. A later read
