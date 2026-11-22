@@ -158,6 +158,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @doc """
   Computes styles and returns detailed CSS/document diagnostics when validation fails.
 
+  Treat calculated lengths in the styled tree as opaque. They can carry the
+  declaring element's font metrics until layout resolves a percentage against
+  the containing block. To measure a prepared width, pass the element's style
+  and the containing width in points to
+  `NativeElixirPdfUtilities.HtmlToPdf.Layout.resolve_content_size/4`.
+
   Table styles preserve `:_table_model`, and cell styles preserve `:_table_cell`.
   Recoverable HTML table model errors remain in `:_table_model.errors`; success
   means renderable input, not that the source table has no conformance errors.

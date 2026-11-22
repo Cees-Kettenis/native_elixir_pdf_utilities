@@ -788,7 +788,13 @@ Include an inspection report and separate the shipment by production lot.</td></
 </html>
 ```
 
-Render it:
+Measure the header from its layout boxes. If you read a styled width directly
+in v1.1.0, pass the styled tree through font fallback and layout as shown below.
+A calculated width can carry font metrics until the containing width is known.
+To resolve one width separately, use
+`Layout.resolve_content_size(node.style, :width, containing_width_pt, nil)`.
+For example, `calc(2em + 20%)` declared at 20 pt resolves to 60 pt inside a
+100 pt containing block.
 
 ```elixir
 alias NativeElixirPdfUtilities.HtmlToPdf
