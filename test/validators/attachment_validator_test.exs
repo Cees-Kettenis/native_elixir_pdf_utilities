@@ -122,6 +122,65 @@ defmodule NativeElixirPdfUtilities.AttachmentValidatorGlobalStateTest do
     assert {:ok, [_, _]} = Attachments.list(updated)
   end
 
+  test "nested attachment traversal preserves sibling order and charges each visit", %{pdf: pdf} do
+    files = for name <- ["a", "b", "c"], do: %{filename: name, bytes: name}
+    assert {:ok, attached} = Attachments.embed(pdf, files)
+    assert {:ok, parsed} = Reader.read_validated(attached)
+    assert {:ok, names} = Reader.dictionary(parsed.document, parsed.catalog["Names"])
+    [a, ar, b, br, c, cr] = names["EmbeddedFiles"]["Names"]
+
+    tree = %{
+      "Kids" => [
+        %{"Names" => [c, cr]},
+        %{"Kids" => [nil, %{"Names" => [a, ar, b, br]}]}
+      ]
+    }
+
+    nested = patch_catalog(attached, %{"Names" => %{"EmbeddedFiles" => tree}})
+    assert {:ok, listed} = Attachments.list(nested)
+    assert Enum.map(listed, & &1.filename) == ["c", "a", "b"]
+    assert {:ok, updated} = Attachments.embed(nested, [%{filename: "d", bytes: "four"}])
+    assert {:ok, listed} = Attachments.list(updated)
+    assert Enum.map(listed, & &1.filename) == ["a", "b", "c", "d"]
+
+    assert {:ok, context} = Reader.read_validated(nested)
+    limits = Limits.effective()
+
+    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+
+    # The same three files require four more visits than the flat tree's one root.
+    assert {{:ok, _}, flat_work} =
+             ResourceBudget.measure(:max_work, fn ->
+               AttachmentValidator.inspect_document(parsed)
+             end)
+
+    assert {{:ok, _}, nested_work} =
+             ResourceBudget.measure(:max_work, fn ->
+               AttachmentValidator.inspect_document(context)
+             end)
+
+    assert nested_work == flat_work + 4
+
+    assert {{:ok, _}, list_work} =
+             ResourceBudget.measure_operation(:max_work, fn -> Attachments.list(nested) end)
+
+    Limits.install(%{limits | max_work: list_work})
+    assert {:ok, files_at_limit} = Attachments.list(nested)
+    assert Enum.map(files_at_limit, & &1.filename) == ["c", "a", "b"]
+    Limits.install(%{limits | max_work: list_work - 1})
+
+    assert {:error, {:resource_limit_exceeded, %{operation: :list, message: message}}} =
+             Attachments.list(nested)
+
+    assert message =~ "max_work"
+
+    Limits.install(%{limits | max_entries: 2})
+
+    assert {:error,
+            {:resource_limit_exceeded, %{message: "attachment count exceeds max_entries"}}} =
+             AttachmentValidator.inspect_document(parsed)
+  end
+
   test "rejects malformed trees, cyclic references and attachment metadata", %{attached: pdf} do
     {:ok, context} = Reader.read_validated(pdf)
     {:ok, names} = Reader.dictionary(context.document, context.catalog["Names"])

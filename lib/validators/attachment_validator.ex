@@ -61,10 +61,7 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
     with {:ok, names_value} <-
            PdfValidator.optional_entry(document, context.catalog, "Names", %{}),
          {:ok, names} <- PdfValidator.dictionary(document, names_value),
-         {:ok, entries, _seen} <-
-           name_tree(document, Map.get(names, "EmbeddedFiles"), MapSet.new(), 0),
-         true <- length(entries) <= Limits.get(:max_entries),
-         true <- length(Enum.uniq_by(entries, &elem(&1, 0))) == length(entries) do
+         {:ok, entries} <- name_tree(document, Map.get(names, "EmbeddedFiles")) do
       Enum.reduce_while(entries, {:ok, [], 0}, fn {name, value}, {:ok, files, total} ->
         with {:ok, spec} <- PdfValidator.dictionary(document, value),
              {:ok, filename_value} <-
@@ -109,9 +106,6 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
         failure ->
           failure
       end
-    else
-      false -> error("embedded file names must be unique and within max_entries")
-      {:error, _} = failure -> failure
     end
   end
 
@@ -175,61 +169,88 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
     end
   end
 
-  defp name_tree(document, value, seen, depth) do
-    cond do
-      is_nil(value) ->
-        {:ok, [], seen}
+  defp name_tree(document, root) do
+    if is_nil(root) do
+      {:ok, []}
+    else
+      state = %{nodes: 0, seen: MapSet.new(), names: MapSet.new(), entries: []}
 
-      depth > Limits.get(:max_depth) or
-          MapSet.size(seen) >= Limits.get(:max_entries) ->
-        limit("embedded file name tree exceeds traversal limits")
-
-      MapSet.member?(seen, value) ->
-        error("embedded file name tree contains a cycle or shared node")
-
-      true ->
-        seen = MapSet.put(seen, value)
-
-        with {:ok, node} <- PdfValidator.dictionary(document, value),
-             {:ok, pairs} <- PdfValidator.resolve(document, Map.get(node, "Names", [])),
-             {:ok, kids} <- PdfValidator.resolve(document, Map.get(node, "Kids", [])),
-             true <- is_list(pairs) and rem(length(pairs), 2) == 0 and is_list(kids),
-             true <- pairs == [] or kids == [],
-             true <- div(length(pairs), 2) <= Limits.get(:max_entries) do
-          Enum.chunk_every(pairs, 2)
-          |> Enum.reduce_while({:ok, []}, fn [key, ref], {:ok, entries} ->
-            case text(key) do
-              {:ok, key} -> {:cont, {:ok, [{key, ref} | entries]}}
-              failure -> {:halt, failure}
-            end
-          end)
-          |> case do
-            {:ok, entries} ->
-              Enum.reduce_while(kids, {:ok, Enum.reverse(entries), seen}, fn child,
-                                                                             {:ok, acc, visited} ->
-                case name_tree(document, child, visited, depth + 1) do
-                  {:ok, more, visited} ->
-                    if length(acc) + length(more) <= Limits.get(:max_entries),
-                      do: {:cont, {:ok, acc ++ more, visited}},
-                      else: {:halt, limit("attachment count exceeds max_entries")}
-
-                  failure ->
-                    {:halt, failure}
-                end
-              end)
-
-            failure ->
-              failure
-          end
-        else
-          false ->
-            error("embedded file name tree requires Names pairs or Kids within attachment limits")
-
-          {:error, _} = failure ->
-            failure
-        end
+      with {:ok, state} <- collect_node(document, root, 0, state),
+           do: {:ok, Enum.reverse(state.entries)}
     end
   end
+
+  defp collect_node(document, value, depth, state) do
+    with :ok <- ResourceBudgetValidator.reserve(:max_work, 1, :limits) do
+      cond do
+        is_nil(value) ->
+          {:ok, state}
+
+        depth > Limits.get(:max_depth) or state.nodes >= Limits.get(:max_entries) ->
+          limit("embedded file name tree exceeds traversal limits")
+
+        match?({:ref, _}, value) and MapSet.member?(state.seen, value) ->
+          error("embedded file name tree contains a cycle or shared node")
+
+        true ->
+          # Indirect references identify PDF objects. Inline dictionaries have no object identity.
+          seen = if match?({:ref, _}, value), do: MapSet.put(state.seen, value), else: state.seen
+          state = %{state | nodes: state.nodes + 1, seen: seen}
+
+          with {:ok, node} <- PdfValidator.dictionary(document, value),
+               {:ok, pairs} <- PdfValidator.resolve(document, Map.get(node, "Names", [])),
+               {:ok, kids} <- PdfValidator.resolve(document, Map.get(node, "Kids", [])) do
+            case {pairs, kids} do
+              {pairs, []} -> collect_pairs(pairs, state)
+              {[], kids} -> collect_children(document, kids, depth + 1, state)
+              _ -> invalid_tree()
+            end
+          end
+      end
+    end
+  end
+
+  defp collect_children(document, kids, depth, state) do
+    case kids do
+      [] ->
+        {:ok, state}
+
+      [child | rest] ->
+        with {:ok, state} <- collect_node(document, child, depth, state),
+             do: collect_children(document, rest, depth, state)
+
+      _ ->
+        invalid_tree()
+    end
+  end
+
+  defp collect_pairs(pairs, state) do
+    case pairs do
+      [] ->
+        {:ok, state}
+
+      [key, ref | rest] ->
+        with true <- MapSet.size(state.names) < Limits.get(:max_entries),
+             :ok <- ResourceBudgetValidator.reserve(:max_work, 1, :limits),
+             {:ok, name} <- text(key),
+             false <- MapSet.member?(state.names, name) do
+          collect_pairs(rest, %{
+            state
+            | names: MapSet.put(state.names, name),
+              entries: [{name, ref} | state.entries]
+          })
+        else
+          false -> limit("attachment count exceeds max_entries")
+          true -> error("embedded file names must be unique")
+          failure -> failure
+        end
+
+      _ ->
+        invalid_tree()
+    end
+  end
+
+  defp invalid_tree, do: error("embedded file name tree requires Names pairs or Kids")
 
   defp text(value) do
     case value do
