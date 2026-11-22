@@ -152,51 +152,44 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   def render(pages, opts \\ []) do
     Font.with_measurement_cache(fn ->
       HtmlValidator.with_render_budget(fn ->
-        with {:ok, pages} <-
-               NativeElixirPdfUtilities.HtmlToPdf.CssEffectScene.prepare(pages, opts) do
-          case WriterValidator.prepare(pages, opts) do
-            {:ok, context} ->
-              with {:ok, context} <-
-                     NativeElixirPdfUtilities.Validators.ColorFontValidator.prepare(context, opts),
-                   {:ok, pages, controls} <-
-                     NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
-                       context.pages,
-                       Keyword.put(opts, :__retain_html_identity__, true)
-                     ),
-                   {:ok, controls} <-
-                     NativeElixirPdfUtilities.Validators.HtmlFormValidator.merge_composition(
-                       pages,
-                       controls,
-                       opts
-                     ),
-                   {font_resources, next_object_id} <- font_resources(pages, 3),
-                   {:ok, font_resources} <-
-                     subset_font_resources(font_resources, context.subset_fonts) do
-                pdf =
-                  pages_to_pdf(
-                    pages,
-                    context.metadata,
-                    context.outlines,
-                    context.compress_streams,
-                    font_resources,
-                    next_object_id,
-                    context.pdf_forms
-                  )
+        with {:ok, context} <-
+               NativeElixirPdfUtilities.HtmlToPdf.CssEffectScene.prepare_writer(pages, opts),
+             {:ok, context} <-
+               NativeElixirPdfUtilities.Validators.ColorFontValidator.prepare(context, opts),
+             {:ok, pages, controls} <-
+               NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare(
+                 context.pages,
+                 Keyword.put(opts, :__retain_html_identity__, true)
+               ),
+             {:ok, controls} <-
+               NativeElixirPdfUtilities.Validators.HtmlFormValidator.merge_composition(
+                 pages,
+                 controls,
+                 opts
+               ),
+             {font_resources, next_object_id} <- font_resources(pages, 3),
+             {:ok, font_resources} <-
+               subset_font_resources(font_resources, context.subset_fonts) do
+          pdf =
+            pages_to_pdf(
+              pages,
+              context.metadata,
+              context.outlines,
+              context.compress_streams,
+              font_resources,
+              next_object_id,
+              context.pdf_forms
+            )
 
-                case controls do
-                  [] ->
-                    {:ok, pdf}
+          case controls do
+            [] ->
+              {:ok, pdf}
 
-                  _ ->
-                    with {:ok, document} <-
-                           NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
-                      NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
-                    end
-                end
+            _ ->
+              with {:ok, document} <-
+                     NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
+                NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
               end
-
-            {:error, {reason, diagnostic}} ->
-              {:error, {reason, Map.put(diagnostic, :module, __MODULE__)}}
           end
         end
       end)

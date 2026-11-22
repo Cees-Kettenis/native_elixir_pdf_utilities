@@ -1327,6 +1327,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriterGlobalStateTest do
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Validators.WriterValidator
 
+  test "retained pages and changed effect artwork share the final drawing entry ceiling" do
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    text = %{
+      type: :text,
+      x: 0,
+      y: 1,
+      width: 1,
+      text: "A",
+      font: "Helvetica",
+      font_size: 1,
+      color: {0, 0, 0}
+    }
+
+    marker = %{type: :flow_marker, x: 0, y: 0, width: 0, height: 0}
+
+    group = %{
+      type: :drawing_group,
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 2,
+      transform: {1, 0, 0, 1, 0, 0},
+      boxes: [marker],
+      css_effect: %{
+        filters: [{"invert", 1.0}],
+        backdrop: [],
+        definitions: "",
+        color: {0, 0, 0},
+        bounds: %{x: 0, top: 2, width: 2, height: 2},
+        style: %{}
+      }
+    }
+
+    pages = [
+      %{size: {10, 10}, boxes: List.duplicate(text, 200)},
+      %{size: {10, 10}, boxes: [group]}
+    ]
+
+    # The group adds start/end entries, one marker, and one generated raster.
+    Limits.install(%{original | max_entries: 203})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = PdfWriter.render(pages)
+    assert diagnostic.stage == :writer and diagnostic.operation == :write_pdf
+    Limits.install(%{original | max_entries: 204})
+    assert {:ok, pdf} = PdfWriter.render(pages)
+    Limits.install(original)
+    assert {:ok, %{pages: [_, _]}} = Reader.read_validated(pdf)
+  end
+
   test "prepared ActualText pairs are reusable and malformed or unbalanced markers return diagnostics" do
     alias NativeElixirPdfUtilities.{Limits, Text}
     alias NativeElixirPdfUtilities.Validators.WriterValidator

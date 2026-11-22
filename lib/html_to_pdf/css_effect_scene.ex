@@ -21,21 +21,58 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectScene do
   def prepare(pages, opts) do
     with {:ok, active} <- WriterValidator.effect_scene(pages) do
       if active do
-        with {:ok, _context} <- WriterValidator.prepare(pages, opts) do
-          Enum.reduce_while(pages, {:ok, []}, fn page, {:ok, pages} ->
-            case prepare_boxes(page.boxes, page.size, opts, []) do
-              {:ok, boxes} -> {:cont, {:ok, [%{page | boxes: boxes} | pages]}}
-              error -> {:halt, error}
-            end
-          end)
-          |> case do
-            {:ok, pages} -> {:ok, Enum.reverse(pages)}
-            error -> error
-          end
+        with {:ok, _context} <- WriterValidator.prepare(pages, opts),
+             {:ok, changes} <- changed_page_boxes(pages, opts) do
+          {:ok,
+           Enum.zip_with(pages, changes, fn page, change ->
+             if change == :unchanged, do: page, else: %{page | boxes: change}
+           end)}
         end
       else
         {:ok, pages}
       end
+    end
+  end
+
+  @doc false
+  @spec prepare_writer(term(), term()) ::
+          {:ok, WriterValidator.context()} | {:error, {atom(), map()}}
+  def prepare_writer(pages, opts) do
+    with {:ok, active} <- WriterValidator.effect_scene(pages) do
+      if active do
+        with {:ok, source} <- WriterValidator.prepare_effect_source(pages, opts),
+             {:ok, changes} <- changed_page_boxes(pages, opts) do
+          writer_result(WriterValidator.prepare_effect_output(source, changes))
+        end
+      else
+        writer_result(WriterValidator.prepare(pages, opts))
+      end
+    end
+  end
+
+  defp writer_result(result) do
+    case result do
+      {:error, {reason, diagnostic}} ->
+        {:error,
+         {reason, Map.put(diagnostic, :module, NativeElixirPdfUtilities.HtmlToPdf.PdfWriter)}}
+
+      success ->
+        success
+    end
+  end
+
+  defp changed_page_boxes(pages, opts) do
+    Enum.reduce_while(pages, {:ok, []}, fn page, {:ok, changes} ->
+      {:ok, active} = WriterValidator.effect_scene([page])
+
+      case if(active, do: prepare_boxes(page.boxes, page.size, opts, []), else: {:ok, :unchanged}) do
+        {:ok, change} -> {:cont, {:ok, [change | changes]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, changes} -> {:ok, Enum.reverse(changes)}
+      error -> error
     end
   end
 

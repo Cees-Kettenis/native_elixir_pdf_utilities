@@ -844,8 +844,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectContractTest do
       boxes: [rectangle, marker]
     }
 
-    assert {:ok, [%{boxes: [%{boxes: output}]}]} =
-             CssEffectScene.prepare([%{size: {30, 30}, boxes: [group]}], [])
+    plain = %{size: {30, 30}, boxes: [rectangle]}
+    pages = [plain, %{size: {30, 30}, boxes: [group]}]
+    assert {:ok, [^plain, %{boxes: [%{boxes: output}]}]} = CssEffectScene.prepare(pages, [])
+
+    assert {:ok, pdf} =
+             PdfWriter.render(pages, metadata: [title: "Proof"], outlines: [{"Filtered", 2}])
+
+    assert {:ok, %{title: "Proof"}} = NativeElixirPdfUtilities.Info.get(pdf)
+    assert {:ok, [%{title: "Filtered", page: 2}]} = NativeElixirPdfUtilities.Outlines.get(pdf)
 
     assert marker in output
     assert Enum.any?(output, &(Map.get(&1, :type) == :image))

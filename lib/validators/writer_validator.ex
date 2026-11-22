@@ -253,6 +253,61 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     with_writer_preparation(fn -> prepare(pages, opts, :pages) end)
   end
 
+  @doc false
+  @spec prepare_effect_source(term(), term()) :: {:ok, map()} | {:error, {atom(), map()}}
+  def prepare_effect_source(pages, opts) do
+    with_writer_preparation(fn -> prepare(pages, opts, :effect_pages) end)
+  end
+
+  @doc false
+  @spec prepare_effect_output(map(), [:unchanged | [map()]]) ::
+          {:ok, context()} | {:error, {atom(), map()}}
+  def prepare_effect_output(source, changes) do
+    with_writer_preparation(fn ->
+      # Keep every target page's size for link validation. Only replacement
+      # geometry needs normalization, font shaping and imported Form preparation.
+      changed_pages =
+        Enum.zip_with(source.pages, changes, fn page, change ->
+          %{page | boxes: if(change == :unchanged, do: [], else: change)}
+        end)
+
+      {result, forms} =
+        PdfFormValidator.with_prepared_sources(fn ->
+          prepare_artwork(changed_pages, :effect_pages)
+        end)
+
+      with {:ok, changed} <- result do
+        {pages, _entries} =
+          Enum.zip([
+            changes,
+            source.pages,
+            source.entry_counts,
+            changed.pages,
+            changed.entry_counts
+          ])
+          |> Enum.map_reduce(0, fn {change, original, before_count, replacement, after_count},
+                                   total ->
+            {page, count} =
+              if change == :unchanged,
+                do: {original, before_count},
+                else: {replacement, after_count}
+
+            HtmlValidator.check_render_resource(:max_entries, total + count, :writer)
+            {page, total + count}
+          end)
+
+        {:ok,
+         source
+         |> Map.delete(:entry_counts)
+         |> Map.merge(%{
+           pages: pages,
+           color_fonts?: source.color_fonts? or changed.color_fonts?,
+           pdf_forms: Map.merge(source.pdf_forms, forms)
+         })}
+      end
+    end)
+  end
+
   @doc "Normalizes an already document-validated source paint plane without reinterpreting destination pages in its temporary one-page canvas."
   @spec prepare_paint_plane([map()], tuple()) :: {:ok, context()} | {:error, term()}
   def prepare_paint_plane(boxes, size) do
@@ -679,7 +734,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           true ->
             with :ok <- HtmlValidator.validate_pdf_output_options(opts),
                  :ok <-
-                   if(kind == :pages,
+                   if(kind != :appearances,
                      do:
                        PdfValidator.validate_container(pages,
                          operation: :render,
@@ -689,159 +744,19 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
                    ),
                  {:ok, metadata} <-
                    InfoValidator.normalize_new_metadata(Keyword.get(opts, :metadata, [])) do
-              case OutlineValidator.normalize(
-                     normalized_outline_input(Keyword.get(opts, :outlines)),
-                     length(pages)
-                   ) do
-                {:ok, outlines} ->
-                  validity =
-                    Enum.reduce_while(pages, :ok, fn page, validity ->
-                      case valid_page?(page, kind) do
-                        {:error, _} = error -> {:halt, error}
-                        false -> {:halt, false}
-                        :box_normalization -> {:cont, :box_normalization}
-                        true -> {:cont, validity}
-                      end
-                    end)
-
-                  case {pages != [], validity} do
-                    {_, {:error, _} = error} ->
-                      error
-
-                    {true, validity} when validity in [true, :ok, :box_normalization] ->
-                      destination_pages = pages
-
-                      pages =
-                        if validity == :box_normalization,
-                          do: normalize_layout_boxes(pages),
-                          else: pages
-
-                      pages =
-                        Enum.map(pages, fn page ->
-                          %{
-                            page
-                            | boxes:
-                                Enum.map(page.boxes, fn box ->
-                                  styles =
-                                    case Map.get(box, :border_styles) do
-                                      styles when is_map(styles) -> Map.values(styles)
-                                      _ -> []
-                                    end
-
-                                  if Map.get(box, :type) == :rect and
-                                       Map.get(box, :shape, :rectangle) == :rectangle and
-                                       Map.get(box, :snap_to_css_pixel_grid, false) and
-                                       Map.get(box, :border_radius, 0) > 0 and
-                                       (is_nil(Map.get(box, :form_owner)) or
-                                          Map.get(box, :role) in [
-                                            :temporal_host,
-                                            :css_control_host
-                                          ]) and
-                                       Enum.any?(styles, &(&1 in [:dotted, :dashed])) do
-                                    Map.put(box, :css_border_surface, %{
-                                      alpha: 1.0,
-                                      clip:
-                                        Map.take(box, [:x, :y, :width, :height, :border_radius])
-                                    })
-                                  else
-                                    box
-                                  end
-                                end)
-                          }
-                        end)
-
-                      case kind do
-                        :pages ->
-                          HtmlValidator.check_render_resource(
-                            :max_pages,
-                            length(pages),
-                            :writer
-                          )
-
-                        :appearances ->
-                          HtmlValidator.check_render_resource(
-                            :max_entries,
-                            length(pages),
-                            :writer
-                          )
-                      end
-
-                      Enum.reduce(pages, 0, fn page, count ->
-                        count = count + length(page.boxes)
-                        HtmlValidator.check_render_resource(:max_entries, count, :writer)
-                        count
-                      end)
-
-                      with :ok <-
-                             Enum.reduce_while(pages, :ok, fn page, :ok ->
-                               case NativeElixirPdfUtilities.Validators.CssCompositingValidator.validate_ancestry(
-                                      page.boxes
-                                    ) do
-                                 :ok -> {:cont, :ok}
-                                 error -> {:halt, error}
-                               end
-                             end),
-                           :ok <-
-                             NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_destinations(
-                               destination_pages
-                             ) do
-                        case validate_embedded_fonts(pages) do
-                          {:ok, faces, glyph_faces} ->
-                            with {:ok, pages, shaped_faces} <-
-                                   NativeElixirPdfUtilities.HtmlToPdf.ShapedTextPaint.prepare(
-                                     pages
-                                   ),
-                                 :ok <-
-                                   validate_glyph_faces(
-                                     pages,
-                                     Map.merge(glyph_faces, shaped_faces)
-                                   ) do
-                              {:ok,
-                               %{
-                                 pages: pages,
-                                 color_fonts?:
-                                   Enum.any?(faces, fn {_id, font} ->
-                                     Map.has_key?(font, :color_tables)
-                                   end),
-                                 metadata: metadata,
-                                 outlines: outlines,
-                                 compress_streams: Keyword.get(opts, :compress_streams, true),
-                                 subset_fonts: Keyword.get(opts, :subset_fonts, true)
-                               }}
-                            else
-                              {:error, {_, _}} = error ->
-                                error
-
-                              {:error, message} ->
-                                Diagnostics.error(:pdf, :invalid_pdf_input, message,
-                                  operation: :write_pdf,
-                                  module: __MODULE__
-                                )
-                            end
-
-                          {:error, {_reason, _diagnostic}} = error ->
-                            error
-
-                          {:error, message} ->
-                            Diagnostics.error(:pdf, :invalid_pdf_input, message,
-                              operation: :write_pdf,
-                              module: __MODULE__
-                            )
-                        end
-                      end
-
-                    _ ->
-                      Diagnostics.error(
-                        :pdf,
-                        :invalid_pdf_input,
-                        "PDF writer requires non-empty valid pages; link_region requires bounded convex counterclockwise QuadPoints and a positive annotation rectangle; rectangle shape must be :rectangle, :wave with a positive stroke and no fill/border styles, {:triangle, direction} with up/down/left/right direction, or {:chevron, :down}; select_arrow requires a chevron and clip rectangle; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; text/rectangle/image text_baseline_offset must be bounded numeric when supplied; paint_frame requires a finite bounded rectangle supplying the original page paint origin and height; clip requires numeric finite bounded x/y and nonnegative width/height, optional nonnegative border_radius and at most one inner_clip rectangle when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; link_quad_points requires eight finite coordinates forming a nonzero convex quadrilateral within its link_region rectangle; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar; glyph_advances require one bounded point advance per explicit glyph and zero advances at zero font size; word_spacing requires a bounded point length; justification spacing requires a bounded point length and strictly increasing UTF-8 offsets inside text",
-                        operation: :write_pdf,
-                        module: __MODULE__
-                      )
-                  end
-
-                {:error, _error} = outline_error ->
-                  outline_error
+              with {:ok, outlines} <-
+                     OutlineValidator.normalize(
+                       normalized_outline_input(Keyword.get(opts, :outlines)),
+                       length(pages)
+                     ),
+                   {:ok, artwork} <- prepare_artwork(pages, kind) do
+                {:ok,
+                 Map.merge(artwork, %{
+                   metadata: metadata,
+                   outlines: outlines,
+                   compress_streams: Keyword.get(opts, :compress_streams, true),
+                   subset_fonts: Keyword.get(opts, :subset_fonts, true)
+                 })}
               end
             else
               {:error, {:resource_limit_exceeded, _diagnostic}} = error ->
@@ -872,6 +787,152 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
 
       _ ->
         Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer requires a list of pages",
+          operation: :write_pdf,
+          module: __MODULE__
+        )
+    end
+  end
+
+  defp prepare_artwork(pages, kind) do
+    validity =
+      Enum.reduce_while(pages, :ok, fn page, validity ->
+        case valid_page?(page, kind) do
+          {:error, _} = error -> {:halt, error}
+          false -> {:halt, false}
+          :box_normalization -> {:cont, :box_normalization}
+          true -> {:cont, validity}
+        end
+      end)
+
+    case {pages != [], validity} do
+      {_, {:error, _} = error} ->
+        error
+
+      {true, validity} when validity in [true, :ok, :box_normalization] ->
+        destination_pages = pages
+
+        {pages, counts} =
+          if validity == :box_normalization do
+            normalize_layout_boxes(pages, kind == :effect_pages)
+          else
+            {pages, if(kind == :effect_pages, do: Enum.map(pages, &length(&1.boxes)), else: [])}
+          end
+
+        pages =
+          Enum.map(pages, fn page ->
+            %{
+              page
+              | boxes:
+                  Enum.map(page.boxes, fn box ->
+                    styles =
+                      case Map.get(box, :border_styles) do
+                        styles when is_map(styles) -> Map.values(styles)
+                        _ -> []
+                      end
+
+                    if Map.get(box, :type) == :rect and
+                         Map.get(box, :shape, :rectangle) == :rectangle and
+                         Map.get(box, :snap_to_css_pixel_grid, false) and
+                         Map.get(box, :border_radius, 0) > 0 and
+                         (is_nil(Map.get(box, :form_owner)) or
+                            Map.get(box, :role) in [
+                              :temporal_host,
+                              :css_control_host
+                            ]) and
+                         Enum.any?(styles, &(&1 in [:dotted, :dashed])) do
+                      Map.put(box, :css_border_surface, %{
+                        alpha: 1.0,
+                        clip: Map.take(box, [:x, :y, :width, :height, :border_radius])
+                      })
+                    else
+                      box
+                    end
+                  end)
+            }
+          end)
+
+        case kind do
+          pages_kind when pages_kind in [:pages, :effect_pages] ->
+            HtmlValidator.check_render_resource(
+              :max_pages,
+              length(pages),
+              :writer
+            )
+
+          :appearances ->
+            HtmlValidator.check_render_resource(
+              :max_entries,
+              length(pages),
+              :writer
+            )
+        end
+
+        Enum.reduce(pages, 0, fn page, count ->
+          count = count + length(page.boxes)
+          HtmlValidator.check_render_resource(:max_entries, count, :writer)
+          count
+        end)
+
+        with :ok <-
+               Enum.reduce_while(pages, :ok, fn page, :ok ->
+                 case NativeElixirPdfUtilities.Validators.CssCompositingValidator.validate_ancestry(
+                        page.boxes
+                      ) do
+                   :ok -> {:cont, :ok}
+                   error -> {:halt, error}
+                 end
+               end),
+             :ok <-
+               NativeElixirPdfUtilities.Validators.HtmlLinkValidator.validate_destinations(
+                 destination_pages
+               ) do
+          case validate_embedded_fonts(pages) do
+            {:ok, faces, glyph_faces} ->
+              with {:ok, pages, shaped_faces} <-
+                     NativeElixirPdfUtilities.HtmlToPdf.ShapedTextPaint.prepare(pages),
+                   :ok <-
+                     validate_glyph_faces(
+                       pages,
+                       Map.merge(glyph_faces, shaped_faces)
+                     ) do
+                artwork = %{
+                  pages: pages,
+                  color_fonts?:
+                    Enum.any?(faces, fn {_id, font} -> Map.has_key?(font, :color_tables) end)
+                }
+
+                {:ok,
+                 if(kind == :effect_pages,
+                   do: Map.put(artwork, :entry_counts, counts),
+                   else: artwork
+                 )}
+              else
+                {:error, {_, _}} = error ->
+                  error
+
+                {:error, message} ->
+                  Diagnostics.error(:pdf, :invalid_pdf_input, message,
+                    operation: :write_pdf,
+                    module: __MODULE__
+                  )
+              end
+
+            {:error, {_reason, _diagnostic}} = error ->
+              error
+
+            {:error, message} ->
+              Diagnostics.error(:pdf, :invalid_pdf_input, message,
+                operation: :write_pdf,
+                module: __MODULE__
+              )
+          end
+        end
+
+      _ ->
+        Diagnostics.error(
+          :pdf,
+          :invalid_pdf_input,
+          "PDF writer requires non-empty valid pages; link_region requires bounded convex counterclockwise QuadPoints and a positive annotation rectangle; rectangle shape must be :rectangle, :wave with a positive stroke and no fill/border styles, {:triangle, direction} with up/down/left/right direction, or {:chevron, :down}; select_arrow requires a chevron and clip rectangle; flow_marker requires zero width, non-negative height and no link/field; baseline_snap_depth must be non-negative numeric when supplied; text/rectangle/image text_baseline_offset must be bounded numeric when supplied; paint_frame requires a finite bounded rectangle supplying the original page paint origin and height; clip requires numeric finite bounded x/y and nonnegative width/height, optional nonnegative border_radius and at most one inner_clip rectangle when supplied; border_cutout requires numeric offsets and positive dimensions when supplied; glyph_group requires valid UTF-8 actual_text and text-only boxes; link_quad_points requires eight finite coordinates forming a nonzero convex quadrilateral within its link_region rectangle; explicit glyph_ids require an embedded font and one positive 16-bit glyph ID per Unicode scalar; glyph_advances require one bounded point advance per explicit glyph and zero advances at zero font size; word_spacing requires a bounded point length; justification spacing requires a bounded point length and strictly increasing UTF-8 offsets inside text",
           operation: :write_pdf,
           module: __MODULE__
         )
@@ -978,17 +1039,17 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     end
   end
 
-  defp normalize_layout_boxes(pages) do
-    {pages, _count} =
-      Enum.map_reduce(pages, 0, fn page, count ->
+  defp normalize_layout_boxes(pages, retain_counts?) do
+    {pages, {_total, counts}} =
+      Enum.map_reduce(pages, {0, []}, fn page, {previous, counts} ->
         page_height = Map.get(page, :paint_frame, %{height: elem(page.size, 1)}).height
-        {boxes, count} = normalize_boxes(page.boxes, count, nil, page_height, page_height)
-
+        {boxes, count} = normalize_boxes(page.boxes, previous, nil, page_height, page_height)
         boxes = boxes |> List.flatten() |> Enum.map(&normalize_page_link_quad(&1, page.size))
-        {%{page | boxes: boxes}, count}
+        counts = if retain_counts?, do: [count - previous | counts], else: counts
+        {%{page | boxes: boxes}, {count, counts}}
       end)
 
-    pages
+    {pages, Enum.reverse(counts)}
   end
 
   # Prepare final link hit geometry after all drawing transforms and clips,
