@@ -65,6 +65,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StaticCssControlsTest do
     assert t - b < 25
   end
 
+  test "a leading carriage return is a printable space in preformatted text and a newline in a textarea value" do
+    for tag <- ~w(pre listing) do
+      spans = fn prefix ->
+        assert {:ok, pdf} = HtmlToPdf.render("<#{tag}>#{prefix}First</#{tag}>", @opts)
+        assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+        spans
+      end
+
+      assert spans.("&#13;") == spans.(" ")
+    end
+
+    for {source, value, height} <- [{"&#13;First", "\nFirst", 24}, {"&#10;First", "First", 12}] do
+      html = """
+      <style>textarea{display:block;field-sizing:content;width:100pt;font:12pt/12pt monospace;
+        border:0;padding:0}</style><textarea name="notes">#{source}</textarea>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+      assert {:ok, [%{value: ^value, widgets: [%{rect: [_, b, _, t]}]}]} = Forms.fields(pdf)
+      assert_in_delta t - b, height, 0.01
+    end
+  end
+
   test "content-sized textareas keep visible lines and editable values at the final width" do
     value = "Another long line that must wrap to more than two lines"
 

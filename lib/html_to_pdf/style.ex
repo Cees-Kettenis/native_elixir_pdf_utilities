@@ -6942,6 +6942,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   defp transform_text_node(node, text, style, owner, ancestors) do
     HtmlValidator.reserve_render_resource(:max_output_bytes, byte_size(text), :style)
 
+    # HTML source newlines have already become LF. A CR retained in character
+    # data (for example &#13;) renders as a space under CSS Text.
+    text = String.replace(text, "\r", " ")
+
     transform = :maps.get(:text_transform, style, :none)
     math_text = :maps.get(:_math_text, style, false)
     svg_text = :maps.get(:_svg_element, style, false)

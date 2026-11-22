@@ -2401,18 +2401,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec normalize_html_element_children(String.t(), list(), String.t() | nil) :: list()
-  def normalize_html_element_children(tag, children, first_token) do
-    case {tag, children} do
-      {tag, [%{type: :text, text: text} = first | rest]} when tag in ~w(pre listing textarea) ->
-        text =
-          if is_binary(first_token) and not String.starts_with?(first_token, "<!--") do
-            String.replace(text, ~r/^\r?\n|^\r/u, "", global: false)
-          else
-            text
-          end
-
-        [%{first | text: text} | rest]
+  @spec normalize_html_element_children(term(), list(), binary()) :: list()
+  def normalize_html_element_children(context, children, source) do
+    # A literal LF or a character reference can emit the first LF token.
+    # A preceding comment or ignored null still occupies the first token position.
+    case {context, children, source} do
+      {tag, [%{type: :text, text: <<"\n", tail::binary>>} = first | rest], <<byte, _::binary>>}
+      when tag in ~w(pre listing textarea) and byte in [?\n, ?&] ->
+        [%{first | text: tail} | rest]
 
       _ ->
         children

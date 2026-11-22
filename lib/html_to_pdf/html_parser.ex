@@ -1063,7 +1063,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                      ) do
                 normalized =
                   HtmlValidator.normalize_html_element_children(
-                    tag,
+                    ForeignContentValidator.child_context(prepared),
                     element_children,
                     stream_source(remaining)
                   )

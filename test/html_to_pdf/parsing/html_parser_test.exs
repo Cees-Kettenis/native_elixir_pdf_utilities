@@ -452,6 +452,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
   end
 
+  test "preformatted elements suppress only an immediately following LF token" do
+    for tag <- ~w(pre listing textarea),
+        {prefix, expected} <- [
+          {"&#13;", "\r"},
+          {"&#13;&#10;", "\r\n"},
+          {"&#10;", ""},
+          {"&NewLine;", ""},
+          {"\r\n", ""},
+          {"\n\n", "\n"}
+        ] do
+      source = prefix <> "First"
+
+      assert {:ok, %{children: [%{children: [%{text: text, source: %{text: ^source}}]}]}} =
+               HtmlParser.parse_detailed("<#{tag}>#{source}</#{tag}>")
+
+      assert text == expected <> "First"
+    end
+
+    for tag <- ~w(pre listing), prefix <- ["<!--boundary-->", "\0"] do
+      assert {:ok, %{children: [%{children: [%{text: "\nFirst"}]}]}} =
+               HtmlParser.parse_detailed("<#{tag}>#{prefix}&#10;First</#{tag}>")
+    end
+
+    assert {:ok, %{children: [%{children: [%{text: "<!--boundary-->\nFirst"}]}]}} =
+             HtmlParser.parse_detailed("<textarea><!--boundary-->&#10;First</textarea>")
+  end
+
   test "preprocesses literal newlines in every tokenizer context before decoding references" do
     for newline <- ["\r", "\r\n", "\n"] do
       html =
