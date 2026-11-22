@@ -4,6 +4,8 @@ defmodule NativeElixirPdfUtilities.FileReader do
   alias NativeElixirPdfUtilities.Validators.{FileValidator, ResourceBudgetValidator}
   alias NativeElixirPdfUtilities.Diagnostics
 
+  @chunk_bytes 16_384
+
   @doc """
   Reads an authorized regular file under an explicit or remaining input-byte limit.
   A caller supplying previously admitted font bytes permits a work-budgeted
@@ -39,20 +41,32 @@ defmodule NativeElixirPdfUtilities.FileReader do
               end
             end
           else
-            result =
-              case :file.read(file, maximum_bytes + 1) do
-                :eof -> {:ok, ""}
-                result -> result
-              end
-
-            with {:ok, bytes} <- result,
-                 :ok <- FileValidator.validate_size(byte_size(bytes), maximum_bytes, path) do
-              {:ok, bytes}
-            end
+            read_bytes(file, stat.size + 1, maximum_bytes, path, 0, [])
           end
         end
       after
         :file.close(file)
+      end
+    end
+  end
+
+  defp read_bytes(file, request, maximum, path, consumed, chunks) do
+    result =
+      case :file.read(file, request) do
+        :eof -> {:ok, ""}
+        result -> result
+      end
+
+    with {:ok, bytes} <- result,
+         total = consumed + byte_size(bytes),
+         :ok <- FileValidator.validate_size(total, maximum, path) do
+      if byte_size(bytes) == request do
+        # The file grew beyond its observed size. Read at most one byte past
+        # the remaining allowance and keep each subsequent buffer bounded.
+        next = min(@chunk_bytes, maximum - total + 1)
+        read_bytes(file, next, maximum, path, total, [bytes | chunks])
+      else
+        {:ok, IO.iodata_to_binary(:lists.reverse(chunks, bytes))}
       end
     end
   end
@@ -65,7 +79,7 @@ defmodule NativeElixirPdfUtilities.FileReader do
   end
 
   defp fingerprint(file, remaining, state, path) do
-    result = :file.read(file, min(16_384, remaining + 1))
+    result = :file.read(file, min(@chunk_bytes, remaining + 1))
 
     if result == :eof do
       {:ok, :crypto.hash_final(state)}

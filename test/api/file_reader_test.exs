@@ -38,6 +38,20 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
              FileReader.read(root, 1)
   end
 
+  @tag skip: :os.type() != {:unix, :linux}
+  test "regular files with a zero reported size still obey the actual byte ceiling" do
+    # Linux exposes this process's newline-terminated status as a regular
+    # file. Its reported size is zero even though the descriptor yields data.
+    path = "/proc/self/comm"
+    assert File.stat!(path).size == 0
+    expected = File.read!(path)
+    assert byte_size(expected) > 1
+    assert {:ok, ^expected} = FileReader.read(path, byte_size(expected))
+
+    assert {:error, {:resource_limit_exceeded, %{source: ^path}}} =
+             FileReader.read(path, byte_size(expected) - 1)
+  end
+
   test "an empty authorized file still fits an exhausted operation", %{root: root} do
     path = Path.join(root, "empty.css")
     File.write!(path, "")
