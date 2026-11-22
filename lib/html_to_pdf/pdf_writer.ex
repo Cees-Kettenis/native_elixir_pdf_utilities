@@ -37,6 +37,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           | :invalid_pdf_input
           | :resource_limit_exceeded
           | :unsupported_form
+          | :unsupported_html
           | :unsupported_pdf_feature
 
   @doc """
@@ -93,6 +94,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
   viewports carry validator-issued fields separately, preserving their document
   names, owners, actual clipped widgets and genuine appearance paint.
   Group depth and all nested drawing instructions use shared resource limits.
+  A group whose CSS filter references a missing same-document definition returns
+  `:unsupported_html`. The diagnostic's `:source` identifies the filter reference.
 
   Text and image links may supply `:link_destination` as
   `{:xyz, page_number, x, y}` using one-based pages and PDF bottom-left points.
