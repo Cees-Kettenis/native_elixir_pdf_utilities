@@ -50,7 +50,9 @@ Operation labels can differ from function names, such as `:stamp_text` or `:read
 ## Forms and attachments
 
 Form and attachment operations use the same error tuple. Diagnostics identify
-the module and operation. Field write errors include the field name in `:source`.
+the module and operation. A write error for a recognized field can include its
+name in `:source`. For `:unknown_form_field`, compare the requested names with
+the names returned by `Forms.fields/1`.
 
 | Reason | Action |
 | --- | --- |
