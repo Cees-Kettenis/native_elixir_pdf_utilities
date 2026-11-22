@@ -329,10 +329,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       true ->
         HtmlValidator.reserve_render_resource(:max_entries, 1, :html)
 
-        text =
-          if HtmlValidator.html_text_mode(context) != :rcdata,
-            do: html,
-            else: HtmlEntities.decode(html, :text)
+        text = character_data(html, context)
 
         tree =
           if text == "" do
@@ -806,24 +803,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
             {:error, {:html_source, token, byte_size(stream_source(remaining))}}
 
           :text ->
-            text =
-              if HtmlValidator.html_text_mode(context) != :rcdata,
-                do: token,
-                else: HtmlEntities.decode(token, :text)
+            text = character_data(token, context)
 
-            {tree, id} =
-              attach_node(
-                tree,
-                parent,
-                %{
-                  type: :text,
-                  text: text,
-                  source: token_source(source_context, token, remaining)
-                },
-                source_context
-              )
-
-            {tree, _node} = HtmlTree.close(tree, id)
+            tree = attach_text(tree, parent, source_context, token, remaining, text)
 
             parse_children(
               remaining,
@@ -868,21 +850,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         parse_children(remaining, context, closing_tag, ancestors, source_context, tree, parent)
 
       is_tuple(context) and String.starts_with?(token, "<![CDATA[") ->
-        text = binary_part(token, 9, byte_size(token) - 12)
-
-        {tree, id} =
-          attach_node(
-            tree,
-            parent,
-            %{
-              type: :text,
-              text: text,
-              source: token_source(source_context, token, remaining)
-            },
-            source_context
-          )
-
-        {tree, _node} = HtmlTree.close(tree, id)
+        text = character_data(token, context)
+        tree = attach_text(tree, parent, source_context, token, remaining, text)
         parse_children(remaining, context, closing_tag, ancestors, source_context, tree, parent)
 
       Regex.match?(~r/^<!doctype(?=[ \t\n\f\r>])/i, token) ->
@@ -1153,7 +1122,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         end
 
       true ->
-        case HtmlValidator.html_text_action(context, token) do
+        text = character_data(token, context)
+
+        case HtmlValidator.html_text_action(context, text) do
           :ignore ->
             tree =
               if context in ~w(ul ol menu dir) do
@@ -1163,7 +1134,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
                     _ -> []
                   end
 
-                %{tree | pending_list_space: {parent, [token | prior]}}
+                %{tree | pending_list_space: {parent, [text | prior]}}
               else
                 tree
               end
@@ -1183,19 +1154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
              {:html_source, String.trim_leading(token), byte_size(stream_source(remaining))}}
 
           :text ->
-            {tree, id} =
-              attach_node(
-                tree,
-                parent,
-                %{
-                  type: :text,
-                  text: HtmlEntities.decode(token, :text),
-                  source: token_source(source_context, token, remaining)
-                },
-                source_context
-              )
-
-            {tree, _node} = HtmlTree.close(tree, id)
+            tree = attach_text(tree, parent, source_context, token, remaining, text)
 
             parse_children(
               remaining,
@@ -1207,6 +1166,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
               parent
             )
         end
+    end
+  end
+
+  @doc false
+  @spec character_data(binary(), term()) :: binary()
+  def character_data(token, context) do
+    mode = HtmlValidator.html_text_mode(context)
+
+    # Decode first so ignoring a null cannot join two pieces of an entity name.
+    text =
+      cond do
+        is_tuple(context) and String.starts_with?(token, "<![CDATA[") ->
+          binary_part(token, 9, byte_size(token) - 12)
+
+        mode in [:data, :rcdata] ->
+          HtmlEntities.decode(token, :text)
+
+        true ->
+          token
+      end
+
+    if :binary.match(text, <<0>>) == :nomatch do
+      text
+    else
+      replacement =
+        if mode == :data and ForeignContentValidator.namespace(context, "") == :html,
+          do: "",
+          else: "�"
+
+      :binary.replace(text, <<0>>, replacement, [:global])
+    end
+  end
+
+  defp attach_text(tree, parent, source_context, token, remaining, text) do
+    if text == "" do
+      tree
+    else
+      node = %{type: :text, text: text, source: token_source(source_context, token, remaining)}
+      {tree, id} = attach_node(tree, parent, node, source_context)
+      {tree, _node} = HtmlTree.close(tree, id)
+      tree
     end
   end
 

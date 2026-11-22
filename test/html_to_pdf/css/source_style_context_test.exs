@@ -45,6 +45,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SourceStyleContextTest do
     assert diagnostic.column == 38
   end
 
+  test "embedded CSS binds replacement characters and preserves their original byte spans" do
+    css = "/*a\0b*/p{color:red}"
+
+    for style <- ["<style>#{css}</style>", "<svg><style><![CDATA[#{css}]]></style></svg>"] do
+      assert {:ok, dom} = HtmlParser.parse_document_detailed("<p>\0</p>" <> style)
+      assert {:ok, %{embedded: [%{descriptor: descriptor}]}} = HtmlCssSourceValidator.prepare(dom)
+      assert descriptor.css == "/*a�b*/p{color:red}"
+      assert HtmlCssSourceValidator.map_span(descriptor, 3, 3).text == "\0"
+      assert HtmlCssSourceValidator.map_span(descriptor, 6, 1).text == "b"
+    end
+  end
+
   test "empty boundaries and multibyte span validation retain original extents" do
     assert {:ok, dom} = HtmlParser.parse_document_detailed("<p style=''>Good</p><style></style>")
     assert {:ok, provenance} = HtmlCssSourceValidator.prepare(dom)

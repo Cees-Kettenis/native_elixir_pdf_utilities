@@ -153,6 +153,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     end
   end
 
+  test "literal nulls follow the HTML text mode and foreign integration point" do
+    source = "A\0B&#0;&am\0p;"
+
+    for {context, expected} <- [
+          {"p", "AB�&amp;"},
+          {"title", "A�B�&am�p;"},
+          {"textarea", "A�B�&am�p;"},
+          {"style", "A�B&#0;&am�p;"},
+          {"plaintext", "A�B&#0;&am�p;"},
+          {"svg", "A�B�&am�p;"},
+          {%{namespace: :svg, tag: "foreignObject"}, "AB�&amp;"},
+          {%{namespace: :mathml, tag: "mi"}, "AB�&amp;"}
+        ] do
+      assert {:ok, %{children: [%{text: ^expected, source: %{text: ^source}}]}} =
+               HtmlParser.parse_fragment_detailed(source, context)
+    end
+
+    html = "<p>\0<!-- boundary -->A\0B&#0;</p><svg><text><![CDATA[A\0B]]></text></svg>"
+    assert {:ok, %{children: [paragraph, svg]}} = HtmlParser.parse_detailed(html)
+    assert [%{text: "AB�", source: %{text: "A\0B&#0;"}}] = paragraph.children
+    assert [%{children: [%{text: "A�B", source: %{text: "<![CDATA[A\0B]]>"}}]}] = svg.children
+
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render("<p>A\0B&#0;C</p>")
+    assert {:ok, "AB�C"} = NativeElixirPdfUtilities.Text.extract(pdf)
+  end
+
   test "raw text and RCDATA never tokenize processing instructions" do
     for tag <- ~w(style title textarea script xmp noembed plaintext) do
       attrs = if tag == "script", do: " type=text/plain", else: ""

@@ -399,19 +399,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
             _ -> nil
           end
 
-        decoded =
-          cond do
-            HtmlValidator.html_text_mode(context) in [:raw_text, :plaintext] ->
-              token
-
-            String.starts_with?(token, "<![CDATA[") and is_tuple(context) ->
-              binary_part(token, 9, byte_size(token) - 12)
-
-            true ->
-              HtmlEntities.decode(token, :text)
-          end
-
-        if is_nil(style_owner) or (style_owner == node.parent_id and decoded == node.text) do
+        if is_nil(style_owner) or
+             (style_owner == node.parent_id and
+                HtmlParser.character_data(token, context) == node.text) do
           {:ok, stack,
            Map.put(bound, node.node_id, %{
              offset: offset,
@@ -427,12 +417,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
         end
 
       {:text, nil, true} ->
-        if HtmlValidator.html_text_mode(context) == :data and String.trim(token) == "",
-          do: {:ok, stack, bound},
-          else:
-            binding_error("original text token has no matching canonical source owner", %{
-              text: raw
-            })
+        if HtmlValidator.html_text_mode(context) == :data and
+             String.trim(HtmlParser.character_data(token, context)) == "",
+           do: {:ok, stack, bound},
+           else:
+             binding_error("original text token has no matching canonical source owner", %{
+               text: raw
+             })
 
       {:other, nil, true} ->
         {:ok, stack, bound}
@@ -625,6 +616,21 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
       if context,
         do: HtmlEntities.decode_with_spans(normalized, context),
         else: {normalized, for(at <- 0..(byte_size(normalized) - 1)//1, do: {at, 1, at, 1})}
+
+    # In embedded HTML and SVG styles one literal null becomes a three-byte
+    # replacement character. CSS offsets still refer back to the single source byte.
+    {decoded, segments} =
+      if context != :attribute and :binary.match(decoded, <<0>>) != :nomatch do
+        {expanded, _} =
+          Enum.map_reduce(segments, 0, fn {at, size, input_at, input_size}, offset ->
+            size = if :binary.at(decoded, at) == 0, do: byte_size("�"), else: size
+            {{offset, size, input_at, input_size}, offset + size}
+          end)
+
+        {:binary.replace(decoded, <<0>>, "�", [:global]), expanded}
+      else
+        {decoded, segments}
+      end
 
     segments =
       Enum.map(segments, fn {at, size, input_at, input_size} ->
