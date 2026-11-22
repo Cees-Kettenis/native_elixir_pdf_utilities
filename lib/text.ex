@@ -161,8 +161,10 @@ defmodule NativeElixirPdfUtilities.Text do
            {:ok, pages} <- extract_pages(text_context, true) do
         visible_pages =
           pages
-          |> Enum.map(fn page -> {page.number, Enum.filter(page.spans, & &1.paints_text?)} end)
-          |> Enum.reject(fn {_page_number, spans} -> spans == [] end)
+          |> Enum.map(fn page ->
+            {page.number, page.rotation, Enum.filter(page.spans, & &1.paints_text?)}
+          end)
+          |> Enum.reject(fn {_page_number, _rotation, spans} -> spans == [] end)
 
         case visible_pages do
           [] ->
@@ -208,7 +210,9 @@ defmodule NativeElixirPdfUtilities.Text do
            {:ok, pages} <- extract_pages(text_context, request.options.actual_text) do
         pages =
           if request.options.order == :visual do
-            Enum.map(pages, fn page -> %{page | spans: visual_spans(page.spans)} end)
+            Enum.map(pages, fn page ->
+              %{page | spans: visual_spans(page.spans, page.rotation)}
+            end)
           else
             pages
           end
@@ -698,11 +702,11 @@ defmodule NativeElixirPdfUtilities.Text do
     separator = if layout?, do: "\f", else: "\n"
 
     pages
-    |> Enum.reduce_while({:ok, [], 0, 0}, fn {number, spans},
+    |> Enum.reduce_while({:ok, [], 0, 0}, fn {number, rotation, spans},
                                              {:ok, rendered, bytes, whitespace} ->
       {parts, page_bytes, spaces} =
         if layout? do
-          layout_page_projection(spans)
+          layout_page_projection(spans, rotation)
         else
           parts = plain_page(spans)
           {parts, IO.iodata_length(parts), 0}
@@ -740,14 +744,11 @@ defmodule NativeElixirPdfUtilities.Text do
     |> elem(0)
   end
 
-  defp layout_page_projection(spans) do
-    min_x = spans |> Enum.map(& &1.x) |> Enum.min()
-
+  defp layout_page_projection(spans, rotation) do
     lines =
-      spans
-      |> Enum.sort_by(&{&1.y, &1.x})
-      |> group_lines([])
-      |> Enum.map(fn line -> line.spans |> Enum.sort_by(& &1.x) |> project_line(min_x) end)
+      Enum.map(visual_lines(spans, rotation), fn {line, min_x} ->
+        project_line(line, min_x)
+      end)
 
     # Each line separator contributes one UTF-8 byte to the returned page.
     bytes = Enum.reduce(lines, length(lines) - 1, &(&1.bytes + &2))
@@ -762,53 +763,124 @@ defmodule NativeElixirPdfUtilities.Text do
     |> Enum.intersperse("\n")
   end
 
-  defp visual_spans(spans) do
-    spans
-    |> Enum.sort_by(&{&1.y, &1.x})
-    |> group_lines([])
-    |> Enum.flat_map(fn line -> Enum.sort_by(line.spans, & &1.x) end)
+  defp visual_spans(spans, rotation) do
+    Enum.flat_map(visual_lines(spans, rotation), fn {line, _min_x} ->
+      Enum.map(line, & &1.span)
+    end)
   end
 
-  defp group_lines(spans, lines) do
-    case spans do
-      [] ->
+  defp visual_lines(spans, rotation) do
+    groups = Enum.group_by(spans, &baseline_turn(&1, rotation))
+
+    lines =
+      Enum.flat_map(groups, fn {turn, spans} ->
+        # Independently positioned labels do not establish a continuous reading
+        # direction. Keep their existing ordering in display coordinates.
+        turn = if turn != 0 and not Enum.any?(spans, & &1.joins_previous?), do: 0, else: turn
+
+        positioned =
+          Enum.map(spans, fn span ->
+            {x, y} = reading_position(span.x, span.y, turn)
+            {end_x, _} = reading_position(span.end_x, span.end_y, turn)
+            %{x: x, y: y, end_x: end_x, span: span}
+          end)
+
+        min_x = positioned |> Enum.min_by(& &1.x) |> Map.fetch!(:x)
+
+        positioned
+        |> Enum.reduce([], &collect_run/2)
+        |> Enum.sort_by(&{&1.y, &1.x, &1.index})
+        |> group_lines([])
+        |> Enum.map(fn {_y, runs} ->
+          line = runs |> Enum.sort_by(&{&1.x, &1.index}) |> Enum.flat_map(&Enum.reverse(&1.parts))
+          {line, min_x}
+        end)
+      end)
+
+    if map_size(groups) <= 1 do
+      lines
+    else
+      # Place differently oriented lines on the page's predominant reading axes.
+      {turn, _} =
+        Enum.max_by(groups, fn {_turn, items} -> {length(items), -hd(items).source_index} end)
+
+      Enum.sort_by(lines, fn {[%{span: first} | _], _min_x} ->
+        {x, y} = reading_position(first.x, first.y, turn)
+        {y, x, first.source_index}
+      end)
+    end
+  end
+
+  # The first column of the text-to-page transform gives the baseline even
+  # for zero-width operands. Display coordinates already include page rotation.
+  defp baseline_turn(span, rotation) do
+    [a, b | _] = span.text_matrix
+    [xx, xy, yx, yy | _] = span.ctm
+    dx = a * xx + b * yx
+    dy = -(a * xy + b * yy)
+
+    turn =
+      cond do
+        abs(dy) > abs(dx) -> if dy > 0, do: 1, else: 3
+        dx < 0 -> 2
+        true -> 0
+      end
+
+    rem(turn + div(rotation, 90), 4)
+  end
+
+  defp reading_position(x, y, turn) do
+    case turn do
+      0 -> {x, y}
+      1 -> {y, -x}
+      2 -> {-x, -y}
+      3 -> {-y, x}
+    end
+  end
+
+  defp collect_run(position, runs) do
+    case runs do
+      [%{parts: [previous | _]} = run | rest]
+      when position.span.joins_previous? and
+             position.span.source_index == previous.span.source_index + 1 and
+             abs(position.y - run.y) <= 1.5 ->
+        [%{run | parts: [position | run.parts]} | rest]
+
+      _ ->
+        [
+          %{x: position.x, y: position.y, index: position.span.source_index, parts: [position]}
+          | runs
+        ]
+    end
+  end
+
+  defp group_lines(runs, lines) do
+    case {runs, lines} do
+      {[], _} ->
         Enum.reverse(lines)
 
-      [span | rest] ->
-        case lines do
-          [%{y: y, font_size: font_size, spans: line_spans} = line | previous]
-          when abs(span.y - y) <= 1.5 ->
-            updated = %{
-              line
-              | spans: [span | line_spans],
-                font_size: max(font_size, span.font_size)
-            }
+      {[run | rest], [{y, current} | previous]} when abs(run.y - y) <= 1.5 ->
+        group_lines(rest, [{y, [run | current]} | previous])
 
-            group_lines(rest, [updated | previous])
-
-          _ ->
-            group_lines(
-              rest,
-              [%{y: span.y, font_size: span.font_size, spans: [span]} | lines]
-            )
-        end
+      {[run | rest], _} ->
+        group_lines(rest, [{run.y, [run]} | lines])
     end
   end
 
   defp project_line(spans, min_x) do
     {parts, _current_x, _first?} =
-      Enum.reduce(spans, {[], min_x, true}, fn span, {parts, current_x, first?} ->
-        space_width = max(span.font_size * 0.25, 4.0)
-        gap = span.x - current_x
+      Enum.reduce(spans, {[], min_x, true}, fn position, {parts, current_x, first?} ->
+        space_width = max(position.span.font_size * 0.25, 4.0)
+        gap = position.x - current_x
 
         spaces =
           cond do
-            first? -> max(round((span.x - min_x) / space_width), 0)
+            first? -> max(round((position.x - min_x) / space_width), 0)
             gap > space_width * 0.35 -> max(round(gap / space_width), 1)
             true -> 0
           end
 
-        {[{spaces, span.text} | parts], max(span.end_x, span.x), false}
+        {[{spaces, position.span.text} | parts], max(position.end_x, position.x), false}
       end)
 
     parts = trim_line_end(parts)

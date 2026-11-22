@@ -18,6 +18,12 @@ For a binary already in memory, use `Text.extract(pdf)`.
 | `layout: true`, the default | Approximate visual lines and spacing; text pages separated by `"\f"` |
 | `layout: false` | Text in drawing order; text pages separated by `"\n"` |
 
+For connected text on quarter-turned pages, line reconstruction follows the
+text baseline. Independently positioned labels retain display order when their
+orientation has no connected text. On pages that mix orientations, line order
+is approximate. Use `layout: false`
+for drawing order when a diagram or sidebar has its own reading sequence.
+
 Both omit pages with no painted text. A document with no extractable painted
 text returns `:no_extractable_text`. Extraction fails if shown text cannot be
 decoded reliably. `max_output_bytes` bounds the complete UTF-8 result, including

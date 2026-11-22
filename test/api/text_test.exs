@@ -5,6 +5,29 @@ defmodule NativeElixirPdfUtilities.TextTest do
 
   alias NativeElixirPdfUtilities.Text
 
+  test "layout reconstruction preserves words and lines after print and PDF page rotation" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Transform}
+    html = "<p>Page <b>printed</b> here</p><p>Next line</p>"
+    assert {:ok, upright} = HtmlToPdf.render(html)
+    assert {:ok, drawing_order} = Text.extract(upright, layout: false)
+
+    for result <- [
+          {:ok, upright},
+          HtmlToPdf.render("<style>@page{page-orientation:rotate-left}</style>" <> html),
+          HtmlToPdf.render("<style>@page{page-orientation:rotate-right}</style>" <> html),
+          Transform.rotate_pages(upright, 90),
+          Transform.rotate_pages(upright, 180),
+          Transform.rotate_pages(upright, 270)
+        ] do
+      assert {:ok, pdf} = result
+      assert {:ok, "Page printed here\nNext line"} = Text.extract(pdf)
+      assert {:ok, ^drawing_order} = Text.extract(pdf, layout: false)
+      assert {:ok, %{pages: [%{spans: source}]}} = Text.extract_spans(pdf)
+      assert {:ok, %{pages: [%{spans: visual}]}} = Text.extract_spans(pdf, order: :visual)
+      assert visual == source
+    end
+  end
+
   test "file extraction rejects nonregular inputs with requested operation context" do
     path = Path.join(System.tmp_dir!(), "nonregular-pdf-#{System.unique_integer([:positive])}")
     File.mkdir_p!(path)
@@ -1946,6 +1969,24 @@ defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
 
     invalid_dictionary = List.replace_at(malformed_font_objects, 5, {7, "42"})
     assert_error(Text.extract(pdf(invalid_dictionary)), :invalid_pdf_input, :resolution)
+  end
+
+  test "visual order keeps joined operands together on mixed and zero-advance baselines" do
+    content = """
+    BT /F1 12 Tf 1 0 0 1 20 650 Tm (Last) Tj
+    0 -1 1 0 15 700 Tm (Side) Tj (ways) Tj
+    1 0 0 1 10 750 Tm (To) Tj (p) Tj ET
+    """
+
+    source = page_pdf(content)
+    assert {:ok, visual_text} = Text.extract(source)
+    assert String.split(visual_text) == ["Top", "Sideways", "Last"]
+    assert {:ok, "Last Sideways Top"} = Text.extract(source, layout: false)
+    assert {:ok, %{pages: [%{spans: physical}]}} = Text.extract_spans(source)
+    assert {:ok, %{pages: [%{spans: visual}]}} = Text.extract_spans(source, order: :visual)
+    assert Enum.map(visual, & &1.source_index) == [3, 4, 1, 2, 0]
+    assert Enum.sort_by(visual, & &1.source_index) == physical
+    assert {:ok, %{pages: [%{spans: []}]}} = Text.extract_spans(page_pdf(""), order: :visual)
   end
 
   test "extract_spans keeps source order and can provide best-effort visual order" do
