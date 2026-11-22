@@ -226,8 +226,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
   @doc "Masks ignored at-rules without changing source byte positions and collects namespace bindings."
   @spec stylesheet_projection(String.t()) :: {String.t(), map()}
   def stylesheet_projection(source) do
-    source
-    |> rules()
+    project_stylesheet(source, rules(source), false)
+  end
+
+  defp project_stylesheet(source, rules, nested?) do
+    rules
     |> Enum.reduce({[], %{}, true, 0}, fn rule, {projected, namespaces, prelude, cursor} ->
       selector = HtmlValidator.trim_css_whitespace(rule.selectors)
 
@@ -255,17 +258,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
           {name, _} when name in ["media", "font-face", "page"] and not rule.block ->
             {String.duplicate(" ", byte_size(rule.source)), namespaces, false}
 
-          {name, _} when name in ["layer", "scope", "supports", "container", "when", "else"] ->
-            {rule.source, namespaces,
+          {name, _}
+          when name in ["media", "layer", "scope", "supports", "container", "when", "else"] ->
+            {project_nested_rules(rule), namespaces,
              if(name == "layer" and not rule.block, do: prelude, else: false)}
 
           {"property", _} ->
             {rule.source, namespaces, false}
 
-          {"media", _} ->
-            {body, _} = stylesheet_projection(rule.declarations)
-            replacement = rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: "")
-            {replacement, namespaces, false}
+          {name, _} when nested? and name in ["apply", "contents", "private"] ->
+            {project_nested_rules(rule), namespaces, false}
 
           {name, _}
           when name in [
@@ -287,7 +289,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
             {String.duplicate(" ", byte_size(rule.source)), namespaces, false}
 
           nil ->
-            {rule.source, namespaces, false}
+            {project_nested_rules(rule), namespaces, false}
         end
 
       before = binary_part(source, cursor, rule.offset - cursor)
@@ -298,6 +300,16 @@ defmodule NativeElixirPdfUtilities.Validators.CssSyntaxValidator do
       tail = binary_part(source, cursor, byte_size(source) - cursor)
       {IO.iodata_to_binary(Enum.reverse([tail | projected])), namespaces}
     end)
+  end
+
+  defp project_nested_rules(rule) do
+    if rule.block and String.contains?(rule.declarations, "@") do
+      items = Enum.filter(block_items(rule.declarations), &(&1.kind == :rule))
+      {body, _} = project_stylesheet(rule.declarations, items, true)
+      rule.selectors <> "{" <> body <> if(rule.closed, do: "}", else: "")
+    else
+      rule.source
+    end
   end
 
   defp namespace_binding(source, namespaces) do

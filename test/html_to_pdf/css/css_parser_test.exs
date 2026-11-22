@@ -293,6 +293,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     end)
   end
 
+  test "descriptor inspection and rendering ignore the same grouped rules" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Info}
+
+    hidden = "@page{size:220pt 130pt}@font-face{font-family:Hidden;src:url(hidden.ttf)}"
+    sibling = "@page{size:240pt 150pt}"
+
+    for group <- [
+          "@unknown{#{hidden}}",
+          "@media print{@unknown{#{hidden}}}",
+          "@supports (display:block){@unknown{#{hidden}}}",
+          "@layer report{@unknown{#{hidden}}}",
+          "p{color:black;@unknown{#{hidden}}}",
+          "@supports (display:unknown){#{hidden}}"
+        ] do
+      assert {:ok, []} = CssParser.page_options(group)
+      assert {:ok, []} = CssParser.font_faces(group)
+      css = group <> sibling
+      assert {:ok, [page_size: "240pt 150pt"]} = CssParser.page_options(css)
+
+      assert {:ok, %{font_faces: [], page_options: [page_size: "240pt 150pt"]}} =
+               CssParser.prepare_stylesheet(css)
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<style>#{css}</style><p>Visible</p>",
+                 asset_resolver: fn request ->
+                   flunk("Unexpected resource request #{inspect(request)}")
+                 end
+               )
+
+      assert {:ok, [%{width: 240.0, height: 150.0}]} = Info.page_sizes(pdf)
+    end
+
+    assert {:ok, [%{sources: ["visible.ttf"]}]} =
+             CssParser.font_faces(
+               "@unknown{#{hidden}}@font-face{font-family:Shown;src:url(visible.ttf)}"
+             )
+  end
+
+  test "descriptor conditions use the same namespace bindings in standalone and projected CSS" do
+    alias NativeElixirPdfUtilities.Validators.PrintMediaValidator
+
+    binding = ~s(@namespace s "http://www.w3.org/2000/svg";)
+    rule = "@supports selector(s|rect) { @page { size: letter } }"
+
+    for {css, options} <- [{binding <> rule, [page_size: :letter]}, {rule, []}] do
+      assert {:ok, selected} = PrintMediaValidator.select_rules(css, nil)
+      assert {:ok, ^options} = CssParser.page_options(selected)
+      assert {:ok, ^options} = CssParser.page_options(css)
+    end
+  end
+
   test "at-rule preprocessing preserves quoted strings and braces" do
     for literal <- [
           ~S|"@media print {BOGUS}"|,

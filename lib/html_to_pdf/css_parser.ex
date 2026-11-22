@@ -141,11 +141,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           RenderCache.fetch_stylesheet(
             {:parsed, css, PrintMediaValidator.cache_context(css, media_context)},
             fn ->
-              {projected, namespaces} =
-                css |> strip_comments() |> CssSyntaxValidator.stylesheet_projection()
-
-              with {:ok, active_css} <-
-                     PrintMediaValidator.select_rules(projected, media_context, nil, namespaces),
+              with {:ok, active_css, namespaces} <- active_stylesheet(css, media_context),
                    {:ok, font_faces} <- parse_font_faces(active_css, css),
                    {:ok, page_options} <- parse_page_rules(active_css, css),
                    {:ok, publishing_pages} <- CssPageValidator.rules(active_css),
@@ -753,9 +749,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   apply them yet. Rendering consumes accepted named and explicit two-length
   `size` values, portrait and landscape orientations, one-to-four-value
   `margin` shorthands, and the four margin longhands. Malformed declarations,
-  unknown properties, invalid paged-media descriptors or selectors, and
-  misspelled `@page` at-rules return
-  `{:error, :invalid_css}`.
+  unknown page properties and invalid paged-media descriptors or selectors
+  return `{:error, :invalid_css}`. Unknown at-rules are ignored with their contents.
   """
   @spec page_options(String.t()) ::
           {:ok, [page_option()]}
@@ -769,11 +764,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end)
   end
 
+  defp active_stylesheet(css, media_context) do
+    {projected, namespaces} =
+      css |> strip_comments() |> CssSyntaxValidator.stylesheet_projection()
+
+    with {:ok, active} <-
+           PrintMediaValidator.select_rules(projected, media_context, nil, namespaces),
+         do: {:ok, active, namespaces}
+  end
+
   defp read_descriptors(css, read) do
     HtmlValidator.with_render_budget(fn ->
       with {:ok, css} <- HtmlValidator.validate_css_source(css),
            :ok <- HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(css), :css),
-           {:ok, active_css} <- css |> strip_comments() |> PrintMediaValidator.select_rules(nil),
+           {:ok, active_css, _namespaces} <- active_stylesheet(css, nil),
            {:ok, descriptors} <- read.(active_css) do
         {:ok, descriptors}
       else
