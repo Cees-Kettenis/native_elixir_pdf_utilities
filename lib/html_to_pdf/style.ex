@@ -1321,14 +1321,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   # Keep the authored or cloned identity on the box-owning styled node. Pseudo
   # nodes remain generated nodes and never impersonate an authored element.
-  defp style_node(node, inherited_style, rules, ancestors, opts, counters, parent_counters) do
+  defp style_node(node, inherited_style, rules, ancestors, opts, counters_before, parent_counters) do
     case style_prepared_node(
            node,
            inherited_style,
            rules,
            ancestors,
            opts,
-           counters,
+           counters_before,
            parent_counters
          ) do
       {:ok, rendered, sibling_counters, counters} ->
@@ -1343,43 +1343,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             styled = Map.update!(styled, :style, &HtmlValidator.list_paint_style/1)
 
             styled =
-              if Map.get(styled.style, :display) == :list_item do
-                markers =
-                  generated_value(
-                    generated_content_node(
-                      node,
-                      :marker,
-                      styled.style,
-                      rules,
-                      ancestors,
-                      sibling_counters || CounterState.new()
-                    )
-                  )
+              case styled.style do
+                %{display: :list_item} = style when not is_map_key(style, :_list_marker) ->
+                  %{
+                    styled
+                    | style:
+                        generated_marker_style(node, style, rules, ancestors, counters_before)
+                  }
 
-                case markers do
-                  [] ->
-                    case generated_content_style(node, :marker, styled.style, rules, ancestors) do
-                      {:ok, %{content: :none, _marker_content: true}} ->
-                        Map.update!(
-                          styled,
-                          :style,
-                          &Map.merge(&1, %{_list_marker: [], _marker_content: true})
-                        )
-
-                      _ ->
-                        styled
-                    end
-
-                  markers ->
-                    marker_fields = Map.take(hd(markers).style, [:_marker_content])
-
-                    marker_fields =
-                      Map.put(marker_fields, :_list_marker, Enum.flat_map(markers, & &1.children))
-
-                    Map.update!(styled, :style, &Map.merge(&1, marker_fields))
-                end
-              else
-                styled
+                _ ->
+                  styled
               end
 
             styled =
@@ -1672,9 +1645,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     )
 
                   element_style =
-                    HtmlValidator.prepare_list_marker(
+                    prepare_element_marker(
+                      node,
                       element_style,
-                      CounterState.value(element_counters, "list-item")
+                      rules,
+                      ancestors,
+                      element_counters
                     )
 
                   with {:ok, before, before_counters} <-
@@ -1995,9 +1971,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                     )
 
                   element_style =
-                    HtmlValidator.prepare_list_marker(
+                    prepare_element_marker(
+                      node,
                       element_style,
-                      CounterState.value(element_counters, "list-item")
+                      rules,
+                      ancestors,
+                      element_counters
                     )
 
                   element_style =
@@ -2602,6 +2581,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:error, reason} ->
           {:error, reason}
       end
+    end
+  end
+
+  # The marker is the first generated child. It sees the owner's counter
+  # operations and the preceding siblings, before ::before or any descendants.
+  defp prepare_element_marker(node, style, rules, ancestors, counters) do
+    if style.display == :list_item do
+      style = HtmlValidator.prepare_list_marker(style, CounterState.value(counters, "list-item"))
+      generated_marker_style(node, style, rules, ancestors, counters)
+    else
+      style
+    end
+  end
+
+  defp generated_marker_style(node, style, rules, ancestors, counters) do
+    paint_style = HtmlValidator.list_paint_style(style)
+
+    case generated_value(
+           generated_content_node(node, :marker, paint_style, rules, ancestors, counters)
+         ) do
+      [] ->
+        case generated_content_style(node, :marker, paint_style, rules, ancestors) do
+          {:ok, %{content: :none, _marker_content: true}} ->
+            Map.merge(style, %{_list_marker: [], _marker_content: true})
+
+          _ ->
+            style
+        end
+
+      [marker | _] = markers ->
+        style
+        |> Map.merge(Map.take(marker.style, [:_marker_content]))
+        |> Map.put(:_list_marker, Enum.flat_map(markers, & &1.children))
     end
   end
 

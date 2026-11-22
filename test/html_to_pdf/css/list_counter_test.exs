@@ -57,6 +57,48 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ListCounterTest do
     assert text =~ "8. Second"
   end
 
+  test "marker counters precede generated content and children in the printed PDF" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+
+    rules = """
+    ol{counter-reset:x} li::marker{content:'[' counter(x) '] '}
+    li::after{content:'-' counter(x)}
+    """
+
+    for {css, expected} <- [
+          {"li::before{content:'';counter-increment:x}", "[0] First-1\n[1] Second-2"},
+          {"li::after{counter-increment:x}", "[0] First-1\n[1] Second-2"},
+          {"b{counter-increment:x}", "[0] First-1\n[1] Second-2"},
+          {"li{counter-increment:x}li::before{content:'';counter-increment:x}",
+           "[1] First-2\n[3] Second-4"},
+          {"li{counter-reset:x 4}li::before{content:'';counter-increment:x}",
+           "[4] First-5\n[4] Second-5"},
+          {"li{display:inline list-item}li::before{content:'';counter-increment:x}",
+           "[0] First-1[1] Second-2"}
+        ] do
+      html = "<style>#{rules}#{css}</style><ol><li><b>First</b></li><li><b>Second</b></li></ol>"
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert Text.extract(pdf) == {:ok, expected}
+    end
+  end
+
+  test "a skipped list item leaves the counter for the next visible marker" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+
+    html = """
+    <style>ol{counter-reset:x} li::before{content:'';counter-increment:x}
+    li::marker{content:'[' counter(x) '] '} li[hidden]::marker{content:url(skipped.png)}</style>
+    <ol><li hidden=until-found>Skipped</li><li>Visible</li></ol>
+    """
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render(html, asset_resolver: fn _ -> flunk("skipped marker loaded") end)
+
+    assert {:ok, text} = Text.extract(pdf)
+    assert text =~ "[0] Visible"
+    refute text =~ "Skipped"
+  end
+
   test "invalid counter-set declarations return actionable public diagnostics" do
     alias NativeElixirPdfUtilities.HtmlToPdf
 

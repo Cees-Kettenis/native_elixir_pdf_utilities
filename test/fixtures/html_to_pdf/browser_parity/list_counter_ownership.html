@@ -19,6 +19,11 @@ li { margin: 0; }
 .inline-items > li { display:inline list-item; }
 .inline-items > li::marker { content:'§ '; }
 .inline-items span { display:inline-block;vertical-align:top;width:12pt;height:7pt;background:#28763d; }
+.marker-order { position:absolute;left:330pt;top:65pt;width:180pt;font:12pt/15pt "DejaVu Sans Mono"; }
+.marker-order ol { margin:0;padding:0;counter-reset:step 9;list-style-position:inside; }
+.marker-order li::marker { content:counter(step); }
+.marker-order li::before { content:'';counter-increment:step; }
+.marker-order span { display:inline-block;vertical-align:top;width:8pt;height:7pt;background:#28763d; }
 </style></head><body>
 <p>Owned items through a descendant</p>
 <ol><li>First<span style="display:list-item">Second</span></li><li>Third</li></ol>
@@ -43,4 +48,5 @@ li { margin: 0; }
 <ol class="generated"><li>First</li><li>Third</li></ol>
 <ol class="generated" reversed><li>Third</li><li>First</li></ol>
 <div class="inline-list-example"><ol class="inline-items"><li>First</li><li>Second<span></span></li></ol></div>
+<div class="marker-order"><ol><li><span></span>Nine</li><li><span></span>Ten</li></ol></div>
 </body></html>
