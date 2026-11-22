@@ -294,6 +294,72 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFilterWorkValidator do
     end
   end
 
+  @doc "Bounds native pattern tile pixels when a tile paints an embedded SVG document."
+  @spec pattern_target(map(), list(), keyword() | nil, pos_integer()) ::
+          {non_neg_integer(), non_neg_integer()}
+  def pattern_target(root, tree, dimensions, expansion) do
+    nodes = Enum.map(tree, &elem(&1, 0))
+    # In a nested document the inherited device transform is not available.
+    # Viewports, markers and CSS can also change the user space of a tile.
+    with true <-
+           dimensions != nil and
+             Enum.all?(nodes, fn node ->
+               (node == root or node.tag not in ~w(svg symbol marker style)) and
+                 (node.tag != "pattern" or
+                    not Enum.any?(
+                      ~w(viewBox patternContentUnits href xlink:href),
+                      &Map.has_key?(node.attributes, &1)
+                    )) and
+                 not Enum.any?(
+                   ~w(style patternTransform marker-start marker-mid marker-end),
+                   &Map.has_key?(node.attributes, &1)
+                 )
+             end),
+         scale when is_number(scale) <-
+           world_scale(root, nodes, dimensions[:width], dimensions[:height]) do
+      pixels =
+        nodes
+        |> Enum.filter(&(&1.tag == "pattern"))
+        |> Enum.reduce(0, fn pattern, maximum ->
+          with %{"patternUnits" => "userSpaceOnUse", "width" => width, "height" => height} <-
+                 pattern.attributes,
+               {:ok, {:user, w}} <- SvgStyleValidator.parse("width", width),
+               {:ok, {:user, h}} <- SvgStyleValidator.parse("height", height) do
+            max(maximum, ceil(w) * ceil(h) * ceil(scale) * ceil(scale))
+          else
+            _ -> indeterminate_pattern!()
+          end
+        end)
+
+      # A paint on a group or use is inherited by each of its drawn paths.
+      # Each expanded drawing operation can fill and stroke its own pattern.
+      inherited? =
+        Enum.any?(nodes, fn node ->
+          node.tag not in ~w(rect ellipse circle line polygon polyline path) and
+            Enum.any?(
+              ~w(fill stroke),
+              &String.contains?(Map.get(node.attributes, &1, ""), "url(")
+            )
+        end)
+
+      {pixels, if(inherited?, do: 2 * expansion, else: 0)}
+    else
+      _ -> indeterminate_pattern!()
+    end
+  end
+
+  defp indeterminate_pattern! do
+    throw(
+      {:render_resource_limit,
+       Diagnostics.error(
+         :limits,
+         :resource_limit_exceeded,
+         "nested SVG pattern tile cannot be bounded within max_raster_pixels",
+         source: "SVG"
+       )}
+    )
+  end
+
   defp region_plane(filter, scale) do
     with true <-
            scale != :unknown and Map.get(filter.attributes, "filterUnits") == "userSpaceOnUse",

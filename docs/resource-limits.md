@@ -132,6 +132,10 @@ estimated working buffers are checked before conversion where their sizes can
 be determined. PNG estimates include scanlines, reconstruction, output and row
 buffers. A 16-bit RGBA sample needs eight decoded bytes per pixel.
 
+Each use of an embedded SVG counts its native parsing, geometry and drawing
+surfaces. Reusing a cached PNG skips those conversion charges. A pattern that
+draws another SVG needs a tile size the converter can bound in device pixels.
+
 SVG estimates include transforms, reused filters and embedded content. Some
 combinations involving patterns, markers, masks, filter images or indeterminate
 intermediate regions cannot be bounded and return `:resource_limit_exceeded`.

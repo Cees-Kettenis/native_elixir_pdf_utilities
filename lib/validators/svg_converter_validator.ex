@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   alias NativeElixirPdfUtilities.Validators.{
     FontValidator,
     HtmlValidator,
+    ResourceBudgetValidator,
     SvgValidator,
     SvgFilterWorkValidator,
     SvgImageValidator,
@@ -44,6 +45,29 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
   @spec prepare(term(), term(), term(), term(), term(), term()) ::
           {:ok, map()} | {:error, {atom(), map()}}
   def prepare(source, options, budget, fonts, context, image_font_options) do
+    with_conversion(
+      source,
+      options,
+      budget,
+      fonts,
+      context,
+      image_font_options,
+      &admit_prepared/2
+    )
+  end
+
+  defp admit_prepared(request, admit) do
+    with :ok <- admit.(), do: {:ok, request}
+  end
+
+  @typep admission :: :ok | {:error, {atom(), map()}}
+  @typep consumer(result) :: (map(), (-> admission()) -> result)
+
+  @doc false
+  @spec with_conversion(term(), term(), term(), term(), term(), term(), consumer(result)) ::
+          result | {:error, {atom(), map()}}
+        when result: term()
+  def with_conversion(source, options, budget, fonts, context, image_font_options, consume) do
     budget = if is_nil(budget), do: HtmlValidator.new_image_budget(), else: budget
 
     HtmlValidator.with_render_budget(fn ->
@@ -93,14 +117,23 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
               )
           end
 
-        {:ok,
-         %{
-           source: source,
-           options: options,
-           scale: scale,
-           fonts: fonts,
-           view_box?: Map.has_key?(summary.source_root, "viewBox")
-         }}
+        request = %{
+          source: source,
+          options: options,
+          scale: scale,
+          fonts: fonts,
+          view_box?: Map.has_key?(summary.source_root, "viewBox")
+        }
+
+        consume.(request, fn ->
+          reserve_nested_work(
+            %{summary.filter_work | root: work_root},
+            1,
+            dimensions[:width] * dimensions[:height],
+            budget,
+            dimensions
+          )
+        end)
       end
     end)
     |> case do
@@ -125,6 +158,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
              prepare_source(source, context, HtmlValidator.new_image_budget(), 0, nil) do
         if summary.text == [] do
           with :ok <- SvgParserWorkValidator.validate(source),
+               :ok <- reserve_nested_work(summary.filter_work, 1, 0, nil, nil),
                do: {:ok, %{source: source, id: id}}
         else
           invalid("SVG glyph bounds cannot recursively load text fonts: #{id}")
@@ -322,7 +356,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
          {:ok, root, summary} <- prepare_print_geometry(source, root, summary, context),
          occurrences =
            Map.new(Enum.with_index(SvgSceneValidator.tree_nodes(root), 1), fn {{node, _}, index} ->
-             {node.node_id, Map.get(summary.expansion_counts, index, 1)}
+             {node.node_id,
+              {Map.get(summary.expansion_counts, index, 1),
+               Map.get(summary.isolated_images, index, 0),
+               Map.get(summary.patterned_images, index, 0)}}
            end),
          {:ok, fonts} <-
            if(is_nil(image_font_options),
@@ -338,6 +375,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
       summary =
         Map.put(summary, :filter_work, %{
           root: normalized,
+          images?: summary.images > 0,
           expansion: summary.expanded_work,
           counts:
             Map.new(summary.ids, fn {id, index} ->
@@ -347,6 +385,88 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
 
       {:ok, approved, summary, fonts}
     end
+  end
+
+  # Apply additional native work only on a conversion cache miss. Loading,
+  # permission checks, font selection and the first document admission still
+  # run once per source, with their original budgets.
+  defp reserve_nested_work(work, parents, parent_pixels, budget, dimensions) do
+    if work.images? do
+      nodes = SvgSceneValidator.tree_nodes(work.root)
+
+      {pattern_pixels, extra_paints} =
+        if budget != nil and
+             Enum.any?(nodes, fn {node, _} ->
+               match?(
+                 %{svg_image_work: %{patterned: n}, svg_filter_work: child}
+                 when n > 0 and is_map(child),
+                 node
+               )
+             end),
+           do:
+             SvgFilterWorkValidator.pattern_target(work.root, nodes, dimensions, work.expansion),
+           else: {0, 0}
+
+      nodes
+      |> Enum.reduce_while(:ok, fn {node, _ancestors}, :ok ->
+        result =
+          case node do
+            %{svg_image_work: image, svg_filter_work: child} when is_map(child) ->
+              extra_placements = image.patterned * extra_paints
+              count = parents * (image.placements + extra_placements)
+              # Resvg can expand an isolated target to five times the canvas
+              # on each axis. A nested SVG starts a new context on that target.
+              pixels =
+                parent_pixels * (image.placements + 24 * image.isolated) +
+                  image.patterned * max(pattern_pixels * parents - 25 * parent_pixels, 0) +
+                  extra_placements * max(pattern_pixels * parents, 25 * parent_pixels)
+
+              extra = count - 1
+
+              HtmlValidator.reserve_render_resource(:max_entries, extra * child.entries, :style)
+              HtmlValidator.reserve_render_resource(:max_work, extra * child.native_work, :style)
+
+              HtmlValidator.reserve_render_resource(
+                :max_decoded_bytes,
+                extra * child.path_bytes,
+                :style
+              )
+
+              with :ok <-
+                     reserve_extra_pixels(
+                       budget,
+                       max(pixels - child.intrinsic_pixels, 0),
+                       4,
+                       max(pixels * child.layers - child.intrinsic_pixels, 0)
+                     ) do
+                reserve_nested_work(child, count, pixels, budget, nil)
+              end
+
+            %{svg_image_work: %{placements: count, raster: {pixels, channels}}}
+            when parents > 1 and budget != nil ->
+              extra = (parents - 1) * count * pixels
+              reserve_extra_pixels(budget, extra, channels, extra)
+
+            _ ->
+              :ok
+          end
+
+        case result do
+          :ok -> {:cont, :ok}
+          error -> {:halt, error}
+        end
+      end)
+    else
+      :ok
+    end
+  end
+
+  defp reserve_extra_pixels(budget, decoded_pixels, channels, raster_pixels) do
+    HtmlValidator.reserve_render_resource(:max_raster_pixels, raster_pixels, :style)
+
+    if budget != nil and decoded_pixels > 0,
+      do: HtmlValidator.reserve_decoded_image(budget, decoded_pixels, 1, channels),
+      else: :ok
   end
 
   defp prepare_print_geometry(source, root, summary, context) do
@@ -505,14 +625,15 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                    :style
                  ),
                :ok <- HtmlValidator.reserve_image_source(budget, byte_size(data)),
-               {:ok, data, resource_fonts, filter_work} <-
+               {placements, isolated, patterned} = Map.fetch!(occurrences, node.node_id),
+               {:ok, data, resource_fonts, filter_work, image_bytes} <-
                  resource_bytes(
                    data,
                    mime,
                    Map.update!(context, :resources, &Map.delete(&1, href)),
                    budget,
                    depth + 1,
-                   Map.fetch!(occurrences, node.node_id),
+                   placements,
                    image_font_options
                  ) do
             attrs =
@@ -520,7 +641,17 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
               |> Map.delete(SvgReferenceValidator.href_attribute(node))
               |> Map.put("href", "data:#{mime};base64,#{Base.encode64(data)}")
 
-            node = node |> Map.put(:attributes, attrs) |> Map.put(:svg_filter_work, filter_work)
+            node =
+              node
+              |> Map.put(:attributes, attrs)
+              |> Map.put(:svg_filter_work, filter_work)
+              |> Map.put(:svg_image_work, %{
+                placements: placements,
+                isolated: isolated,
+                patterned: patterned,
+                raster: image_bytes
+              })
+
             {:ok, node, Enum.uniq_by(fonts ++ resource_fonts, & &1.data)}
           end
 
@@ -561,10 +692,24 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
       "image/svg+xml" ->
         with {:ok, source, summary, fonts} <-
                prepare_source(data, context, budget, depth, image_font_options),
+             work_before = ResourceBudgetValidator.snapshot().max_work,
              :ok <- SvgParserWorkValidator.validate(source),
-             {:ok, _} <- SvgValidator.validate_dimensions(summary.root, [], budget),
-             {:ok, _} <- prepare_fonts(fonts, summary),
-             do: {:ok, source, fonts, summary.filter_work}
+             parser_work = ResourceBudgetValidator.snapshot().max_work - work_before,
+             {:ok, intrinsic} <- SvgValidator.validate_dimensions(summary.root, [], budget),
+             {:ok, _} <- prepare_fonts(fonts, summary) do
+          work =
+            Map.merge(summary.filter_work, %{
+              entries: summary.nodes + summary.filters + summary.references,
+              native_work: parser_work + summary.expanded_work + summary.expanded_position_work,
+              path_bytes: summary.expanded_path_bytes,
+              layers:
+                1 + 25 * summary.opacity_layers +
+                  75 * (summary.nested_viewports + summary.clip_references),
+              intrinsic_pixels: intrinsic[:width] * intrinsic[:height]
+            })
+
+          {:ok, source, fonts, work, nil}
+        end
 
       "image/png" ->
         with {:ok, image} <- PngDecoder.decode(data, budget, true),
@@ -590,7 +735,9 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                 else
                   :ok
                 end),
-             do: {:ok, data, [], nil}
+             do:
+               {:ok, data, [], nil,
+                {image.width_px * image.height_px, max(image.decoded_stride, 4)}}
 
       "image/jpeg" ->
         case HtmlValidator.jpeg_metadata(data) do
@@ -614,7 +761,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                        error -> {:halt, error}
                      end
                    end),
-                 do: {:ok, data, [], nil}
+                 do: {:ok, data, [], nil, {image.width_px * image.height_px, 4}}
 
           :error ->
             invalid("SVG JPEG resource bytes are invalid")

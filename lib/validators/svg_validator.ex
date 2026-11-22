@@ -328,6 +328,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
       root: nil,
       source_root: nil,
       styles: [],
+      stylesheet_layers: false,
       converter_features: MapSet.new(),
       stack: [],
       context: context,
@@ -706,6 +707,16 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           :style
         )
 
+        opacity_layer =
+          if namespace == :svg and Map.get(attrs, "clip-path", "none") == "none" and
+               Map.has_key?(attrs, "opacity") and
+               NativeElixirPdfUtilities.Validators.SvgStyleValidator.parse(
+                 "opacity",
+                 attrs["opacity"]
+               ) != {:ok, 1.0},
+             do: 1,
+             else: 0
+
         state = %{
           state
           | stack: [
@@ -767,16 +778,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
               ),
             surface_costs:
               Map.put(state.surface_costs, index, %{
-                opacity:
-                  if(
-                    namespace == :svg and Map.get(attrs, "clip-path", "none") == "none" and
-                      case HtmlValidator.parse_css_number(Map.get(attrs, "opacity", "1")) do
-                        {v, ""} -> v > 0 and v < 1
-                        _ -> false
-                      end,
-                    do: 1,
-                    else: 0
-                  ),
+                opacity: opacity_layer,
                 clip:
                   if(namespace == :svg and Map.get(attrs, "clip-path", "none") != "none",
                     do: 1,
@@ -790,17 +792,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
                     else: 0
                   )
               }),
-            opacity_layers:
-              state.opacity_layers +
-                if(
-                  namespace == :svg and Map.get(attrs, "clip-path", "none") == "none" and
-                    case HtmlValidator.parse_css_number(Map.get(attrs, "opacity", "1")) do
-                      {value, ""} -> value > 0 and value < 1
-                      _ -> false
-                    end,
-                  do: 1,
-                  else: 0
-                ),
+            opacity_layers: state.opacity_layers + opacity_layer,
             clip_references:
               state.clip_references +
                 if(namespace == :svg and Map.get(attrs, "clip-path", "none") != "none",
@@ -866,13 +858,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
              },
              else: state
 
-        styles =
+        {styles, stylesheet_layers} =
           if to_string(local) == "style" do
             [chunks | rest] = state.styles
-            validate_css_references(chunks |> Enum.reverse() |> IO.iodata_to_binary(), line)
-            rest
+            css = chunks |> Enum.reverse() |> IO.iodata_to_binary()
+            validate_css_references(css, line)
+            {rest, state.stylesheet_layers or css_layer?(css)}
           else
-            state.styles
+            {state.styles, state.stylesheet_layers}
           end
 
         {xml_tree, _node} = HtmlTree.close(state.xml_tree, hd(state.stack).xml_id)
@@ -881,6 +874,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           state
           | depth: state.depth - 1,
             styles: styles,
+            stylesheet_layers: stylesheet_layers,
             stack: tl(state.stack),
             xml_tree: xml_tree
         }
@@ -963,10 +957,34 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
         end
       end)
 
+    layer_nodes =
+      if summary.images > 0 do
+        for node <- summary.source_nodes,
+            node.namespace == :svg and
+              (node.tag in ~w(marker mask filter feImage symbol) or
+                 (node.tag == "svg" and node.parent != nil) or
+                 Map.fetch!(summary.surface_costs, node.index).opacity > 0 or
+                 Enum.any?(
+                   ~w(clip-path mask filter),
+                   &(Map.get(node.attributes, &1, "none") != "none")
+                 ) or
+                 Map.get(node.attributes, "mix-blend-mode", "normal") != "normal" or
+                 Map.get(node.attributes, "isolation") == "isolate" or
+                 String.contains?(Map.get(node.attributes, "preserveAspectRatio", ""), "slice") or
+                 css_layer?(Map.get(node.attributes, "style", ""))),
+            into: MapSet.new(),
+            do: node.index
+      else
+        MapSet.new()
+      end
+
     # Every authored node and every reused subtree charges the same outer scope.
     work =
       visit_expansion(
-        [{1, MapSet.new(), 1}],
+        [
+          {1, MapSet.new(), 1,
+           if(summary.images > 0 and summary.stylesheet_layers, do: :layer, else: :canvas)}
+        ],
         graph,
         summary.path_costs,
         summary.text_costs,
@@ -975,7 +993,14 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           nodes: 0,
           positions: 0,
           paths: 0,
-          counts: %{}
+          counts: %{},
+          layer_nodes: layer_nodes,
+          pattern_nodes:
+            MapSet.new(for n <- summary.source_nodes, n.tag == "pattern", do: n.index),
+          image_nodes:
+            MapSet.new(for n <- summary.source_nodes, n.tag in ~w(image feImage), do: n.index),
+          isolated_images: %{},
+          patterned_images: %{}
         }
       )
 
@@ -989,7 +1014,10 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
      Map.merge(summary, %{
        expanded_work: work.nodes,
        expanded_position_work: work.positions,
+       expanded_path_bytes: work.paths,
        expansion_counts: work.counts,
+       isolated_images: work.isolated_images,
+       patterned_images: work.patterned_images,
        opacity_layers: costs.opacity,
        clip_references: costs.clip,
        nested_viewports: costs.viewport
@@ -998,12 +1026,22 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
     {:svg_validation, error} -> error
   end
 
+  # Escapes and comments can obscure CSS property names. Keep uncertain
+  # declarations within the native isolated-layer bound.
+  defp css_layer?(css) do
+    css != "" and
+      Regex.match?(
+        ~r/(?:^|[;{\s])(?:opacity|clip-path|mask|filter|mix-blend-mode|isolation|overflow|all)\s*:|\\|\/\*/iu,
+        css
+      )
+  end
+
   defp visit_expansion(pending, graph, path_costs, text_costs, position_costs, work) do
     case pending do
       [] ->
         work
 
-      [{index, ancestors, depth} | rest] ->
+      [{index, ancestors, depth, target} | rest] ->
         paths = Map.fetch!(path_costs, index)
         node_work = 1 + Map.fetch!(text_costs, index)
         positions = Map.fetch!(position_costs, index)
@@ -1047,13 +1085,33 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
 
             HtmlValidator.reserve_render_resource(:max_decoded_bytes, paths, :style)
             ancestors = MapSet.put(ancestors, index)
-            children = Enum.map(Map.fetch!(graph, index), &{&1, ancestors, depth + 1})
+
+            target =
+              cond do
+                target == :pattern or MapSet.member?(work.pattern_nodes, index) -> :pattern
+                target == :layer or MapSet.member?(work.layer_nodes, index) -> :layer
+                true -> :canvas
+              end
+
+            image? = MapSet.member?(work.image_nodes, index)
+            children = Enum.map(Map.fetch!(graph, index), &{&1, ancestors, depth + 1, target})
 
             visit_expansion(children ++ rest, graph, path_costs, text_costs, position_costs, %{
-              nodes: work.nodes + node_work,
-              positions: work.positions + positions,
-              paths: work.paths + paths,
-              counts: Map.update(work.counts, index, 1, &(&1 + 1))
+              work
+              | nodes: work.nodes + node_work,
+                positions: work.positions + positions,
+                paths: work.paths + paths,
+                counts: Map.update(work.counts, index, 1, &(&1 + 1)),
+                isolated_images:
+                  if(image? and target != :canvas,
+                    do: Map.update(work.isolated_images, index, 1, &(&1 + 1)),
+                    else: work.isolated_images
+                  ),
+                patterned_images:
+                  if(image? and target == :pattern,
+                    do: Map.update(work.patterned_images, index, 1, &(&1 + 1)),
+                    else: work.patterned_images
+                  )
             })
         end
     end

@@ -29,10 +29,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
   @spec rasterize(term(), term(), HtmlValidator.image_budget() | nil, term(), term(), term()) ::
           {:ok, binary()} | {:error, {atom(), map()}}
   def rasterize(svg, options, budget, fonts, context, image_font_options) do
-    with {:ok, request} <-
-           SvgConverterValidator.prepare(svg, options, budget, fonts, context, image_font_options) do
-      convert_prepared(request)
-    end
+    SvgConverterValidator.with_conversion(
+      svg,
+      options,
+      budget,
+      fonts,
+      context,
+      image_font_options,
+      &convert_prepared/2
+    )
   end
 
   @doc "Converts an image while retaining its authorized source for CSS viewport changes."
@@ -123,16 +128,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer do
     end
   end
 
-  defp convert_prepared(request) do
+  defp convert_prepared(request, admit \\ fn -> :ok end) do
+    render = fn -> with :ok <- admit.(), do: convert(request) end
+
     case ResourceContext.current() do
       nil ->
-        convert(request)
+        render.()
 
       scope ->
         RenderCache.fetch(
           scope.scope,
           {:svg_converter, scope.document_id, scope.tree_scope_id, request},
-          fn -> convert(request) end
+          render
         )
     end
   end
