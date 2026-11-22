@@ -46,6 +46,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedPublishingBrowserParityTest do
     assert stats.page_count == 2
   end
 
+  test "transformed text and paint continue into the next named page's content area" do
+    # CSS Transforms 1 (2019-02-14), §3 includes transformed content in overflow.
+    # The named second page changes the printable origin, so it needs its own reference print.
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Paths.fixture("html_to_pdf/browser_parity/publishing_transformed_overflow.html"),
+        native_renderer: fn html, opts ->
+          NativeElixirPdfUtilities.HtmlToPdf.render(
+            html,
+            Keyword.drop(opts, [:page_size, :margin])
+          )
+        end,
+        artifact_dir: "tmp/browser_parity/publishing_transformed_overflow",
+        page_regions: %{2 => [swatch: {80, 26, 18, 4}]},
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.page_count == 2
+  end
+
   for {name, count} <- [{"running", 2}, {"notes", 1}, {"references", 2}] do
     @name name
     @count count

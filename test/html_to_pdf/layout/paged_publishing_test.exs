@@ -481,6 +481,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedPublishingTest do
     assert_in_delta body.x, 30.0, 0.01
   end
 
+  test "published transforms retain the visible word and link on its destination page" do
+    for extra <- [
+          "",
+          "@page :first{margin:10pt}",
+          "@page report{size:200pt 230pt;margin:15pt}.second{page:report}"
+        ],
+        {distance, destination} <- [{90, 1}, {115, 2}] do
+      html = """
+      <style>@page{size:200pt 130pt;margin:10pt}body{margin:0}#{extra}</style>
+      <div style="transform:translateY(#{distance}pt)"><a href="https://example.com/moved">MOVED</a></div>
+      <section class="second" style="break-before:page">SECOND</section>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{pages: pages, page_count: 2}} = Text.extract_spans(pdf)
+
+      for %{number: number, media_box: [0, 0, _, height], spans: spans} <- pages do
+        visible_text =
+          spans
+          |> Enum.filter(&(&1.y >= 0 and &1.y <= height))
+          |> Enum.map_join(& &1.text)
+
+        assert String.contains?(visible_text, "MOVED") == (number == destination)
+        assert String.contains?(visible_text, "SECOND") == (number == 2)
+      end
+
+      assert {:ok, context} = NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf)
+
+      for {page, number} <- Enum.with_index(context.pages, 1) do
+        assert length(Map.get(page.dictionary, "Annots", [])) ==
+                 if(number == destination, do: 1, else: 0)
+      end
+    end
+  end
+
   test "page orientation rotates editable widget bounds and preserves static artwork" do
     render = fn orientation, mode ->
       html = """

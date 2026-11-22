@@ -2275,6 +2275,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     css_advanced_print_paint.html
     publishing_pages.html
     publishing_oriented_forms.html
+    publishing_transformed_overflow.html
     publishing_running.html
     publishing_notes.html
     publishing_references.html

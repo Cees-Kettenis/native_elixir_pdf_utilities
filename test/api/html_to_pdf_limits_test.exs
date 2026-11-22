@@ -5,6 +5,33 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfLimitsTest do
   alias NativeElixirPdfUtilities.TestSupport.{PngFixture, ResourceBudget}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
+  test "transformed overflow creates a counted sheet with that page's geometry and furniture" do
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    html = """
+    <style>@page{size:200pt 220pt;margin:16pt;@top-center{content:counter(page) '/' counter(pages);font-size:8pt}}
+    @page:first{size:200pt 130pt;margin:10pt}body{margin:0}</style>
+    <div style="transform:translateY(115pt)">MOVED</div>
+    """
+
+    Limits.install(%{limits | max_pages: 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :pagination, message: message}}} =
+             HtmlToPdf.render(html)
+
+    assert message =~ "max_pages"
+
+    Limits.install(%{limits | max_pages: 2})
+    assert {:ok, pdf} = HtmlToPdf.render(html)
+    assert {:ok, %{pages: [first, second]}} = Text.extract_spans(pdf)
+    assert first.media_box == [0, 0, 200, 130]
+    assert second.media_box == [0, 0, 200, 220]
+    assert Enum.map_join(first.spans, & &1.text) =~ "1/2"
+    assert Enum.map_join(second.spans, & &1.text) =~ "2/2"
+    assert Enum.map_join(second.spans, & &1.text) =~ "MOVED"
+  end
+
   test "oversized legacy literal input returns public shared diagnostics" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)

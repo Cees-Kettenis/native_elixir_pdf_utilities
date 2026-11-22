@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
   alias NativeElixirPdfUtilities.Validators.{
     CssPageValidator,
     CssPublishingValidator,
+    CssTransformValidator,
     CssValueValidator,
     HtmlValidator
   }
@@ -345,6 +346,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
          next = %{next | note_values: note_counter_values(registry, next, pages)},
          {:ok, next} <- allocate(registry, pages, opts, next),
          pages = continuation_pages(pages, next.extra),
+         {:ok, pages} <- prepare_transformed_pages(pages, result, tree, registry, opts, explicit),
          next = %{next | total: length(pages)} do
       if Map.drop(next, [:extra]) == Map.drop(state, [:extra]) do
         with {:ok, pages} <- add_margin_boxes(pages, tree, registry, next, opts, explicit),
@@ -363,6 +365,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
           iteration + 1
         )
       end
+    end
+  end
+
+  # Slice body paint before publishing adds margin boxes, bleed and page orientation.
+  # The physical page count then participates in counter and content convergence.
+  defp prepare_transformed_pages(pages, result, tree, registry, opts, explicit) do
+    if CssTransformValidator.needs_materialization?(pages) do
+      continuation = fn page, number ->
+        groups = group_positions(page.page_groups, 1)
+
+        selected =
+          CssPageValidator.select(
+            tree.css_page_rules,
+            page.page_name,
+            number,
+            false,
+            registry.first_side,
+            groups
+          )
+
+        %{page | page_groups: groups, blank: false}
+        |> blank_page_geometry(selected, opts, explicit, first_style(tree))
+        |> publishing_result()
+        |> Map.update!(:margins, &PageGeometry.snap_css_pixel_margins/1)
+      end
+
+      Pagination.prepare_paint(
+        pages,
+        result,
+        Keyword.merge(opts,
+          css_fragmentation_margins: :per_page,
+          css_continuation_page: continuation
+        )
+      )
+    else
+      {:ok, pages}
     end
   end
 

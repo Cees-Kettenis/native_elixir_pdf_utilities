@@ -866,6 +866,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
     end
   end
 
+  @doc false
+  @spec needs_materialization?([map()]) :: boolean()
+  def needs_materialization?(pages),
+    do: Enum.any?(pages, &needs_materialization?(&1.boxes, false))
+
   @doc "Materializes actual paginated CSS paint scopes without changing their source flow or point coordinates."
   @spec materialize([map()], keyword()) :: {:ok, [map()]} | {:error, {atom(), map()}}
   @spec materialize([map()], keyword(), term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
@@ -876,9 +881,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
       ) do
     alias NativeElixirPdfUtilities.Validators.{EmbeddedFormValidator, HtmlFormValidator}
 
-    if Enum.all?(pages, fn page ->
-         not needs_materialization?(page.boxes, false)
-       end) do
+    if not needs_materialization?(pages) do
       {:ok, pages}
     else
       with :ok <-
@@ -965,7 +968,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
           {:ok,
            prepare_print_slices(
              Enum.reverse(pages),
-             Keyword.get(opts, :css_fragmentation_margins)
+             Keyword.get(opts, :css_fragmentation_margins),
+             Keyword.get(opts, :css_continuation_page)
            )}
         end
       end
@@ -975,81 +979,75 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
   # Transform fragments first; then slice the continuous print-content strip
   # into its genuine page viewports. Adjacent existing pages receive actual
   # overflow paint, with source text, clips and target identities intact.
-  defp prepare_print_slices(pages, margins) do
+  defp prepare_print_slices(pages, margins, continuation) do
     alias NativeElixirPdfUtilities.HtmlToPdf.DrawingGeometry
 
-    if is_map(margins) do
+    if is_map(margins) or margins == :per_page do
+      {frames, end_offset} = Enum.map_reduce(pages, 0.0, &print_frame(&1, &2, margins))
+
       sources =
-        pages
-        |> Enum.with_index()
-        |> Enum.flat_map(fn {page, index} ->
-          Enum.filter(
-            page.boxes,
-            &(Map.get(&1, :role) == :css_transform_plane and
-                Map.get(&1, :position_anchor) != :fixed)
-          )
-          |> Enum.map(fn group ->
-            {group, index, print_paint_bounds(group, {1, 1, 0, 0, nil, elem(page.size, 1)})}
-          end)
+        for frame <- frames,
+            group <- frame.page.boxes,
+            Map.get(group, :role) == :css_transform_plane,
+            Map.get(group, :position_anchor) != :fixed,
+            bounds = print_paint_bounds(group, {1, 1, 0, 0, nil, elem(frame.page.size, 1)}),
+            bounds != nil do
+          {group, frame, bounds}
+        end
+
+      extent =
+        Enum.reduce(sources, end_offset, fn {_group, frame, {_left, bottom, _right, _top}},
+                                            farthest ->
+          max(farthest, frame.origin - bottom)
         end)
 
-      last = List.last(pages)
-      height = elem(last.size, 1) - margins.top - margins.bottom
-      content_top = elem(last.size, 1) - margins.top
-
-      page_count =
-        Enum.reduce(sources, length(pages), fn {_group, source, bounds}, count ->
-          case bounds do
-            nil ->
-              count
-
-            {_left, bottom, _right, _top} ->
-              max(count, ceil((source * height + content_top - bottom) / height))
-          end
-        end)
-
-      HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
-      HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
       canvas = Enum.filter(hd(pages).boxes, &(Map.get(&1, :position_anchor) == :canvas))
+      count = length(frames)
+      last = List.last(frames)
 
-      HtmlValidator.reserve_render_resource(
-        :max_entries,
-        (page_count - length(pages)) * length(canvas),
-        :pagination
-      )
+      frames =
+        if continuation == nil do
+          extra = ceil((extent - end_offset) / last.viewport.height)
+          page_count = count + extra
+          HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
+          HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
+          HtmlValidator.reserve_render_resource(:max_entries, extra * length(canvas), :pagination)
 
-      pages = pages ++ List.duplicate(%{last | boxes: canvas}, page_count - length(pages))
+          pages = List.duplicate(%{last.page | boxes: canvas}, extra)
+          {added, _offset} = Enum.map_reduce(pages, end_offset, &print_frame(&1, &2, margins))
+          frames ++ added
+        else
+          HtmlValidator.check_render_resource(:max_pages, count, :pagination)
+
+          extend_print_frames(
+            Enum.reverse(frames),
+            count,
+            end_offset,
+            extent,
+            margins,
+            canvas,
+            continuation
+          )
+        end
 
       work =
-        length(pages) * Enum.reduce(pages, 0, fn page, count -> count + length(page.boxes) end)
+        length(frames) * Enum.reduce(frames, 0, fn frame, n -> n + length(frame.page.boxes) end)
 
       HtmlValidator.reserve_render_resource(:max_work, work, :pagination)
 
-      Enum.with_index(pages)
-      |> Enum.map(fn {page, target} ->
-        height = elem(page.size, 1) - margins.top - margins.bottom
-
-        viewport = %{
-          x: margins.left,
-          y: margins.bottom,
-          width: elem(page.size, 0) - margins.left - margins.right,
-          height: height
-        }
+      Enum.map(frames, fn frame ->
+        %{page: page, viewport: viewport} = frame
 
         carried =
-          Enum.flat_map(sources, fn {group, source, bounds} ->
-            case bounds do
-              {_left, bottom, _right, top} when source != target ->
-                delta = (target - source) * height
+          Enum.flat_map(sources, fn {group, source, {_left, bottom, _right, top}} ->
+            dy = frame.origin - source.origin
 
-                if top + delta > viewport.y and bottom + delta < viewport.y + viewport.height do
-                  [DrawingGeometry.translate_box(group, 0.0, delta) |> issue_page_widget_slices()]
-                else
-                  []
-                end
-
-              _ ->
-                []
+            if source.offset != frame.offset and top + dy > viewport.y and
+                 bottom + dy < viewport.y + viewport.height do
+              dx = viewport.x - source.viewport.x
+              [DrawingGeometry.translate_box(group, dx, dy) |> issue_page_widget_slices()]
+            else
+              []
             end
           end)
 
@@ -1079,6 +1077,45 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
       end)
     else
       pages
+    end
+  end
+
+  defp print_frame(page, offset, default_margins) do
+    margins = if default_margins == :per_page, do: page.margins, else: default_margins
+    {width, height} = page.size
+
+    viewport = %{
+      x: margins.left,
+      y: margins.bottom,
+      width: width - margins.left - margins.right,
+      height: height - margins.top - margins.bottom
+    }
+
+    # PDF Y increases upwards. Adding the sheet's flow offset to its content top
+    # gives the common origin used to carry paint between different-sized pages.
+    {%{page: page, viewport: viewport, offset: offset, origin: offset + height - margins.top},
+     offset + viewport.height}
+  end
+
+  defp extend_print_frames(frames, count, offset, extent, margins, canvas, continuation) do
+    if offset >= extent do
+      Enum.reverse(frames)
+    else
+      HtmlValidator.check_render_resource(:max_pages, count + 1, :pagination)
+      HtmlValidator.reserve_render_resource(:max_entries, length(canvas), :pagination)
+      page = %{hd(frames).page | boxes: canvas}
+      page = continuation.(page, count + 1)
+      {frame, next} = print_frame(page, offset, margins)
+
+      extend_print_frames(
+        [frame | frames],
+        count + 1,
+        next,
+        extent,
+        margins,
+        canvas,
+        continuation
+      )
     end
   end
 
@@ -1227,10 +1264,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
             child_size =
               if Map.get(box, :role) == :overflow_clip, do: size, else: {box.width, box.height}
 
+            local_opts = Keyword.drop(opts, [:css_fragmentation_margins, :css_continuation_page])
+
             with {:ok, children} <-
-                   prepare_group_forms(children, child_size, opts, context, depth + 1),
+                   prepare_group_forms(children, child_size, local_opts, context, depth + 1),
                  {:ok, [page]} <-
-                   materialize([%{size: child_size, boxes: children}], opts, context),
+                   materialize([%{size: child_size, boxes: children}], local_opts, context),
                  {:ok, [page], fields} <- HtmlFormValidator.prepare_scoped([page], opts, context),
                  {:ok, descriptor} <-
                    if(fields == [],
@@ -1289,6 +1328,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
       end)
 
     Enum.map(pages, fn page ->
+      margins = if margins == :per_page, do: page.margins, else: margins
+
       scopes =
         page.boxes
         |> Enum.flat_map(&Map.get(&1, :css_transform_scopes, []))

@@ -59,6 +59,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
   @spec finalize([page()], map(), [render_option()]) ::
           {:ok, [page()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def finalize(pages, layout_tree, opts) do
+    with {:ok, pages} <- prepare_paint(pages, layout_tree, opts) do
+      NativeElixirPdfUtilities.Validators.HtmlLinkValidator.resolve_pages(
+        pages,
+        Map.get(layout_tree, :link_scope),
+        Map.get(layout_tree, :link_expected_targets, []),
+        Map.get(layout_tree, :link_document_targets, []),
+        Map.get(layout_tree, :link_page_origin)
+      )
+    end
+  end
+
+  @doc false
+  @spec prepare_paint([page()], map(), keyword()) :: {:ok, [page()]} | {:error, {atom(), map()}}
+  def prepare_paint(pages, layout_tree, opts) do
     with :ok <-
            Enum.reduce_while(pages, :ok, fn page, :ok ->
              case NativeElixirPdfUtilities.Validators.CssStackingValidator.validate_boxes(
@@ -76,16 +90,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Pagination do
          pages =
            Enum.map(pages, fn page ->
              %{page | boxes: NativeElixirPdfUtilities.HtmlToPdf.Stacking.order(page.boxes)}
-           end),
-         {:ok, pages} <-
-           NativeElixirPdfUtilities.Validators.CssTransformValidator.materialize(pages, opts) do
-      NativeElixirPdfUtilities.Validators.HtmlLinkValidator.resolve_pages(
-        pages,
-        Map.get(layout_tree, :link_scope),
-        Map.get(layout_tree, :link_expected_targets, []),
-        Map.get(layout_tree, :link_document_targets, []),
-        Map.get(layout_tree, :link_page_origin)
-      )
+           end) do
+      NativeElixirPdfUtilities.Validators.CssTransformValidator.materialize(pages, opts)
     end
   end
 
