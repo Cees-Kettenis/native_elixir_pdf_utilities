@@ -98,6 +98,24 @@ defmodule NativeElixirPdfUtilities.AttachmentsGlobalStateTest do
     %{pdf: pdf}
   end
 
+  test "embedding admits the PDF and all new bytes before detecting file types", %{pdf: pdf} do
+    # The first file deliberately disagrees with its signature, so its MIME
+    # diagnostic identifies exactly when input admission has succeeded.
+    files = [%{filename: "first.jpg", bytes: "%PDF-1.7"}, %{filename: "second", bytes: "abc"}]
+    total = byte_size(pdf) + 11
+    limits = Limits.effective()
+    Limits.install(%{limits | max_input_bytes: total})
+    assert {:error, {:invalid_mime_type, %{operation: :embed}}} = Attachments.embed(pdf, files)
+
+    Limits.install(%{limits | max_input_bytes: total - 1})
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Attachments.embed(pdf, files)
+    assert diagnostic.stage == :limits and diagnostic.operation == :embed
+    assert diagnostic.message =~ "max_input_bytes"
+
+    assert {:error, {:invalid_pdf_input, %{operation: :embed}}} = Attachments.embed(nil, [])
+  end
+
   test "listing charges decoded name-tree keys, filenames, descriptions and MIME types together",
        %{pdf: pdf} do
     files =
@@ -120,6 +138,7 @@ defmodule NativeElixirPdfUtilities.AttachmentsGlobalStateTest do
     for attachment <- [
           nil,
           %{},
+          %{bytes: "a"},
           %{filename: "../a", bytes: "a"},
           %{filename: "a", bytes: 1},
           %{filename: "a", bytes: "a", extra: true},

@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.Attachments do
   def embed(pdf, attachments, opts \\ []) do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :embed, fn ->
       result =
-        with {:ok, attachments} <- AttachmentValidator.prepare(attachments, opts),
+        with {:ok, attachments} <- AttachmentValidator.prepare(attachments, opts, pdf),
              {:ok, context} <- Reader.read_validated(pdf),
              {:ok, existing} <- AttachmentValidator.inspect_document(context),
              :ok <- AttachmentValidator.prepare_write(context, existing, attachments) do

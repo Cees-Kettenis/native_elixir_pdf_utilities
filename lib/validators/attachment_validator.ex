@@ -11,8 +11,8 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
   }
 
   @doc false
-  @spec prepare(term(), term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
-  def prepare(attachments, opts) do
+  @spec prepare(term(), term(), term()) :: {:ok, [map()]} | {:error, {atom(), map()}}
+  def prepare(attachments, opts, pdf \\ <<>>) do
     count =
       NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
         attachments,
@@ -29,23 +29,41 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
       count == :limit_exceeded ->
         limit("attachment count exceeds max_entries")
 
+      not is_binary(pdf) ->
+        PdfValidator.validate_input(pdf)
+
       true ->
-        Enum.reduce_while(attachments, {:ok, [], MapSet.new(), 0}, fn attachment,
-                                                                      {:ok, acc, names, total} ->
-          with {:ok, prepared} <- prepare_attachment(attachment),
-               false <- MapSet.member?(names, prepared.filename),
-               total <- total + byte_size(prepared.bytes),
-               :ok <- byte_budget(total) do
-            {:cont, {:ok, [prepared | acc], MapSet.put(names, prepared.filename), total}}
-          else
-            true -> {:halt, error("attachment filenames must be unique")}
-            {:error, _} = failure -> {:halt, failure}
-          end
-        end)
-        |> case do
-          {:ok, prepared, _names, _total} -> {:ok, Enum.reverse(prepared)}
-          failure -> failure
+        with {:ok, bytes} <- source_bytes(attachments, byte_size(pdf)),
+             :ok <- ResourceBudgetValidator.reserve(:max_input_bytes, bytes, :limits) do
+          prepare_files(attachments)
         end
+    end
+  end
+
+  # Admit the PDF and every new payload together before MIME detection reads
+  # any of the files. Existing embedded streams are already part of the PDF.
+  defp source_bytes(attachments, pdf_size) do
+    Enum.reduce_while(attachments, {:ok, pdf_size}, fn attachment, {:ok, total} ->
+      case attachment do
+        %{bytes: bytes} when is_binary(bytes) -> {:cont, {:ok, total + byte_size(bytes)}}
+        _ -> {:halt, error("each attachment requires binary bytes and a filename")}
+      end
+    end)
+  end
+
+  defp prepare_files(attachments) do
+    Enum.reduce_while(attachments, {:ok, [], MapSet.new()}, fn attachment, {:ok, acc, names} ->
+      with {:ok, prepared} <- prepare_attachment(attachment),
+           false <- MapSet.member?(names, prepared.filename) do
+        {:cont, {:ok, [prepared | acc], MapSet.put(names, prepared.filename)}}
+      else
+        true -> {:halt, error("attachment filenames must be unique")}
+        {:error, _} = failure -> {:halt, failure}
+      end
+    end)
+    |> case do
+      {:ok, prepared, _names} -> {:ok, Enum.reverse(prepared)}
+      failure -> failure
     end
   end
 
@@ -153,9 +171,6 @@ defmodule NativeElixirPdfUtilities.Validators.AttachmentValidator do
 
           byte_size(filename) + byte_size(description) > Limits.get(:max_decoded_bytes) ->
             limit("attachment metadata exceeds max_decoded_bytes")
-
-          byte_size(bytes) > Limits.get(:max_input_bytes) ->
-            limit("attachment exceeds max_input_bytes")
 
           true ->
             with {:ok, mime} <- MimeValidator.prepare(bytes, filename, Map.get(input, :mime_type)) do
