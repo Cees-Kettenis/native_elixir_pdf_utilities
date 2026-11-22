@@ -149,7 +149,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
   @spec validate_source_prefix(term(), term()) ::
           {:ok, String.t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def validate_source_prefix(source, finish) do
-    with {:ok, source} <- HtmlValidator.validate_html_source(source) do
+    with {:ok, source} <- HtmlValidator.validate_html_source(source, :admitted) do
       case finish do
         nil ->
           {:ok, source}

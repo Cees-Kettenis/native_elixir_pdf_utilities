@@ -31,21 +31,22 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   @spec with_parser_invocation(term(), (String.t() -> term())) :: term()
   def with_parser_invocation(source, consumer) do
     HtmlValidator.with_render_budget(fn ->
-      with {:ok, source} <- HtmlValidator.validate_html_source(source) do
-        key = {__MODULE__, :invocation}
-        prior = Process.get(key)
-        invocation = %{id: make_ref(), source: source, handles: %{}}
-        Process.put(key, invocation)
+      key = {__MODULE__, :invocation}
+      prior = Process.get(key)
+      invocation = %{id: make_ref(), source: source, handles: %{}}
+      Process.put(key, invocation)
 
-        try do
-          NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.with_parser_scope(
-            invocation.id,
-            source,
-            fn -> consumer.(source) end
-          )
-        after
-          if prior, do: Process.put(key, prior), else: Process.delete(key)
-        end
+      try do
+        NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.with_parser_scope(
+          invocation.id,
+          source,
+          fn ->
+            with {:ok, source} <- HtmlValidator.validate_html_source(source, :parser),
+                 do: consumer.(source)
+          end
+        )
+      after
+        if prior, do: Process.put(key, prior), else: Process.delete(key)
       end
     end)
   end

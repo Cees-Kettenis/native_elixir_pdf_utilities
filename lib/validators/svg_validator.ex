@@ -305,19 +305,20 @@ defmodule NativeElixirPdfUtilities.Validators.SvgValidator do
           source: "SVG"
         )
 
-      not String.valid?(svg) ->
-        Diagnostics.error(:style, :invalid_document, "SVG source must be valid UTF-8",
-          source: "SVG"
-        )
-
       true ->
-        :ok
+        HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(svg), :style)
+
+        if String.valid?(svg) do
+          :ok
+        else
+          Diagnostics.error(:style, :invalid_document, "SVG source must be valid UTF-8",
+            source: "SVG"
+          )
+        end
     end
   end
 
   defp validate_structure(svg, context) do
-    HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(svg), :style)
-
     # Reject both DTD events because a bare DOCTYPE emits only endDTD in xmerl.
     state = %{
       depth: 0,

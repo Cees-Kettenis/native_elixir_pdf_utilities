@@ -1753,28 +1753,56 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec validate_html_source(term()) ::
+  @spec validate_html_source(term(), :new | :admitted | :parser) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_html_source(html) do
-    case html do
-      html when is_binary(html) ->
-        case {byte_size(html) <= Limits.get(:max_input_bytes), String.valid?(html, :fast_ascii)} do
-          {false, _} ->
-            Diagnostics.error(
-              :html,
-              :resource_limit_exceeded,
-              "HTML input exceeds max_input_bytes"
-            )
+  def validate_html_source(html, admission \\ :new) do
+    if is_binary(html) do
+      charge =
+        case admission do
+          :new ->
+            byte_size(html)
 
-          {true, true} ->
-            {:ok, html}
+          :admitted ->
+            0
 
-          {true, false} ->
-            Diagnostics.error(:html, :invalid_encoding, "HTML input must be valid UTF-8")
+          :parser ->
+            NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.source_charge(html)
         end
 
-      _ ->
-        Diagnostics.error(:html, :invalid_html, "HTML input must be a string")
+      validate_source_bytes(html, :html, charge)
+    else
+      Diagnostics.error(:html, :invalid_html, "HTML input must be a string")
+    end
+  end
+
+  # A parser commits the charge once it has a valid source. Provenance checks
+  # and a template execution pass can inspect bytes admitted by that parser.
+  defp validate_source_bytes(bytes, stage, charge) do
+    label = if stage == :html, do: "HTML", else: "CSS"
+
+    cond do
+      byte_size(bytes) > Limits.get(:max_input_bytes) ->
+        Diagnostics.error(
+          stage,
+          :resource_limit_exceeded,
+          "#{label} input exceeds max_input_bytes"
+        )
+
+      charge >
+          NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_input_bytes) ->
+        Diagnostics.error(
+          stage,
+          :resource_limit_exceeded,
+          "operation exceeds max_input_bytes (configured limit #{Limits.get(:max_input_bytes)})",
+          module: __MODULE__
+        )
+
+      String.valid?(bytes, :fast_ascii) ->
+        {:ok, bytes}
+
+      true ->
+        reason = if stage == :html, do: :invalid_encoding, else: :invalid_css
+        Diagnostics.error(stage, reason, "#{label} input must be valid UTF-8")
     end
   end
 
@@ -4118,22 +4146,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   end
 
   @doc false
-  @spec validate_css_source(term(), :stylesheet | :declarations) ::
+  @spec validate_css_source(term(), :stylesheet | :declarations, :new | :admitted) ::
           {:ok, binary()}
           | {:error, {:invalid_css | :resource_limit_exceeded, Diagnostics.diagnostic()}}
-  def validate_css_source(css, kind \\ :stylesheet) do
+  def validate_css_source(css, kind \\ :stylesheet, admission \\ :new) do
     case {css, kind} do
       {css, kind} when is_binary(css) and kind in [:stylesheet, :declarations] ->
-        case {byte_size(css) <= Limits.get(:max_input_bytes), String.valid?(css, :fast_ascii)} do
-          {false, _} ->
-            Diagnostics.error(:css, :resource_limit_exceeded, "CSS input exceeds max_input_bytes")
-
-          {true, true} ->
-            {:ok, css}
-
-          {true, false} ->
-            Diagnostics.error(:css, :invalid_css, "CSS input must be valid UTF-8")
-        end
+        validate_source_bytes(css, :css, if(admission == :new, do: byte_size(css), else: 0))
 
       {_css, :declarations} ->
         Diagnostics.error(:css, :invalid_css, "CSS declaration input must be a string")

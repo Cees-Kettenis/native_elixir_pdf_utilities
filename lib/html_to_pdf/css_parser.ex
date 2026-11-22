@@ -381,7 +381,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           {:ok, [map()]} | {:error, {atom(), map()}}
   def style_declaration_records(css, media_context \\ nil) do
     HtmlValidator.with_render_budget(fn ->
-      with {:ok, css} <- HtmlValidator.validate_css_source(css),
+      with {:ok, css} <- HtmlValidator.validate_css_source(css, :stylesheet, :admitted),
            projection = source_projection(css),
            {:ok, projected, media} <- source_media_projection(projection, media_context),
            rules_css = mask_source_blocks(projected, @font_face_rule_regex),

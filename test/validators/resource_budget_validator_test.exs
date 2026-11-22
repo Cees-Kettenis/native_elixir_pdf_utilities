@@ -29,6 +29,30 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceBudgetValidatorTest do
            })
   end
 
+  test "source parsers check available bytes before decoding HTML, CSS and SVG" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{CssParser, HtmlParser}
+    alias NativeElixirPdfUtilities.Validators.SvgValidator
+    Limits.install(%{Limits.effective() | max_input_bytes: 8})
+
+    for {parse, stage, invalid} <- [
+          {&HtmlParser.parse_detailed/1, :html, :invalid_encoding},
+          {&CssParser.parse_detailed/1, :css, :invalid_css},
+          {&CssParser.parse_declarations_detailed/1, :css, :invalid_css},
+          {&CssParser.prepare_source_stylesheet/1, :css, :invalid_css},
+          {&SvgValidator.validate_extraction/1, :style, :invalid_document}
+        ] do
+      ResourceBudgetValidator.with_budget(fn ->
+        assert :ok = ResourceBudgetValidator.reserve(:max_input_bytes, 7, :html)
+        assert {:error, {:resource_limit_exceeded, %{stage: ^stage}}} = parse.(<<65, 255>>)
+        assert ResourceBudgetValidator.remaining(:max_input_bytes) == 1
+        assert {:error, {^invalid, _}} = parse.(<<255>>)
+      end)
+    end
+
+    assert {:ok, _dom} = HtmlParser.parse_detailed("café")
+    assert {:ok, []} = CssParser.parse_detailed("/*é*/")
+  end
+
   test "an image read cannot reuse source bytes consumed by another stage" do
     Limits.install(Map.put(Limits.effective(), :max_input_bytes, 5))
 

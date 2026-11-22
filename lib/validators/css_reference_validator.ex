@@ -15,7 +15,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssReferenceValidator do
           {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def scan(source, mapper \\ nil) do
     HtmlValidator.with_render_budget(fn ->
-      with {:ok, source} <- HtmlValidator.validate_css_source(source, :declarations),
+      with {:ok, source} <- HtmlValidator.validate_css_source(source, :declarations, :admitted),
            :ok <-
              if(is_nil(mapper) or is_function(mapper, 2),
                do: :ok,
