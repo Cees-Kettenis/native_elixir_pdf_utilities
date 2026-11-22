@@ -53,8 +53,16 @@ output path and filesystem reason.
 Observed excess returns `:resource_limit_exceeded`. Unexpected worker exits,
 including GC heap kills, return `:operation_worker_failed`. Sampling can miss
 peaks and excludes native allocations, persistent caches and helper processes.
-Native work may continue after a timeout. Use OS process or container isolation
-when hard memory or cancellation guarantees are required.
+Native work may continue after the operation times out. A hard memory limit or
+termination deadline for native work requires an external process boundary.
+
+On x86-64 GNU/Linux, the Resvg 0.6.0 binary runs SVG rasterization, bounds
+queries and font database initialization on ordinary BEAM schedulers. Each call
+occupies one scheduler until it returns. Concurrent conversions can delay
+unrelated requests and timeout handling in the same VM. Limit simultaneous
+conversions. If a service must stay responsive while rendering untrusted SVGs,
+run the renderer in its own BEAM instance and enforce CPU and memory limits
+on that OS process. Its supervisor can terminate the renderer at the deadline.
 
 Resolvers execute in the requesting worker. See
 [resolver process context](html-to-pdf-compatibility.md#resolver-process-context)
