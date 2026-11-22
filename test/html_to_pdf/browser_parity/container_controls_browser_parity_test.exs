@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ContainerControlsBrowserParityTest 
       PdfVisualCompare.assert_browser_match!(
         Paths.fixture("html_to_pdf/browser_parity/css_container_controls.html"),
         render_opts: [forms: :static, fonts: []],
+        regions: [after_wrapped_textarea: {14, 406, 18, 3}],
         max_changed_ratio: 0.004,
         max_average_delta: 0.003
       )

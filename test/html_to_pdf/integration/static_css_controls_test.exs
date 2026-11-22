@@ -24,6 +24,69 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StaticCssControlsTest do
     assert Enum.any?(model, &(&1.name == "initial" and &1.value == ""))
   end
 
+  test "content-sized textareas keep visible lines and editable values at the final width" do
+    value = "Another long line that must wrap to more than two lines"
+
+    for display <- ["inline-block", "block"],
+        {attrs, dimension, initial, visible, height} <- [
+          {"rows=1", "width:8ch", value, value, 132},
+          {"rows=1", "width:24ch", "Another long line", "Another long line", 12},
+          {"rows=1", "", "One\nTwo\nThree", "One Two Three", 36},
+          {"rows=4", "", "One", "One", 12},
+          {"rows=4", "", "", "", 12},
+          {"", "", "One\n", "One", 24},
+          {"placeholder='One&#10;Two'", "", "", "One Two", 24},
+          {"rows=4", "field-sizing:fixed", "One", "One", 48},
+          {"", "height:12pt", "One\nTwo", "One", 12},
+          {"", "max-height:24pt", "One\nTwo\nThree", "One Two", 24},
+          {"", "min-height:36pt", "One", "One", 36}
+        ] do
+      html = """
+      <style>body{margin:0}textarea{display:#{display};field-sizing:content;font:12pt/12pt monospace;
+        border:0;padding:0;#{dimension}}</style><textarea name="notes" #{attrs}>#{initial}</textarea>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+
+      assert {:ok, [%{name: "notes", value: ^initial, widgets: [%{rect: [x, y, r, t]}]}]} =
+               Forms.fields(pdf)
+
+      assert_in_delta t - y, height, 0.01
+      assert r > x
+      assert {:ok, static} = HtmlToPdf.render(html, Keyword.put(@opts, :forms, :static))
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(static)
+
+      # Wrapping can split a word into separate positioned spans.
+      assert spans |> Enum.map_join(& &1.text) |> String.replace(~r/\s+/u, "") ==
+               String.replace(visible, ~r/\s+/u, "")
+    end
+  end
+
+  test "textarea client width responds to height constraints and scrollbar settings" do
+    for display <- ["block", "inline-block"] do
+      rect = fn css ->
+        html = """
+        <style>textarea{display:#{display};font:12pt/12pt monospace;field-sizing:content;
+          border:0;padding:0;#{css}}</style><textarea name="notes">One</textarea>
+        """
+
+        assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+        assert {:ok, [%{widgets: [%{rect: [l, b, r, t]}]}]} = Forms.fields(pdf)
+        {r - l, t - b}
+      end
+
+      {plain, 12.0} = rect.("overflow:hidden")
+      {natural, 12.0} = rect.("")
+      {constrained, 36.0} = rect.("min-height:36pt")
+      {thin, 12.0} = rect.("scrollbar-width:thin")
+      {forced, 23.25} = rect.("overflow:scroll")
+      assert_in_delta natural - plain, 11.25, 0.01
+      assert_in_delta thin - plain, 7.5, 0.01
+      assert_in_delta forced, natural, 0.01
+      assert_in_delta constrained, plain, 0.01
+    end
+  end
+
   test "skipping a native editor retains its host height and suppresses its value paint" do
     html = """
     <div><input hidden=until-found value="HiddenEditor" style="display:block;width:90pt;line-height:15pt"></div>

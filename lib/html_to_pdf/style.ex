@@ -5206,6 +5206,52 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
     })
   end
 
+  defp content_sized_textarea(style, state) do
+    text = if state.placeholder_shown, do: state.placeholder, else: state.value
+    caret_line = text == "" or String.ends_with?(text, "\n")
+
+    # When font ink extends below the final line, Chromium reserves
+    # the classic vertical scrollbar in the editor's client width.
+    overflow = Map.get(style, :overflow_y, style.overflow)
+
+    ink_overflow =
+      if caret_line,
+        do: 0.0,
+        else:
+          max(
+            Float.floor((normal_line_height(style) - style.line_height) / 1.5) * 0.75,
+            0.0
+          )
+
+    thickness = NativeElixirPdfUtilities.Validators.ScrollbarValidator.thickness(style)
+
+    gutter =
+      if overflow == :scroll or (overflow == :auto and ink_overflow > 0),
+        do: thickness,
+        else: 0.0
+
+    horizontal =
+      if Map.get(style, :overflow_x, style.overflow) == :scroll,
+        do: thickness,
+        else: 0.0
+
+    # Only fixed field sizing uses the HTML row count as its preferred height.
+    style
+    |> Map.delete(:_control_row_count)
+    |> Map.merge(%{
+      _textarea_caret_line: caret_line,
+      _textarea_gutter: gutter,
+      _textarea_horizontal_gutter: horizontal
+    })
+    |> then(fn style ->
+      if overflow == :auto and
+           (style.height != :auto or Map.get(style, :min_height, :auto) != :auto or
+              Map.get(style, :max_height, :none) != :none),
+         do: Map.put(style, :_textarea_scroll_extent, ink_overflow),
+         else: style
+    end)
+  end
+
   # Fixed native appearance sizing combines font metrics with HTML character
   # counts. This calculation is shared by text inputs and textarea columns.
   defp initial_control_width(style, count) do
@@ -6553,6 +6599,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               _ ->
                 put_line_height(style)
             end
+
+          style =
+            if node.tag == "textarea" and Map.get(style, :field_sizing) == :content,
+              do: content_sized_textarea(style, node._initial_form_state),
+              else: style
 
           with {:ok, style} <-
                  (case style do

@@ -17,6 +17,9 @@
     field-sizing:content;font:16px "DejaVu Sans";padding:2px;border:1px solid #333;appearance:none}
   .control::placeholder {color:#993333}
   iframe {border:1px solid #456;width:260px;height:90px}
+  .notes {position:absolute;left:16px;top:440px}
+  .notes textarea {display:block;field-sizing:content;width:8ch;font:16px/20px "DejaVu Sans Mono";border:0;padding:0;overflow:hidden;resize:none}
+  .after-notes {width:32px;height:8px;background:#28763d}
 </style>
 </head><body>
   <div class="section"><div class="card"><div class="shell"></div></div></div>
@@ -24,4 +27,7 @@
   <div class="section"><div class="zoom"></div></div>
   <div class="section"><input class="control" placeholder="Hint"><input class="control" value="Longer text"></div>
   <div class="section"><iframe srcdoc="<style>html{scrollbar-width:none}body{margin:0}.panel{width:100%;height:180px;background:#cd9}</style><div class='panel'></div>"></iframe></div>
+  <div class="notes"><textarea rows="1">One
+Two
+Three four five</textarea><div class="after-notes"></div></div>
 </body></html>

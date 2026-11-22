@@ -2272,10 +2272,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             content_width + border_widths.left + padding.left + padding.right +
               border_widths.right
 
-          content_width =
-            if :maps.get(:form_kind, style, nil) == :listbox,
-              do: max(content_width - 11.25, 0.0),
-              else: content_width
+          content_width = editor_client_width(style, content_width)
 
           box_x =
             box_x +
@@ -3212,6 +3209,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp resolve_fit_content_style(block, available_width) do
+    block = prepare_textarea_client(block, available_width)
+
     case block do
       %{style: style, children: children} ->
         if match?(%{width: {:css_intrinsic_size, _}}, style) or
@@ -3261,6 +3260,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         available = max(available_width - horizontal_box_size(style), 0.0)
         minimum = intrinsic_content_width(children, style, :min)
         maximum = intrinsic_content_width(children, style, :max)
+
+        minimum = editor_intrinsic_size(style, :width, minimum)
+        maximum = editor_intrinsic_size(style, :width, maximum)
 
         style =
           style
@@ -8932,7 +8934,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     resolved_content_size(style, property, available_size, default)
   end
 
+  defp editor_intrinsic_size(style, property, default) do
+    # The editor has a one-pixel caret width. Empty values and final newlines
+    # reserve one additional line without emitting any synthetic text.
+    case {style, property, default} do
+      {%{_textarea_caret_line: caret}, :height, n} when is_number(n) ->
+        n + if(caret, do: style.line_height, else: 0.0) + style._textarea_horizontal_gutter
+
+      {%{_textarea_gutter: gutter}, :width, n} when is_number(n) ->
+        max(n, @css_pixel_points) + gutter
+
+      _ ->
+        default
+    end
+  end
+
   defp resolved_content_size(style, property, available_size, default) do
+    default = editor_intrinsic_size(style, property, default)
+
     default =
       if property == :height and is_number(default) and
            (is_map_key(style, :contain) or is_map_key(style, :container_type) or
@@ -13983,10 +14002,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           box_x = x + margin.left
 
-          content_width =
-            if :maps.get(:form_kind, style, nil) == :listbox,
-              do: max(content_width - 11.25, 0.0),
-              else: content_width
+          content_width = editor_client_width(style, content_width)
 
           content_x = box_x + border_widths.left + padding.left
           content_top = box_top - border_widths.top - padding.top
@@ -16810,6 +16826,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  # A definite or constrained editor height can add or remove the vertical
+  # scrollbar. Measure first without it, before fitting text to the client.
+  defp prepare_textarea_client(node, available_width) do
+    case node do
+      %{style: %{_textarea_scroll_extent: ink} = style} ->
+        style = %{style | _textarea_gutter: 0.0}
+
+        runs =
+          case node do
+            %{runs: runs} -> runs
+            %{children: children} -> inline_runs(children, style) |> layout_value()
+          end
+
+        width = inline_block_content_width(%{style: style, runs: runs}, available_width)
+        height = inline_content_height(runs, width, style)
+        available_height = Map.get(style, :_containing_height)
+        used = resolved_content_size(style, :height, available_height, height)
+        scroll_height = editor_intrinsic_size(style, :height, height) + ink
+
+        gutter =
+          if scroll_height > used,
+            do: NativeElixirPdfUtilities.Validators.ScrollbarValidator.thickness(style),
+            else: 0.0
+
+        %{node | style: %{style | _textarea_gutter: gutter}}
+
+      _ ->
+        node
+    end
+  end
+
+  defp editor_client_width(style, width) do
+    case style do
+      %{_textarea_gutter: gutter} -> max(width - gutter, 0.0)
+      %{form_kind: :listbox} -> max(width - 11.25, 0.0)
+      _ -> width
+    end
+  end
+
   defp inline_block_content_width(run, available_width) do
     case run do
       %{_inline_content_width: width} ->
@@ -16979,6 +17034,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   end
 
   defp do_measure_inline_block(run, available_width) do
+    run = prepare_textarea_client(run, available_width)
     style = run.style
     content_width = inline_block_content_width(run, available_width)
 
@@ -17007,7 +17063,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {height, nil, nil, nil}
 
         %{runs: runs} ->
-          lines = inline_lines(runs, content_width)
+          client_width = max(content_width - Map.get(style, :_textarea_gutter, 0.0), 0.0)
+          lines = inline_lines(runs, client_width)
 
           has_flow_line =
             :maps.get(:form_kind, style, nil) in [:text, :input_button, :select] or
@@ -17015,7 +17072,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
           height =
             if has_flow_line,
-              do: inline_content_height(runs, lines, style, content_width),
+              do: inline_content_height(runs, lines, style, client_width),
               else: 0.0
 
           baseline =
