@@ -24,6 +24,47 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StaticCssControlsTest do
     assert Enum.any?(model, &(&1.name == "initial" and &1.value == ""))
   end
 
+  test "field sizing follows the winning dimension after cascade rollback" do
+    for attribute <- ["value='A Test'", "placeholder='A Test'"] do
+      rect = fn css ->
+        html = """
+        <style>input{field-sizing:content;font:12pt monospace;border:0;padding:0}</style>
+        <input name="field" #{attribute} style="#{css}">
+        """
+
+        assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+        assert {:ok, [%{widgets: [%{rect: [left, _, right, _]}]}]} = Forms.fields(pdf)
+        right - left
+      end
+
+      intrinsic = rect.("")
+      assert intrinsic > 0 and intrinsic < 72
+
+      for reset <- [
+            "width:revert",
+            "inline-size:revert-layer",
+            "width:auto",
+            "width:var(--missing)",
+            "width:var(--missing,revert)"
+          ] do
+        assert rect.(reset) == intrinsic
+      end
+
+      assert rect.("width:72pt") == 72
+    end
+
+    html = """
+    <style>@layer base { input {field-sizing:content;width:72pt;height:25pt} }
+    @layer overrides { input {width:revert-layer;height:revert} }</style>
+    <input name="field" value="A">
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, [%{widgets: [%{rect: [l, b, r, t]}]}]} = Forms.fields(pdf)
+    assert r - l >= 72 and r - l < 80
+    assert t - b < 25
+  end
+
   test "content-sized textareas keep visible lines and editable values at the final width" do
     value = "Another long line that must wrap to more than two lines"
 

@@ -1039,14 +1039,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssValueValidator do
               do: {:ok, dependent_declarations},
               else: CssCascadeValidator.prepare_values(dependent_declarations, style, budget)
 
-          with {:ok, dependent_declarations} <- dependent do
-            validate_cascade_list(
-              style,
-              dependent_declarations,
-              budget,
-              consumer,
-              failure
-            )
+          with {:ok, dependent_declarations} <- dependent,
+               {:ok, style} <-
+                 validate_cascade_list(style, dependent_declarations, budget, consumer, failure) do
+            case style do
+              %{field_sizing: :content} ->
+                {:ok,
+                 NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_content_sizing(
+                   style,
+                   foundational_declarations ++ dependent_declarations
+                 )}
+
+              _ ->
+                {:ok, style}
+            end
           end
         end
       end

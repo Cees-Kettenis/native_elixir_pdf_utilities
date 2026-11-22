@@ -1721,20 +1721,13 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValidator do
   @spec prepare_content_sizing(map(), [term()]) :: map()
   def prepare_content_sizing(style, declarations) do
     if Map.get(style, :form_kind) in [:text, :textarea, :select, :listbox, :base_select] do
-      axes = [:width, :height]
+      Enum.reduce([:width, :height], style, fn axis, style ->
+        property = Atom.to_string(axis)
 
-      authored =
-        Enum.flat_map(declarations, fn declaration ->
-          {property, _} =
-            NativeElixirPdfUtilities.Validators.CssValueValidator.declaration_pair(declaration)
-
-          NativeElixirPdfUtilities.Validators.CssCascadeValidator.targets(property, style)
-        end)
-
-      Enum.reduce(axes, style, fn axis, style ->
-        if Atom.to_string(axis) not in authored or Map.get(style, axis) == :auto,
-          do: Map.put(style, axis, if(axis == :width, do: :fit_content, else: :auto)),
-          else: style
+        if Map.get(style, axis) == :auto or
+             not Enum.any?(declarations, &(property in &1.cascade_targets)),
+           do: Map.put(style, axis, if(axis == :width, do: :fit_content, else: :auto)),
+           else: style
       end)
     else
       style

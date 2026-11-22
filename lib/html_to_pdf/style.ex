@@ -6542,18 +6542,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 style
             end
 
-          style =
-            case style do
-              %{field_sizing: :content} ->
-                NativeElixirPdfUtilities.Validators.HtmlFormValidator.prepare_content_sizing(
-                  style,
-                  declarations
-                )
-
-              _ ->
-                style
-            end
-
           # Native dropdown appearance uses the font's normal line height.
           # HTML's select rendering rules reset authored line-height here.
           # Native dropdown text includes one CSS pixel of internal leading
