@@ -5,6 +5,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
 
   alias NativeElixirPdfUtilities.Validators.{
     ColrFontValidator,
+    FlateValidator,
     FontValidator,
     HtmlValidator,
     SvgValidator,
@@ -246,35 +247,19 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
 
   defp decode(data) do
     if match?(<<31, 139, 8, _::binary>>, data) do
-      zlib = :zlib.open()
+      case FlateValidator.inflate(data, 31, fn _status, size, bytes ->
+             FontValidator.check(:max_decoded_bytes, size)
+             FontValidator.reserve(:max_work, bytes + 1)
+           end) do
+        {:ok, decoded} ->
+          decoded
 
-      try do
-        :ok = :zlib.inflateInit(zlib, 31)
-        inflate(zlib, data, 0, [])
-      rescue
-        ErlangError ->
+        :invalid_data ->
           invalid("SVG font gzip stream is malformed, truncated or has an invalid checksum")
-      after
-        :zlib.close(zlib)
       end
     else
       FontValidator.check(:max_decoded_bytes, byte_size(data))
       data
-    end
-  end
-
-  defp inflate(zlib, data, size, chunks) do
-    {status, output} = :zlib.safeInflate(zlib, data)
-    bytes = IO.iodata_length(output)
-    size = size + bytes
-    FontValidator.check(:max_decoded_bytes, size)
-    FontValidator.reserve(:max_work, bytes + 1)
-
-    if status == :finished do
-      :ok = :zlib.inflateEnd(zlib)
-      IO.iodata_to_binary(Enum.reverse([output | chunks]))
-    else
-      inflate(zlib, <<>>, size, [output | chunks])
     end
   end
 

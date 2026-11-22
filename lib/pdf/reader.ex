@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Tokenizer
+  alias NativeElixirPdfUtilities.Validators.FlateValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   import Bitwise
 
@@ -1279,33 +1280,16 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   end
 
   defp inflate(data, ref) do
-    zlib = :zlib.open()
+    limit = PdfValidator.reader_decode_limit(byte_size(data))
 
-    try do
-      :ok = :zlib.inflateInit(zlib)
+    case FlateValidator.inflate(data, 15, fn _status, size, _bytes ->
+           PdfValidator.validate_decoding_progress(size, limit, ref)
+         end) do
+      :invalid_data ->
+        error(:filter, :invalid_pdf_input, "FlateDecode data is invalid", object: ref)
 
-      limit = PdfValidator.reader_decode_limit(byte_size(data))
-
-      inflate_chunks(zlib, data, limit, 0, [], ref)
-    rescue
-      _ -> error(:filter, :invalid_pdf_input, "FlateDecode data is invalid", object: ref)
-    after
-      :zlib.close(zlib)
-    end
-  end
-
-  defp inflate_chunks(zlib, data, limit, decoded_size, decoded, ref) do
-    # safeInflate returns at most one bounded zlib output buffer per call.
-    {status, output} = :zlib.safeInflate(zlib, data)
-    decoded_size = decoded_size + IO.iodata_length(output)
-
-    with :ok <- PdfValidator.validate_decoding_progress(decoded_size, limit, ref) do
-      if status == :finished do
-        :ok = :zlib.inflateEnd(zlib)
-        {:ok, IO.iodata_to_binary(Enum.reverse([output | decoded]))}
-      else
-        inflate_chunks(zlib, <<>>, limit, decoded_size, [output | decoded], ref)
-      end
+      result ->
+        result
     end
   end
 

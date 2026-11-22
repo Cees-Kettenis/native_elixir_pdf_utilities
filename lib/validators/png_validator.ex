@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.PngValidator do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Validators.FlateValidator
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
@@ -136,35 +137,23 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
   end
 
   defp inflate(data, expected_size) do
-    zlib = :zlib.open()
+    result =
+      FlateValidator.inflate(data, 15, fn status, size, _bytes ->
+        cond do
+          size > expected_size ->
+            error("PNG decompressed data exceeds the expected scanline size")
 
-    try do
-      :ok = :zlib.inflateInit(zlib)
-      inflate_chunks(zlib, data, expected_size, 0, [])
-    rescue
-      ErlangError -> error("PNG compressed data is invalid or truncated")
-    after
-      :zlib.close(zlib)
-    end
-  end
+          status == :finished and size < expected_size ->
+            error("PNG decompressed data is shorter than the expected scanlines")
 
-  defp inflate_chunks(zlib, data, expected, size, chunks) do
-    {status, output} = :zlib.safeInflate(zlib, data)
-    size = size + IO.iodata_length(output)
+          true ->
+            :ok
+        end
+      end)
 
-    cond do
-      size > expected ->
-        error("PNG decompressed data exceeds the expected scanline size")
-
-      status == :finished and size == expected ->
-        :ok = :zlib.inflateEnd(zlib)
-        {:ok, [output | chunks] |> Enum.reverse() |> IO.iodata_to_binary()}
-
-      status == :finished ->
-        error("PNG decompressed data is shorter than the expected scanlines")
-
-      true ->
-        inflate_chunks(zlib, <<>>, expected, size, [output | chunks])
+    case result do
+      :invalid_data -> error("PNG compressed data is invalid or truncated")
+      result -> result
     end
   end
 

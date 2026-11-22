@@ -7,6 +7,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderTest do
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.TestSupport.PngFixture, as: PNG
 
+  test "a dictionary request rejects the stream even if the decoder returned partial output" do
+    alias NativeElixirPdfUtilities.Validators.FlateValidator
+
+    assert FlateValidator.chunk({:need_dictionary, 1, []}) == :invalid_data
+    assert FlateValidator.chunk({:need_dictionary, 1, ["partial"]}) == :invalid_data
+  end
+
   test "images with identical samples but different geometry have distinct PDF resources" do
     a = PNG.build(2, 1, 0, 8, 0, fn _, _ -> [128] end)
     b = PNG.build(1, 2, 0, 8, 0, fn _, _ -> [128] end)

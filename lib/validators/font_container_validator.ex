@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Validators.FlateValidator
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
   alias NativeElixirPdfUtilities.Validators.FontValidator
@@ -172,36 +173,24 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
     end
   end
 
-  defp inflate(bytes, expected, tag) do
-    zlib = :zlib.open()
+  defp inflate(bytes, expected_size, tag) do
+    result =
+      FlateValidator.inflate(bytes, 15, fn status, size, _bytes ->
+        cond do
+          size > expected_size ->
+            invalid("WOFF decompression exceeds its declared table length", tag)
 
-    try do
-      :ok = :zlib.inflateInit(zlib)
-      inflate_chunks(zlib, bytes, expected, 0, [], tag)
-    rescue
-      ErlangError -> invalid("WOFF compressed table is invalid or truncated", tag)
-    after
-      :zlib.close(zlib)
-    end
-  end
+          status == :finished and size < expected_size ->
+            invalid("WOFF decompression is shorter than its declared table length", tag)
 
-  defp inflate_chunks(zlib, bytes, expected, size, chunks, tag) do
-    {status, output} = :zlib.safeInflate(zlib, bytes)
-    size = size + IO.iodata_length(output)
+          true ->
+            :ok
+        end
+      end)
 
-    cond do
-      size > expected ->
-        invalid("WOFF decompression exceeds its declared table length", tag)
-
-      status == :finished and size == expected ->
-        :ok = :zlib.inflateEnd(zlib)
-        {:ok, IO.iodata_to_binary(Enum.reverse([output | chunks]))}
-
-      status == :finished ->
-        invalid("WOFF decompression is shorter than its declared table length", tag)
-
-      true ->
-        inflate_chunks(zlib, <<>>, expected, size, [output | chunks], tag)
+    case result do
+      :invalid_data -> invalid("WOFF compressed table is invalid or truncated", tag)
+      result -> result
     end
   end
 
