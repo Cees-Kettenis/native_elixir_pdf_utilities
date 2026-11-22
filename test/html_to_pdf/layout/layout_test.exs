@@ -4475,6 +4475,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert Layout.layout(styled_tree) == {:error, :invalid_layout}
   end
 
+  test "list layout propagates a positioned descendant's placement error" do
+    html = """
+    <ul><li style="position:relative">Parent
+      <ol style="position:absolute"><li>Child</li></ol>
+    </li></ul>
+    """
+
+    assert {:ok, dom} = HtmlParser.parse_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, [])
+    assert Layout.layout(styled) == {:error, :invalid_layout}
+  end
+
   test "layout applies relative offsets and nested stacking context order" do
     html = """
     <div style="position: relative; left: 5pt; top: 3pt; width: 100pt; height: 50pt; background: white">

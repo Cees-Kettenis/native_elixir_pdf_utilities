@@ -11969,7 +11969,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     case layout_list_items(
            children,
-           Map.fetch!(style, :list_marker_type),
+           style,
            content_x,
            content_top,
            content_width
@@ -12001,29 +12001,45 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp layout_list_items(children, marker_type, x, y, width) do
+  defp layout_list_items(children, style, x, y, width) do
+    marker_type = Map.fetch!(style, :list_marker_type)
+
+    {children, _next} =
+      Enum.map_reduce(children, 1, fn child, index ->
+        case child do
+          %{style: %{display: :list_item} = item_style} ->
+            {markers, _gap} =
+              NativeElixirPdfUtilities.HtmlToPdf.ListMarker.nodes(
+                item_style,
+                text_style(item_style),
+                marker_type,
+                index
+              )
+
+            {%{child | style: Map.put(item_style, :_list_marker, markers)}, index + 1}
+
+          %{style: %{_list_marker: _}} ->
+            {child, index + 1}
+
+          _ ->
+            {child, index}
+        end
+      end)
+
     result =
       children
-      |> Enum.with_index(1)
-      |> Enum.reduce_while({:ok, [], y}, fn {child, index}, {:ok, boxes, current_y} ->
-        child =
+      |> group_inline_flow_children(Map.get(style, :_inline_available_height))
+      |> Enum.reduce_while({:ok, [], y}, fn child, {:ok, boxes, current_y} ->
+        placement =
           case child do
-            %{style: %{display: :list_item} = style} ->
-              {markers, _gap} =
-                NativeElixirPdfUtilities.HtmlToPdf.ListMarker.nodes(
-                  style,
-                  text_style(style),
-                  marker_type,
-                  index
-                )
-
-              %{child | style: Map.put(style, :_list_marker, markers)}
+            %{type: :inline_flow, children: inline} ->
+              layout_inline_flow(inline, style, x, current_y, width)
 
             _ ->
-              child
+              layout_block(child, x, current_y, width)
           end
 
-        case layout_block(child, x, current_y, width) do
+        case placement do
           {:ok, item_boxes, next_y} -> {:cont, {:ok, Enum.reverse(item_boxes, boxes), next_y}}
           {:error, reason} -> {:halt, {:error, reason}}
         end

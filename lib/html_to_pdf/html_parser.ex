@@ -1155,6 +1155,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
       true ->
         case HtmlValidator.html_text_action(context, token) do
           :ignore ->
+            tree =
+              if context in ~w(ul ol menu dir) do
+                prior =
+                  case tree.pending_list_space do
+                    {^parent, spaces} -> spaces
+                    _ -> []
+                  end
+
+                %{tree | pending_list_space: {parent, [token | prior]}}
+              else
+                tree
+              end
+
             parse_children(
               remaining,
               context,
@@ -1300,6 +1313,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParser do
         %{parent: ^parent, end: finish} -> finish
         _ -> nil
       end
+
+    # Structural list whitespace is absent from public child lists. Retain its
+    # source spelling so an inline list item can share a line with its sibling.
+    node =
+      case tree.pending_list_space do
+        {^parent, spaces} ->
+          Map.put(node, :list_whitespace_before, IO.iodata_to_binary(Enum.reverse(spaces)))
+
+        _ ->
+          node
+      end
+
+    tree = %{tree | pending_list_space: nil}
 
     id =
       NativeElixirPdfUtilities.Validators.TemplateExecutionValidator.original_node_id(

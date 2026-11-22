@@ -14,6 +14,11 @@ li { margin: 0; }
 .suppressed > li:first-child::before { content: none; counter-increment: list-item 10; }
 .boxless { display: contents; counter-increment: list-item 10; }
 .generated > li:first-child::after { display: list-item; content: 'Generated second'; }
+.inline-list-example { position:absolute;left:330pt;top:25pt;width:240pt; }
+.inline-items { margin:0;padding:0;font:12pt/15pt "DejaVu Sans Mono"; }
+.inline-items > li { display:inline list-item; }
+.inline-items > li::marker { content:'§ '; }
+.inline-items span { display:inline-block;vertical-align:top;width:12pt;height:7pt;background:#28763d; }
 </style></head><body>
 <p>Owned items through a descendant</p>
 <ol><li>First<span style="display:list-item">Second</span></li><li>Third</li></ol>
@@ -37,4 +42,5 @@ li { margin: 0; }
 <p>Generated list item</p>
 <ol class="generated"><li>First</li><li>Third</li></ol>
 <ol class="generated" reversed><li>Third</li><li>First</li></ol>
+<div class="inline-list-example"><ol class="inline-items"><li>First</li><li>Second<span></span></li></ol></div>
 </body></html>

@@ -9,9 +9,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
   @type t :: %__MODULE__{
           root: reference(),
           nodes: %{reference() => map()},
+          pending_list_space: {reference(), [binary()]} | nil,
           hosts: %{reference() => reference()}
         }
-  defstruct [:root, nodes: %{}, hosts: %{}]
+  defstruct [:root, :pending_list_space, nodes: %{}, hosts: %{}]
 
   @doc false
   @spec new(map(), :document | :document_fragment) :: t()

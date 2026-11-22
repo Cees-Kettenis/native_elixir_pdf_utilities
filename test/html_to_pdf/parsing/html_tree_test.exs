@@ -147,6 +147,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTreeTest do
           %{fragment | children: [marker, %{template | document_id: make_ref()}]},
           %{fragment | children: [marker, Map.delete(template, :document_id)]},
           Map.put(fragment, :projection, fragment),
+          Map.put(fragment, :list_whitespace_before, false),
+          Map.put(fragment, :list_whitespace_before, "word"),
           %{fragment | source: %{text: <<255>>, line: 1, column: 1}}
         ] do
       assert {:error, {:invalid_document, diagnostic}} =

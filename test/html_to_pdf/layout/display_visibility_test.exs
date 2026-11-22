@@ -252,6 +252,87 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DisplayVisibilityTest do
     assert Enum.map_join(text, & &1.text) =~ "Item"
   end
 
+  test "list containers share inline lines and retain block boundaries, ordinals and markers" do
+    render = fn css, children ->
+      html = """
+      <style>body,ol{margin:0}ol{padding-left:22pt;font:12pt/15pt monospace}
+        ol>li{display:inline list-item}#{css}</style><ol>#{children}</ol>
+      """
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render(html,
+                 page_size: {300, 300},
+                 margin: 0,
+                 system_font_discovery: false
+               )
+
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+      spans
+    end
+
+    lines = fn spans ->
+      spans
+      |> Enum.chunk_by(&Float.round(&1.y, 2))
+      |> Enum.map(&Enum.map_join(&1, fn span -> span.text end))
+    end
+
+    two = "<li>First</li><li>Second</li>"
+
+    for position <- ["inside", "outside"] do
+      assert lines.(render.("li{list-style-position:#{position}}", two)) == ["1. First2. Second"]
+    end
+
+    assert lines.(render.("li::marker{content:'§ '}", two)) == ["§ First§ Second"]
+    assert lines.(render.("li::marker{content:none}", two)) == ["FirstSecond"]
+
+    assert lines.(render.("ol>li{display:inline}", "<li>First</li> <li>Second</li>")) == [
+             "First Second"
+           ]
+
+    assert lines.(render.("ol>li{display:inline}", two)) == ["FirstSecond"]
+
+    for display <- ["block", "list-item"] do
+      separated = "<li>First</li> <!-- gap -->\n<li>Second</li>"
+
+      assert lines.(
+               render.("ol{display:#{display};list-style:none}ol>li{display:inline}", separated)
+             ) ==
+               ["First Second"]
+    end
+
+    mixed = "<li>First</li><li class='block'>Middle</li> <li>Last</li>"
+
+    assert lines.(render.("ol>li.block{display:list-item}", mixed)) == [
+             "1. First",
+             "2.Middle",
+             "3. Last"
+           ]
+
+    nested = "<li>Outer<ol><li>Nested</li></ol></li><li>Last</li>"
+
+    assert lines.(render.("ol ol>li{display:list-item}", nested)) == [
+             "1. Outer",
+             "1.Nested",
+             "2. Last"
+           ]
+
+    wrapped = render.("ol{width:70pt}", "<li>First</li> <li>Second</li>")
+    assert lines.(wrapped) == ["1. First", "2. Second"]
+
+    for position <- ["inside", "outside"] do
+      spans =
+        render.("ol>li{display:inline flow-root list-item;list-style-position:#{position}}", two)
+
+      assert length(lines.(spans)) == 1
+      marker = hd(spans)
+      assert marker.text == "1."
+
+      if position == "outside",
+        do: assert(marker.x < 22),
+        else: assert_in_delta(marker.x, 22, 0.01)
+    end
+  end
+
   test "run-ins enter the following paragraph without changing authored inheritance" do
     alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
 

@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ListCounterBrowserParityTest do
       PdfVisualCompare.assert_browser_match!(
         Paths.fixture("html_to_pdf/browser_parity/list_counter_ownership.html"),
         artifact_dir: "tmp/browser_parity/list_counter_ownership",
+        regions: [after_inline_items: {440, 27, 7, 3}],
         max_changed_ratio: 0.01,
         max_average_delta: 0.035
       )

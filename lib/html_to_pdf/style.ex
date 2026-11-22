@@ -1419,6 +1419,56 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                 styled
               end
 
+            styled =
+              case styled do
+                %{style: %{display: :list_item, _display_outer: outer} = style}
+                when outer in [:inline, :run_in] ->
+                  if Map.get(style, :_flow_root, false) and
+                       Map.get(style, :list_style_position, :outside) == :outside do
+                    # An atomic inline list item's outside marker hangs beyond its
+                    # own principal box and does not increase the inline advance.
+                    item_style =
+                      anonymous_box_style(style, :list_item)
+                      |> Map.merge(
+                        Map.take(style, [
+                          :_list_marker,
+                          :_marker_content,
+                          :list_marker_type,
+                          :list_style_image
+                        ])
+                      )
+
+                    body = %{
+                      type: :element,
+                      tag: "span",
+                      style: item_style,
+                      children: styled.children
+                    }
+
+                    %{styled | style: Map.put(style, :display, :inline_block), children: [body]}
+                  else
+                    {markers, gap} =
+                      NativeElixirPdfUtilities.HtmlToPdf.ListMarker.nodes(
+                        style,
+                        text_style(style),
+                        :disc,
+                        1
+                      )
+
+                    display =
+                      if Map.get(style, :_flow_root, false), do: :inline_block, else: :inline
+
+                    %{
+                      styled
+                      | style: Map.put(style, :display, display),
+                        children: markers ++ gap ++ styled.children
+                    }
+                  end
+
+                _ ->
+                  styled
+              end
+
             if :maps.get(:type, node, nil) == :element and
                  :maps.get(:tag, styled, nil) == :maps.get(:tag, node, nil),
                do:
@@ -1435,6 +1485,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                        :parent_id,
                        :composed_parent_id,
                        :source,
+                       :list_whitespace_before,
                        :cloned_from_node_id,
                        :_html_translate,
                        :_html_inert,
@@ -2109,6 +2160,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                         _ -> styled_children
                       end
 
+                    styled_children =
+                      if tag in ~w(ul ol menu dir),
+                        do: inline_list_spacing(styled_children, element_style),
+                        else: styled_children
+
                     rendered_children = before ++ styled_children ++ picker ++ after_content
 
                     rendered_children =
@@ -2312,36 +2368,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                           children: rendered_children
                         }
                       )
-
-                    element =
-                      case element do
-                        %{style: %{display: :list_item, _display_outer: outer} = style}
-                        when outer in [:inline, :run_in] ->
-                          {markers, gap} =
-                            NativeElixirPdfUtilities.HtmlToPdf.ListMarker.nodes(
-                              style,
-                              text_style(style),
-                              :disc,
-                              1
-                            )
-
-                          %{
-                            element
-                            | style:
-                                Map.put(
-                                  style,
-                                  :display,
-                                  if(:maps.get(:_flow_root, style, false),
-                                    do: :inline_block,
-                                    else: :inline
-                                  )
-                                ),
-                              children: markers ++ gap ++ element.children
-                          }
-
-                        _ ->
-                          element
-                      end
 
                     result =
                       if element_style.display == :contents do
@@ -4989,6 +5015,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       margin: CssValueValidator.edges(font_size, 0.0, font_size, 0.0),
       padding: CssValueValidator.edges(0.0, 0.0, 0.0, 30.0)
     })
+  end
+
+  defp inline_list_spacing(children, style) do
+    if Enum.any?(children, fn child ->
+         get_in(child, [:style, :display]) in [
+           :inline,
+           :inline_block,
+           :inline_grid,
+           :inline_flex,
+           :inline_table,
+           :contents
+         ]
+       end) do
+      inherited = text_style(style)
+
+      Enum.flat_map(children, fn child ->
+        case Map.get(child, :list_whitespace_before) do
+          nil -> [child]
+          space -> [%{type: :text, text: space, style: inherited}, child]
+        end
+      end)
+    else
+      children
+    end
   end
 
   defp list_item_defaults(font_size) do

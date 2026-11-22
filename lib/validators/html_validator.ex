@@ -3205,6 +3205,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
            "frameset",
            "ul",
            "ol",
+           "menu",
+           "dir",
            "dl",
            "table",
            "colgroup",
@@ -8049,7 +8051,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
 
             %{type: :text, text: text, style: style} ->
               if is_binary(text) and String.valid?(text, :fast_ascii) and
-                   valid_layout_style?(style),
+                   valid_layout_style?(style) and
+                   (parent_display != :list or trim_ascii_whitespace(text) == ""),
                  do: :ok,
                  else: :invalid_layout
 
