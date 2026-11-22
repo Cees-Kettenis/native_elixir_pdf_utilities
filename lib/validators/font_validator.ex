@@ -1106,20 +1106,19 @@ defmodule NativeElixirPdfUtilities.Validators.FontValidator do
   end
 
   @doc false
-  @spec cache_evictions([tuple()], pos_integer(), Limits.key()) :: [term()]
-  @spec cache_evictions([tuple()], pos_integer(), Limits.key(), (tuple() -> non_neg_integer())) ::
+  @spec cache_evictions([{term(), non_neg_integer(), integer()}], pos_integer(), Limits.key()) ::
           [term()]
-  def cache_evictions(entries, maximum_entries, byte_limit, size_of \\ &cache_bytes/1) do
-    # Both cache formats put the insertion sequence last and their key first.
+  def cache_evictions(entries, maximum_entries, byte_limit) do
+    maximum_bytes = Limits.get(byte_limit)
+
     {_retained, _bytes, evicted} =
       entries
-      |> Enum.sort_by(&elem(&1, tuple_size(&1) - 1), :desc)
-      |> Enum.reduce({0, 0, []}, fn entry, {count, bytes, evicted} ->
-        size = size_of.(entry)
-
-        case count < maximum_entries and bytes + size <= Limits.get(byte_limit) do
-          true -> {count + 1, bytes + size, evicted}
-          false -> {count, bytes, [elem(entry, 0) | evicted]}
+      |> Enum.sort_by(&elem(&1, 2), :desc)
+      |> Enum.reduce({0, 0, []}, fn {key, size, _sequence}, {count, bytes, evicted} ->
+        if count < maximum_entries and bytes + size <= maximum_bytes do
+          {count + 1, bytes + size, evicted}
+        else
+          {count, bytes, [key | evicted]}
         end
       end)
 

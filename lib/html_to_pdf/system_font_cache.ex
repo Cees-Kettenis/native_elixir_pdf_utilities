@@ -36,10 +36,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache do
                   :miss ->
                     result = loader.()
 
-                    case FontValidator.cacheable_result?(result) do
-                      true -> GenServer.call(cache, {:store, key, result}, :infinity)
-                      false -> result
+                    if FontValidator.cacheable_result?(result) do
+                      entry = {key, result, System.unique_integer([:positive, :monotonic])}
+
+                      request =
+                        case FontValidator.cache_entry_size(entry) do
+                          nil -> :prune
+                          bytes -> {:store, entry, bytes}
+                        end
+
+                      :ok = GenServer.call(cache, request, :infinity)
                     end
+
+                    result
                 end
               end,
               [node()]
@@ -53,20 +62,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCache do
     table = :ets.new(@table, [:named_table, :protected, :set, read_concurrency: true])
 
     {:ok,
-     %{maximum_entries: Keyword.fetch!(options, :maximum_entries), sequence: 0, table: table}}
+     %{maximum_entries: Keyword.fetch!(options, :maximum_entries), entries: %{}, table: table}}
   end
 
   @impl GenServer
-  def handle_call({:store, key, result}, _from, state) do
-    sequence = state.sequence + 1
-    :ets.insert(state.table, {key, result, sequence})
+  def handle_call(request, _from, state) do
+    # Only the caller sizes the value. Eviction needs its key, retained byte
+    # count and admission order, including when a lowered limit triggers pruning.
+    entries =
+      case request do
+        {:store, {key, _result, sequence} = entry, bytes} ->
+          :ets.insert(state.table, entry)
+          Map.put(state.entries, key, {key, bytes, sequence})
 
-    state.table
-    |> :ets.tab2list()
-    |> FontValidator.cache_evictions(state.maximum_entries, :max_cache_bytes)
-    |> Enum.each(&:ets.delete(state.table, &1))
+        :prune ->
+          state.entries
+      end
 
-    {:reply, result, %{state | sequence: sequence}}
+    evicted =
+      FontValidator.cache_evictions(
+        Map.values(entries),
+        state.maximum_entries,
+        :max_cache_bytes
+      )
+
+    Enum.each(evicted, &:ets.delete(state.table, &1))
+    {:reply, :ok, %{state | entries: Map.drop(entries, evicted)}}
   end
 
   defp cached(key) do

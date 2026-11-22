@@ -219,8 +219,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
       FontValidator.cache_evictions(
         entries,
         state.maximum_entries,
-        :max_cache_bytes,
-        &elem(&1, 1)
+        :max_cache_bytes
       )
 
     Enum.each(evicted, &:ets.delete(state.table, &1))

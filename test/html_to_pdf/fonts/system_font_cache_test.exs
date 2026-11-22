@@ -17,6 +17,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SystemFontCacheTest do
     assert Agent.get(calls, & &1) == 1
   end
 
+  test "an oversized discovery result stays with its caller and prunes retained entries" do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    key = {:oversized_discovery, make_ref()}
+    retained = {:retained_discovery, make_ref()}
+    assert :found = SystemFontCache.fetch(retained, fn -> :found end)
+
+    Limits.install(%{limits | max_cache_bytes: 1})
+    result = {:ok, List.duplicate("family", 32)}
+    server = Process.whereis(SystemFontCache)
+    :erlang.trace(server, true, [:receive])
+
+    try do
+      assert ^result = SystemFontCache.fetch(key, fn -> result end)
+      assert_receive {:trace, ^server, :receive, {:"$gen_call", _, :prune}}
+      refute_received {:trace, ^server, :receive, {:"$gen_call", _, {:store, _, _}}}
+      assert :ets.lookup(SystemFontCache, key) == []
+      assert :ets.lookup(SystemFontCache, retained) == []
+    after
+      :erlang.trace(server, false, [:receive])
+    end
+  end
+
   test "serializes concurrent misses and bounds retained lookups" do
     {:ok, calls} = Agent.start_link(fn -> 0 end)
     concurrent_key = {:concurrent, make_ref()}
