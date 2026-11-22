@@ -10,7 +10,8 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
 
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
-  alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
+  alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.IncrementalValidator
 
@@ -439,10 +440,26 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   defp decode_title(document, value, budget) do
     with {:ok, value} <- PdfValidator.resolve(document, value),
          {kind, bytes} when kind in [:string, :hex] and is_binary(bytes) <- value,
-         {:ok, title} <- InfoCodec.decode_text(bytes) do
+         {:ok, title} <- decode_title_text(bytes) do
       normalize_title(title, budget)
     else
+      {:error, {:resource_limit_exceeded, _diagnostic}} = error -> error
       _ -> error(:invalid_pdf_input, "outline item Title must be a valid PDF text string")
+    end
+  end
+
+  defp decode_title_text(bytes) do
+    case InfoValidator.decode_metadata_text(bytes) do
+      {:error, {:resource_limit_exceeded, _diagnostic}} = error ->
+        # When other reads already used bytes, the shared allowance is the
+        # first bound we hit. Decoding further just to classify it locally
+        # would spend memory beyond that allowance.
+        if ResourceBudgetValidator.remaining(:max_decoded_bytes) == Limits.get(:max_decoded_bytes),
+          do: limit_error("outline title exceeds the byte limit"),
+          else: error
+
+      result ->
+        result
     end
   end
 

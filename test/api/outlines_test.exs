@@ -507,6 +507,37 @@ defmodule NativeElixirPdfUtilities.OutlinesGlobalStateTest do
     assert diagnostic.stage == :limits and diagnostic.message =~ "nesting depth"
   end
 
+  test "decoded outline titles share the reader allowance with xref streams and siblings" do
+    alias NativeElixirPdfUtilities.TestSupport.Paths
+
+    titles = ["A", "😀"]
+    items = Enum.map(titles, &{&1, 1})
+    original = Limits.effective()
+
+    # The stream fixture has seven 7-byte xref entries. The classic table
+    # consumes no decoded stream bytes. The titles consume five UTF-8 bytes.
+    for {fixture, index_bytes} <- [{"classic-xref.pdf", 0}, {"xref-stream.pdf", 49}] do
+      Limits.install(original)
+      source = File.read!(Paths.fixture("pdf_reader/#{fixture}"))
+      assert {:ok, pdf} = Outlines.put(source, items)
+      assert {:ok, merged} = Merge.merge([pdf])
+      assert {:ok, merged_items} = Outlines.get(merged)
+      assert Enum.map(merged_items, & &1.title) == titles
+
+      Limits.install(%{original | max_decoded_bytes: index_bytes + 4})
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = Outlines.get(pdf)
+      assert diagnostic.stage == :limits and diagnostic.operation == :get_outlines
+      assert diagnostic.module == Outlines
+
+      assert diagnostic.message =~ "max_decoded_bytes"
+
+      Limits.install(%{original | max_decoded_bytes: index_bytes + 5})
+      assert {:ok, bookmarks} = Outlines.get(pdf)
+      assert Enum.map(bookmarks, & &1.title) == titles
+    end
+  end
+
   test "merged outlines share item and decoded-title allowances" do
     pdfs =
       Enum.map(["aa", "bb", "cc"], fn title ->
@@ -517,6 +548,14 @@ defmodule NativeElixirPdfUtilities.OutlinesGlobalStateTest do
     assert {:ok, combined} = Merge.merge(pdfs)
     assert {:ok, items} = Outlines.get(combined)
     assert Enum.map(items, & &1.title) == ["aa", "bb", "cc"]
+
+    prepared =
+      Enum.map(pdfs, fn pdf ->
+        assert {:ok, context} = Reader.read_validated(pdf)
+        assert {:ok, input} = MergeValidator.prepare(context)
+        input
+      end)
+
     original = Limits.effective()
     Limits.install(%{original | max_entries: 2})
     assert {:ok, _} = OutlineValidator.normalize(Enum.take(items, 2), 3)
@@ -529,6 +568,13 @@ defmodule NativeElixirPdfUtilities.OutlinesGlobalStateTest do
     assert {:ok, _} = OutlineValidator.normalize(Enum.take(items, 2), 3)
     assert {:error, {:resource_limit_exceeded, diagnostic}} = OutlineValidator.normalize(items, 3)
     assert diagnostic.message =~ "aggregate outline title bytes"
+
+    assert {:error, {:resource_limit_exceeded, diagnostic}} =
+             MergeValidator.prepare_remapping(prepared, 3)
+
+    assert diagnostic.operation == :merge and diagnostic.module == MergeValidator
+    assert diagnostic.message =~ "aggregate outline title bytes"
+
     assert {:error, {:resource_limit_exceeded, diagnostic}} = Merge.merge(pdfs)
     assert diagnostic.operation == :merge and diagnostic.module == Merge
   end
