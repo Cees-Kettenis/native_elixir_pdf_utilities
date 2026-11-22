@@ -297,6 +297,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OpenTypeAsciiTest do
     end
   end
 
+  test "an edited face cannot change the next render's ASCII shaping decision" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
+    config = %{family: "Independent ASCII renders", data: OpenTypeFixture.outline_font([], [])}
+    assert {:ok, [font]} = Font.load_configured_faces([config])
+
+    # Separate operations share the process-wide cache. Both models have the same ID and bytes.
+    edited = Map.put(font, :kerning, %{{1, 2} => -50})
+    opts = [fonts: [config], system_font_discovery: false]
+    html = "<p style='font-family:Independent ASCII renders'>AB</p>"
+    assert {:ok, expected} = HtmlToPdf.render(html, opts)
+
+    for face <- [edited, font] do
+      assert {:ok, %{compatible?: true}} = FontCache.ascii_layout(face)
+      assert {:ok, ^expected} = HtmlToPdf.render(html, opts)
+    end
+
+    refute TextShapingValidator.required?(font, "AB")
+  end
+
   test "a malformed edited face cannot poison a valid face's cached layout analysis" do
     alias NativeElixirPdfUtilities.HtmlToPdf.FontCache
     alias NativeElixirPdfUtilities.Validators.FontValidator

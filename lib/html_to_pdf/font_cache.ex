@@ -137,28 +137,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCache do
 
       {previous, result} =
         FontValidator.memo(key, fn ->
+          # Callers can edit a physical face without changing its ID or source bytes.
+          # Match the model used for the proof before reusing it across renders.
           result =
             fetch_value(
               key,
               fn _ ->
-                NativeElixirPdfUtilities.Validators.OpenTypeAsciiValidator.prepare(font)
+                with {:ok, info} <-
+                       NativeElixirPdfUtilities.Validators.OpenTypeAsciiValidator.prepare(font) do
+                  {:ok, info |> Map.take([:flags, :dynamic?]) |> Map.put(:compatible?, true)}
+                end
               end,
-              font.data
+              physical
             )
-
-          result =
-            case result do
-              {:ok, info} ->
-                compatible? =
-                  info.data == font.data and info.cmap == font.cmap and
-                    info.kerning == Map.get(font, :kerning, %{}) and
-                    info.ligatures == Map.get(font, :latin_ligatures, %{})
-
-                {:ok, info |> Map.take([:flags, :dynamic?]) |> Map.put(:compatible?, compatible?)}
-
-              error ->
-                error
-            end
 
           {physical, result}
         end)
