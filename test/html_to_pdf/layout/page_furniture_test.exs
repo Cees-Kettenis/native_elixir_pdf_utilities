@@ -259,6 +259,49 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurnitureTest do
              )
   end
 
+  test "decoration validates each page's effective margins before placing furniture" do
+    [first, second] = pages(2)
+    margins = %{top: 20, bottom: 20, left: 32, right: 12}
+    opts = [page_furniture: [header: furniture_html("Header"), footer: furniture_html("Footer")]]
+
+    for size <- [@page_size, {220.0, 110.0}] do
+      page = %{second | size: size}
+
+      for override <- [
+            nil,
+            Map.delete(margins, :top),
+            %{margins | bottom: -1},
+            %{margins | bottom: elem(size, 1) - margins.top},
+            %{margins | right: elem(size, 0) - margins.left}
+          ] do
+        assert {:error, {:invalid_layout, %{stage: :layout, operation: :decorate_pages}}} =
+                 PageFurniture.decorate(
+                   [first, Map.put(page, :margins, override)],
+                   layout_tree(),
+                   opts
+                 )
+      end
+
+      assert {:ok, decorated} =
+               PageFurniture.decorate(
+                 [first, Map.put(page, :margins, margins)],
+                 layout_tree(),
+                 opts
+               )
+
+      for {page, left} <- Enum.zip(decorated, [@margin, margins.left]) do
+        for label <- ["Header", "Footer"] do
+          box = Enum.find(page.boxes, &(Map.get(&1, :text) == label))
+          assert_in_delta box.x, left, 0.0001
+        end
+      end
+
+      assert {:ok, pdf} = PdfWriter.render(decorated)
+      assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+      for line <- ["Header", "Body 1", "Body 2", "Footer"], do: assert(text =~ line)
+    end
+  end
+
   test "decorate supports full HTML documents and empty visual templates" do
     full_document = """
     <!doctype html>

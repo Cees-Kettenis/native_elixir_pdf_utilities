@@ -8886,12 +8886,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
   defp valid_pages?(pages, page_size) do
     Enum.all?(pages, fn page ->
       case page do
-        %{size: ^page_size, boxes: boxes} when is_list(boxes) ->
-          true
-
         %{size: size, margins: margins, boxes: boxes} when is_list(boxes) ->
           validate_page_size(size) == :ok and validate_margins(margins) == :ok and
             validate_printable_area(size, margins) == :ok
+
+        %{size: ^page_size, boxes: boxes} when is_list(boxes) ->
+          true
 
         _ ->
           false

@@ -43,8 +43,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
   Adds configured running headers and footers to paginated pages.
 
   Omitted, `nil`, and `false` page furniture leave pages unchanged. Configured
-  templates must fit inside the corresponding top or bottom margin in
-  `layout_tree`.
+  headers and footers must fit inside each page’s top and bottom margins.
+  Pages with the layout’s page size inherit its margins unless they provide
+  their own `:margins` map. Pages with a different size require their own margins.
   """
   @spec decorate([page()], layout_tree(), [render_option()]) ::
           {:ok, [page()]} | {:error, detailed_error()}
@@ -65,7 +66,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
         FontValidator.with_budget(fn ->
           case HtmlValidator.prepare_furniture_input(pages, layout_tree, opts) do
             {:ok, %{margins: margins, furniture: furniture}} ->
-              decorate_pages(pages, layout_tree.page_size, margins, furniture, opts, image_budget)
+              decorate_pages(pages, margins, furniture, opts, image_budget)
 
             {:error, {reason, diagnostic}} ->
               {:error,
@@ -80,7 +81,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
     end)
   end
 
-  defp decorate_pages(pages, _page_size, margins, furniture, opts, image_budget) do
+  defp decorate_pages(pages, margins, furniture, opts, image_budget) do
     case furniture do
       nil ->
         {:ok, pages}
