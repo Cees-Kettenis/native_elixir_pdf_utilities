@@ -249,7 +249,7 @@ defmodule ManualWeb.OpenApi do
         "/html-to-pdf" => %{
           "post" =>
             upload_operation(
-              "Render uploaded or pasted HTML as PDF",
+              "Render uploaded or pasted HTML as PDF. An uploaded file takes precedence.",
               %{
                 "html_file" => %{"type" => "string", "format" => "binary"},
                 "html" => %{"type" => "string"},
@@ -272,6 +272,15 @@ defmodule ManualWeb.OpenApi do
               ["page_size", "orientation"],
               "application/pdf"
             )
+            |> put_in(["requestBody", "content", "multipart/form-data", "schema", "anyOf"], [
+              %{"required" => ["html_file"]},
+              %{"required" => ["html"], "properties" => %{"html" => %{"pattern" => "\\S"}}}
+            ])
+            |> put_in(["responses", "422"], %{
+              "description" =>
+                "Missing HTML source, invalid form options, or rendering diagnostic",
+              "content" => %{"text/html" => %{"schema" => %{"type" => "string"}}}
+            })
         },
         "/outlines" => %{
           "post" =>

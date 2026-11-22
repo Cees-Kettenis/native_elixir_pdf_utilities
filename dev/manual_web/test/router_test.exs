@@ -109,6 +109,18 @@ defmodule ManualWeb.RouterTest do
     assert svg["responses"]["422"]["content"]["text/html"]
     schema = svg["requestBody"]["content"]["multipart/form-data"]["schema"]
     assert schema["anyOf"] == [%{"required" => ["svg_file"]}, %{"required" => ["svg"]}]
+
+    html = document["paths"]["/html-to-pdf"]["post"]
+    assert html["responses"]["200"]["content"]["application/pdf"]
+    assert html["responses"]["422"]["content"]["text/html"]
+    assert html["summary"] =~ "uploaded file takes precedence"
+    schema = html["requestBody"]["content"]["multipart/form-data"]["schema"]
+    assert schema["required"] == ["page_size", "orientation"]
+
+    assert schema["anyOf"] == [
+             %{"required" => ["html_file"]},
+             %{"required" => ["html"], "properties" => %{"html" => %{"pattern" => "\\S"}}}
+           ]
   end
 
   test "converts SVG uploads and text using explicit canvas dimensions or a single proportional axis" do
@@ -215,6 +227,28 @@ defmodule ManualWeb.RouterTest do
            ]
 
     assert {:ok, [%{title: "Manual"}]} = Outlines.get(response.resp_body)
+  end
+
+  test "HTML source selection requires uploaded or pasted content and prefers the upload" do
+    options = %{"page_size" => "a4", "orientation" => "portrait"}
+    file = upload("<p>Uploaded</p>", "input.html")
+
+    for {source, expected} <- [
+          {%{"html_file" => file}, "Uploaded"},
+          {%{"html" => "<p>Pasted</p>"}, "Pasted"},
+          {%{"html_file" => file, "html" => "<p>Pasted</p>"}, "Uploaded"}
+        ] do
+      response = post("/html-to-pdf", Map.merge(options, source))
+      assert response.status == 200
+      assert {:ok, text} = Text.extract(response.resp_body)
+      assert String.trim(text) == expected
+    end
+
+    for source <- [%{}, %{"html" => "  "}] do
+      response = post("/html-to-pdf", Map.merge(options, source))
+      assert response.status == 422
+      assert response.resp_body =~ "upload an HTML file or paste HTML"
+    end
   end
 
   test "HTML outline selection overrides CSS bookmarks in the returned PDF" do
