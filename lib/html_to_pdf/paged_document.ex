@@ -1,5 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedDocument do
-  @moduledoc "Coordinates static CSS publishing with shared layout and pagination."
+  @moduledoc false
   alias NativeElixirPdfUtilities.HtmlToPdf.{
     CounterState,
     CounterStyle,
