@@ -1010,7 +1010,6 @@ defmodule NativeElixirPdfUtilities.Validators.CssTransformValidator do
           extra = ceil((extent - end_offset) / last.viewport.height)
           page_count = count + extra
           HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
-          HtmlValidator.check_render_resource(:max_pages, page_count, :pagination)
           HtmlValidator.reserve_render_resource(:max_entries, extra * length(canvas), :pagination)
 
           pages = List.duplicate(%{last.page | boxes: canvas}, extra)
