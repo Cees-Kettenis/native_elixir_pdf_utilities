@@ -2315,7 +2315,8 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           {:error, {:resource_limit_exceeded, _diagnostic}} = error ->
             throw({:render_resource_limit, error})
 
-          {:error, {_reason, %{stage: :geometry}}} = error ->
+          {:error, {_reason, %{stage: stage}}} = error
+          when stage in [:geometry, :optional_content] ->
             throw({:render_resource_limit, error})
 
           {:error, _diagnostic} ->

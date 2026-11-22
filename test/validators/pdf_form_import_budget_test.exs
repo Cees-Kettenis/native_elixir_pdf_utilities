@@ -12,6 +12,76 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetTest do
     {:ok, context: context}
   end
 
+  test "imported Forms reject layered artwork and omit annotation-only dependencies", %{
+    context: context
+  } do
+    [page] = context.pages
+    {page_id, page_gen} = page.ref
+    {catalog_id, catalog_gen} = context.catalog_ref
+    group_id = context.document.trailer["Size"]
+    group = {:ref, {group_id, 0}}
+    stream = group_id + 1
+    annotation = group_id + 2
+
+    for state <- ["ON", "OFF"], dependency <- [:artwork, :annotation, :unused] do
+      catalog =
+        Map.put(context.catalog, "OCProperties", %{
+          "OCGs" => [group],
+          "D" => %{"BaseState" => {:name, state}}
+        })
+
+      paint = "1 0 0 rg 0 0 100 60 re f"
+
+      {dictionary, paint} =
+        case dependency do
+          :artwork ->
+            {Map.put(page.dictionary, "Resources", %{"Properties" => %{"Swatch" => group}}),
+             "/OC /Swatch BDC #{paint} EMC"}
+
+          :annotation ->
+            {Map.put(page.dictionary, "Annots", [{:ref, {annotation, 0}}]), paint}
+
+          :unused ->
+            {page.dictionary, paint}
+        end
+
+      assert {:ok, source} =
+               IncrementalWriter.write(context, [
+                 {catalog_id, catalog_gen, {:value, catalog}},
+                 {page_id, page_gen,
+                  {:value, Map.put(dictionary, "Contents", {:ref, {stream, 0}})}},
+                 {group_id, 0,
+                  {:value, %{"Type" => {:name, "OCG"}, "Name" => {:string, "Swatch"}}}},
+                 {annotation, 0,
+                  {:value,
+                   %{
+                     "Type" => {:name, "Annot"},
+                     "Subtype" => {:name, "Link"},
+                     "Rect" => [0, 0, 1, 1],
+                     "OC" => group
+                   }}},
+                 {stream, 0, {:stream, %{}, paint}}
+               ])
+
+      image = %{format: :pdf_form, data: source, width_px: 100, height_px: 60}
+      draw = %{type: :image, x: 0, y: 0, width: 100, height: 60, image: image}
+      pages = [%{size: {100, 60}, boxes: [draw]}]
+
+      if dependency == :artwork do
+        for result <- [PdfWriter.render(pages), PdfWriter.appearance_objects(pages, 1)] do
+          assert {:error, {:unsupported_pdf_feature, diagnostic}} = result
+          assert diagnostic.stage == :optional_content
+          assert diagnostic.message =~ "layer visibility"
+        end
+      else
+        assert {:ok, pdf} = PdfWriter.render(pages)
+        assert {:ok, %{pages: [imported]}} = Reader.read_validated(pdf)
+        refute Map.has_key?(imported.dictionary, "Annots")
+        assert {:ok, %{stream: ^paint}} = PdfFormValidator.prepare_source(source)
+      end
+    end
+  end
+
   test "nonpositive imported dimensions retain the ordinary invalid-source diagnostic", %{
     context: context
   } do
@@ -274,7 +344,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetGlobalStateTest
 
     box = %{type: :image, x: 0, y: 0, width: 100, height: 60, image: image}
     page = %{size: {100, 60}, boxes: [box, box]}
-    assert :erlang.trace_pattern({Reader, :read, 1}, true, [:local]) == 1
+    assert :erlang.trace_pattern({Reader, :read_validated, 1}, true, [:local]) == 1
 
     try do
       for kind <- [:pages, :appearances] do
@@ -300,11 +370,11 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormImportBudgetGlobalStateTest
         :erlang.trace(task.pid, true, [:call, :set_on_spawn])
         send(task.pid, :render)
         assert :ok = Task.await(task)
-        assert_receive {:trace, _, :call, {Reader, :read, [^source]}}
-        refute_receive {:trace, _, :call, {Reader, :read, _}}
+        assert_receive {:trace, _, :call, {Reader, :read_validated, [^source]}}
+        refute_receive {:trace, _, :call, {Reader, :read_validated, _}}
       end
     after
-      :erlang.trace_pattern({Reader, :read, 1}, false, [:local])
+      :erlang.trace_pattern({Reader, :read_validated, 1}, false, [:local])
     end
   end
 

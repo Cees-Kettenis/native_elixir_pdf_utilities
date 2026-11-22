@@ -37,6 +37,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
           | :invalid_pdf_input
           | :resource_limit_exceeded
           | :unsupported_form
+          | :unsupported_pdf_feature
 
   @doc """
   Renders paginated drawing instructions to a PDF binary.

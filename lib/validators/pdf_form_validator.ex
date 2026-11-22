@@ -38,18 +38,18 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormValidator do
 
   defp prepare_uncached_source(source) do
     # Enter the bounded operation before opening its process-local allowances.
-    # Reader.read then reuses this worker for parsing and subsequent decoding.
+    # The reader reuses this worker for parsing and subsequent decoding.
     Operation.run_with_shared_budget(__MODULE__, :prepare_pdf_form, fn ->
       HtmlValidator.with_render_budget(fn ->
         PdfValidator.with_reader_budget(fn ->
-          with {:ok, document} <- Reader.read(source),
-               [page] <- document.pages,
-               %{value: %{"Contents" => contents} = page_value} <-
-                 Map.get(document.objects, page.ref),
+          with {:ok, context} <- Reader.read_validated(source),
+               [page] <- context.pages,
+               %{"Contents" => contents} <- page.dictionary,
                [0, 0, width, height] <- page.media_box,
                true <- is_map(page.resources),
                {:ok, normalization} <- prepare_normalization(width, height),
-               {:ok, dictionary, stream} <- prepare_content(contents, document) do
+               :ok <- PdfValidator.validate_artwork_import(context, :all, :overlay),
+               {:ok, dictionary, stream} <- prepare_content(contents, context.document) do
             {:ok,
              %{
                width: width,
@@ -58,8 +58,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfFormValidator do
                stream: stream,
                content_dictionary: dictionary,
                resources: page.resources,
-               group: Map.get(page_value, "Group"),
-               objects: document.objects
+               group: Map.get(page.dictionary, "Group"),
+               objects: context.document.objects
              }}
           else
             {:error, {_reason, _diagnostic}} = error ->
