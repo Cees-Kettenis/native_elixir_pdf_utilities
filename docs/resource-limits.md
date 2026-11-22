@@ -166,3 +166,11 @@ as other text processing.
 The consolidation changes defaults as well as names. Review application overrides
 and the diagnostic for a rejected document when migrating. The current accepted
 keys and defaults are available through `NativeElixirPdfUtilities.Limits.defaults/0`.
+
+Code that read `Limits.effective().max_pdf_input_bytes` in v1.1.0 should read
+`Limits.effective().max_input_bytes` for the shared input allowance. Both
+`Limits.defaults()` and `Limits.effective()` contain only active settings.
+For a setting name that may be missing, use `Limits.fetch(name)` or
+`Limits.fetch(Limits.defaults(), name)`. Both return `{:ok, value}` on success
+and `{:error, {:setting_not_found, diagnostic}}` with the message
+`setting could not be found` for a missing key.

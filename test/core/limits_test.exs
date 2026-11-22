@@ -132,6 +132,19 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     assert defaults.max_raster_work == 250_000_000_000
   end
 
+  test "settings can be fetched from the effective limits or built-in defaults" do
+    Limits.install(%{Limits.effective() | max_input_bytes: 448})
+    assert Limits.fetch(:max_input_bytes) == {:ok, 448}
+    assert Limits.fetch(Limits.defaults(), :max_input_bytes) == {:ok, 50_000_000}
+
+    for name <- [:max_pdf_input_bytes, :missing_setting] do
+      assert {:error, {:setting_not_found, diagnostic}} = Limits.fetch(name)
+      assert diagnostic.message == "setting could not be found"
+      assert diagnostic.stage == :limits and diagnostic.operation == :fetch
+      assert Limits.fetch(Limits.defaults(), name) == {:error, {:setting_not_found, diagnostic}}
+    end
+  end
+
   test "the public key type exactly describes every accepted limit" do
     assert {:ok, types} = Code.Typespec.fetch_types(Limits)
 

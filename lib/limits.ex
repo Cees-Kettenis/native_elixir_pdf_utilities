@@ -90,6 +90,34 @@ defmodule NativeElixirPdfUtilities.Limits do
     :persistent_term.get(@persistent_key, @defaults)
   end
 
+  @doc """
+  Fetches a setting from the effective limits or a supplied limits map.
+
+  Pass `defaults()` as the first argument to read a built-in value.
+  Missing setting names return a `:setting_not_found` diagnostic.
+  """
+  @spec fetch(t(), atom()) ::
+          {:ok, pos_integer()}
+          | {:error, {:setting_not_found, NativeElixirPdfUtilities.Diagnostics.diagnostic()}}
+  @spec fetch(atom()) ::
+          {:ok, pos_integer()}
+          | {:error, {:setting_not_found, NativeElixirPdfUtilities.Diagnostics.diagnostic()}}
+  def fetch(limits \\ effective(), name) do
+    case Map.fetch(limits, name) do
+      {:ok, value} ->
+        {:ok, value}
+
+      :error ->
+        NativeElixirPdfUtilities.Diagnostics.error(
+          :limits,
+          :setting_not_found,
+          "setting could not be found",
+          module: __MODULE__,
+          operation: :fetch
+        )
+    end
+  end
+
   @doc false
   @spec keys() :: [key()]
   def keys do

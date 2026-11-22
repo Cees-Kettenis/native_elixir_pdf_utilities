@@ -78,7 +78,7 @@ Use these modules for application work and untrusted input:
 | Render HTML | `HtmlToPdf` |
 | Inspect PDFs | `Info`, `Text` |
 | Edit PDFs | `Merge`, `Transform`, `Split`, `Stamp`, `Outlines`, `Forms`, `Attachments` |
-| Check resource policy | `Limits.defaults/0`, `Limits.effective/0` |
+| Check resource policy | `Limits.defaults/0`, `Limits.effective/0`, `Limits.fetch/1`, `Limits.fetch/2` |
 
 Document operations validate their inputs. Ordinary file I/O failures also return
 diagnostics. Successful processing does not mean a PDF is safe to open.
