@@ -174,6 +174,39 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StaticCssControlsTest do
     assert physical == baseline
   end
 
+  test "reading flow preserves source spaces, word continuations and directional text" do
+    for {css, content, logical} <- [
+          {"", "inter<span style='color:red'>nation</span>al", "international"},
+          {"", "inter <span style='color:red'>nation</span> al", "inter nation al"},
+          {"", "A שלום B", "A שלום B"},
+          {"width:45pt", "One two <b>three</b> four", "One two three four"},
+          {"width:31pt;overflow-wrap:anywhere", "international", "international"},
+          {"white-space:pre-wrap", "  One\n\nTwo  ", "  One\n\nTwo  "},
+          {"", "One<br>Two", "One\nTwo"},
+          {"display:grid;grid-template-columns:60pt 60pt;reading-flow:grid-columns",
+           "<div style='grid-column:2'>L<b>ast</b></div><div style='grid-column:1'>First</div>",
+           "First\nLast"}
+        ] do
+      html = """
+      <div style="display:flex;reading-flow:flex-flow"><div style="order:2;#{css}">#{content}</div>
+        <div style="order:1">FIRST</div></div>
+      """
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+
+      assert {:ok, %{pages: [%{spans: logical_spans}]}} =
+               Text.extract_spans(pdf, actual_text: true)
+
+      assert Enum.map_join(logical_spans, & &1.text) == "FIRST\n" <> logical
+
+      assert {:ok, original} =
+               HtmlToPdf.render(Regex.replace(~r/;reading-flow:[a-z-]+/, html, ""), @opts)
+
+      assert {:ok, physical} = Text.extract_spans(original)
+      assert {:ok, ^physical} = Text.extract_spans(pdf)
+    end
+  end
+
   test "static CSS part suppression leaves the filename and range state intact" do
     html = """
     <style>

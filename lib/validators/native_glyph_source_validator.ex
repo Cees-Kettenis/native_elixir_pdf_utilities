@@ -173,7 +173,7 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
   @doc "Slices an actual text run and its scalar provenance at the same UTF-8 byte boundaries."
   @spec slice_run(map(), non_neg_integer(), String.t()) :: map()
   def slice_run(run, offset, text) do
-    result = Map.put(run, :text, text)
+    result = run |> Map.put(:text, text) |> advance_reading_offset(offset)
 
     result =
       if Map.has_key?(run, :_paragraph_end_length),
@@ -213,7 +213,7 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
           {Map.put(selected, field, part), Map.put(rest, field, tail)}
         end)
 
-      part = run |> Map.put(:text, text) |> Map.merge(selected)
+      part = run |> Map.put(:text, text) |> Map.merge(selected) |> advance_reading_offset(offset)
 
       part =
         if Map.has_key?(run, :_paragraph_end_length),
@@ -223,6 +223,12 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
       {part, {rest, offset + byte_size(text)}}
     end)
     |> elem(0)
+  end
+
+  defp advance_reading_offset(run, bytes) do
+    if is_map_key(run, :_reading_offset),
+      do: Map.update!(run, :_reading_offset, &(&1 + bytes)),
+      else: run
   end
 
   @doc "Splits a run at a known newline byte offset, consuming source scalars once."
@@ -266,7 +272,7 @@ defmodule NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator do
       run.text == text ->
         run
 
-      Map.has_key?(run, :_paragraph_end_length) or
+      Map.has_key?(run, :_reading_offset) or Map.has_key?(run, :_paragraph_end_length) or
           Enum.any?(@scalar_lists, &is_list(Map.get(run, &1))) ->
         if text == "" do
           slice_run(run, 0, text)

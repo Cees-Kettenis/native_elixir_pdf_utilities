@@ -45,6 +45,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReadingFlowTest do
     end
   end
 
+  test "only whitespace between visible line fragments enters their reading text" do
+    source = [%{text: "A hidden B\n\nC"}]
+    line = fn text, offset -> [%{text: text, _reading_offset: offset}] end
+
+    assert %{
+             0 => {paragraph, 0, ""},
+             1 => {paragraph, 1, ""},
+             3 => {paragraph, 3, "\n\n"}
+           } =
+             ReadingFlow.line_boundaries(source, [
+               line.("A", 0),
+               line.("B", 9),
+               [],
+               line.("C", 12)
+             ])
+  end
+
   test "a nested subdocument keeps its own logical text and ignores non-text paint" do
     root = %{reading_flow: :source_order, _reading_scope: make_ref()}
 

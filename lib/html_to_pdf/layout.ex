@@ -12791,6 +12791,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         line_runs
       end)
 
+    reading_lines =
+      if is_map_key(style, :_reading_source),
+        do: NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow.line_boundaries(runs, lines),
+        else: %{}
+
     metadata = Map.delete(metadata, :baseline_snap_depth)
     last_line_index = length(lines) - 1
 
@@ -12897,6 +12902,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             false ->
               metadata
           end
+
+        line_metadata =
+          if is_map_key(reading_lines, index),
+            do: Map.put(line_metadata, :_reading_line, Map.fetch!(reading_lines, index)),
+            else: line_metadata
 
         line_metadata =
           line_metadata
@@ -16082,7 +16092,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                 &text_style/1
               )
 
-            NativeElixirPdfUtilities.HtmlToPdf.InlineBidi.prepare(adjusted, parent_style)
+            with {:ok, runs} <-
+                   NativeElixirPdfUtilities.HtmlToPdf.InlineBidi.prepare(adjusted, parent_style) do
+              if is_map_key(parent_style, :_reading_source) do
+                {runs, _} =
+                  Enum.map_reduce(runs, 0, fn run, offset ->
+                    {Map.put(run, :_reading_offset, offset), offset + byte_size(run.text)}
+                  end)
+
+                {:ok, runs}
+              else
+                {:ok, runs}
+              end
+            end
           end
         else
           {:ok, adjusted}
@@ -18591,6 +18613,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
   defp text_style(style) do
     Map.take(style, [
+      :_reading_source,
       :_bidi_contexts,
       :_text_language,
       :_hyphenation_dictionaries,

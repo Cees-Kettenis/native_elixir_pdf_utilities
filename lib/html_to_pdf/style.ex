@@ -3050,7 +3050,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       style =
         case style do
           %{reading_flow: flow} when flow != :normal ->
-            Map.put(style, :_reading_scope, node._selector_id)
+            Map.merge(style, %{_reading_scope: node._selector_id, _reading_source: true})
 
           _ ->
             style
@@ -4860,6 +4860,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
           :_math_text,
           :_body_link_color,
           :_quote_shaping,
+          :_reading_source,
           :_bidi_contexts,
           :_text_language,
           :_hyphenation_dictionaries,

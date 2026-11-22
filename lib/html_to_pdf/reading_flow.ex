@@ -73,6 +73,57 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow do
     end
   end
 
+  @doc false
+  @spec line_boundaries([map()], [[map()]]) :: map()
+  def line_boundaries(runs, lines) do
+    paragraph = make_ref()
+
+    source =
+      if match?([_, _ | _], lines) do
+        bytes = Enum.reduce(runs, 0, &(byte_size(&1.text) + &2))
+
+        NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_render_resource(
+          :max_work,
+          bytes,
+          :layout
+        )
+
+        Enum.map_join(runs, & &1.text)
+      else
+        ""
+      end
+
+    {boundaries, _} =
+      lines
+      |> Enum.with_index()
+      |> Enum.reduce({%{}, 0}, fn {line, index}, {boundaries, previous} ->
+        fragments = Enum.filter(line, &is_map_key(&1, :_reading_offset))
+
+        case fragments do
+          [] ->
+            {boundaries, previous}
+
+          [first | _] ->
+            last = List.last(fragments)
+            start = first._reading_offset
+            # Only restore whitespace discarded by the line fitter. Clipped
+            # or replaced source text must never leak into the PDF's ActualText.
+            gap =
+              if start > previous and start <= byte_size(source) do
+                skipped = binary_part(source, previous, start - previous)
+                if String.trim(skipped) == "", do: skipped, else: ""
+              else
+                ""
+              end
+
+            {Map.put(boundaries, index, {paragraph, index, gap}),
+             last._reading_offset + byte_size(last.text)}
+        end
+      end)
+
+    boundaries
+  end
+
   @doc "Adds page-local logical text spans before native PDF writing."
   @spec prepare_pages([map()]) :: [map()]
   def prepare_pages(pages) do
@@ -145,7 +196,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow do
       boxes
       |> Enum.map(fn box -> Map.update!(box, :reading_path, &tl/1) end)
       |> item_text()
-      |> String.trim()
     end)
   end
 
@@ -158,18 +208,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow do
           nil ->
             case box_text(box) do
               "" -> {[], groups}
-              text -> {[text], groups}
+              text -> {[{text, Map.get(box, :_reading_line)}], groups}
             end
 
           scope ->
             case Map.pop(groups, scope) do
               {nil, groups} -> {[], groups}
-              {boxes, groups} -> {[logical_text(boxes)], groups}
+              {boxes, groups} -> {[{logical_text(boxes), nil}], groups}
             end
         end
       end)
 
-    Enum.join(pieces, " ")
+    {text, _} =
+      Enum.map_reduce(pieces, :first, fn {text, line}, previous ->
+        separator =
+          case {previous, line} do
+            {:first, _} -> ""
+            {{paragraph, index, _}, {paragraph, index, _}} -> ""
+            {{paragraph, _, _}, {paragraph, _, gap}} -> gap
+            _ -> " "
+          end
+
+        {[separator, text], line}
+      end)
+
+    IO.iodata_to_binary(text)
   end
 
   defp box_text(box) do
