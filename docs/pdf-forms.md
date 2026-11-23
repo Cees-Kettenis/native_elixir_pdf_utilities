@@ -4,6 +4,9 @@ Use `NativeElixirPdfUtilities.Forms` to inspect, fill and flatten AcroForm field
 HTML rendering creates these fields by default. Drawn lines and scanned boxes
 have no fields to fill; use `Stamp.text/3` to place text on those PDFs.
 
+Flattening a visible widget controlled by an optional-content group returns
+`:unsupported_form` so that artwork on a disabled layer stays hidden.
+
 ## Generate and complete a form
 
 ```elixir

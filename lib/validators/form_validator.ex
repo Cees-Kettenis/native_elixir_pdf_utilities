@@ -453,7 +453,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           do: normal,
           else: widget.normal[widget.appearance_state]
 
-      with {:ok, stream} <- PdfValidator.validate_stream(document, normal),
+      with :ok <- flatten_layer(document, widget.dictionary),
+           {:ok, stream} <- PdfValidator.validate_stream(document, normal),
            {:ok, bbox} <- PdfValidator.number_array(document, stream.dictionary["BBox"], 4),
            {:ok, matrix} <-
              PdfValidator.number_array(
@@ -502,6 +503,24 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   rescue
     ArithmeticError -> appearance_geometry_error(widget)
+  end
+
+  defp flatten_layer(document, dictionary) do
+    case Map.get(dictionary, "OC") do
+      nil ->
+        :ok
+
+      membership ->
+        with {:ok, group} <- PdfValidator.resolve(document, membership) do
+          if is_nil(group),
+            do: :ok,
+            else:
+              error(
+                :unsupported_form,
+                "flattening this widget would discard its optional-content visibility"
+              )
+        end
+    end
   end
 
   defp appearance_geometry_error(widget, failure \\ nil) do

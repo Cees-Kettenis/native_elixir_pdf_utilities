@@ -48,6 +48,44 @@ defmodule NativeElixirPdfUtilities.FormAppearanceStateTest do
     end
   end
 
+  test "flattening a layer-controlled widget preserves the original form through a diagnostic" do
+    assert {:ok, pdf} = HtmlToPdf.render("<input name=customer value=Ada>")
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, %{fields: [%{widgets: [widget]}]}} = FormValidator.inspect_document(context)
+    {:ref, {id, generation}} = widget.ref
+    group = context.document.trailer["Size"]
+    member = {:ref, {group, 0}}
+    {catalog_id, catalog_gen} = context.catalog_ref
+    layers = %{"OCGs" => [member], "D" => %{"OFF" => [member]}}
+
+    assert {:ok, source} =
+             IncrementalWriter.write(context, [
+               {group, 0, {:value, %{"Type" => {:name, "OCG"}, "Name" => {:string, "Details"}}}},
+               {catalog_id, catalog_gen,
+                {:value, Map.put(context.catalog, "OCProperties", layers)}},
+               {id, generation, {:value, Map.put(widget.dictionary, "OC", member)}}
+             ])
+
+    for {layer_value, expected} <- [{nil, :ok}, {member, :invalid_pdf_input}] do
+      patch = [{id, generation, {:value, Map.put(widget.dictionary, "OC", member)}}]
+      entries = if layer_value == nil, do: [{group, 0, {:value, nil}} | patch], else: patch
+      assert {:ok, modified} = IncrementalWriter.write(context, entries)
+
+      case expected do
+        :ok ->
+          assert {:ok, flat} = Forms.flatten(modified)
+          assert {:ok, []} = Forms.fields(flat)
+
+        reason ->
+          assert {:error, {^reason, %{stage: :resolution}}} = Forms.flatten(modified)
+      end
+    end
+
+    assert {:ok, [%{value: "Ada"}]} = Forms.fields(source)
+    assert {:error, {:unsupported_form, %{operation: :flatten}}} = Forms.flatten(source)
+    assert {:ok, _} = Forms.flatten(pdf)
+  end
+
   test "missing cyclic and incorrectly typed appearance states return actionable diagnostics" do
     assert {:ok, pdf} =
              HtmlToPdf.render("<input type=checkbox name=agree checked>",
