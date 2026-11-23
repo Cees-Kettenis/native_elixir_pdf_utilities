@@ -774,9 +774,11 @@ defmodule NativeElixirPdfUtilities.Text do
 
     lines =
       Enum.flat_map(groups, fn {turn, spans} ->
-        # Independently positioned labels do not establish a continuous reading
-        # direction. Keep their existing ordering in display coordinates.
-        turn = if turn != 0 and not Enum.any?(spans, & &1.joins_previous?), do: 0, else: turn
+        # Separate text objects can form a column of lines with a common start.
+        # Isolated diagram labels otherwise retain display-coordinate order.
+        turn =
+          if turn != 0 and not Enum.any?(spans, & &1.joins_previous?) and
+               not aligned_line_starts?(spans, turn), do: 0, else: turn
 
         positioned =
           Enum.map(spans, fn span ->
@@ -809,6 +811,18 @@ defmodule NativeElixirPdfUtilities.Text do
         {y, x, first.source_index}
       end)
     end
+  end
+
+  defp aligned_line_starts?([first | rest], turn) do
+    {start, baseline} = reading_position(first.x, first.y, turn)
+
+    Enum.reduce_while(rest, false, fn span, separate ->
+      {x, y} = reading_position(span.x, span.y, turn)
+
+      if abs(x - start) <= 1.5,
+        do: {:cont, separate or abs(y - baseline) > 1.5},
+        else: {:halt, false}
+    end)
   end
 
   # The first column of the text-to-page transform gives the baseline even

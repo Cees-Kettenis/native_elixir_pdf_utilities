@@ -19,8 +19,8 @@ For a binary already in memory, use `Text.extract(pdf)`.
 | `layout: false` | Text in drawing order; text pages separated by `"\n"` |
 
 For connected text on quarter-turned pages, line reconstruction follows the
-text baseline. Independently positioned labels retain display order when their
-orientation has no connected text. On pages that mix orientations, line order
+text baseline. Separate lines with a common starting position also follow
+that baseline. Other independently positioned labels retain display order. On pages that mix orientations, line order
 is approximate. Use `layout: false`
 for drawing order when a diagram or sidebar has its own reading sequence.
 

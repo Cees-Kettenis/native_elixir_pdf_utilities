@@ -28,6 +28,17 @@ defmodule NativeElixirPdfUtilities.TextTest do
     end
   end
 
+  test "separate heading and body lines retain their reading order through page rotation" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Transform}
+    assert {:ok, pdf} = HtmlToPdf.render("<h1>Chapter</h1><p>Body</p>")
+
+    for angle <- [90, 180, 270] do
+      assert {:ok, rotated} = Transform.rotate_pages(pdf, angle)
+      assert {:ok, "Chapter\nBody"} = Text.extract(rotated)
+      assert {:ok, "Chapter Body"} = Text.extract(rotated, layout: false)
+    end
+  end
+
   test "file extraction rejects nonregular inputs with requested operation context" do
     path = Path.join(System.tmp_dir!(), "nonregular-pdf-#{System.unique_integer([:positive])}")
     File.mkdir_p!(path)
