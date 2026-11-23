@@ -13,16 +13,18 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
   end
 
   @doc false
-  @spec prepare_decode(binary(), HtmlValidator.image_budget(), boolean()) ::
+  @type admission :: boolean() | pos_integer() | :admitted_pixels
+  @spec prepare_decode(binary(), HtmlValidator.image_budget(), admission()) ::
           {:ok, map(), binary()} | {:error, {atom(), map()}}
-  def prepare_decode(png, budget, reserve?) do
+  def prepare_decode(png, budget, admission) do
     metadata =
       case png do
         <<137, 80, 78, 71, 13, 10, 26, 10, chunks::binary>> -> prepare(chunks)
         _ -> error("PNG signature is missing or invalid")
       end
 
-    with {:ok, parsed} <- metadata do
+    with {:ok, parsed} <- metadata,
+         :ok <- admit_raster(parsed, admission) do
       channels = %{0 => 1, 2 => 3, 3 => 1, 4 => 2, 6 => 4}[parsed.color_type]
       depth = parsed.bit_depth
       output_depth = max(depth, 8)
@@ -77,7 +79,7 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
 
       with :ok <- validate_working_buffers(inflated_bytes, output_bytes, largest_row, rows),
            :ok <-
-             if(reserve?,
+             if(admission != false,
                do:
                  HtmlValidator.reserve_decoded_image(
                    budget,
@@ -92,6 +94,29 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
            :ok <- validate_filters(inflated, passes) do
         {:ok, parsed, inflated}
       end
+    end
+  end
+
+  defp admit_raster(parsed, admission) do
+    cond do
+      admission in [false, :admitted_pixels] ->
+        :ok
+
+      max(parsed.width_px, parsed.height_px) > Limits.get(:max_raster_dimension) ->
+        Diagnostics.error(
+          :style,
+          :resource_limit_exceeded,
+          "PNG dimensions exceed max_raster_dimension", source: "PNG")
+
+      true ->
+        placements = if admission == true, do: 1, else: admission
+
+        NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+          :max_raster_pixels,
+          placements * parsed.width_px * parsed.height_px,
+          :style,
+          module: __MODULE__
+        )
     end
   end
 

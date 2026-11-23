@@ -177,6 +177,30 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderGlobalStateTest do
     end
   end
 
+  test "both PNG axes and cumulative pixels are admitted before inflation" do
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, as: Budget
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_raster_dimension: 2})
+
+    for {w, h} <- [{3, 1}, {1, 3}] do
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+               decode(PNG.solid_rgb(w, h))
+
+      assert message =~ "max_raster_dimension"
+    end
+
+    Limits.install(%{limits | max_raster_pixels: 4})
+    png = PNG.solid_rgb(2, 1)
+
+    Budget.with_budget(fn ->
+      assert {:ok, _} = decode(png)
+      assert {:ok, _} = decode(png)
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} = decode(png)
+      assert message =~ "max_raster_pixels"
+    end)
+  end
+
   test "working and final buffer budgets are checked before decompression" do
     old = Limits.effective()
     on_exit(fn -> Limits.install(old) end)

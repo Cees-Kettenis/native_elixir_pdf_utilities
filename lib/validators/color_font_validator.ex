@@ -372,7 +372,7 @@ defmodule NativeElixirPdfUtilities.Validators.ColorFontValidator do
                  [],
                  Map.get(record, :context, %{mode: :inline, resources: %{}})
                ),
-             {:ok, image} <- PngDecoder.decode(png, budget, true),
+             {:ok, image} <- PngDecoder.decode(png, budget, :admitted_pixels),
              do: {:ok, image}
 
       :png ->

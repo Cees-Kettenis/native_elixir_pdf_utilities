@@ -712,13 +712,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
         end
 
       "image/png" ->
-        with {:ok, image} <- PngDecoder.decode(data, budget, true),
-             :ok <-
-               HtmlValidator.reserve_render_resource(
-                 :max_raster_pixels,
-                 image.width_px * image.height_px * count,
-                 :style
-               ),
+        with {:ok, image} <- PngDecoder.decode(data, budget, count),
              :ok <-
                (if count > 1 do
                   Enum.reduce_while(2..count, :ok, fn _, :ok ->

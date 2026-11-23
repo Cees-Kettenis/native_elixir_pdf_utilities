@@ -5,10 +5,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoder do
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
   @doc false
-  @spec decode(binary(), HtmlValidator.image_budget(), boolean()) ::
+  @spec decode(binary(), HtmlValidator.image_budget(), PngValidator.admission()) ::
           {:ok, map()} | {:error, {atom(), map()}}
-  def decode(png, budget, reserve?) do
-    with {:ok, parsed, inflated} <- PngValidator.prepare_decode(png, budget, reserve?),
+  def decode(png, budget, admission) do
+    with {:ok, parsed, inflated} <- PngValidator.prepare_decode(png, budget, admission),
          {:ok, passes} <- decode_passes(inflated, parsed) do
       pixels =
         case parsed.interlace do
