@@ -15,6 +15,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
           | :disclosure_closed
           | :none
 
+  @digits %{
+    "arabic-indic" => "٠١٢٣٤٥٦٧٨٩",
+    "persian" => "۰۱۲۳۴۵۶۷۸۹",
+    "devanagari" => "०१२३४५६७८९",
+    "bengali" => "০১২৩৪৫৬৭৮৯",
+    "thai" => "๐๑๒๓๔๕๖๗๘๙",
+    "tibetan" => "༠༡༢༣༤༥༦༧༨༩",
+    "cjk-decimal" => "〇一二三四五六七八九",
+    "full-width-decimal" => "０１２３４５６７８９"
+  }
+  @bullets %{
+    "disc" => "•",
+    "circle" => "◦",
+    "square" => "▪",
+    "disclosure-open" => "▼",
+    "disclosure-closed" => "▶"
+  }
   @doc false
   @spec marker(style(), integer()) :: String.t()
   def marker(style, ordinal) do
@@ -22,20 +39,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
       :none ->
         ""
 
-      :disc ->
-        "•"
-
-      :circle ->
-        "◦"
-
-      :square ->
-        "▪"
-
-      :disclosure_open ->
-        "▼"
-
-      :disclosure_closed ->
-        "▶"
+      style when style in [:disc, :circle, :square, :disclosure_open, :disclosure_closed] ->
+        Map.fetch!(@bullets, style |> Atom.to_string() |> String.replace("_", "-"))
 
       :decimal ->
         "#{ordinal}."
@@ -133,21 +138,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
     else
       name = if is_atom(style), do: Atom.to_string(style), else: style
 
-      digits = %{
-        "arabic-indic" => "٠١٢٣٤٥٦٧٨٩",
-        "persian" => "۰۱۲۳۴۵۶۷۸۹",
-        "devanagari" => "०१२३४५६७८९",
-        "bengali" => "০১২৩৪৫৬৭৮৯",
-        "thai" => "๐๑๒๓๔๕๖๗๘๙",
-        "tibetan" => "༠༡༢༣༤༥༦༧༨༩",
-        "cjk-decimal" => "〇一二三四五六七八九",
-        "full-width-decimal" => "０１２３４５６７８９"
-      }
-
       cond do
-        Map.has_key?(digits, name) ->
+        Map.has_key?(@digits, name) ->
           mapping =
-            Map.fetch!(digits, name)
+            Map.fetch!(@digits, name)
             |> String.graphemes()
             |> Enum.with_index()
             |> Map.new(fn {d, n} -> {Integer.to_string(n), d} end)
@@ -156,6 +150,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
           |> Integer.to_string()
           |> String.graphemes()
           |> Enum.map_join(&Map.get(mapping, &1, &1))
+
+        is_map_key(@bullets, name) ->
+          Map.fetch!(@bullets, name)
+
+        name == "none" ->
+          ""
 
         name == "lower-greek" and ordinal > 0 ->
           encode(ordinal, String.graphemes("αβγδεζηθικλμνξοπρστυφχψω"), :alphabetic)
@@ -246,7 +246,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
         {definition, text}
       else
         {left, right} =
-          if ordinal < 0 and definition.system != :cyclic, do: definition.negative, else: {"", ""}
+          if ordinal < 0 and definition.system not in [:cyclic, :fixed],
+            do: definition.negative,
+            else: {"", ""}
 
         {width, pad} = definition.pad
         count = max(width - String.length(text) - String.length(left) - String.length(right), 0)
@@ -279,6 +281,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CounterStyle do
       }
 
       case name do
+        name when is_map_key(@digits, name) ->
+          %{default | symbols: String.graphemes(Map.fetch!(@digits, name))}
+
+        name when is_map_key(@bullets, name) ->
+          %{default | system: :cyclic, symbols: [Map.fetch!(@bullets, name)], suffix: " "}
+
         "decimal-leading-zero" ->
           %{default | pad: {2, "0"}}
 

@@ -44,6 +44,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PublishingCounterTest do
     assert CounterStyle.format("lower-greek", 25, %{}) == "αα"
   end
 
+  test "fixed negatives, inherited digits and generated bullets retain their symbols" do
+    html = """
+    <style>
+    @counter-style label {system:fixed -1;symbols:'FIRST' 'SECOND';negative:'(' ')'}
+    @counter-style digits {system:extends arabic-indic}
+    @counter-style bullet {system:extends disc}
+    .fixed {counter-reset:x -1}.fixed::before{content:counter(x,label)}
+    .digits {counter-reset:x 12}.digits::before{content:counter(x,digits)}
+    .bullet::before{content:counter(x,disc) counter(x,bullet)}
+    </style><p class='fixed'> fixed</p><p class='digits'> inherited</p><p class='bullet'> bullet</p>
+    """
+
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert text =~ "FIRST fixed"
+    refute text =~ "(FIRST)"
+    assert text =~ "١٢ inherited"
+    assert text =~ "•• bullet"
+  end
+
   test "counter styles are available to markers and generated nested counters" do
     html = """
     <style>
