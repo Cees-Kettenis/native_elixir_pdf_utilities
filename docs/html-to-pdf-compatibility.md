@@ -337,6 +337,10 @@ Compared with v1.0.0, columns now preserve their minimum content widths instead
 of squeezing them and overlapping text. Existing narrow-page templates may
 therefore wrap differently or extend farther beyond the page.
 
+A `script` or `template` directly inside `td`, `th` or `caption` fails validation,
+including scripts that hold only JSON data. Place it outside the table when
+printing the surrounding cell or caption text.
+
 ### Table page breaks
 
 | Content | Behavior |
