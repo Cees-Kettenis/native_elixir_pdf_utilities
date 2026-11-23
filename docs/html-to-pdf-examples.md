@@ -1829,6 +1829,11 @@ Data scripts and unused templates can accompany real choices without becoming op
 </select>
 ```
 
+Use the `label` attribute for an `optgroup` heading. A child `legend` in an
+`optgroup` and a `noscript` directly inside a `select` are unsupported. Place
+fallback text outside the control and supply its printable choices as `option`
+elements.
+
 The field retains both real choices and its approved initial value. The unused
 image is not resolved. The same script/template sibling rules apply to supported
 lists, description lists, table rows/groups and buttons. Ordinary scripts still
