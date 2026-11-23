@@ -213,9 +213,11 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
 
     case resolved do
       {:ok, dictionary} when is_map(dictionary) ->
-        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link"),
-          do: link_destination_status(document, dictionary, selected_refs, all_page_refs),
-          else: {:ok, true}
+        case PdfValidator.resolved_name?(document, Map.get(dictionary, "Subtype"), "Link") do
+          true -> link_destination_status(document, dictionary, selected_refs, all_page_refs)
+          false -> {:ok, true}
+          error -> error
+        end
 
       _ ->
         error(:annotations, :invalid_pdf_input, "page annotation must resolve to a dictionary")

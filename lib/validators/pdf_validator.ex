@@ -1126,12 +1126,17 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           :none
 
         action when is_map(action) ->
-          if named?(document, Map.get(action, "S"), "GoTo") do
-            with {:ok, target} <- resolve(document, Map.get(action, "D")) do
-              {:ok, {{:action, action}, target}}
-            end
-          else
-            :none
+          case resolved_name?(document, Map.get(action, "S"), "GoTo") do
+            true ->
+              with {:ok, target} <- resolve(document, Map.get(action, "D")) do
+                {:ok, {{:action, action}, target}}
+              end
+
+            false ->
+              :none
+
+            error ->
+              error
           end
 
         _ ->
@@ -1146,12 +1151,15 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   @doc "Checks whether a direct or indirect value resolves to the expected PDF name."
   @spec named?(document(), value(), binary()) :: boolean()
   def named?(document, value, expected) do
+    resolved_name?(document, value, expected) == true
+  end
+
+  @doc false
+  @spec resolved_name?(document(), value(), binary()) :: boolean() | {:error, {atom(), map()}}
+  def resolved_name?(document, value, expected) do
     case value do
-      {:ref, _ref} ->
-        case resolve(document, value) do
-          {:ok, value} -> named?(value, expected)
-          {:error, _} -> false
-        end
+      {:ref, _} ->
+        with {:ok, resolved} <- resolve(document, value), do: named?(resolved, expected)
 
       value ->
         named?(value, expected)

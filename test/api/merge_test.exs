@@ -168,6 +168,72 @@ defmodule NativeElixirPdfUtilities.MergeGlobalStateTest do
     end
   end
 
+  test "assembly retains lookup failures during link classification and rewriting" do
+    base = [
+      {1, "<< /Type /Catalog /Pages 2 0 R /Dests << /target [3 0 R /Fit] >> >>"},
+      {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R 5 0 R] >>"}
+    ]
+
+    for first <- ["<< /Subtype /Text >>", "<< /Subtype /Link /Dest /target >>"],
+        second <- ["<< /Subtype 6 0 R >>", "<< /Subtype /Link /A << /S 6 0 R /D /target >> >>"] do
+      pdf = merge_pdf(base ++ [{4, first}, {5, second}, {6, "6 0 R"}])
+      assert {:error, {:invalid_pdf_input, %{stage: :resolution}}} = Merge.merge([pdf])
+    end
+
+    alias NativeElixirPdfUtilities.Validators.{AssemblyValidator, ResourceBudgetValidator}
+
+    for link <- ["<< /Subtype /Link /Dest 6 0 R >>", "<< /Subtype 7 0 R /Dest [3 0 R /Fit] >>"] do
+      pdf =
+        merge_pdf(
+          base ++ [{4, link}, {5, "<< /Subtype /Text >>"}, {6, "[3 0 R /Fit]"}, {7, "/Link"}]
+        )
+
+      assert {:ok, context} = Reader.read_validated(pdf)
+      assert {:ok, source} = AssemblyValidator.prepare_source(context)
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} =
+               ResourceBudgetValidator.with_budget(fn ->
+                 :ok = ResourceBudgetValidator.reserve(:max_work, Limits.get(:max_work), :limits)
+                 AssemblyValidator.prepare_selection(source, [1])
+               end)
+
+      assert {:ok, _} = AssemblyValidator.prepare_selection(source, [1])
+    end
+  end
+
+  test "named links survive merge at the exact work boundary" do
+    source =
+      merge_pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R /Dests << /target [3 0 R /Fit] >> >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R] >>"},
+        {4, "<< /Subtype /Link /Rect [1 1 5 5] /Dest 5 0 R >>"},
+        {5, "/target"}
+      ])
+
+    limits = Limits.effective()
+
+    used =
+      NativeElixirPdfUtilities.Operation.run(__MODULE__, :measure, fn ->
+        assert {:ok, _} = Merge.merge([source])
+        NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot().max_work
+      end)
+
+    for allowance <- [used - 2, used - 1] do
+      Limits.install(%{limits | max_work: allowance})
+      assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Merge.merge([source])
+    end
+
+    Limits.install(%{limits | max_work: used})
+    assert {:ok, output} = Merge.merge([source])
+    Limits.install(limits)
+    assert {:ok, %{document: doc, pages: [page]}} = Reader.read_validated(output)
+    [annotation] = page.dictionary["Annots"]
+    assert {:ok, %{"Dest" => [destination, {:name, "Fit"}]}} = Reader.resolve(doc, annotation)
+    assert destination == {:ref, page.ref}
+  end
+
   test "merging respects the shared parsing allowance and remapping retains its capacity guard" do
     source =
       merge_pdf([

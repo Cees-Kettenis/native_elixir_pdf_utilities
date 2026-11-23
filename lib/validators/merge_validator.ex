@@ -150,55 +150,67 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   end
 
   defp normalize_named_link_destinations(document, catalog, objects) do
-    case Enum.any?(objects, &named_link_destination?(document, &1.value)) do
+    case Enum.find_value(objects, false, &named_link_destination?(document, &1.value)) do
+      {:error, _} = error ->
+        error
+
       false ->
         {:ok, objects}
 
       true ->
-        result =
-          case OutlineValidator.named_destinations(document, catalog) do
-            {:ok, named_destinations} ->
-              Enum.reduce_while(objects, {:ok, []}, fn object, {:ok, normalized} ->
-                case normalize_named_link_object(document, named_destinations, object) do
-                  {:ok, object} -> {:cont, {:ok, [object | normalized]}}
-                  {:error, _error} = destination_error -> {:halt, destination_error}
-                end
-              end)
-
-            {:error, _error} = destination_error ->
-              destination_error
+        with {:ok, names} <-
+               named_destination_result(OutlineValidator.named_destinations(document, catalog)) do
+          objects
+          |> Enum.reduce_while({:ok, []}, fn object, {:ok, normalized} ->
+            case normalize_named_link_object(document, names, object) do
+              {:ok, object} -> {:cont, {:ok, [object | normalized]}}
+              error -> {:halt, error}
+            end
+          end)
+          |> case do
+            {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+            error -> error
           end
-
-        case result do
-          {:ok, normalized} ->
-            {:ok, Enum.reverse(normalized)}
-
-          {:error, {reason, diagnostic}} ->
-            stage = if reason == :resource_limit_exceeded, do: :limits, else: :annotations
-
-            {:error,
-             {reason,
-              diagnostic
-              |> Map.put(:stage, stage)
-              |> Map.put(:operation, :merge)
-              |> Map.put(:module, __MODULE__)}}
         end
+    end
+  end
+
+  # Name-tree failures belong to annotation import. Preserve resolution errors
+  # from the link dictionary itself, including cycles in explicit destinations.
+  defp named_destination_result(result) do
+    case result do
+      {:error, {reason, diagnostic}} ->
+        stage = if reason == :resource_limit_exceeded, do: :limits, else: :annotations
+
+        {:error,
+         {reason, Map.merge(diagnostic, %{stage: stage, operation: :merge, module: __MODULE__})}}
+
+      success ->
+        success
     end
   end
 
   defp named_link_destination?(document, value) do
     case value do
       values when is_list(values) ->
-        Enum.any?(values, &named_link_destination?(document, &1))
+        Enum.find_value(values, false, &named_link_destination?(document, &1))
 
       dictionary when is_map(dictionary) ->
-        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link") do
-          case PdfValidator.link_destination(document, dictionary) do
-            {:ok, {_location, {kind, _name}}} when kind in [:name, :string, :hex] -> true
-            _ -> false
-          end
-        else
-          Enum.any?(dictionary, fn {_key, value} -> named_link_destination?(document, value) end)
+        case PdfValidator.resolved_name?(document, Map.get(dictionary, "Subtype"), "Link") do
+          true ->
+            case PdfValidator.link_destination(document, dictionary) do
+              {:ok, {_location, {kind, _name}}} when kind in [:name, :string, :hex] -> true
+              {:error, _} = error -> error
+              _ -> false
+            end
+
+          false ->
+            Enum.find_value(dictionary, false, fn {_key, value} ->
+              named_link_destination?(document, value)
+            end)
+
+          error ->
+            error
         end
 
       _ ->
@@ -218,15 +230,20 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   defp normalize_named_link_value(document, named_destinations, value) do
     case value do
       dictionary when is_map(dictionary) ->
-        if PdfValidator.named?(document, Map.get(dictionary, "Subtype"), "Link") do
-          normalize_named_link_dictionary(document, named_destinations, dictionary)
-        else
-          Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
-            case normalize_named_link_value(document, named_destinations, value) do
-              {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
-              {:error, _} = error -> {:halt, error}
-            end
-          end)
+        case PdfValidator.resolved_name?(document, Map.get(dictionary, "Subtype"), "Link") do
+          true ->
+            normalize_named_link_dictionary(document, named_destinations, dictionary)
+
+          {:error, _} = error ->
+            error
+
+          false ->
+            Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
+              case normalize_named_link_value(document, named_destinations, value) do
+                {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
+                {:error, _} = error -> {:halt, error}
+              end
+            end)
         end
 
       values when is_list(values) ->
@@ -251,7 +268,9 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     case PdfValidator.link_destination(document, dictionary) do
       {:ok, {location, {kind, _name} = named}} when kind in [:name, :string, :hex] ->
         with {:ok, destination} <-
-               OutlineValidator.resolve_named_destination(document, named, named_destinations) do
+               named_destination_result(
+                 OutlineValidator.resolve_named_destination(document, named, named_destinations)
+               ) do
           case {destination, location} do
             {nil, _} ->
               {:ok, dictionary}
@@ -263,6 +282,9 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
               {:ok, Map.put(dictionary, "A", Map.put(action, "D", destination))}
           end
         end
+
+      {:error, _} = error ->
+        error
 
       _ ->
         {:ok, dictionary}
