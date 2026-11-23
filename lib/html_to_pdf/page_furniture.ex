@@ -118,11 +118,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PageFurniture do
                    image_budget
                  ) do
             decorated_page = %{page | boxes: page.boxes ++ header_boxes ++ footer_boxes}
-            {:cont, {:ok, decorated ++ [decorated_page]}}
+            {:cont, {:ok, [decorated_page | decorated]}}
           else
             {:error, {_reason, _diagnostic}} = error -> {:halt, error}
           end
         end)
+        |> case do
+          {:ok, decorated} -> {:ok, Enum.reverse(decorated)}
+          error -> error
+        end
     end
   end
 
