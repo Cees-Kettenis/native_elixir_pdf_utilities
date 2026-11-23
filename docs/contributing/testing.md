@@ -10,6 +10,7 @@ when Elixir/Erlang are already on your PATH.
 | --- | --- |
 | One suite | `./scripts/quality-matrix --check test test/html_to_pdf/tables/atomic_table_overflow_test.exs` |
 | Compile, formatting and unused dependencies | `./scripts/quality-matrix --check format` |
+| Development app routes (from `dev/manual_web/`) | `mix deps.get && mix test --warnings-as-errors` |
 | Standalone 100% coverage | `./scripts/quality-matrix --check coverage` |
 | One Chromium parity suite | `./scripts/quality-matrix --check parity test/html_to_pdf/browser_parity/curved_border_browser_parity_test.exs` |
 | Full Chromium parity only | `./scripts/quality-matrix --check parity` |

@@ -139,6 +139,13 @@ jobs:
         if: matrix.suite == 'checks' && matrix.canonical
         run: mix test --cover --warnings-as-errors
 
+      - name: Run development app route tests
+        if: matrix.suite == 'checks' && matrix.canonical
+        working-directory: dev/manual_web
+        run: |
+          mix deps.get
+          mix test --warnings-as-errors
+
       - name: Run Dialyzer
         if: matrix.suite == 'checks' && matrix.canonical
         run: mix dialyzer --no-compile
