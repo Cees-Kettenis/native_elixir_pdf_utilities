@@ -313,6 +313,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureGlobalStateTest d
     assert {:ok, "H"} = Text.extract(pdf, layout: false)
   end
 
+  test "SVG directory ranges share the width count and validate later records", %{font: font} do
+    svg =
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='glyph1' width='10' height='10'/></svg>"
+
+    glyph_count = length(font.widths)
+
+    with_last = fn last ->
+      size = byte_size(svg)
+
+      table =
+        <<0::16, 10::32, 0::32, 2::16, 1::16, 1::16, 26::32, size::32, 2::16, last::16, 26::32,
+          size::32, svg::binary>>
+
+      %{font | data: FontFixture.rebuild(font.data, %{"SVG " => table})}
+    end
+
+    valid = with_last.(glyph_count - 1)
+    assert {:ok, %{bounds: _}} = SvgFontValidator.prepare(valid, 1, {0, 0, 0, 1})
+
+    assert {:error, {:invalid_font, %{source: "SVG font"}}} =
+             SvgFontValidator.prepare(with_last.(glyph_count), 1, {0, 0, 0, 1})
+
+    # Glyph zero has no artwork. Its lookup pays only for directory validation.
+    Limits.install(%{max_work: glyph_count + 2})
+    assert {:ok, nil} = SvgFontValidator.prepare(valid, 0, {0, 0, 0, 1})
+
+    Limits.install(%{max_work: glyph_count + 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :font, message: message}}} =
+             SvgFontValidator.prepare(valid, 0, {0, 0, 0, 1})
+
+    assert message =~ "max_work"
+  end
+
   test "gzip SVG glyphs consume their inflated bytes in the shared decoding allowance", %{
     font: font
   } do

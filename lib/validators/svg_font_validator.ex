@@ -36,7 +36,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
                   )
 
               <<count::16>> = read(data, index, 2)
-              FontValidator.reserve(:max_work, count)
+              glyph_count = length(font.widths)
+              FontValidator.reserve(:max_work, glyph_count + count)
 
               records =
                 for <<first::16, last::16, offset::32,
@@ -46,7 +47,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
               {_previous, selected} =
                 Enum.reduce(records, {-1, nil}, fn {first, last, relative, size},
                                                    {previous, selected} ->
-                  unless first > previous and first <= last and last < length(font.widths) and
+                  unless first > previous and first <= last and last < glyph_count and
                            relative >= 2 + count * 12 and size > 0,
                          do:
                            invalid(
