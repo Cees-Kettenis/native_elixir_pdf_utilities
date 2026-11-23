@@ -498,6 +498,64 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     assert {:ok, "Two"} = Text.extract(second)
   end
 
+  test "page assembly resolves each relative annotation URI against its own catalog" do
+    pdf = fn base ->
+      three_page_pdf(
+        "/Annots [16 0 R 10 0 R]",
+        [
+          {16, "<< /Subtype /Link /Rect [0 0 1 1] /A 17 0 R >>"},
+          {17, "<< /S /URI /URI (help.html) >>"}
+        ],
+        "/URI << /Base (#{base}) >>"
+      )
+    end
+
+    a = pdf.("https://one.example/docs/")
+    b = pdf.("https://two.example/manual/")
+    assert {:ok, merged} = Merge.merge([a, b])
+    assert {:ok, picked} = Transform.pick_pages(merged, [4, 1])
+    assert {:ok, context} = Reader.read_validated(picked)
+
+    for {page, target} <-
+          Enum.zip(context.pages, [
+            "https://two.example/manual/help.html",
+            "https://one.example/docs/help.html"
+          ]) do
+      assert {:ok, [relative, absolute]} =
+               Reader.resolve(context.document, page.dictionary["Annots"])
+
+      assert {:ok, %{"A" => %{"URI" => {:string, ^target}}}} =
+               Reader.resolve(context.document, relative)
+
+      assert {:ok, %{"A" => %{"URI" => {:string, "https://example.com"}}}} =
+               Reader.resolve(context.document, absolute)
+    end
+  end
+
+  test "a URI-only document resolves its base and reports missing indirect URI entries" do
+    source = fn catalog, target ->
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R /URI #{catalog} >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Annots [4 0 R] >>"},
+        {4, "<< /Subtype /Link /Rect [0 0 10 10] /A << /S /URI /URI #{target} >> >>"}
+      ])
+    end
+
+    base = "<< /Base (https://one.example/docs/) >>"
+    assert {:ok, picked} = Transform.pick_pages(source.(base, "(help.html)"), [1])
+    assert {:ok, context} = Reader.read_validated(picked)
+    [link] = hd(context.pages).dictionary["Annots"]
+
+    assert {:ok, %{"A" => %{"URI" => {:string, "https://one.example/docs/help.html"}}}} =
+             Reader.resolve(context.document, link)
+
+    for input <- [source.("99 0 R", "(help.html)"), source.(base, "99 0 R")] do
+      assert {:error, {:invalid_pdf_input, %{stage: :resolution}}} =
+               Transform.pick_pages(input, [1])
+    end
+  end
+
   test "ordinary PDF resource names may use the optional-content keyword" do
     for fonts <- ["<< /OC 15 0 R >>", "18 0 R"] do
       source =

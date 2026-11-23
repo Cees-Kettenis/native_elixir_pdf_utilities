@@ -150,19 +150,21 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   end
 
   defp normalize_named_link_destinations(document, catalog, objects) do
-    case Enum.find_value(objects, false, &named_link_destination?(document, &1.value)) do
-      {:error, _} = error ->
-        error
-
-      false ->
-        {:ok, objects}
-
-      true ->
+    with {:ok, base} <- catalog_uri_base(document, catalog),
+         named? when is_boolean(named?) <-
+           Enum.find_value(objects, false, &named_link_destination?(document, &1.value)) do
+      if named? or base != nil do
         with {:ok, names} <-
-               named_destination_result(OutlineValidator.named_destinations(document, catalog)) do
+               if(named?,
+                 do:
+                   named_destination_result(
+                     OutlineValidator.named_destinations(document, catalog)
+                   ),
+                 else: {:ok, %{}}
+               ) do
           objects
           |> Enum.reduce_while({:ok, []}, fn object, {:ok, normalized} ->
-            case normalize_named_link_object(document, names, object) do
+            case normalize_named_link_object(document, {names, base}, object) do
               {:ok, object} -> {:cont, {:ok, [object | normalized]}}
               error -> {:halt, error}
             end
@@ -172,6 +174,22 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
             error -> error
           end
         end
+      else
+        {:ok, objects}
+      end
+    end
+  end
+
+  defp catalog_uri_base(document, catalog) do
+    with {:ok, uri} <- PdfValidator.resolve(document, catalog["URI"]),
+         true <- is_map(uri),
+         {:ok, {kind, bytes}} when kind in [:string, :hex] <-
+           PdfValidator.resolve(document, uri["Base"]),
+         {:ok, %URI{scheme: scheme} = base} when is_binary(scheme) <- URI.new(bytes) do
+      {:ok, base}
+    else
+      {:error, {_reason, _diagnostic}} = error -> error
+      _ -> {:ok, nil}
     end
   end
 
@@ -264,7 +282,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     end
   end
 
-  defp normalize_named_link_dictionary(document, named_destinations, dictionary) do
+  defp normalize_named_link_dictionary(document, {named_destinations, base}, dictionary) do
     case PdfValidator.link_destination(document, dictionary) do
       {:ok, {location, {kind, _name} = named}} when kind in [:name, :string, :hex] ->
         with {:ok, destination} <-
@@ -281,6 +299,19 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
             {destination, {:action, action}} ->
               {:ok, Map.put(dictionary, "A", Map.put(action, "D", destination))}
           end
+        end
+
+      :none when not is_nil(base) ->
+        with {:ok, action} when is_map(action) <- PdfValidator.resolve(document, dictionary["A"]),
+             true <- PdfValidator.resolved_name?(document, action["S"], "URI"),
+             {:ok, {kind, bytes}} when kind in [:string, :hex] <-
+               PdfValidator.resolve(document, action["URI"]),
+             {:ok, %URI{scheme: nil} = relative} <- URI.new(bytes) do
+          target = base |> URI.merge(relative) |> URI.to_string()
+          {:ok, Map.put(dictionary, "A", Map.put(action, "URI", {kind, target}))}
+        else
+          {:error, {_reason, _diagnostic}} = error -> error
+          _ -> {:ok, dictionary}
         end
 
       {:error, _} = error ->
