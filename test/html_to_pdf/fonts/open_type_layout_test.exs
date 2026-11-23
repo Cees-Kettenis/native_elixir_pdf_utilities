@@ -721,7 +721,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.OpenTypeLayoutTest do
     assert {:ok, result} = TextShaper.shape("A️B️C️", font)
     assert Enum.map(result.glyphs, & &1.glyph) == [7, 2, 3]
     assert Enum.map(result.glyphs, & &1.codepoints) == [[?A, 0xFE0F], [?B, 0xFE0F], [?C, 0xFE0F]]
-    assert NativeElixirPdfUtilities.HtmlToPdf.Font.supports_text?(font, "A️")
+    refute NativeElixirPdfUtilities.HtmlToPdf.Font.supports_text?(font, "A️")
+    assert NativeElixirPdfUtilities.HtmlToPdf.Font.covers_shaping_input?(font, "A️")
     font = %{font | cmap: Map.delete(font.cmap, ?A)}
     assert NativeElixirPdfUtilities.Validators.FontRenderingValidator.supports_text?(font, "A️")
 

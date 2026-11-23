@@ -121,7 +121,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
                  text,
                  selected
                ) and
-               Font.supports_text?(selected, text) and
+               Font.covers_shaping_input?(selected, text) and
                (not NativeElixirPdfUtilities.Validators.TextShapingValidator.required?(
                   selected,
                   text

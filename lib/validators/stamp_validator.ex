@@ -356,7 +356,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
         with {:ok, registry} <-
                Font.load_registry(fonts: fonts, system_font_discovery: discovery),
              [font_face | _rest] <- Font.requested_faces(family, weight, style, registry),
-             true <- Enum.all?(texts, &Font.supports_text?(font_face, &1)) do
+             true <- Enum.all?(texts, &Font.covers_shaping_input?(font_face, &1)) do
           {:ok, font_face}
         else
           false ->

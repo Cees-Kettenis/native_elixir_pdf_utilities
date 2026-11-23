@@ -1217,7 +1217,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                 size <= 0 ->
                   {:halt, error(:unsupported_form, "widget is too small to draw an appearance")}
 
-                not Enum.all?(lines, &Font.supports_text?(font, &1)) ->
+                not Enum.all?(lines, &Font.covers_shaping_input?(font, &1)) ->
                   {:halt,
                    error(
                      :unsupported_form,

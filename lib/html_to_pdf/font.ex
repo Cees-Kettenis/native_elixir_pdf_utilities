@@ -320,7 +320,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   checked against their Unicode character map.
   """
   @spec supports_text?(font_face(), String.t()) :: boolean()
-  def supports_text?(font, text) do
+  def supports_text?(font, text), do: covers_codepoints?(font, text, false)
+
+  @doc false
+  @spec covers_shaping_input?(font_face(), String.t()) :: boolean()
+  def covers_shaping_input?(font, text), do: covers_codepoints?(font, text, true)
+
+  defp covers_codepoints?(font, text, shaping?) do
     case {font, text} do
       {%{type: :built_in}, text} when is_binary(text) ->
         String.valid?(text, :fast_ascii) and
@@ -330,7 +336,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
       {%{type: :embedded, cmap: cmap}, text} when is_map(cmap) and is_binary(text) ->
         String.valid?(text, :fast_ascii) and
-          supported_codepoints?(text, Map.get(font, :unicode_cmap, cmap))
+          supported_codepoints?(text, Map.get(font, :unicode_cmap, cmap), shaping?) and
+          (shaping? or not Map.has_key?(font, :unicode_cmap) or
+             supported_codepoints?(text, cmap, false))
 
       _ ->
         false
@@ -339,7 +347,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
   # The caller has admitted UTF-8. Scan without allocating a charlist for
   # every fallback-font candidate and stop at the first missing glyph.
-  defp supported_codepoints?(text, cmap) do
+  defp supported_codepoints?(text, cmap, shaping?) do
     case text do
       "" ->
         true
@@ -347,11 +355,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       <<codepoint::utf8, rest::binary>> ->
         case cmap do
           %{^codepoint => glyph} when glyph != 0 ->
-            supported_codepoints?(rest, cmap)
+            supported_codepoints?(rest, cmap, shaping?)
 
           _ ->
-            NativeElixirPdfUtilities.Validators.TextShapingValidator.ignorable?(codepoint) and
-              supported_codepoints?(rest, cmap)
+            shaping? and
+              NativeElixirPdfUtilities.Validators.TextShapingValidator.ignorable?(codepoint) and
+              supported_codepoints?(rest, cmap, shaping?)
         end
     end
   end

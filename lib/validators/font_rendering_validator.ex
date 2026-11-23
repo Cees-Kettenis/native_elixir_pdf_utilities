@@ -391,7 +391,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
   end
 
   defp eligible_for_shaping?(font, text) do
-    not Map.has_key?(font, :unicode_cmap) or Font.supports_text?(font, text) or
+    not Map.has_key?(font, :unicode_cmap) or Font.covers_shaping_input?(font, text) or
       case text do
         <<_base::utf8, rest::binary>> when rest != "" ->
           # CSS Fonts 4 §5.3 also admits a cluster through its single
@@ -423,7 +423,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontRenderingValidator do
         error -> throw({:font_resource_limit, error})
       end
     else
-      NativeElixirPdfUtilities.HtmlToPdf.Font.supports_text?(selected, text)
+      NativeElixirPdfUtilities.HtmlToPdf.Font.covers_shaping_input?(selected, text)
     end
   end
 

@@ -215,6 +215,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontTest do
     assert {:ok, _families, embedded} = Font.resolve("DejaVu Sans", 400, :normal, registry)
 
     assert Font.supports_text?(embedded, "café © α €")
+
+    for text <- ["ABC", "A\u2060B"] do
+      assert Font.supports_text?(embedded, text)
+      assert is_binary(Font.encode_embedded_text(text, embedded))
+    end
+
+    for text <- ["A\u180BB", "A\u{E0100}B"] do
+      refute Font.supports_text?(embedded, text)
+      assert Font.covers_shaping_input?(embedded, text)
+    end
+
     refute Font.supports_text?(embedded, "漢")
     refute Font.supports_text?(embedded, <<255>>)
     refute Font.supports_text?(%{type: :unknown}, "ASCII")

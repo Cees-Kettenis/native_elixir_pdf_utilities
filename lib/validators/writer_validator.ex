@@ -2819,12 +2819,15 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       %{type: :built_in, pdf_name: pdf_name} when is_binary(pdf_name) ->
         not Map.has_key?(box, :glyph_ids) and not Map.has_key?(box, :glyph_advances) and
           box.font == pdf_name and pdf_name in @built_in_fonts and
-          Font.supports_text?(box.font_face, box.text)
+          Font.covers_shaping_input?(box.font_face, box.text)
 
       nil ->
         not Map.has_key?(box, :glyph_ids) and not Map.has_key?(box, :glyph_advances) and
           box.font in @built_in_fonts and
-          Font.supports_text?(%{type: :built_in, family: box.font, pdf_name: box.font}, box.text)
+          Font.covers_shaping_input?(
+            %{type: :built_in, family: box.font, pdf_name: box.font},
+            box.text
+          )
 
       _ ->
         false
