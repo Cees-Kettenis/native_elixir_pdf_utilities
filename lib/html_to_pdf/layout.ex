@@ -15348,15 +15348,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         :maps.get(:hard_break, run, false) or HtmlValidator.trim_ascii_whitespace(run.text) != ""
       end)
 
-    terminal_newline? =
-      case List.last(runs) do
-        %{style: %{white_space: mode}, text: text}
-        when mode in [:pre, :pre_wrap, :pre_line, :break_spaces] ->
-          String.ends_with?(text, "\n")
-
-        _ ->
-          false
-      end
+    # Fitting consumes normalized runs. Every remaining LF forced a line.
+    terminal_newline? = String.ends_with?(List.last(runs, %{text: ""}).text, "\n")
 
     last = List.last(lines)
     last = if NativeElixirPdfUtilities.HtmlToPdf.TextSpacing.empty_line?(last), do: [], else: last

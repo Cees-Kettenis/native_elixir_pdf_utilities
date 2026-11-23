@@ -15,6 +15,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.WhiteSpaceTest do
     assert CssWhiteSpaceValidator.compute_style(%{text_wrap_mode: :nowrap}).white_space == :nowrap
   end
 
+  test "preserved terminal and interior breaks allocate the same lines with either wrap policy" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+
+    for policy <- [
+          "white-space:pre-line",
+          "white-space-collapse:preserve-breaks;text-wrap-mode:nowrap"
+        ],
+        {content, lines} <- [
+          {"A\n", 1},
+          {"A<span>\n</span>", 1},
+          {"A\nB\n", 2},
+          {"A<br>", 1},
+          {"A\n<span>B</span>", 2}
+        ] do
+      html =
+        "<style>body,p{margin:0;font:12pt/18pt 'DejaVu Sans'}</style>" <>
+          "<p style='#{policy}'>#{content}</p><p>Z</p>"
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+      assert List.last(spans).text == "Z"
+      assert_in_delta List.last(spans).y - hd(spans).y, 18 * lines, 0.1
+    end
+  end
+
   test "admitted legacy fitting projections trim a complete trailing separator run" do
     assert {:ok, dom} = HtmlParser.parse("<p style='white-space:pre;margin:0'>A   </p>")
 
