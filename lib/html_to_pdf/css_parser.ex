@@ -749,8 +749,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   Valid page-context properties are accepted even when the renderer does not
   apply them yet. Rendering consumes accepted named and explicit two-length
   `size` values, portrait and landscape orientations, one-to-four-value
-  `margin` shorthands, and the four margin longhands. Malformed declarations,
-  unknown page properties and invalid paged-media descriptors or selectors
+  `margin` shorthands, and the four margin longhands. A malformed declaration
+  such as `bad` in `@page { bad; margin: 10pt }` is skipped. Unknown page
+  properties, invalid descriptor values such as `margin: bogus`, and invalid page selectors
   return `{:error, :invalid_css}`. Unknown at-rules are ignored with their contents.
   """
   @spec page_options(String.t()) ::
