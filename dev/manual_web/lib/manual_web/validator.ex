@@ -226,7 +226,7 @@ defmodule ManualWeb.Validator do
 
   @doc "Parses comma-separated page numbers and inclusive ranges such as 1,3-5."
   @spec page_selection(term(), boolean(), atom()) ::
-          {:ok, [pos_integer() | Range.t()]} | {:error, detailed_error()}
+          {:ok, [integer() | Range.t()]} | {:error, detailed_error()}
   def page_selection(value, allow_empty, operation) do
     case {optional_text(value), allow_empty} do
       {nil, true} ->
