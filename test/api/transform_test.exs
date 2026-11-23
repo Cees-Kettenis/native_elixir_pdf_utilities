@@ -570,7 +570,9 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
         "/Annots [16 0 R 10 0 R]",
         [
           {16, "<< /Subtype /Link /Rect [0 0 1 1] /A 17 0 R >>"},
-          {17, "<< /S /URI /URI (help.html) >>"}
+          {17, "<< /S /URI /URI (help.html) /Next 18 0 R >>"},
+          {18, "[19 0 R << /S /URI /URI (direct.html) /Next null >> 19 0 R]"},
+          {19, "<< /S /URI /URI (chain.html) /Next 17 0 R >>"}
         ],
         "/URI << /Base (#{base}) >>"
       )
@@ -590,11 +592,58 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
       assert {:ok, [relative, absolute]} =
                Reader.resolve(context.document, page.dictionary["Annots"])
 
-      assert {:ok, %{"A" => %{"URI" => {:string, ^target}}}} =
-               Reader.resolve(context.document, relative)
+      assert {:ok, %{"A" => start}} = Reader.resolve(context.document, relative)
+
+      assert {:ok, %{"URI" => {:string, ^target}, "Next" => next}} =
+               Reader.resolve(context.document, start)
+
+      assert {:ok, [shared, %{"URI" => {:string, direct}}, shared]} =
+               Reader.resolve(context.document, next)
+
+      assert {:ok, %{"URI" => {:string, chained}, "Next" => ^start}} =
+               Reader.resolve(context.document, shared)
+
+      assert direct == String.replace_suffix(target, "help.html", "direct.html")
+      assert chained == String.replace_suffix(target, "help.html", "chain.html")
 
       assert {:ok, %{"A" => %{"URI" => {:string, "https://example.com"}}}} =
                Reader.resolve(context.document, absolute)
+    end
+  end
+
+  test "URI action chains respect depth and retain relative targets without a catalog base" do
+    source = fn base ->
+      actions = for id <- 17..40, do: {id, "<< /S /URI /URI (step) /Next #{id + 1} 0 R >>"}
+
+      three_page_pdf(
+        "/Annots [16 0 R]",
+        [
+          {16, "<< /Subtype /Link /Rect [0 0 1 1] /A 17 0 R >>"}
+          | actions ++ [{41, "<< /S /URI /URI (last) >>"}]
+        ],
+        base
+      )
+    end
+
+    assert {:ok, picked} = Transform.pick_pages(source.(""), [1])
+    assert {:ok, context} = Reader.read_validated(picked)
+    [link] = hd(context.pages).dictionary["Annots"]
+    assert {:ok, %{"A" => action}} = Reader.resolve(context.document, link)
+    assert {:ok, %{"Next" => next}} = Reader.resolve(context.document, action)
+    assert {:ok, %{"URI" => {:string, "step"}}} = Reader.resolve(context.document, next)
+
+    alias NativeElixirPdfUtilities.Limits
+    original = Limits.effective()
+
+    try do
+      Limits.install(%{original | max_depth: 20})
+
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+               Merge.merge([source.("/URI << /Base (https://example.org/) >>")])
+
+      assert message =~ "link action chain"
+    after
+      Limits.install(original)
     end
   end
 

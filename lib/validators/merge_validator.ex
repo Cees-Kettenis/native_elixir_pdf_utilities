@@ -162,22 +162,26 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
                    ),
                  else: {:ok, %{}}
                ) do
-          objects
-          |> Enum.reduce_while({:ok, []}, fn object, {:ok, normalized} ->
-            case normalize_named_link_object(document, {names, base}, object) do
-              {:ok, object} -> {:cont, {:ok, [object | normalized]}}
-              error -> {:halt, error}
-            end
-          end)
-          |> case do
-            {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-            error -> error
-          end
+          {objects, actions} =
+            Enum.map_reduce(objects, %{}, fn object, seen ->
+              {value, seen} = normalize_link_value(document, names, base, object.value, seen)
+              {override_value(object, value), seen}
+            end)
+
+          {:ok,
+           Enum.map(objects, fn object ->
+             case Map.fetch(actions, {object.obj, object.gen}) do
+               {:ok, value} -> override_value(object, value)
+               :error -> object
+             end
+           end)}
         end
       else
         {:ok, objects}
       end
     end
+  catch
+    {:link_error, error} -> error
   end
 
   defp catalog_uri_base(document, catalog) do
@@ -236,53 +240,104 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     end
   end
 
-  defp normalize_named_link_object(document, named_destinations, object) do
-    with {:ok, value} <- normalize_named_link_value(document, named_destinations, object.value) do
-      case value == object.value do
-        true -> {:ok, object}
-        false -> {:ok, Map.put(object, :value_override, value)}
-      end
-    end
+  defp override_value(object, value) do
+    if object.value == value, do: object, else: Map.put(object, :value_override, value)
   end
 
-  defp normalize_named_link_value(document, named_destinations, value) do
+  defp normalize_link_value(document, names, base, value, seen) do
     case value do
       dictionary when is_map(dictionary) ->
-        case PdfValidator.resolved_name?(document, Map.get(dictionary, "Subtype"), "Link") do
+        case PdfValidator.resolved_name?(document, dictionary["Subtype"], "Link") do
           true ->
-            normalize_named_link_dictionary(document, named_destinations, dictionary)
+            link = link_value!(normalize_named_link_dictionary(document, names, dictionary))
 
-          {:error, _} = error ->
-            error
+            if base && Map.has_key?(link, "A") do
+              {action, seen} = rebase_action(document, base, link["A"], seen, 0)
+              {Map.put(link, "A", action), seen}
+            else
+              {link, seen}
+            end
 
           false ->
-            Enum.reduce_while(dictionary, {:ok, %{}}, fn {key, value}, {:ok, normalized} ->
-              case normalize_named_link_value(document, named_destinations, value) do
-                {:ok, value} -> {:cont, {:ok, Map.put(normalized, key, value)}}
-                {:error, _} = error -> {:halt, error}
-              end
-            end)
+            {entries, seen} =
+              Enum.map_reduce(dictionary, seen, fn {key, value}, seen ->
+                {value, seen} = normalize_link_value(document, names, base, value, seen)
+                {{key, value}, seen}
+              end)
+
+            {Map.new(entries), seen}
+
+          error ->
+            throw({:link_error, error})
         end
 
       values when is_list(values) ->
-        values
-        |> Enum.reduce_while({:ok, []}, fn value, {:ok, normalized} ->
-          case normalize_named_link_value(document, named_destinations, value) do
-            {:ok, value} -> {:cont, {:ok, [value | normalized]}}
-            {:error, _} = error -> {:halt, error}
-          end
-        end)
-        |> case do
-          {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
-          error -> error
-        end
+        Enum.map_reduce(values, seen, &normalize_link_value(document, names, base, &1, &2))
 
       value ->
-        {:ok, value}
+        {value, seen}
     end
   end
 
-  defp normalize_named_link_dictionary(document, {named_destinations, base}, dictionary) do
+  # Keep indirect actions shared, including cycles. Only /A and /Next identify
+  # action objects; similarly named entries in private dictionaries are data.
+  defp rebase_action(document, base, value, seen, depth) do
+    if depth > Limits.get(:max_depth),
+      do: throw({:link_error, resource_limit_error("link action chain exceeds max_depth")})
+
+    case value do
+      {:ref, ref} ->
+        if Map.has_key?(seen, ref) do
+          {value, seen}
+        else
+          action = link_value!(PdfValidator.resolve(document, value))
+
+          {action, seen} =
+            rebase_action(document, base, action, Map.put(seen, ref, action), depth + 1)
+
+          {value, Map.put(seen, ref, action)}
+        end
+
+      actions when is_list(actions) ->
+        Enum.map_reduce(actions, seen, &rebase_action(document, base, &1, &2, depth + 1))
+
+      action when is_map(action) ->
+        action = rebase_uri(document, base, action)
+
+        case Map.fetch(action, "Next") do
+          {:ok, next} ->
+            {next, seen} = rebase_action(document, base, next, seen, depth + 1)
+            {Map.put(action, "Next", next), seen}
+
+          :error ->
+            {action, seen}
+        end
+
+      other ->
+        {other, seen}
+    end
+  end
+
+  defp rebase_uri(document, base, action) do
+    with true <- PdfValidator.resolved_name?(document, action["S"], "URI"),
+         {:ok, {kind, bytes}} when kind in [:string, :hex] <-
+           PdfValidator.resolve(document, action["URI"]),
+         {:ok, %URI{scheme: nil} = relative} <- URI.new(bytes) do
+      Map.put(action, "URI", {kind, base |> URI.merge(relative) |> URI.to_string()})
+    else
+      {:error, {_, _}} = error -> throw({:link_error, error})
+      _ -> action
+    end
+  end
+
+  defp link_value!(result) do
+    case result do
+      {:ok, value} -> value
+      {:error, _} = error -> throw({:link_error, error})
+    end
+  end
+
+  defp normalize_named_link_dictionary(document, named_destinations, dictionary) do
     case PdfValidator.link_destination(document, dictionary) do
       {:ok, {location, {kind, _name} = named}} when kind in [:name, :string, :hex] ->
         with {:ok, destination} <-
@@ -299,19 +354,6 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
             {destination, {:action, action}} ->
               {:ok, Map.put(dictionary, "A", Map.put(action, "D", destination))}
           end
-        end
-
-      :none when not is_nil(base) ->
-        with {:ok, action} when is_map(action) <- PdfValidator.resolve(document, dictionary["A"]),
-             true <- PdfValidator.resolved_name?(document, action["S"], "URI"),
-             {:ok, {kind, bytes}} when kind in [:string, :hex] <-
-               PdfValidator.resolve(document, action["URI"]),
-             {:ok, %URI{scheme: nil} = relative} <- URI.new(bytes) do
-          target = base |> URI.merge(relative) |> URI.to_string()
-          {:ok, Map.put(dictionary, "A", Map.put(action, "URI", {kind, target}))}
-        else
-          {:error, {_reason, _diagnostic}} = error -> error
-          _ -> {:ok, dictionary}
         end
 
       {:error, _} = error ->
