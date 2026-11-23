@@ -176,6 +176,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureGlobalStateTest d
   alias NativeElixirPdfUtilities.Validators.{
     ColrFontValidator,
     ColrPaintValidator,
+    ResourceBudgetValidator,
     SvgFontValidator
   }
 
@@ -310,6 +311,43 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontStructureGlobalStateTest d
 
     assert {:ok, pdf} = PdfWriter.render([%{size: {80, 80}, boxes: [box]}])
     assert {:ok, "H"} = Text.extract(pdf, layout: false)
+  end
+
+  test "gzip SVG glyphs consume their inflated bytes in the shared decoding allowance", %{
+    font: font
+  } do
+    id = font.cmap[?H]
+
+    svg =
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect id='glyph#{id}' width='10' height='10'/></svg>"
+
+    prepare = fn payload ->
+      table = svg_table(id, payload)
+      changed = %{font | data: FontFixture.rebuild(font.data, %{"SVG " => table})}
+      SvgFontValidator.prepare(changed, id, {0, 0, 0, 1})
+    end
+
+    {paint, artwork_bytes} =
+      ResourceBudgetValidator.with_budget(fn ->
+        before = ResourceBudgetValidator.remaining(:max_decoded_bytes)
+        assert {:ok, %{bounds: _} = paint} = prepare.(svg)
+        {paint, before - ResourceBudgetValidator.remaining(:max_decoded_bytes)}
+      end)
+
+    required = byte_size(svg) + artwork_bytes
+    gzip = :zlib.gzip(svg)
+
+    with_remaining = fn remaining ->
+      ResourceBudgetValidator.with_budget(fn ->
+        used = Limits.get(:max_decoded_bytes) - remaining
+        :ok = ResourceBudgetValidator.reserve(:max_decoded_bytes, used, :font)
+        prepare.(gzip)
+      end)
+    end
+
+    assert {:ok, ^paint} = with_remaining.(required)
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = with_remaining.(required - 1)
+    assert diagnostic.message =~ "max_decoded_bytes"
   end
 
   test "bounded COLR layers retain empty, singular and unbounded child behavior", %{font: font} do

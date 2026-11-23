@@ -247,8 +247,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgFontValidator do
 
   defp decode(data) do
     if match?(<<31, 139, 8, _::binary>>, data) do
-      case FlateValidator.inflate(data, 31, fn _status, size, bytes ->
-             FontValidator.check(:max_decoded_bytes, size)
+      case FlateValidator.inflate(data, 31, fn _status, _size, bytes ->
+             FontValidator.reserve(:max_decoded_bytes, bytes)
              FontValidator.reserve(:max_work, bytes + 1)
            end) do
         {:ok, decoded} ->
