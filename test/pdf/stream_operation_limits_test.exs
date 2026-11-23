@@ -12,6 +12,25 @@ defmodule NativeElixirPdfUtilities.Pdf.StreamOperationLimitsTest do
     %{limits: limits}
   end
 
+  test "independent PDF inputs share a single allowance", %{limits: limits} do
+    pdf = File.read!(Paths.fixture("pdf_reader/classic-xref.pdf"))
+    other = pdf <> "\n"
+    total = byte_size(pdf) + byte_size(other)
+
+    inspect_both = fn ->
+      Operation.run(__MODULE__, :inspect_sources, fn ->
+        assert {:ok, _} = Reader.read(pdf)
+        NativeElixirPdfUtilities.Info.encrypted?(other)
+      end)
+    end
+
+    Limits.install(%{limits | max_input_bytes: total})
+    assert {:ok, false} = inspect_both.()
+    Limits.install(%{limits | max_input_bytes: total - 1})
+    assert {:error, {:resource_limit_exceeded, _}} = inspect_both.()
+    assert {:ok, _} = Reader.read(other)
+  end
+
   test "standalone stream decoding admits the worker before resolving or decoding", %{
     limits: limits
   } do

@@ -187,7 +187,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
 
             _ ->
               with {:ok, document} <-
-                     NativeElixirPdfUtilities.Pdf.Reader.read_validated(pdf) do
+                     NativeElixirPdfUtilities.Pdf.Reader.read_admitted(pdf) do
                 NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
               end
           end

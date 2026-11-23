@@ -64,12 +64,17 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           )
 
         {:ok, _count} ->
+          remaining =
+            NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(
+              :max_input_bytes
+            )
+
           Enum.reduce_while(inputs, {:ok, 0}, fn input, {:ok, aggregate_bytes} ->
             cond do
               not is_binary(input) ->
                 {:halt, :invalid}
 
-              aggregate_bytes + byte_size(input) > Limits.get(:max_input_bytes) ->
+              aggregate_bytes + byte_size(input) > remaining ->
                 {:halt, resource_limit_error("aggregate merge input bytes exceed the limit")}
 
               true ->

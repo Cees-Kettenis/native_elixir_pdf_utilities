@@ -578,7 +578,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   """
   @spec validate_input(term(), [diagnostic_option()]) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_input(pdf, opts \\ []) do
+  @spec validate_input(term(), [diagnostic_option()], :admitted | :new) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_input(pdf, opts \\ [], admission \\ :admitted) do
     cond do
       not is_binary(pdf) ->
         error(:input, :invalid_pdf_input, "PDF input must be a binary", opts)
@@ -592,7 +594,15 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         )
 
       Regex.match?(~r/\A%PDF-(1\.[0-7]|2\.0)(?:\s|\r|\n)/, pdf) ->
-        :ok
+        if admission == :new,
+          do:
+            NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+              :max_input_bytes,
+              byte_size(pdf),
+              :limits,
+              opts
+            ),
+          else: :ok
 
       true ->
         error(

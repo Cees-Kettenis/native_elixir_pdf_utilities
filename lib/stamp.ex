@@ -102,8 +102,8 @@ defmodule NativeElixirPdfUtilities.Stamp do
   def overlay(pdf, overlay_pdf, options \\ []) do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :overlay_pdf, fn ->
       with :ok <- StampValidator.admit_overlay_inputs(pdf, overlay_pdf),
-           {:ok, target_context} <- Reader.read_validated(pdf),
-           {:ok, overlay_context} <- Reader.read_validated(overlay_pdf),
+           {:ok, target_context} <- Reader.read_admitted(pdf),
+           {:ok, overlay_context} <- Reader.read_admitted(overlay_pdf),
            {:ok, plan} <- StampValidator.prepare_overlay(target_context, overlay_context, options),
            {:ok, stamped} <- StampWriter.write(plan) do
         {:ok, stamped}
@@ -151,7 +151,7 @@ defmodule NativeElixirPdfUtilities.Stamp do
     pages = Enum.map(text_plan.appearances, & &1.page)
 
     with {:ok, appearance_pdf} <- PdfWriter.render(pages),
-         {:ok, appearance_context} <- Reader.read_validated(appearance_pdf),
+         {:ok, appearance_context} <- Reader.read_admitted(appearance_pdf),
          {:ok, plan} <-
            StampValidator.prepare_generated_overlay(target_context, appearance_context, text_plan) do
       StampWriter.write(plan)

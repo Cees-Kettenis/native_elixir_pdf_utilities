@@ -39,7 +39,7 @@ defmodule NativeElixirPdfUtilities.Attachments do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :embed, fn ->
       result =
         with {:ok, attachments} <- AttachmentValidator.prepare(attachments, opts, pdf),
-             {:ok, context} <- Reader.read_validated(pdf),
+             {:ok, context} <- Reader.read_admitted(pdf),
              {:ok, existing} <- AttachmentValidator.inspect_document(context),
              :ok <- AttachmentValidator.prepare_write(context, existing, attachments) do
           case attachments do

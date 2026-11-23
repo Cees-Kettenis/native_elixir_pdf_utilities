@@ -128,6 +128,14 @@ defmodule NativeElixirPdfUtilities.MergeGlobalStateTest do
 
     assert bytes_diagnostic.stage == :limits
     assert bytes_diagnostic.message == "aggregate merge input bytes exceed the limit"
+
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, as: Budget
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             NativeElixirPdfUtilities.Operation.run(__MODULE__, :nested_merge, fn ->
+               :ok = Budget.reserve(:max_input_bytes, original.max_input_bytes - 5, :limits)
+               Merge.merge(["bad", "bad"])
+             end)
   end
 
   test "merged page counts honor the shared page allowance" do

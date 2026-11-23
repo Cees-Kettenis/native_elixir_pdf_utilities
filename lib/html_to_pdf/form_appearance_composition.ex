@@ -12,7 +12,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormAppearanceComposition do
       with {:ok, projection} <-
              WriterValidator.prepare_appearance_projection(appearance, matrix, polygons, bounds),
            {:ok, source} <- PdfWriter.render([%{size: projection.source_size, boxes: []}]),
-           {:ok, context} <- Reader.read_validated(source),
+           {:ok, context} <- Reader.read_admitted(source),
            {:ok, objects, [form], next} <-
              PdfWriter.appearance_objects(
                [projection.appearance],
