@@ -186,10 +186,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PdfWriter do
               {:ok, pdf}
 
             _ ->
-              with {:ok, document} <-
-                     NativeElixirPdfUtilities.Pdf.Reader.read_admitted(pdf) do
-                NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
-              end
+              NativeElixirPdfUtilities.Operation.run_with_shared_budget(
+                __MODULE__,
+                :write_pdf,
+                fn ->
+                  with {:ok, document} <- NativeElixirPdfUtilities.Pdf.Reader.read_admitted(pdf) do
+                    NativeElixirPdfUtilities.Pdf.FormWriter.create(document, controls)
+                  end
+                end
+              )
           end
         end
       end)

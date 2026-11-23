@@ -5,6 +5,44 @@ defmodule NativeElixirPdfUtilities.FormAppearanceStateTest do
   alias NativeElixirPdfUtilities.Pdf.{IncrementalWriter, Reader}
   alias NativeElixirPdfUtilities.Validators.FormValidator
 
+  test "standalone interactive writing carries reader work back to its caller" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.{
+      FontFallback,
+      HtmlParser,
+      Layout,
+      Pagination,
+      PdfWriter,
+      Style
+    }
+
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, as: Budget
+    assert {:ok, dom} = HtmlParser.parse_document_detailed("<input name=customer value=Ada>")
+    assert {:ok, styled} = Style.compute_detailed(dom)
+    assert {:ok, styled} = FontFallback.resolve(styled, :replace)
+    assert {:ok, layout} = Layout.layout(styled)
+    assert {:ok, pages} = Pagination.paginate(layout)
+    write = fn -> PdfWriter.render(pages) end
+
+    measure = fn run ->
+      Budget.with_budget(fn ->
+        assert {:ok, pdf} = run.()
+        {pdf, Budget.snapshot()}
+      end)
+    end
+
+    {pdf, standalone} = measure.(write)
+
+    {_, inside_worker} =
+      measure.(fn ->
+        NativeElixirPdfUtilities.Operation.run_with_shared_budget(PdfWriter, :write_pdf, write)
+      end)
+
+    assert Map.take(standalone, [:max_work, :max_entries]) ==
+             Map.take(inside_worker, [:max_work, :max_entries])
+
+    assert {:ok, [%{value: "Ada"}]} = Forms.fields(pdf)
+  end
+
   test "flatten preserves direct and referenced checkbox artwork" do
     for {checked, value, artwork} <- [{"checked", true, "☒"}, {"", false, "☐"}] do
       assert {:ok, pdf} =
