@@ -10,11 +10,11 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.PageGeometry
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
 
-  @forward_range ~r/\A(width|height|inline-size|block-size|resolution|aspect-ratio|color|color-index|monochrome|grid)\s*(<=|>=|<|>|=)\s*(.+)\z/s
-  @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|inline-size|block-size|resolution|aspect-ratio|color|color-index|monochrome|grid)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
+  @forward_range ~r/\A(width|height|inline-size|block-size|resolution|aspect-ratio|color|color-index|monochrome)\s*(<=|>=|<|>|=)\s*(.+)\z/s
+  @reverse_range ~r/\A(.+?)\s*(<=|>=|<|>|=)\s*(width|height|inline-size|block-size|resolution|aspect-ratio|color|color-index|monochrome)(?:\s*(<=|>=|<|>)\s*(.+))?\z/s
 
   # Static print output uses sRGB, eight bits per component, no device session.
-  @numeric_features %{"color" => 8, "color-index" => 0, "monochrome" => 0, "grid" => 0}
+  @numeric_features %{"color" => 8, "color-index" => 0, "monochrome" => 0}
   @discrete_features %{
     "prefers-color-scheme" => {"light", ~w(light dark)},
     "prefers-contrast" => {"no-preference", ~w(no-preference more less custom)},
@@ -619,6 +619,12 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
       end)
 
     case Regex.run(~r/\A([a-z-]+)\s*:\s*(.+)\z/s, value) do
+      [_, "grid", expected] ->
+        case NativeElixirPdfUtilities.Validators.CssMathValidator.scalar(expected, :integer) do
+          {:ok, value} when value in [0, 1] -> value == 0
+          _ -> :unknown
+        end
+
       [_, "orientation", orientation] ->
         if orientation in ~w(landscape portrait),
           do:
@@ -708,6 +714,9 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               "aspect-ratio" ->
                 Map.get(context, :query_width, context.width) > 0 and
                   Map.get(context, :query_height, context.height) > 0
+
+              "grid" ->
+                false
 
               "resolution" ->
                 true
