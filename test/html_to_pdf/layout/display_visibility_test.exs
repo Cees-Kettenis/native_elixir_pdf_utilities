@@ -238,7 +238,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DisplayVisibilityTest do
   end
 
   test "preserved list whitespace contributes line boxes before, between and after items" do
-    for mode <- ["pre", "break-spaces", "normal"], display <- ["inline", "list-item"] do
+    for mode <- ["pre", "break-spaces", "preserve-breaks nowrap", "normal"],
+        display <- ["inline", "list-item"] do
       html =
         "<style>body,p,ul{margin:0;padding:0;font:12pt/18pt 'DejaVu Sans'}ul{white-space:#{mode}}li{display:#{display};list-style:none}</style>" <>
           "<ul>\n<li>A</li>\n\n<li>B</li>\n\n</ul><p>T</p>"

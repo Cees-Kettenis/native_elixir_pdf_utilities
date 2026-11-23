@@ -40,6 +40,46 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.WhiteSpaceTest do
     end
   end
 
+  test "preserved segment breaks in an otherwise empty block prevent margin collapse" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+
+    for {policy, content, height} <- [
+          {"white-space:pre-line", "\n\n", 36},
+          {"white-space:pre-line", "<span>\n\n</span>", 36},
+          {"white-space:pre-line;display:flow-root", "\n\n", 36},
+          {"white-space:pre-line;padding-top:3pt", "\n\n", 39},
+          {"white-space-collapse:preserve-breaks;text-wrap-mode:nowrap", "\n\n", 36},
+          {"white-space:pre-line", "   ", 0},
+          {"white-space:nowrap", "\n\n", 0}
+        ] do
+      html =
+        "<style>body,div,p{margin:0;font:12pt/18pt 'DejaVu Sans'}</style>" <>
+          "<p>X</p><div style='#{policy}'>#{content}</div><p>Z</p>"
+
+      assert {:ok, pdf} = HtmlToPdf.render(html)
+      assert {:ok, %{pages: [%{spans: [before, after_line]}]}} = Text.extract_spans(pdf)
+      assert_in_delta after_line.y - before.y, 18 + height, 0.1
+    end
+  end
+
+  test "preserved breaks decide which short page contains the following paragraph" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+
+    for {block, expected} <- [
+          {"<p style='white-space-collapse:preserve-breaks;text-wrap-mode:nowrap'>FIRST\n</p>",
+           ["FIRSTAFTER"]},
+          {"<div style='white-space:pre-line'>\n\n</div>", ["", "AFTER"]}
+        ] do
+      html =
+        "<style>@page{size:300pt 60pt;margin:10pt}html,body,p{margin:0;font-size:12pt;font-family:'DejaVu Sans'}</style>" <>
+          block <> "<p>AFTER</p>"
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, system_font_discovery: false)
+      assert {:ok, %{pages: pages}} = Text.extract_spans(pdf)
+      assert Enum.map(pages, fn page -> Enum.map_join(page.spans, & &1.text) end) == expected
+    end
+  end
+
   test "admitted legacy fitting projections trim a complete trailing separator run" do
     assert {:ok, dom} = HtmlParser.parse("<p style='white-space:pre;margin:0'>A   </p>")
 

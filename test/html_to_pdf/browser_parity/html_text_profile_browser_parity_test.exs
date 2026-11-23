@@ -31,6 +31,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTextProfileBrowserParityTest do
     assert stats.page_count == 1
   end
 
+  test "terminal and newline-only blocks keep Chromium's line positions and page breaks" do
+    # The short page is part of the assertion. Both cases share one browser print.
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Paths.fixture("html_to_pdf/browser_parity/whitespace_block_pagination.html"),
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.page_count == 4
+
+    for engine <- ["native", "chromium"] do
+      pdf = File.read!(Path.join(stats.artifact_dir, engine <> ".pdf"))
+      assert {:ok, %{pages: pages}} = NativeElixirPdfUtilities.Text.extract_spans(pdf)
+
+      assert Enum.map(pages, fn page -> Enum.map_join(page.spans, & &1.text) end) ==
+               ["FirstAfter terminal break", "Before blank lines", "", "After blank lines"]
+    end
+  end
+
   test "accepted static container nesting matches Chromium and its PDF remains readable" do
     stats =
       PdfVisualCompare.assert_browser_match!(

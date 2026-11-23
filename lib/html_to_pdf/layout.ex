@@ -1313,13 +1313,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                         not elem(margin_edge_blocks(children, :top, []), 1)
 
                       %{type: :text, text: text, style: text_style} ->
-                        text == "" or
-                          (:maps.get(:white_space, text_style, nil) not in [
-                             :pre,
-                             :pre_wrap,
-                             :break_spaces
-                           ] and
-                             HtmlValidator.trim_ascii_whitespace(text) == "")
+                        not line_forming_text?(text, text_style)
 
                       _ ->
                         false
@@ -1417,11 +1411,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       case child do
         %{type: :text, text: text, style: style} ->
-          if text == "" or
-               (:maps.get(:white_space, style, nil) not in [:pre, :pre_wrap, :break_spaces] and
-                  HtmlValidator.trim_ascii_whitespace(text) == ""),
-             do: {:cont, {blocks, false}},
-             else: {:halt, {blocks, true}}
+          if line_forming_text?(text, style),
+            do: {:halt, {blocks, true}},
+            else: {:cont, {blocks, false}}
 
         %{style: %{display: :none}} ->
           {:cont, {blocks, false}}
@@ -4741,6 +4733,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
+  # CSS 2.1 §8.3.1. A preserved segment break creates a line box even
+  # when there is no ink. Margin collapse and inline layout must agree.
+  defp line_forming_text?(text, style) do
+    text != "" and
+      (HtmlValidator.trim_ascii_whitespace(text) != "" or
+         case NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.collapse_mode(style) do
+           mode when mode in [:preserve, :preserve_spaces, :break_spaces] -> true
+           :preserve_breaks -> String.contains?(text, ["\r", "\n"])
+           _ -> false
+         end)
+  end
+
   defp layout_inline_flow(children, style, x, y, width, metadata \\ %{}) do
     with {:ok, runs} <- inline_runs(children, style) do
       case Enum.any?(runs, fn run ->
@@ -4751,13 +4755,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                :soft_break
              ] or
                :maps.get(:hard_break, run, false) or
-               HtmlValidator.trim_ascii_whitespace(run.text) != "" or
-               (run.text != "" and
-                  case :maps.get(:white_space, run.style, :normal) do
-                    mode when mode in [:pre, :pre_wrap, :break_spaces] -> true
-                    :pre_line -> String.contains?(run.text, "\n")
-                    _ -> false
-                  end)
+               line_forming_text?(run.text, run.style)
            end) do
         true ->
           metadata = Map.merge(%{flow_id: {:inline_flow, x, y}, fragment_lines: true}, metadata)

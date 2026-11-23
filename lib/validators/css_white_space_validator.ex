@@ -266,13 +266,20 @@ defmodule NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator do
     end
   end
 
+  @doc "Returns the computed collapse policy, including for legacy styled trees."
+  @spec collapse_mode(map()) :: atom()
+  def collapse_mode(style) do
+    case style do
+      %{white_space_collapse: collapse} -> collapse
+      %{white_space: legacy} -> elem(Map.fetch!(@legacy_modes, legacy), 1)
+      _ -> :collapse
+    end
+  end
+
   @doc "Returns the shared ordered scalar-preserving whitespace normalization operations."
   @spec normalizations(map()) :: [{Regex.t(), String.t()}]
   def normalizations(style) do
-    baseline =
-      if Map.has_key?(style, :white_space_collapse), do: style, else: expand_legacy(style)
-
-    case :maps.get(:white_space_collapse, baseline, :collapse) do
+    case collapse_mode(style) do
       mode when mode in [:preserve, :break_spaces] ->
         [{~r/\r\n?|\n/u, "\n"}]
 

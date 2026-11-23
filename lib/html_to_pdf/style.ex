@@ -2065,7 +2065,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                   preserve_list_space? =
                     tag in ~w(ul ol menu dir) and
-                      element_style.white_space in [:pre, :pre_wrap, :pre_line, :break_spaces]
+                      NativeElixirPdfUtilities.Validators.CssWhiteSpaceValidator.collapse_mode(
+                        element_style
+                      ) not in [:collapse, :discard]
 
                   with rendered_children when is_list(rendered_children) <-
                          if(

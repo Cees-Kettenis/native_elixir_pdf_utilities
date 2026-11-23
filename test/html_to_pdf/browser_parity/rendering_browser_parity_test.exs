@@ -2309,6 +2309,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     empty_generated_content.html
     list_counter_ownership.html
     css_unicode_separators.html
+    whitespace_block_pagination.html
     html_container_nesting.html
     body_inline_spacing_normal.html
     body_inline_spacing_pre.html
