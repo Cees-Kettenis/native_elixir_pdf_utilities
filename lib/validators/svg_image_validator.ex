@@ -196,32 +196,31 @@ defmodule NativeElixirPdfUtilities.Validators.SvgImageValidator do
         {Map.get(item.attributes, "id"), item}
       end)
 
-    references = expand_references(active_references(node), nodes, :sets.new(version: 2))
+    roots = active_references(node)
+    references = expand_references(MapSet.to_list(roots), nodes, roots)
     prepare_selected(node, budget, opts, references, true, false, %{}, fonts)
   end
 
   # Only reachable definitions participate in selected dependency loading.
-  @spec expand_references(MapSet.t(String.t()), map(), :sets.set(String.t())) ::
-          MapSet.t(String.t())
-  defp expand_references(references, nodes, visited) do
-    pending = Enum.reject(references, &:sets.is_element(&1, visited))
+  defp expand_references(pending, nodes, references) do
+    case pending do
+      [] ->
+        references
 
-    if pending == [] do
-      references
-    else
-      expanded =
-        Enum.reduce(pending, references, fn id, ids ->
-          case Map.get(nodes, id) do
-            nil -> ids
-            node -> MapSet.union(ids, active_references(node, true))
-          end
-        end)
+      [id | rest] ->
+        case Map.fetch(nodes, id) do
+          :error ->
+            expand_references(rest, nodes, references)
 
-      expand_references(
-        expanded,
-        nodes,
-        :sets.union(visited, :sets.from_list(pending, version: 2))
-      )
+          {:ok, node} ->
+            fresh = MapSet.difference(active_references(node, true), references)
+
+            expand_references(
+              MapSet.to_list(fresh) ++ rest,
+              nodes,
+              MapSet.union(references, fresh)
+            )
+        end
     end
   end
 
