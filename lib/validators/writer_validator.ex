@@ -210,38 +210,78 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     {paint, canvas}
   end
 
-  @doc "Determines whether page artwork needs effect preparation and admits the list spines used by the scene traversal."
-  @spec effect_scene(term()) :: {:ok, boolean()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  @doc "Checks whether bounded page artwork requires effect preparation."
+  @spec effect_scene(term()) :: {:ok, boolean()} | {:error, {atom(), map()}}
   def effect_scene(pages) do
-    if is_list(pages), do: scan_scene(pages, :pages, false), else: {:ok, false}
+    with {:ok, indices} <- effect_page_indices(pages), do: {:ok, map_size(indices) > 0}
   end
 
-  defp scan_scene(nodes, kind, active) do
-    case nodes do
+  @doc false
+  @spec effect_page_indices(term()) ::
+          {:ok, %{optional(non_neg_integer()) => true}} | {:error, {atom(), map()}}
+  def effect_page_indices(pages) do
+    with_writer_preparation(fn ->
+      if is_list(pages), do: scan_pages(pages, 0, 0, %{}), else: {:ok, %{}}
+    end)
+  end
+
+  defp scan_pages(pages, index, count, indices) do
+    case pages do
       [] ->
-        {:ok, active}
+        {:ok, indices}
 
-      [node | rest] ->
-        active =
-          active or
-            (kind == :boxes and is_map(node) and
-               (is_map_key(node, :css_effect) or is_map_key(node, :css_projection)))
+      [page | rest] ->
+        HtmlValidator.check_render_resource(:max_pages, index + 1, :writer)
 
-        case node do
-          %{boxes: children} when is_list(children) ->
-            with {:ok, active} <- scan_scene(children, :boxes, active),
-                 do: scan_scene(rest, kind, active)
+        boxes =
+          case page do
+            %{boxes: boxes} when is_list(boxes) -> boxes
+            _ -> []
+          end
 
-          _ ->
-            scan_scene(rest, kind, active)
+        with {:ok, active, count} <- scan_boxes(boxes, 0, false, count) do
+          indices = if active, do: Map.put(indices, index, true), else: indices
+          scan_pages(rest, index + 1, count, indices)
         end
 
       _ ->
-        Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer #{kind} must be a proper list",
-          operation: :write_pdf,
-          module: NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
-        )
+        scene_list_error(:pages)
     end
+  end
+
+  defp scan_boxes(boxes, depth, active, count) do
+    case boxes do
+      [] ->
+        {:ok, active, count}
+
+      [box | rest] ->
+        HtmlValidator.check_render_resource(:max_entries, count + 1, :writer)
+
+        active =
+          active or
+            (is_map(box) and (is_map_key(box, :css_effect) or is_map_key(box, :css_projection)))
+
+        case box do
+          %{boxes: children} when is_list(children) ->
+            HtmlValidator.check_render_resource(:max_depth, depth + 1, :writer)
+
+            with {:ok, active, count} <- scan_boxes(children, depth + 1, active, count + 1),
+                 do: scan_boxes(rest, depth, active, count)
+
+          _ ->
+            scan_boxes(rest, depth, active, count + 1)
+        end
+
+      _ ->
+        scene_list_error(:boxes)
+    end
+  end
+
+  defp scene_list_error(kind) do
+    Diagnostics.error(:pdf, :invalid_pdf_input, "PDF writer #{kind} must be a proper list",
+      operation: :write_pdf,
+      module: NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
+    )
   end
 
   @doc """

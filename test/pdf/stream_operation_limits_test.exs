@@ -12,6 +12,23 @@ defmodule NativeElixirPdfUtilities.Pdf.StreamOperationLimitsTest do
     %{limits: limits}
   end
 
+  test "effect classification admits nested and plain box lists before traversal", %{
+    limits: limits
+  } do
+    alias NativeElixirPdfUtilities.Validators.WriterValidator
+    Limits.install(%{limits | max_entries: 2, max_depth: 1})
+    assert {:ok, false} = WriterValidator.effect_scene([%{boxes: [%{}, %{}]}])
+
+    assert {:ok, true} =
+             WriterValidator.effect_scene([%{boxes: [%{boxes: [%{css_effect: %{}}]}]}])
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             WriterValidator.effect_scene([%{boxes: [%{}, %{}, %{}]}])
+
+    assert {:error, {:resource_limit_exceeded, _}} =
+             WriterValidator.effect_scene([%{boxes: [%{boxes: [%{boxes: []}]}]}])
+  end
+
   test "independent PDF inputs share a single allowance", %{limits: limits} do
     pdf = File.read!(Paths.fixture("pdf_reader/classic-xref.pdf"))
     other = pdf <> "\n"

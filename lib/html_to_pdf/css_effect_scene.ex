@@ -19,10 +19,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectScene do
   @doc "Prepares effect groups while preserving native logical text and annotations."
   @spec prepare(term(), keyword()) :: {:ok, term()} | {:error, {atom(), map()}}
   def prepare(pages, opts) do
-    with {:ok, active} <- WriterValidator.effect_scene(pages) do
-      if active do
+    with {:ok, indices} <- WriterValidator.effect_page_indices(pages) do
+      if map_size(indices) > 0 do
         with {:ok, _context} <- WriterValidator.prepare(pages, opts),
-             {:ok, changes} <- changed_page_boxes(pages, opts) do
+             {:ok, changes} <- changed_page_boxes(pages, opts, indices) do
           {:ok,
            Enum.zip_with(pages, changes, fn page, change ->
              if change == :unchanged, do: page, else: %{page | boxes: change}
@@ -38,10 +38,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectScene do
   @spec prepare_writer(term(), term()) ::
           {:ok, WriterValidator.context()} | {:error, {atom(), map()}}
   def prepare_writer(pages, opts) do
-    with {:ok, active} <- WriterValidator.effect_scene(pages) do
-      if active do
+    with {:ok, indices} <- WriterValidator.effect_page_indices(pages) do
+      if map_size(indices) > 0 do
         with {:ok, source} <- WriterValidator.prepare_effect_source(pages, opts),
-             {:ok, changes} <- changed_page_boxes(pages, opts) do
+             {:ok, changes} <- changed_page_boxes(pages, opts, indices) do
           writer_result(WriterValidator.prepare_effect_output(source, changes))
         end
       else
@@ -61,9 +61,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssEffectScene do
     end
   end
 
-  defp changed_page_boxes(pages, opts) do
-    Enum.reduce_while(pages, {:ok, []}, fn page, {:ok, changes} ->
-      {:ok, active} = WriterValidator.effect_scene([page])
+  defp changed_page_boxes(pages, opts, indices) do
+    pages
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {page, index}, {:ok, changes} ->
+      active = Map.has_key?(indices, index)
 
       case if(active, do: prepare_boxes(page.boxes, page.size, opts, []), else: {:ok, :unchanged}) do
         {:ok, change} -> {:cont, {:ok, [change | changes]}}
