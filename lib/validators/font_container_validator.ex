@@ -174,6 +174,8 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
   end
 
   defp inflate(bytes, expected_size, tag) do
+    FontValidator.reserve(:max_decoded_bytes, expected_size)
+
     result =
       FlateValidator.inflate(bytes, 15, fn status, size, _bytes ->
         cond do
@@ -329,7 +331,7 @@ defmodule NativeElixirPdfUtilities.Validators.FontContainerValidator do
           end)
         )
 
-    FontValidator.check(:max_decoded_bytes, bytes)
+    FontValidator.reserve(:max_decoded_bytes, bytes)
     FontValidator.reserve(:max_work, bytes)
 
     case List.keyfind(tables, "head", 0) do

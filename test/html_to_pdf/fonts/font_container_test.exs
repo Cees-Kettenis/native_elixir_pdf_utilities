@@ -336,6 +336,36 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontContainerGlobalStateTest do
     }
   end
 
+  test "successive font container expansions share the remaining decoded bytes", %{woff: woff} do
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, as: Budget
+    limits = Limits.effective()
+
+    for input <- [woff, File.read!(Paths.fixture("fonts/selected-transformed.woff2"))] do
+      {decoded, used} =
+        Budget.with_budget(fn ->
+          assert {:ok, decoded} = FontContainerValidator.prepare(input)
+          {decoded, Budget.snapshot().max_decoded_bytes}
+        end)
+
+      assert used >= byte_size(decoded)
+
+      for extra <- [0, 1] do
+        Limits.install(%{limits | max_decoded_bytes: 2 * used - extra})
+
+        Budget.with_budget(fn ->
+          assert {:ok, ^decoded} = FontContainerValidator.prepare(input)
+          result = FontContainerValidator.prepare(input)
+
+          if extra == 0,
+            do: assert({:ok, ^decoded} = result),
+            else: assert({:error, {:resource_limit_exceeded, %{stage: :font}}} = result)
+        end)
+      end
+
+      Limits.install(limits)
+    end
+  end
+
   test "decoded bytes and cumulative reconstruction work have independent limits", %{
     woff: woff,
     ttc: ttc

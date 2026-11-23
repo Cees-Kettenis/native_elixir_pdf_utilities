@@ -403,7 +403,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
 
         glyph = glyph <> :binary.copy(<<0>>, rem(2 - rem(byte_size(glyph), 2), 2))
         next = total + byte_size(glyph)
-        FontValidator.check(:max_decoded_bytes, next)
+        FontValidator.reserve(:max_decoded_bytes, byte_size(glyph))
 
         if format == 0 and next > 131_070,
           do: invalid("WOFF2 glyph offsets cannot fit short loca", "loca")
@@ -413,6 +413,8 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
 
     unless Enum.all?(Map.values(state), &(&1 == <<>>)),
       do: invalid("WOFF2 glyph streams have unused trailing bytes", "glyf")
+
+    FontValidator.reserve(:max_decoded_bytes, (count + 1) * if(format == 0, do: 2, else: 4))
 
     loca =
       for offset <- Enum.reverse(offsets),
@@ -582,6 +584,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
     unless metrics > 0 and metrics <= count,
       do: invalid("WOFF2 hmtx metric count is outside maxp glyphs", "hmtx")
 
+    FontValidator.reserve(:max_decoded_bytes, (metrics + count) * 2)
     {advances, bytes} = read(bytes, metrics * 2, "hmtx advances")
     xmins = glyph_xmins(tables, count)
 

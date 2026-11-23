@@ -31,7 +31,7 @@ defmodule NativeElixirPdfUtilities.Validators.BrotliValidator do
           do: invalid("Brotli requires binary source bytes and a nonnegative decoded length", 0)
 
         FontValidator.reserve_source(data)
-        FontValidator.check(:max_decoded_bytes, expected)
+        FontValidator.reserve(:max_decoded_bytes, expected)
 
         state = %{
           input: data,
