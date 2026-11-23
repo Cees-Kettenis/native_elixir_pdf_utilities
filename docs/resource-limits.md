@@ -34,7 +34,11 @@ milliseconds, the BEAM runtime's fixed maximum.
 | `max_operation_memory_bytes` | 1,073,741,824 | Observed BEAM worker memory and referenced binaries; also the ceiling for estimated working buffers |
 | `operation_memory_check_interval_ms` | 25 | Interval between worker-memory checks |
 
-Public document operations run in disposable workers. Nested calls share the
+High-level document operations such as `HtmlToPdf.render/2` run in disposable
+workers. If you call `HtmlToPdf.PdfWriter.render/2` directly with noninteractive
+pages, serialization runs in the calling process. Its byte and work limits
+still apply. Interactive PDF readback starts a worker with the shared budget.
+Nested calls within a high-level operation share the
 operation's deadline and memory allowance. Starting another loop or processing
 another format does not create a new allowance. Applications control concurrent
 operations. Form-value helpers check their own observed working set against the
