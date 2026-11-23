@@ -328,6 +328,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
     assert styles(html, "")["deep"].color == {0, 0, 1}
   end
 
+  test "automatic slot direction follows assigned nodes while sibling selectors use the shadow tree" do
+    html = """
+    <div><span slot="item" dir="ltr">Ignored</span><span slot="item">שלום</span>
+    <template shadowrootmode="open"><style>slot:dir(rtl) + p{color:blue}slot:dir(ltr) + p{color:red}</style>
+    <slot dir="auto" name="item">Fallback</slot><p id="assigned">Assigned</p>
+    <slot dir="auto" name="unused">Fallback</slot><p id="fallback">Fallback</p></template></div>
+    """
+
+    nodes = styles(html, "")
+    assert nodes["assigned"].color == {0, 0, 1}
+    assert nodes["fallback"].color == {1, 0, 0}
+  end
+
   test "direction matching resolves logical ancestor metadata during normal styling" do
     assert styles("<div dir='ltr'><p id='direction'>Text</p></div>", "p:dir(ltr){color:blue}")[
              "direction"

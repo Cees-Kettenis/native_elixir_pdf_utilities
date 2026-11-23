@@ -69,6 +69,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
     Map.merge(context, %{
       logical_nodes: logical,
+      direction_slots: Map.take(prepared, Map.keys(composition.assignments)),
       root_children: children,
       consumed_shadow_roots: composition.roots
     })
@@ -491,9 +492,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
 
         original = Map.get(Map.get(context, :logical_nodes, %{}), identity(node), node)
 
+        slots = Map.get(context, :direction_slots, %{})
+
         NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidator.direction(
-          original,
-          parents
+          Map.get(slots, identity(original), original),
+          Enum.map(parents, &Map.get(slots, identity(&1), &1))
         ) == direction
 
       :empty ->
