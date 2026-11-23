@@ -16,7 +16,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt do
       Enum.reduce(tables, {[], [], first_offset, 0}, fn {tag, data},
                                                         {records, payloads, offset, total} ->
         padding = rem(4 - rem(byte_size(data), 4), 4)
-        table_checksum = checksum(data)
+        # OpenType computes the head directory checksum with checkSumAdjustment zeroed.
+        table_checksum =
+          case {tag, data} do
+            {"head", <<_::64, previous::32, _::binary>>} ->
+              checksum(data) - previous &&& 0xFFFF_FFFF
+
+            _ ->
+              checksum(data)
+          end
+
         record = <<tag::binary-size(4), table_checksum::32, offset::32, byte_size(data)::32>>
 
         {[record | records], [:binary.copy(<<0>>, padding), data | payloads],

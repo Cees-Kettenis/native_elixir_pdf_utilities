@@ -10,6 +10,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColorFontTest do
     WriterValidator
   }
 
+  test "full embedding preserves the bitmap-only font's table and whole-file checksums" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.Font.Sfnt
+    source = File.read!(FontCorpus.path("selected-bitmap-only.ttf"))
+    assert {:ok, [font]} = Font.load_configured_faces([%{family: "Bitmap", data: source}])
+    assert Sfnt.checksum(font.data) == 0xB1B0_AFBA
+    <<_::32, count::16, _::48, records::binary-size(count * 16), _::binary>> = font.data
+
+    [{sum, offset, size}] =
+      for <<"head", sum::32, offset::32, size::32 <- records>>, do: {sum, offset, size}
+
+    <<prefix::binary-size(8), _adjustment::32, rest::binary>> =
+      binary_part(font.data, offset, size)
+
+    assert Sfnt.checksum(prefix <> <<0::32>> <> rest) == sum
+
+    assert {:ok, pdf} =
+             HtmlToPdf.render("<p style='font-family:Bitmap'>H</p>",
+               fonts: [%{family: "Bitmap", data: source}],
+               subset_fonts: false,
+               compress_streams: false
+             )
+
+    assert :binary.match(pdf, font.data) != :nomatch
+  end
+
   test "independent sbix and CBDT strikes select density, keep alpha and extract real selected text" do
     for file <- ["selected-sbix.ttf", "selected-cbdt.ttf", "selected-bitmap-only.ttf"] do
       data = FontCorpus.path(file) |> File.read!()
