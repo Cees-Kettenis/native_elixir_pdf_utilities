@@ -410,7 +410,17 @@ defmodule NativeElixirPdfUtilities.Validators.CssSelectorValidator do
         with {:ok, namespace, name, rest} <- attribute_name(body, context),
              {:ok, attribute, rest} <-
                HtmlValidator.parse_css_attribute_selector("[" <> name <> rest) do
-          attribute = if namespace == nil, do: attribute, else: {:namespace, namespace, attribute}
+          attribute =
+            cond do
+              namespace != nil ->
+                {:namespace, namespace, attribute}
+
+              Map.get(context, :html_attributes, false) ->
+                put_elem(attribute, 1, String.downcase(elem(attribute, 1), :ascii))
+
+              true ->
+                attribute
+            end
 
           parse_selector_modifiers(
             rest,

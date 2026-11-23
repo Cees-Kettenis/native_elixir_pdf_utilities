@@ -112,7 +112,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           {:ok, stylesheet()}
           | {:error, {:invalid_css | :not_implemented | :resource_limit_exceeded, map()}}
   def parse_detailed(css) do
-    with {:ok, prepared} <- prepare_stylesheet(css), do: {:ok, prepared.rules}
+    with {:ok, prepared} <- prepare_stylesheet(css, nil, :html_attributes),
+         do: {:ok, prepared.rules}
   end
 
   @typedoc false
@@ -129,7 +130,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         ) ::
           {:ok, prepared_stylesheet()}
           | {:error, {:invalid_css | :not_implemented | :resource_limit_exceeded, map()}}
-  def prepare_stylesheet(css, media_context \\ nil) do
+  def prepare_stylesheet(css, media_context \\ nil),
+    do: prepare_stylesheet(css, media_context, :authored_attributes)
+
+  defp prepare_stylesheet(css, media_context, attribute_mode) do
     HtmlValidator.with_render_budget(fn ->
       case HtmlValidator.validate_css_source(css) do
         {:ok, css} ->
@@ -140,7 +144,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           )
 
           RenderCache.fetch_stylesheet(
-            {:parsed, css, PrintMediaValidator.cache_context(css, media_context)},
+            {:parsed, css, PrintMediaValidator.cache_context(css, media_context), attribute_mode},
             fn ->
               with {:ok, active_css, namespaces} <- active_stylesheet(css, media_context),
                    {:ok, font_faces} <- parse_font_faces(active_css, css),
@@ -152,7 +156,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                      ) do
                 parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
 
-                {:ok, rules, cascade} = parse_rules(parsed_css, namespaces, media_context)
+                {:ok, rules, cascade} =
+                  parse_rules(parsed_css, namespaces, media_context, attribute_mode)
 
                 with {:ok, registrations} <-
                        CssPropertyRegistrationValidator.prepare(
@@ -1031,9 +1036,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp parse_rules(css, namespaces, media) do
+  defp parse_rules(css, namespaces, media, attribute_mode) do
+    settings = stylesheet_settings(css, media, [])
+
+    settings =
+      if attribute_mode == :html_attributes,
+        do: Map.put(settings || %{}, :html_attributes, true),
+        else: settings
+
     {:ok, cascade} =
-      CssStylesheetValidator.prepare(css, namespaces, stylesheet_settings(css, media, []))
+      CssStylesheetValidator.prepare(css, namespaces, settings)
 
     {:ok, rules} = sources_to_rules(cascade.rules, namespaces)
     {:ok, rules, cascade}

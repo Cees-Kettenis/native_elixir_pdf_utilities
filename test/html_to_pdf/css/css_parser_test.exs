@@ -495,7 +495,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
       [selector] = rule.selectors
       [part] = selector.parts
-      assert part.attributes == [{operator, "DATA-KIND", "AbC", mode}]
+      assert part.attributes == [{operator, "data-kind", "AbC", mode}]
       assert hd(part.negations).attributes == [{:equals, "title", "Skip", :insensitive}]
       assert selector.specificity == {0, 2, 1}
 
@@ -508,6 +508,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
     assert hd(hd(rule.selectors).parts).attributes == [
              {:equals, "lang", "", :sensitive},
              {:equals, "title", "αβ", :insensitive}
+           ]
+  end
+
+  test "public parsing folds unqualified attribute names after decoding escapes" do
+    css = ~S|svg[v\69 ewBox][DATA-X=Value] {color:red}|
+
+    for parse <- [&CssParser.parse/1, &CssParser.parse_detailed/1] do
+      assert {:ok, [rule]} = parse.(css)
+
+      assert hd(hd(rule.selectors).parts).attributes == [
+               {:present, "viewbox"},
+               {:equals, "data-x", "Value"}
+             ]
+    end
+
+    assert {:ok, %{rules: [rule]}} = CssParser.prepare_stylesheet(css)
+
+    assert hd(hd(rule.selectors).parts).attributes == [
+             {:present, "viewBox"},
+             {:equals, "DATA-X", "Value"}
            ]
   end
 

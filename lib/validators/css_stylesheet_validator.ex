@@ -49,6 +49,10 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
           scopes: [],
           container_queries: [],
           namespaces: namespaces,
+          selector_context: %{
+            namespaces: namespaces,
+            html_attributes: Map.get(settings, :html_attributes, false)
+          },
           selector_aliases: CssAliasValidator.definitions(source, :selector),
           media_aliases: CssAliasValidator.definitions(source, :media),
           media: Map.get(settings, :media),
@@ -369,7 +373,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
             true -> elem(replace_nesting(expanded, ":where(:scope)"), 0)
           end
 
-        case CssSelectorValidator.parse(selector, %{namespaces: context.namespaces}) do
+        case CssSelectorValidator.parse(selector, context.selector_context) do
           {:ok, parsed_selectors} ->
             parsed_selectors =
               if context.scope_language,
@@ -509,7 +513,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
                       else: elem(replace_nesting(body, ":where(:scope)"), 0)
                     )
 
-              case CssSelectorValidator.parse(body, %{namespaces: context.namespaces}) do
+              case CssSelectorValidator.parse(body, context.selector_context) do
                 {:ok, selectors} = result ->
                   if Enum.any?(selectors, fn selector ->
                        Enum.any?(
