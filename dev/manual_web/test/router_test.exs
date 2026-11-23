@@ -550,6 +550,42 @@ defmodule ManualWeb.RouterTest do
             }} = Info.get(update.resp_body)
   end
 
+  test "multipart merge uses the published field name and preserves upload order" do
+    operation = ManualWeb.OpenApi.document()["paths"]["/merge"]["post"]
+    schema = operation["requestBody"]["content"]["multipart/form-data"]["schema"]
+    [field] = schema["required"]
+    assert schema["properties"][field]["minItems"] == 2
+    boundary = "manual-pdf-form"
+
+    submit = fn labels ->
+      parts =
+        Enum.map(labels, fn label ->
+          [
+            "--",
+            boundary,
+            "\r\nContent-Disposition: form-data; name=\"",
+            field,
+            "\"; filename=\"",
+            label,
+            ".pdf\"\r\nContent-Type: application/pdf\r\n\r\n",
+            rendered_pdf(label),
+            "\r\n"
+          ]
+        end)
+
+      :post
+      |> conn("/merge", IO.iodata_to_binary([parts, "--", boundary, "--\r\n"]))
+      |> put_req_header("content-type", "multipart/form-data; boundary=" <> boundary)
+      |> Router.call(@router_options)
+    end
+
+    assert %{status: 200, resp_body: bytes} = submit.(["Alpha", "Beta"])
+    assert {:ok, text} = Text.extract(bytes)
+    assert text =~ ~r/Alpha.*Beta/s
+    assert %{status: 422} = submit.(["Alpha"])
+    assert %{status: 422} = post("/tokenize", %{})
+  end
+
   test "shows tokenizer diagnostics as operation errors" do
     response = post("/tokenize", %{"source" => "(unfinished"})
 

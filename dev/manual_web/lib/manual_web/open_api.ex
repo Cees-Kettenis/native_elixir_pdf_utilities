@@ -81,14 +81,14 @@ defmodule ManualWeb.OpenApi do
             upload_operation(
               "Merge two or more uploaded PDFs",
               %{
-                "pdfs" => %{
+                "pdfs[]" => %{
                   "type" => "array",
                   "minItems" => 2,
                   "items" => %{"type" => "string", "format" => "binary"}
                 },
                 "disposition" => disposition_schema()
               },
-              ["pdfs"],
+              ["pdfs[]"],
               "application/pdf"
             )
         },
@@ -365,6 +365,14 @@ defmodule ManualWeb.OpenApi do
               [],
               "text/html"
             )
+            |> put_in(["requestBody", "content", "multipart/form-data", "schema", "anyOf"], [
+              %{"required" => ["pdf"]},
+              %{"required" => ["source"], "properties" => %{"source" => %{"pattern" => "\\S"}}}
+            ])
+            |> put_in(["responses", "422"], %{
+              "description" => "Missing tokenizer input or a tokenization diagnostic",
+              "content" => %{"text/html" => %{"schema" => %{"type" => "string"}}}
+            })
         }
       }
     }
