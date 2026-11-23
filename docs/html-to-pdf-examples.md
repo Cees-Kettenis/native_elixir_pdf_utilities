@@ -1341,9 +1341,10 @@ For a COLR/CPAL font, a named palette can override individual entries:
 </style>
 ```
 
-Feature controls preserve their precedence and font-face defaults. An active
-feature that needs general OpenType shaping returns a diagnostic instead of
-silently rendering the wrong glyph. See [font support and limitations](html-to-pdf-compatibility.md#fonts-and-text).
+Feature controls preserve their precedence and font-face defaults. For example,
+turning common ligatures on can shape `ffi` in “office” as a single glyph when
+the selected font provides it. Unsupported glyph sequences follow the configured
+missing-glyph policy. See [font support and limitations](html-to-pdf-compatibility.md#fonts-and-text).
 
 ### Set PDF metadata
 
