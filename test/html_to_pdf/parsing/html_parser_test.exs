@@ -5,6 +5,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.HtmlParser
 
+  test "quoted attributes preserve Unicode adjacent to the delimiters" do
+    value = "\u0301choice\u0600"
+    html = ~s(<input name="#{value}" value='&#x301;choice&#x600;'>)
+    assert {:ok, %{children: [input]}} = HtmlParser.parse_detailed(html)
+    assert input.attributes["name"] == value
+    assert input.attributes["value"] == value
+  end
+
   test "original CSS token spans are independent of decoded declaration provenance" do
     html = "\uFEFF<style>/*é🙂*/\r\np{width:3pt}</style>\r<p STYLE='width&colon;3pt'>Good</p>"
     assert {:ok, dom} = HtmlParser.parse_document_detailed(html)

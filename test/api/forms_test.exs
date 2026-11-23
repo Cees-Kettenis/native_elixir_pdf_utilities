@@ -3,6 +3,15 @@ defmodule NativeElixirPdfUtilities.FormsTest do
   alias NativeElixirPdfUtilities.{Forms, HtmlToPdf, Text}
   alias NativeElixirPdfUtilities.Pdf.{Reader, IncrementalWriter}
 
+  test "quoted Unicode field names stay distinct after reopening the PDF" do
+    name = "\u0301A"
+    value = "Ada\u0600"
+    html = ~s(<input name="#{name}" value='#{value}'><input name="A" value="Second">)
+    assert {:ok, pdf} = NativeElixirPdfUtilities.HtmlToPdf.render(html)
+    assert {:ok, fields} = NativeElixirPdfUtilities.Forms.fields(pdf)
+    assert Enum.map(fields, &{&1.name, &1.value}) == [{name, value}, {"A", "Second"}]
+  end
+
   test "option labels and text-derived values follow separate initial rules" do
     for {option, value, label} <- [
           {"<option> \tAlpha\n Beta\r\f </option>", "Alpha Beta", "Alpha Beta"},

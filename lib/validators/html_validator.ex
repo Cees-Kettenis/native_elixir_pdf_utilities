@@ -3929,7 +3929,9 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
             ""
 
           <<quote, _rest::binary>> when quote in [?", ?'] ->
-            source_value |> String.slice(1..-2//1) |> HtmlEntities.decode(:attribute)
+            source_value
+            |> binary_part(1, byte_size(source_value) - 2)
+            |> HtmlEntities.decode(:attribute)
 
           source_value ->
             HtmlEntities.decode(source_value, :attribute)
