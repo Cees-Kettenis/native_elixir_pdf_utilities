@@ -718,7 +718,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
               "grid" ->
                 false
 
-              "resolution" ->
+              name when name in ["resolution", "orientation"] ->
                 true
 
               name when is_map_key(@numeric_features, name) ->
