@@ -75,7 +75,7 @@ The [runtime matrix](https://github.com/Cees-Kettenis/native_elixir_pdf_utilitie
 | Performance | Starts after all local correctness containers exit; CI runs it after ordinary checks on a runner separate from browser parity |
 | Failures | Later stages skip for that runtime; other runtimes continue |
 | Lock recovery | Inspect `.quality/matrix.lock` PID and `pdf-quality-<run>-*` containers; remove only after confirming the run stopped |
-| CI agreement | Same check policy and `--matrix-json` validation; host orchestration tests cover concurrency, isolation, failure reporting, performance ordering and future-runtime policy |
+| CI agreement | Local and CI runs share the library gates and `--matrix-json` validation. CI also runs the development app route tests listed above. Host orchestration tests cover concurrency, isolation, failure reporting, performance ordering and future-runtime policy |
 | Canonical runtime | Newest supported minor; coverage already includes its ordinary suite |
 | Runtime updates | Once a 1.21 image is available, add it to the matrix, keep three minors and measure its performance baseline |
 
