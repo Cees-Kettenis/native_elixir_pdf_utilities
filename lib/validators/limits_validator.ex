@@ -15,14 +15,16 @@ defmodule NativeElixirPdfUtilities.Validators.LimitsValidator do
         known_keys = Limits.keys()
         {overrides, ignored} = Enum.split_with(config, fn {key, _value} -> key in known_keys end)
 
-        if ignored != [] do
+        ignored
+        |> Keyword.keys()
+        |> Enum.uniq()
+        |> Enum.chunk_every(4)
+        |> Enum.each(fn keys ->
           Logger.warning(fn ->
-            keys = ignored |> Keyword.keys() |> Enum.uniq()
-
             "Ignoring unknown resource limit settings #{inspect(keys)}; these settings have no effect. " <>
               "See NativeElixirPdfUtilities.Limits.defaults/0 for supported settings."
           end)
-        end
+        end)
 
         keys = Keyword.keys(overrides)
 

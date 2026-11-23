@@ -217,6 +217,19 @@ defmodule NativeElixirPdfUtilities.LimitsTest do
     refute log =~ "private-config-value"
   end
 
+  test "every ignored setting is named even when the list exceeds runtime inspection limits" do
+    keys = Enum.map(1..168, &String.to_atom("retired_limit_#{&1}_bytes"))
+    config = [{:max_input_bytes, 123} | Enum.map(keys, &{&1, "private-config-value"})]
+
+    log =
+      capture_log(fn ->
+        assert {:ok, %{max_input_bytes: 123}} = LimitsValidator.validate(config)
+      end)
+
+    for key <- keys, do: assert(log =~ inspect(key))
+    refute log =~ "private-config-value"
+  end
+
   test "unknown-only configuration keeps all defaults" do
     assert capture_log(fn ->
              assert {:ok, limits} = LimitsValidator.validate(max_typo_bytes: :invalid)
