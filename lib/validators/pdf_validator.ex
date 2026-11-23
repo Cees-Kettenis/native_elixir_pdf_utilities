@@ -228,7 +228,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.with_budget(fn ->
       case Process.get(@reader_budget_key) do
         nil ->
-          Process.put(@reader_budget_key, %{})
+          Process.put(@reader_budget_key, true)
 
           try do
             fun.()
@@ -251,9 +251,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       nil ->
         :ok
 
-      budget ->
-        total = Map.get(budget, key, 0) + amount
-
+      _active ->
         case NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
                key,
                amount,
@@ -264,9 +262,6 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           :ok -> :ok
           error -> abort_reader_budget(error)
         end
-
-        Process.put(@reader_budget_key, Map.put(budget, key, total))
-        :ok
     end
   end
 
@@ -277,10 +272,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
       nil ->
         :ok
 
-      budget ->
-        work = Map.get(budget, :max_work, 0) + bytes
-        tokens = Map.get(budget, :max_entries, 0) + 1
-
+      _active ->
         with :ok <-
                NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
                  :max_work,
@@ -297,13 +289,6 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                  operation: :read,
                  module: Reader
                ) do
-          Process.put(
-            @reader_budget_key,
-            budget
-            |> Map.put(:max_work, work)
-            |> Map.put(:max_entries, tokens)
-          )
-
           :ok
         else
           error -> abort_reader_budget(error)
@@ -1817,8 +1802,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
 
         :error ->
           cache = :ets.new(__MODULE__, [:set, :private])
-          work = :atomics.new(1, signed: false)
-          resolution = %{cache: cache, work: work}
+          resolution = %{cache: cache}
 
           try do
             operation.(Keyword.put(opts, @reference_resolution_option, resolution))
@@ -1838,15 +1822,6 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
            module: Reader
          ) do
       :ok ->
-        case Process.get(@reader_budget_key) do
-          nil ->
-            %{work: work} = Keyword.fetch!(opts, @reference_resolution_option)
-            :atomics.add_get(work, 1, 1)
-
-          budget ->
-            Process.put(@reader_budget_key, Map.update(budget, :max_work, 1, &(&1 + 1)))
-        end
-
         :ok
 
       {:error, {reason, diagnostic}} ->
