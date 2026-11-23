@@ -3,6 +3,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReadingFlowTest do
 
   alias NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow
 
+  test "complete and staged renders retain the same logical order after pagination" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+    alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout, Pagination, PdfWriter}
+    opts = [system_font_discovery: false]
+
+    for {flow, expected} <- [{"reading-flow:flex-flow", "Alpha\nBravo"}, {"", "Bravo Alpha"}] do
+      section =
+        "<div style='display:flex;#{flow}'><div style='order:2;reading-order:-1'>Alpha</div><div style='order:1'>Bravo</div></div>"
+
+      html = section <> "<div style='break-before:page'>" <> section <> "</div>"
+      assert {:ok, full} = HtmlToPdf.render(html, opts)
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, styled} = Style.compute_detailed(dom, opts)
+      assert {:ok, layout} = Layout.layout(styled, opts)
+      assert {:ok, pages} = Pagination.paginate(layout, opts)
+      assert length(pages) == 2
+      assert {:ok, staged} = PdfWriter.render(pages, opts)
+
+      for pdf <- [full, staged] do
+        assert {:ok, text} = Text.extract(pdf, layout: false)
+        assert text == Enum.join([expected, expected], "\n")
+      end
+    end
+  end
+
   test "inapplicable flows leave layout items alone" do
     box = %{type: :text, text: "Source"}
     item = %{index: 1, style: %{}}

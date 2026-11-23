@@ -225,7 +225,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow do
           case {previous, line} do
             {:first, _} -> ""
             {{paragraph, index, _}, {paragraph, index, _}} -> ""
-            {{paragraph, _, _}, {paragraph, _, gap}} -> gap
+            {{paragraph, _, _}, {paragraph, _, gap}} when is_binary(gap) -> gap
             _ -> " "
           end
 
@@ -237,10 +237,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow do
 
   defp box_text(box) do
     case box do
-      %{actual_text: text} -> text
+      %{actual_text: text} when is_binary(text) -> text
       %{type: :text, text: text} -> text
       %{type: :image, image: %{logical_text: text}} when is_binary(text) -> text
-      %{boxes: boxes} -> item_text(boxes)
+      %{type: :drawing_group, boxes: boxes} -> item_text(boxes)
       _ -> ""
     end
   end

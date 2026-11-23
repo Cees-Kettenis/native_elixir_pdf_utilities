@@ -851,6 +851,13 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
       {true, validity} when validity in [true, :ok, :box_normalization] ->
         destination_pages = pages
 
+        # Capture logical text before glyph groups become visual runs and
+        # ActualText markers. Both paginated callers and full renders enter here.
+        pages =
+          if kind == :appearances,
+            do: pages,
+            else: NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow.prepare_pages(pages)
+
         {pages, counts} =
           if validity == :box_normalization do
             normalize_layout_boxes(pages, kind == :effect_pages)

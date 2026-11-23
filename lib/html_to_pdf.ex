@@ -349,11 +349,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf do
                          opts,
                          image_budget
                        ),
-                     pages <-
-                       NativeElixirPdfUtilities.HtmlToPdf.ReadingFlow.prepare_pages(
-                         prepared.pages
-                       ),
-                     {:ok, pdf_binary} <- PdfWriter.render(pages, prepared.options) do
+                     {:ok, pdf_binary} <- PdfWriter.render(prepared.pages, prepared.options) do
                   {:ok, pdf_binary}
                 end
               end)
