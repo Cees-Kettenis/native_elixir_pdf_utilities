@@ -7,6 +7,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontSelectionTest do
   alias NativeElixirPdfUtilities.TestSupport.Paths
   alias NativeElixirPdfUtilities.Validators.{CssFontValidator, CssFontFaceValidator}
 
+  test "public fallback uses closest weight while CSS uses directional selection" do
+    faces = for weight <- [500, 700], do: %{family: "Example", weight: weight, style: :normal}
+    assert Font.fallback_faces(%{fallback: faces}, 550, :normal) == faces
+    assert Font.css_fallback_faces(%{fallback: faces}, 550, :normal) == Enum.reverse(faces)
+  end
+
   # CSS Fonts 4, 1 February 2024, §5.2. These expected physical-face choices
   # follow the directional searches, rather than the old nearest-weight rule.
   test "directional weight and width searches select the specified physical face" do

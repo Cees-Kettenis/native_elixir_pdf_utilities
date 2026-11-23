@@ -95,7 +95,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontFallback do
               requested = Font.requested_faces(families, weight, font_style, registry)
 
               candidates =
-                [selected | requested ++ Font.fallback_faces(registry, weight, font_style)]
+                [selected | requested ++ Font.css_fallback_faces(registry, weight, font_style)]
                 |> then(fn fonts ->
                   case FontRenderingValidator.prepare_candidates(
                          fonts,

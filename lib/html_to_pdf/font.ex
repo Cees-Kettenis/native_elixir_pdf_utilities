@@ -283,8 +283,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
   """
   @spec fallback_faces(registry(), number(), font_style()) :: [embedded_font()]
   def fallback_faces(registry, weight, style) do
-    registry = scoped_registry(registry)
+    ordered_fallback_faces(scoped_registry(registry), fn font ->
+      abs(font.weight - weight) + if(font.style == style, do: 0, else: 1_000)
+    end)
+  end
 
+  @doc false
+  @spec css_fallback_faces(registry(), number(), font_style()) :: [embedded_font()]
+  def css_fallback_faces(registry, weight, style) do
+    registry = scoped_registry(registry)
+    selection = Map.get(registry, :selection, %{})
+    ordered_fallback_faces(registry, &Selection.rank(&1, weight, style, selection))
+  end
+
+  defp ordered_fallback_faces(registry, rank) do
     registry
     |> Map.get(:fallback, [])
     |> Enum.group_by(&String.downcase(&1.family))
@@ -296,9 +308,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
       |> Enum.flat_map(fn family ->
         grouped
         |> Map.fetch!(family)
-        |> Enum.sort_by(fn font ->
-          Selection.rank(font, weight, style, Map.get(registry, :selection, %{}))
-        end)
+        |> Enum.sort_by(rank)
       end)
     end)
   end
