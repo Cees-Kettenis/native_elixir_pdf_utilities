@@ -107,6 +107,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
     assert nodes["e"].font_style == :normal
   end
 
+  test "qualified attribute selectors use the expanded name from the HTML parser" do
+    css = """
+    @namespace xml "http://www.w3.org/XML/1998/namespace";
+    @namespace other "urn:other";
+    div:has(svg[xml|lang=en]){color:blue}
+    div:has(svg:not([*|lang])),div:has(svg[|lang]),div:has(svg[other|lang]){color:red}
+    """
+
+    assert styles("<div id='owner'><svg width='1' height='1' xml:lang='en'></svg></div>", css)[
+             "owner"
+           ].color == {0, 0, 1}
+  end
+
   test "namespaces are local to each stylesheet and do not apply to bare attributes" do
     css =
       "@namespace h 'http://www.w3.org/1999/xhtml';@namespace s url(http://www.w3.org/2000/svg);h|p{color:red}s|text{color:blue}|p{font-weight:bold}*|p[data-x]{font-style:italic}"

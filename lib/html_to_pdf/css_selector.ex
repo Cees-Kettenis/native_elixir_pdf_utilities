@@ -718,14 +718,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
         local = elem(selector, 1)
 
         Enum.any?(node.attributes, fn {name, value} ->
-          uri = Map.get(Map.get(node, :attribute_namespaces, %{}), name)
+          {uri, actual_name} =
+            case Map.get(Map.get(node, :attribute_namespaces, %{}), name) do
+              %{namespace: uri, local_name: local_name} -> {uri, local_name}
+              nil -> {nil, name}
+              uri -> {uri, List.last(String.split(name, ":"))}
+            end
 
           expected =
             if Map.get(node, :namespace, :html) == :html and is_nil(uri),
               do: String.downcase(local, :ascii),
               else: local
-
-          actual_name = if is_nil(uri), do: name, else: List.last(String.split(name, ":"))
 
           if actual_name == expected and
                (namespace == :any or uri == if(namespace == :none, do: nil, else: namespace)) do
