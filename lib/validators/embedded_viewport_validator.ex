@@ -12,6 +12,44 @@ defmodule NativeElixirPdfUtilities.Validators.EmbeddedViewportValidator do
   alias NativeElixirPdfUtilities.Validators.MimeValidator
   alias NativeElixirPdfUtilities.Validators.ResourceValidator
 
+  @doc "Checks the generated pre element and escaped content against the remaining source capacity."
+  @spec validate_text_wrapper(binary(), non_neg_integer()) :: :ok | {:error, {atom(), map()}}
+  def validate_text_wrapper(text, wrapper_bytes) do
+    available =
+      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.remaining(:max_input_bytes)
+
+    if escaped_text_fits?(text, available - wrapper_bytes - byte_size(text)),
+      do: :ok,
+      else:
+        Diagnostics.error(
+          :html,
+          :resource_limit_exceeded,
+          "escaped text document exceeds remaining max_input_bytes"
+        )
+  end
+
+  # Raw bytes are already included. Each replacement spends only its extra bytes.
+  defp escaped_text_fits?(text, extra) do
+    case text do
+      _ when extra < 0 ->
+        false
+
+      <<>> ->
+        true
+
+      <<byte, rest::binary>> ->
+        expansion =
+          case byte do
+            ?& -> 4
+            char when char in [?<, ?>] -> 3
+            ?" -> 5
+            _ -> 0
+          end
+
+        escaped_text_fits?(rest, extra - expansion)
+    end
+  end
+
   @doc "Classifies an authorized initial file document using shared MIME evidence before parsing or decoding."
   @spec prepare_initial_file(term(), term()) ::
           {:ok, :html | :text | :raster | :svg, String.t()}

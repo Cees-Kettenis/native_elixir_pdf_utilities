@@ -102,7 +102,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
            (case resource.kind do
               :text ->
                 with {:ok, text} <- HtmlValidator.validate_html_source(resource.bytes),
-                     do: {:ok, text_html(text, :document)}
+                     do: text_html(text, :document)
 
               :raster ->
                 {:file, path} = resource.source
@@ -227,7 +227,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
               :document ->
                 if mime == "text/plain" do
                   with {:ok, text} <- HtmlValidator.validate_html_source(resource.bytes),
-                       do: {:ok, text_html(text, :document)}
+                       do: text_html(text, :document)
                 else
                   {:ok, resource.bytes}
                 end
@@ -376,8 +376,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
   @spec prepare_text(term(), ResourceContext.t(), keyword()) ::
           {:ok, t()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_text(text, context, opts \\ []) do
-    with {:ok, text} <- HtmlValidator.validate_html_source(text) do
-      prepare_html({:srcdoc, text_html(text, :literal)}, context, opts)
+    with {:ok, text} <- HtmlValidator.validate_html_source(text),
+         {:ok, html} <- text_html(text, :literal) do
+      prepare_html({:srcdoc, html}, context, opts)
     end
   end
 
@@ -627,7 +628,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewport do
 
     # The generated opening newline is consumed by HTML's pre parser. The
     # source's own leading newline remains literal document content.
-    "<pre" <> style <> ">\n" <> escape_html(text) <> "</pre>"
+    wrapper = byte_size("<pre>\n</pre>") + byte_size(style)
+
+    with :ok <- EmbeddedViewportValidator.validate_text_wrapper(text, wrapper),
+         do: {:ok, "<pre" <> style <> ">\n" <> escape_html(text) <> "</pre>"}
   end
 
   defp image_html(reference, mode \\ :replacement) do

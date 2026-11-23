@@ -86,6 +86,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedViewportTest do
              [authorization_root: "/tmp", base_url: "/tmp"]
   end
 
+  test "literal text wrapper fits the remaining input capacity before escaping" do
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, as: Budget
+    size = byte_size("<pre>\n&amp;&lt;&gt;&quot;</pre>")
+
+    ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
+      Budget.with_budget(fn ->
+        assert :ok =
+                 Budget.reserve(
+                   :max_input_bytes,
+                   Budget.remaining(:max_input_bytes) - size + 1,
+                   :html
+                 )
+
+        assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+                 EmbeddedViewport.prepare_text(~s(&<>"), parent)
+
+        assert message =~ "escaped text"
+      end)
+    end)
+  end
+
   test "plain text preserves literal markup and rejects invalid UTF-8" do
     ResourceContext.run([], HtmlValidator.new_image_budget(), fn parent ->
       assert {:ok, surface} = EmbeddedViewport.prepare_text("<tag> & \"literal\"\nNext", parent)
