@@ -11,7 +11,8 @@ and [testing](testing.md) for requirements. Paths below are relative to `scripts
 | `performance-regression.exs` | Guarded workloads and fixed-baseline comparisons |
 | `benchmarks/` | Focused rendering/image benchmarks |
 | `fixtures/` | Browser sheets and PNG/PDF cases |
-| `data/` | HTML entities, quotation data and licenses |
+| `data/` | HTML entities, Unicode text tables and bidi, grapheme and line-break test vectors, CFF mappings and Brotli tables. The Unicode and Brotli source manifests pin the inputs. |
+| Historical generators | The [quotation exporter](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/8c7ea9206657d1d887cc77c6633ab49ca0d4d075/scripts/data/quotation/generate.py) and [math token metrics exporter](https://github.com/Cees-Kettenis/native_elixir_pdf_utilities/blob/8c7ea9206657d1d887cc77c6633ab49ca0d4d075/scripts/data/math-token-metrics/generate.py) are available at their pinned revision. |
 | `examples/` | Documented HTML/PDF examples |
 
 ## Common commands
