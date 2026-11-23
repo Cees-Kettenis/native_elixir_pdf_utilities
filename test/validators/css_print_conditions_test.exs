@@ -9,6 +9,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPrintConditionsTest do
     for query <- [
           "print and (color)",
           "(resolution)",
+          "not (max-resolution:-1dpi)",
+          "(-1dppx < resolution)",
           "(orientation)",
           "(color:8)",
           "(color:calc(8))",

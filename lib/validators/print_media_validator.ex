@@ -760,7 +760,7 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
       "resolution" ->
         case HtmlValidator.parse_css_number(expected) do
-          {value, unit} when value >= 0 and unit in ~w(dppx dpi dpcm x) ->
+          {value, unit} when unit in ~w(dppx dpi dpcm x) ->
             scale =
               case unit do
                 "dpi" -> 1 / 96
