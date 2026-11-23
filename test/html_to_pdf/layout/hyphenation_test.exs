@@ -80,6 +80,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationTest do
     end)
   end
 
+  test "equivalent language spellings have identical preparation and revalidation work" do
+    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+
+    costs =
+      for key <- ["en-us", "EN-US"] do
+        ResourceBudget.measure(:max_work, fn ->
+          RenderCache.with_stylesheets(fn ->
+            assert {:ok, model} =
+                     HyphenationValidator.prepare_dictionaries(%{
+                       key => %{patterns: ["a1bc"], provenance: %{source: "Local"}}
+                     })
+
+            HyphenationValidator.validate_prepared(model)
+          end)
+        end)
+      end
+
+    assert [{:ok, work}, {:ok, work}] = costs
+    assert work > 0
+  end
+
   test "improper dictionary lists return public option diagnostics" do
     for field <- [:patterns, :exceptions] do
       dictionary = Map.put(%{provenance: %{source: "Local"}}, field, ["ab" | :invalid])

@@ -19,10 +19,10 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
         # style validation. Child documents with different input are admitted anew.
         {previous, result} =
           RenderCache.fetch_stylesheet({__MODULE__, :dictionaries}, fn ->
-            {input, compile_dictionaries(input)}
+            {input, cached_dictionaries(input)}
           end)
 
-        if previous == input, do: result, else: compile_dictionaries(input)
+        if previous == input, do: result, else: cached_dictionaries(input)
       end
     end)
   catch
@@ -67,7 +67,9 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
 
         case definitions do
           {:ok, definitions} ->
-            case prepare_dictionaries(definitions) do
+            case RenderCache.fetch_stylesheet(canonical_key(definitions), fn ->
+                   prepare_dictionaries(definitions)
+                 end) do
               {:ok, prepared} when prepared == dictionaries -> :ok
               {:error, {:resource_limit_exceeded, _}} = error -> error
               _ -> invalid_prepared()
@@ -130,29 +132,43 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
     {:render_resource_limit, error} -> error
   end
 
-  defp compile_dictionaries(input) do
+  defp cached_dictionaries(input) do
     unless is_map(input),
       do: invalid("hyphenation dictionaries must map language identifiers to dictionaries", nil)
 
     HtmlValidator.check_render_resource(:max_entries, map_size(input), :options)
 
-    {dictionaries, _} =
-      Enum.reduce(input, {%{}, %{bytes: 0, entries: 0}}, fn {language, dictionary},
-                                                            {output, cost} ->
-        parts =
+    definitions =
+      Enum.reduce(input, %{}, fn {language, dictionary}, definitions ->
+        tag =
           case LanguageValidator.prepare_identifier(language) do
-            {:ok, parts} -> parts
+            {:ok, parts} -> Enum.join(parts, "-")
             _ -> invalid("dictionary languages require UTF-8 identifiers", nil)
           end
 
-        tag = Enum.join(parts, "-")
-
-        if tag == "" or Map.has_key?(output, tag),
+        if tag == "" or Map.has_key?(definitions, tag),
           do:
             invalid(
               "dictionary languages must be nonempty and unique after canonicalization",
               tag
             )
+
+        Map.put(definitions, tag, dictionary)
+      end)
+
+    RenderCache.fetch_stylesheet(canonical_key(definitions), fn ->
+      compile_dictionaries(definitions)
+    end)
+  end
+
+  defp canonical_key(definitions),
+    do: {__MODULE__, :canonical, definitions}
+
+  defp compile_dictionaries(definitions) do
+    {dictionaries, _} =
+      Enum.reduce(definitions, {%{}, %{bytes: 0, entries: 0}}, fn {tag, dictionary},
+                                                                  {output, cost} ->
+        parts = String.split(tag, "-")
 
         unless is_map(dictionary) and
                  Enum.all?(Map.keys(dictionary), &(&1 in [:patterns, :exceptions, :provenance])),
