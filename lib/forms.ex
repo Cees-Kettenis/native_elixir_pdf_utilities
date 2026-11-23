@@ -64,7 +64,8 @@ defmodule NativeElixirPdfUtilities.Forms do
             _ ->
               with {:ok, updated} <- FormWriter.fill(context, form, fields) do
                 if Map.get(opts, :flatten, false),
-                  do: flatten(updated, fields: Map.keys(values)),
+                  do:
+                    flatten_fields(updated, [fields: Map.keys(values)], &Reader.read_admitted/1),
                   else: {:ok, updated}
               end
           end
@@ -85,20 +86,21 @@ defmodule NativeElixirPdfUtilities.Forms do
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def flatten(pdf, opts \\ []) do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :flatten, fn ->
-      result =
-        with {:ok, opts} <- FormValidator.options(opts, :flatten),
-             {:ok, context} <- Reader.read_validated(pdf),
-             {:ok, form} <- FormValidator.inspect_document(context),
-             {:ok, fields} <- FormValidator.prepare_write(context, form, %{}, opts, :flatten),
-             {:ok, placements} <- FormValidator.prepare_flatten(context, fields, form) do
-          case fields do
-            [] -> {:ok, pdf}
-            _ -> FormWriter.flatten(context, form, fields, placements)
-          end
-        end
-
-      own_error(result, :flatten)
+      own_error(flatten_fields(pdf, opts, &Reader.read_validated/1), :flatten)
     end)
+  end
+
+  defp flatten_fields(pdf, opts, read) do
+    with {:ok, opts} <- FormValidator.options(opts, :flatten),
+         {:ok, context} <- read.(pdf),
+         {:ok, form} <- FormValidator.inspect_document(context),
+         {:ok, fields} <- FormValidator.prepare_write(context, form, %{}, opts, :flatten),
+         {:ok, placements} <- FormValidator.prepare_flatten(context, fields, form) do
+      case fields do
+        [] -> {:ok, pdf}
+        _ -> FormWriter.flatten(context, form, fields, placements)
+      end
+    end
   end
 
   defp own_error(result, operation) do
