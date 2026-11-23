@@ -109,8 +109,19 @@ For detailed errors, use:
 | CSS declarations | `CssParser.parse_declarations_detailed/1` |
 | Style | `Style.compute_detailed/2` |
 
-Convenience parser and style functions return reason atoms. `Layout.layout/2`
-does too. `HtmlToPdf.render/2` converts pipeline failures to diagnostics.
+Convenience parser and style functions return reason atoms. With
+`Layout.layout/2`, match both error shapes. For example:
+
+```elixir
+case Layout.layout(styled, options) do
+  {:ok, layout} -> {:ok, layout}
+  {:error, {_reason, %{message: message}}} -> {:error, message}
+  {:error, reason} when is_atom(reason) -> {:error, Atom.to_string(reason)}
+end
+```
+
+Invalid layout arguments can return a reason atom. Resource-limit failures
+include a diagnostic. `HtmlToPdf.render/2` converts pipeline failures to diagnostics.
 
 ### Internal modules
 
