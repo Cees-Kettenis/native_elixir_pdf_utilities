@@ -2315,6 +2315,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     body_inline_spacing_pre.html
     body_inline_spacing_pre_line.html
     inline_text_case_context.html
+    turkic_combining_case.html
     lithuanian_text_case_context.html
     css_comment_boundaries.html
     html_recovery_unclosed_elements.html

@@ -5,7 +5,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
   alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeCharacterProperty
 
   @word ~r/^[\p{L}\p{N}_]$/u
-  @mark ~r/^\p{M}$/u
   @word_ignorable ~r/^[\p{M}\p{Cf}'’]$/u
   @cased Regex.compile!(UnicodeCharacterProperty.expression("Cased", false), "u")
   @ignorable Regex.compile!(UnicodeCharacterProperty.expression("Case_Ignorable", false), "u")
@@ -54,7 +53,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
   def convert(text, transform, language) do
     language = List.first(language)
 
-    if language == "lt" and transform in [:uppercase, :lowercase, :capitalize] do
+    if (language == "lt" and transform in [:uppercase, :lowercase, :capitalize]) or
+         (language in ["tr", "az"] and transform == :lowercase) do
       [{0, text, transform, language}]
       |> map_events(false)
       |> Map.get(0, [])
@@ -68,7 +68,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
           String.upcase(text, mode)
 
         :lowercase ->
-          String.downcase(text, if(mode == :turkic, do: mode, else: :greek))
+          String.downcase(text, :greek)
 
         :capitalize ->
           Regex.replace(~r/\b\p{L}/u, text, fn char ->
@@ -87,7 +87,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
   end
 
   defp map_events(events, account?) do
-    lithuanian? = Enum.any?(events, &match?({_id, _text, _transform, "lt"}, &1))
+    contextual? = Enum.any?(events, &match?({_, _, _, lang} when lang in ["lt", "tr", "az"], &1))
 
     # Casing context uses the original characters across inline boundaries.
     # Canonical combining classes distinguish accents above from lower accents
@@ -108,7 +108,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
             |> Enum.reverse()
             |> Enum.reduce(acc, fn char, {tokens, {next_cased, next_dot, next_above}} ->
               combining_class =
-                if lithuanian? do
+                if contextual? do
                   <<codepoint::utf8>> = char
                   :unicode_util.lookup(codepoint).ccc
                 else
@@ -122,7 +122,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
                 Regex.match?(@cased, char) or
                   (Regex.match?(@ignorable, char) and next_cased)
 
-              dot = if Regex.match?(@mark, char), do: char == "̇" or next_dot, else: false
+              dot = char == "̇" or (combining_class not in [0, 230] and next_dot)
 
               above =
                 case combining_class do
@@ -196,7 +196,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
 
             {after_soft_dotted, capitalized_soft_dotted} =
               cond do
-                lithuanian? and Regex.match?(@soft_dotted, char) ->
+                contextual? and Regex.match?(@soft_dotted, char) ->
                   {true, transform == :capitalize and not word}
 
                 combining_class in [0, 230] ->
@@ -206,14 +206,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TextTransform do
                   {after_soft_dotted, capitalized_soft_dotted}
               end
 
-            mark = Regex.match?(@mark, char)
             word = Regex.match?(@word, char) or (Regex.match?(@word_ignorable, char) and word)
 
             cased =
               Regex.match?(@cased, char) or
                 (Regex.match?(@ignorable, char) and before_cased)
 
-            base = if mark, do: base, else: char
+            base = if combining_class in [0, 230], do: char, else: base
 
             {Map.update(texts, id, [mapped], &[mapped | &1]),
              {word, cased, base, after_soft_dotted, capitalized_soft_dotted}}

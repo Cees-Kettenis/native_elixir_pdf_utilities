@@ -48,6 +48,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineTextContextBrowserParityTest 
     end
   end
 
+  test "Turkish and Azeri lowercase match browser ink and extracted combining marks" do
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Paths.fixture("html_to_pdf/browser_parity/turkic_combining_case.html"),
+        render_opts: [system_font_discovery: false],
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    for name <- ["chromium", "native"] do
+      {text, 0} = System.cmd("pdftotext", [Path.join(stats.artifact_dir, name <> ".pdf"), "-"])
+
+      assert text |> String.normalize(:nfd) |> String.replace(~r/\s/u, "") ==
+               String.duplicate("ı\u0301\u0307/i\u0323/i", 2)
+    end
+  end
+
   @tag :lithuanian_case
   test "Lithuanian casing retains browser dots and accents across inline nodes" do
     stats =

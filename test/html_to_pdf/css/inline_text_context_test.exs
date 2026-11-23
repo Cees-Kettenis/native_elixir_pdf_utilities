@@ -60,6 +60,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineTextContextTest do
     assert text(tree) == "AbcdEfGhIjKlMnop"
   end
 
+  test "Turkic lowercasing observes combining-class barriers before and after I" do
+    for lang <- ["tr", "az"],
+        {between, expected} <- [
+          {"", "i"},
+          {"\u0323", "i\u0323"},
+          {"\u0301", "ı\u0301\u0307"},
+          {"\u034F", "ı\u034F\u0307"}
+        ] do
+      assert TextTransform.convert("I" <> between <> "\u0307", :lowercase, [lang]) == expected
+      html = "<p lang='#{lang}' style='text-transform:lowercase'>I<span>#{between}</span>̇</p>"
+      assert {:ok, dom} = HtmlParser.parse_detailed(html)
+      assert {:ok, tree} = Style.compute_detailed(dom)
+      assert text(tree) == expected
+    end
+  end
+
   test "known and explicitly unknown language select casing across inline boundaries" do
     for lang <- ["tr", "az"] do
       html =
