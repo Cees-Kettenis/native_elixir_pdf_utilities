@@ -609,6 +609,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationGlobalStateTest do
     end
   end
 
+  test "dictionary source bytes share the active input allowance once per definition" do
+    alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
+    alias NativeElixirPdfUtilities.TestSupport.ResourceBudget
+
+    input = %{"en" => %{patterns: ["a1b"], provenance: %{source: "Local"}}}
+    original = Limits.effective()
+
+    RenderCache.with_stylesheets(fn ->
+      for limit <- [14, 13, 14] do
+        Limits.install(%{original | max_input_bytes: limit})
+
+        {result, used} =
+          ResourceBudget.measure(:max_input_bytes, fn ->
+            HtmlValidator.with_render_budget(fn ->
+              HtmlValidator.reserve_render_resource(:max_input_bytes, 4, :html)
+
+              with {:ok, model} <- HyphenationValidator.prepare_dictionaries(input),
+                   do: HyphenationValidator.validate_prepared(model)
+            end)
+          end)
+
+        if limit == 14 do
+          assert result == :ok
+          assert used == 14
+        else
+          assert {:error, {:resource_limit_exceeded, %{stage: :options}}} = result
+        end
+      end
+    end)
+  end
+
   test "dictionary validation retains resource failures inside an enclosing render scope" do
     original = Limits.effective()
     definition = %{"en" => %{patterns: ["a1b"], provenance: %{source: "Authored"}}}

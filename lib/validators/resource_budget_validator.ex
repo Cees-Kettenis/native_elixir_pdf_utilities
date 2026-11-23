@@ -23,6 +23,10 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceBudgetValidator do
     end
   end
 
+  @doc "Identifies the current allowance for render-local admission caches."
+  @spec scope() :: reference() | nil
+  def scope, do: Process.get(@scope)
+
   @doc "Reserves admitted resource units against the operation's shared allowance."
   @spec reserve(Limits.key(), non_neg_integer(), atom(), keyword()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}

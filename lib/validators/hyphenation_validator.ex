@@ -3,7 +3,12 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
   @moduledoc false
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.HtmlToPdf.{RenderCache, TextTransform}
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, LanguageValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    LanguageValidator,
+    ResourceBudgetValidator
+  }
 
   @pattern ~r/\A[0-9]?\.?(?:[0-9]?[\p{L}\p{M}'’])+[0-9]?\.?[0-9]?\z/u
   @exception ~r/\A[\p{L}\p{M}'’]+(?:-[\p{L}\p{M}'’]+)*\z/u
@@ -18,9 +23,12 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
         # A shared source term avoids hashing all pattern strings on every
         # style validation. Child documents with different input are admitted anew.
         {previous, result} =
-          RenderCache.fetch_stylesheet({__MODULE__, :dictionaries}, fn ->
-            {input, cached_dictionaries(input)}
-          end)
+          RenderCache.fetch_stylesheet(
+            {__MODULE__, ResourceBudgetValidator.scope(), :dictionaries},
+            fn ->
+              {input, cached_dictionaries(input)}
+            end
+          )
 
         if previous == input, do: result, else: cached_dictionaries(input)
       end
@@ -36,12 +44,17 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
     if dictionaries == %{} do
       :ok
     else
-      {previous, result} =
-        RenderCache.fetch_stylesheet({__MODULE__, :prepared_models}, fn ->
-          {dictionaries, validate_dictionary_models(dictionaries)}
-        end)
+      HtmlValidator.with_render_budget(fn ->
+        {previous, result} =
+          RenderCache.fetch_stylesheet(
+            {__MODULE__, ResourceBudgetValidator.scope(), :prepared_models},
+            fn ->
+              {dictionaries, validate_dictionary_models(dictionaries)}
+            end
+          )
 
-      if previous == dictionaries, do: result, else: validate_dictionary_models(dictionaries)
+        if previous == dictionaries, do: result, else: validate_dictionary_models(dictionaries)
+      end)
     end
   end
 
@@ -156,18 +169,21 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
         Map.put(definitions, tag, dictionary)
       end)
 
-    RenderCache.fetch_stylesheet(canonical_key(definitions), fn ->
-      compile_dictionaries(definitions)
-    end)
+    RenderCache.fetch_stylesheet(
+      canonical_key(definitions),
+      fn ->
+        Enum.each(Map.keys(input), &account_bytes/1)
+        compile_dictionaries(definitions)
+      end
+    )
   end
 
   defp canonical_key(definitions),
-    do: {__MODULE__, :canonical, definitions}
+    do: {__MODULE__, ResourceBudgetValidator.scope(), :canonical, definitions}
 
   defp compile_dictionaries(definitions) do
     {dictionaries, _} =
-      Enum.reduce(definitions, {%{}, %{bytes: 0, entries: 0}}, fn {tag, dictionary},
-                                                                  {output, cost} ->
+      Enum.reduce(definitions, {%{}, 0}, fn {tag, dictionary}, {output, used} ->
         parts = String.split(tag, "-")
 
         unless is_map(dictionary) and
@@ -194,7 +210,7 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
         limit = NativeElixirPdfUtilities.Limits.get(:max_entries)
 
         entries =
-          Enum.reduce([patterns, exceptions], cost.entries, fn list, count ->
+          Enum.reduce([patterns, exceptions], used, fn list, count ->
             case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
                    list,
                    limit - count
@@ -210,13 +226,11 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
             end
           end)
 
-        cost = %{cost | entries: entries}
-        cost = account_bytes(tag, cost)
-        cost = Enum.reduce(Map.values(provenance), cost, &account_bytes/2)
+        Enum.each(Map.values(provenance), &account_bytes/1)
 
-        {trie, cost} =
-          Enum.reduce(patterns, {%{}, cost}, fn pattern, {trie, cost} ->
-            cost = if is_binary(pattern), do: account_bytes(pattern, cost), else: cost
+        trie =
+          Enum.reduce(patterns, %{}, fn pattern, trie ->
+            if is_binary(pattern), do: account_bytes(pattern)
 
             unless is_binary(pattern) and String.valid?(pattern) and
                      Regex.match?(@pattern, pattern),
@@ -254,12 +268,12 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
               :options
             )
 
-            {insert(trie, letters, weights), cost}
+            insert(trie, letters, weights)
           end)
 
-        {exceptions, cost} =
-          Enum.reduce(exceptions, {%{}, cost}, fn exception, {exceptions, cost} ->
-            cost = if is_binary(exception), do: account_bytes(exception, cost), else: cost
+        exceptions =
+          Enum.reduce(exceptions, %{}, fn exception, exceptions ->
+            if is_binary(exception), do: account_bytes(exception)
 
             unless is_binary(exception) and String.valid?(exception) and
                      Regex.match?(@exception, exception),
@@ -291,7 +305,7 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
                   else: {positions, offset + 1}
               end)
 
-            {Map.put(exceptions, word, Enum.reverse(positions)), cost}
+            Map.put(exceptions, word, Enum.reverse(positions))
           end)
 
         {Map.put(output, tag, %{
@@ -300,7 +314,7 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
            exceptions: exceptions,
            provenance: provenance,
            definition: dictionary
-         }), cost}
+         }), entries}
       end)
 
     {:ok, dictionaries}
@@ -320,11 +334,9 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
     end
   end
 
-  defp account_bytes(text, cost) do
-    bytes = cost.bytes + byte_size(text)
-    HtmlValidator.check_render_resource(:max_input_bytes, bytes, :options)
+  defp account_bytes(text) do
+    HtmlValidator.reserve_render_resource(:max_input_bytes, byte_size(text), :options)
     HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :options)
-    %{cost | bytes: bytes}
   end
 
   defp invalid(message, source),
