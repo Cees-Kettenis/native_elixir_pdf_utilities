@@ -61,6 +61,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.EmbeddedResource do
                      {:ok, bytes} <- FileReader.read(path, maximum),
                      {:ok, kind, _mime} <-
                        EmbeddedViewportValidator.prepare_initial_file(bytes, path),
+                     :ok <-
+                       if(kind == :raster,
+                         do: ResourceContext.admit_initial_image(child, path, bytes),
+                         else: :ok
+                       ),
                      do: {:ok, bytes, kind}
             end) do
       {:ok, %{context: child, source: descriptor, bytes: bytes, kind: kind}}

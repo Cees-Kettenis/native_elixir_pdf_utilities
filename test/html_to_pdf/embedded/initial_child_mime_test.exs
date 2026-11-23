@@ -115,6 +115,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeTest do
 
         assert {:bytes, bytes} = prepared.options[:assets][path]
         assert bytes == File.read!(path)
+        assert :atomics.get(parent.image_budget, 1) == previous_count + 1
+        assert :atomics.get(parent.image_budget, 2) == previous_bytes + byte_size(bytes)
         assert {:ok, surface} = EmbeddedViewport.style_viewport(prepared, 90, 60)
         assert :atomics.get(parent.image_budget, 1) == previous_count + 1
         [body] = surface.tree.children
@@ -199,6 +201,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialChildMimeTest do
 
     assert {:ok, text} = Text.extract(pdf)
     assert text =~ "Inline selected"
+  end
+
+  test "sibling raster documents share the source allowance before styling", %{
+    root: root,
+    png: png
+  } do
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
+    original = Limits.effective()
+
+    ResourceContext.run([authorization_root: root], HtmlValidator.new_image_budget(), fn parent ->
+      assert {:ok, _} = EmbeddedViewport.prepare_iframe_document("image.png", parent)
+      used = ResourceBudgetValidator.snapshot().max_input_bytes
+      Limits.install(%{original | max_input_bytes: used + byte_size(png) - 1})
+
+      assert {:error, {:resource_limit_exceeded, _}} =
+               EmbeddedViewport.prepare_iframe_document("image.png", parent)
+
+      assert :atomics.get(parent.image_budget, 2) == byte_size(png)
+      assert ResourceContext.current() == parent
+    end)
   end
 
   test "shared source and pixel ceilings diagnose before decoder allocation and retain current context",

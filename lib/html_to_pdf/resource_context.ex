@@ -60,6 +60,35 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ResourceContext do
   end
 
   @doc false
+  @spec admit_initial_image(t(), String.t(), binary()) ::
+          :ok | {:error, Diagnostics.detailed_error()}
+  def admit_initial_image(child, path, bytes) do
+    with :ok <- HtmlValidator.reserve_image_source(child.image_budget, byte_size(bytes)) do
+      key = {__MODULE__, child.scope}
+      state = Process.get(key)
+      Process.put(key, Map.put(state, {:initial_image, child.document_id}, {path, bytes}))
+      :ok
+    end
+  end
+
+  @doc false
+  @spec take_initial_image(t(), term(), term()) :: boolean()
+  def take_initial_image(child, path, source) do
+    key = {__MODULE__, child.scope}
+    receipt = {:initial_image, child.document_id}
+    state = Process.get(key)
+
+    case {Map.get(state, receipt), source} do
+      {{^path, bytes}, {:bytes, bytes}} ->
+        Process.put(key, Map.delete(state, receipt))
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  @doc false
   @spec current() :: t() | nil
   def current do
     Process.get({__MODULE__, :document})

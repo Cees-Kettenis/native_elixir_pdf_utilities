@@ -76,7 +76,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.AssetLoader do
           FontValidator.with_budget(fn ->
             if kind == :font, do: FontValidator.reserve(:max_entries, 1)
 
-            resolve_explicit_source(source, reference, budget)
+            if kind == :image and ResourceContext.take_initial_image(context, reference, source) do
+              {:bytes, bytes} = source
+              {:ok, bytes}
+            else
+              resolve_explicit_source(source, reference, budget)
+            end
           end)
 
         TemplateRendererContextValidator.observe_resource(
