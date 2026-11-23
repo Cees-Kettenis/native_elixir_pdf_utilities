@@ -1533,6 +1533,9 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
         when type not in [:text, :image, :link_region] and not is_nil(quad) ->
           false
 
+        %{type: type, link_quads: _} when type != :link_region ->
+          false
+
         %{drawing_annotation_rect: _} ->
           false
 

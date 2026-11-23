@@ -199,6 +199,28 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontAndAnnotationValidationTest do
     assert pdf =~ "/QuadPoints"
   end
 
+  test "polygon lists require a link region on pages and inside drawing groups", %{
+    text: text,
+    group: group
+  } do
+    linked = Map.put(text, :link_url, "https://example.test/guide")
+    affine = %{group | transform: {1, 0.2, 0.1, 1, 0, 0}}
+
+    for boxes <- [[linked], [%{affine | boxes: [linked]}]] do
+      assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: boxes}])
+      assert pdf =~ "/Subtype /Link"
+    end
+
+    for quads <- [[], [[{10, 20}, {20, 20}, {20, 30}, {10, 30}]]] do
+      invalid = Map.put(linked, :link_quads, quads)
+
+      for boxes <- [[invalid], [%{affine | boxes: [invalid]}]] do
+        assert {:error, {_, %{stage: :pdf}}} =
+                 PdfWriter.render([%{size: {100, 100}, boxes: boxes}])
+      end
+    end
+  end
+
   test "page clipping drops off-page authored corners and preserves border-box image hit areas",
        %{group: group, text: text} do
     link = %{
