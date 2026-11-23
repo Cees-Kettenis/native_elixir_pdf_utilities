@@ -498,6 +498,72 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     assert {:ok, "Two"} = Text.extract(second)
   end
 
+  @tag :tmp_dir
+  test "flattening preserves NoRotate and ordinary appearance pixels for each page rotation", %{
+    tmp_dir: dir
+  } do
+    alias NativeElixirPdfUtilities.Forms
+    alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
+
+    source = fn rotation, flags, retained_rect ->
+      art = "1 0 0 rg 0 0 50 20 re f 0 0 1 rg 0 0 10 5 re f"
+
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [6 0 R 4 0 R] >> >>"},
+        {2, "<< /Type /Pages /Count 1 /Kids [3 0 R] /Rotate #{rotation} >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 240] /Resources << >> /Annots [6 0 R 4 0 R] >>"},
+        {4,
+         "<< /Subtype /Widget /FT /Tx /T (selected) /Rect [95 100 145 120] /F #{flags} /AP << /N 5 0 R >> >>"},
+        {5,
+         "<< /Type /XObject /Subtype /Form /BBox [0 0 50 20] /Resources << >> /Length #{byte_size(art)} >>\nstream\n#{art}\nendstream"},
+        {6,
+         "<< /Subtype /Widget /FT /Tx /T (kept) /Rect #{retained_rect} /F 4 /AP << /N 5 0 R >> >>"}
+      ])
+    end
+
+    for rotation <- [0, 90, 180, -90], flags <- [4, 20] do
+      input = source.(rotation, flags, "[10 10 20 20]")
+      assert {:ok, output} = Forms.flatten(input, fields: ["selected"])
+      assert {:ok, [%{name: "kept", read_only: false}]} = Forms.fields(output)
+
+      raster = fn pdf, kind ->
+        PdfVisualCompare.rasterize_pdf!(pdf,
+          artifact_dir: Path.join(dir, "#{rotation}-#{flags}-#{kind}")
+        )
+      end
+
+      [live] = raster.(input, "live")
+      [flat] = raster.(output, "flat")
+
+      if flags == 4 or rotation == 0 do
+        assert live == flat
+      else
+        # Poppler antialiases the boundary of a rotated live annotation
+        # differently from the same path in page content. Compare every solid
+        # artwork pixel, retaining its exact position and asymmetric color.
+        solid = fn pixels ->
+          for <<rgb::24 <- pixels>>, into: <<>> do
+            case rgb do
+              0xFF0000 -> <<1>>
+              0x0000FF -> <<2>>
+              _ -> <<0>>
+            end
+          end
+        end
+
+        assert solid.(live.pixels) == solid.(flat.pixels), "rotation #{rotation}"
+      end
+    end
+
+    assert {:error, {:unsupported_form, _}} =
+             Forms.flatten(source.(90, 20, "[100 130 110 140]"), fields: ["selected"])
+
+    for rotation <- [45, "99 0 R"] do
+      assert {:error, _} = Forms.flatten(source.(rotation, 20, "[10 10 20 20]"))
+    end
+  end
+
   test "page assembly resolves each relative annotation URI against its own catalog" do
     pdf = fn base ->
       three_page_pdf(

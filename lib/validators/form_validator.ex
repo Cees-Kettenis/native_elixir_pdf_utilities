@@ -326,13 +326,13 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           {:cont, {[placement | ordered], painted, count}}
 
         {:ok, placement} ->
-          {:cont, {[placement | ordered], [placement.widget.rect | painted], count + 1}}
+          {:cont, {[placement | ordered], [placement.painted_rect | painted], count + 1}}
 
         :error when count == 0 ->
           {:cont, state}
 
         :error ->
-          case validate_retained_annotation(document, ref, painted, count) do
+          case validate_retained_annotation(document, hd(placements).page, ref, painted, count) do
             :ok -> {:cont, state}
             error -> {:halt, error}
           end
@@ -344,7 +344,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   end
 
-  defp validate_retained_annotation(document, ref, painted, count) do
+  defp validate_retained_annotation(document, page, ref, painted, count) do
     with {:ok, annotation} <- PdfValidator.dictionary(document, ref),
          {:ok, flags} <- PdfValidator.optional_entry(document, annotation, "F", 0) do
       cond do
@@ -357,14 +357,19 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         true ->
           with {:ok, [x0, y0, x1, y1]} <-
                  PdfValidator.number_array(document, annotation["Rect"], 4),
+               {:ok, _, [left, bottom, right, top]} <-
+                 annotation_frame(document, page, flags, [
+                   min(x0, x1),
+                   min(y0, y1),
+                   max(x0, x1),
+                   max(y0, y1)
+                 ]),
                :ok <-
                  NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
                    :max_work,
                    count,
                    :forms
                  ) do
-            {left, bottom, right, top} = {min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)}
-
             overlaps? =
               Enum.any?(painted, fn [widget_left, widget_bottom, widget_right, widget_top] ->
                 max(left, widget_left) < min(right, widget_right) and
@@ -428,6 +433,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         ap: static.ap,
         normal: static.normal,
         states: [],
+        flags: static.flags,
         hidden: hidden_flags(static.flags)
       }
 
@@ -454,6 +460,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           else: widget.normal[widget.appearance_state]
 
       with :ok <- flatten_layer(document, widget.dictionary),
+           {:ok, frame, painted_rect} <-
+             annotation_frame(document, placement.page, widget.flags, widget.rect),
            {:ok, stream} <- PdfValidator.validate_stream(document, normal),
            {:ok, bbox} <- PdfValidator.number_array(document, stream.dictionary["BBox"], 4),
            {:ok, matrix} <-
@@ -477,6 +485,12 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           sx = (right - left) / width
           sy = (top - bottom) / height
           placement_matrix = [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
+
+          placement_matrix =
+            if frame,
+              do: PdfValidator.multiply_matrices(frame, placement_matrix),
+              else: placement_matrix
+
           composed = PdfValidator.multiply_matrices(placement_matrix, matrix)
           [combined_a, combined_b, combined_c, combined_d, _, _] = composed
 
@@ -487,6 +501,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                 {:ok,
                  Map.merge(placement, %{
                    stream: stream.ref,
+                   painted_rect: painted_rect,
                    matrix: placement_matrix
                  })}
 
@@ -503,6 +518,30 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
     end
   rescue
     ArithmeticError -> appearance_geometry_error(widget)
+  end
+
+  # NoRotate keeps the upper-left corner fixed in default user space (PDF 12.5.3).
+  # Apply the same transform to artwork and to the bounds used for stacking.
+  defp annotation_frame(document, page, flags, [l, b, r, t] = rect) do
+    if (flags &&& 16) == 0 do
+      {:ok, nil, rect}
+    else
+      case PdfValidator.resolve(document, page.rotate || 0) do
+        {:ok, degrees} when is_integer(degrees) and rem(degrees, 90) == 0 ->
+          case Integer.mod(degrees, 360) do
+            0 -> {:ok, nil, rect}
+            90 -> {:ok, [0, 1, -1, 0, l + t, t - l], [l, t, l + (t - b), t + (r - l)]}
+            180 -> {:ok, [-1, 0, 0, -1, 2 * l, 2 * t], [l - (r - l), t, l, t + (t - b)]}
+            270 -> {:ok, [0, -1, 1, 0, l - t, t + l], [l - (t - b), t - (r - l), l, t]}
+          end
+
+        {:ok, _} ->
+          error(:invalid_form, "NoRotate requires a page rotation in multiples of 90 degrees")
+
+        failure ->
+          failure
+      end
+    end
   end
 
   defp flatten_layer(document, dictionary) do
@@ -830,6 +869,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         widget = %{
           ref: ref,
           dictionary: dictionary,
+          flags: flags,
           hidden: hidden_flags(flags),
           page: page,
           rect: rect,
