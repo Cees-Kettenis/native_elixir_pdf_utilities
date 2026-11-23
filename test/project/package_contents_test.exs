@@ -32,6 +32,9 @@ defmodule NativeElixirPdfUtilities.PackageContentsTest do
           priv/html_to_pdf/temporal/time_icon.svg
           priv/html_to_pdf/temporal/LICENSE.chromium
           priv/html_to_pdf/temporal/README.md
+          priv/fonts/brotli/dictionary.bin
+          priv/licenses/brotli-MIT.txt
+          priv/licenses/cff-character-mappings-MIT.txt
           priv/licenses/icu-78-quotation-LICENSE.txt
           priv/licenses/unicode-character-properties-UNICODE-3.0.txt
         ) do
