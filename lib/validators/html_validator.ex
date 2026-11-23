@@ -6403,7 +6403,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
           "page spread requires left or right recto and first sides",
           module: __MODULE__,
           operation: :paginate,
-          source: :page_spread
+          source: "page_spread"
         )
     end
   end

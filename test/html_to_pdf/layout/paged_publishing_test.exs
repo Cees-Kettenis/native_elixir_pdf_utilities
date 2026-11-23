@@ -190,7 +190,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PagedPublishingTest do
   test "pagination diagnoses malformed page-side metadata on supplied layout trees" do
     layout = %{type: :layout, boxes: [], page_size: {100, 100}, page_spread: %{recto: :left}}
 
-    assert {:error, {:invalid_layout, %{source: :page_spread, operation: :paginate}}} =
+    assert {:error, {:invalid_layout, %{source: "page_spread", operation: :paginate}}} =
              NativeElixirPdfUtilities.HtmlToPdf.Pagination.paginate(layout)
   end
 
