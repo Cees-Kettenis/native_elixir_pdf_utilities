@@ -1489,6 +1489,10 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
           is_map(clip) and valid_clip_rectangle?(clip, true) and
             valid_box?(Map.delete(box, :native_menu_clip), parent_height)
 
+        %{type: type, link_quad_points: quad}
+        when type not in [:text, :image, :link_region] and not is_nil(quad) ->
+          false
+
         %{drawing_annotation_rect: _} ->
           false
 

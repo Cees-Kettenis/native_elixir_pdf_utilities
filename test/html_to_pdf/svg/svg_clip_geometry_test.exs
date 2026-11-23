@@ -45,6 +45,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClipGeometryTest do
     assert {:ok, pdf} = PdfWriter.render([%{size: {100, 100}, boxes: [region]}])
     assert pdf =~ "/QuadPoints [0 20 0 20 0 0 20 0]"
 
+    rectangle = %{
+      type: :rect,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      fill_color: {0, 0, 0},
+      stroke_color: nil,
+      stroke_width: 0,
+      border_radius: 0
+    }
+
+    for quad <- [[], [1, 2], region.link_quad_points] do
+      assert {:error, {:invalid_pdf_input, _}} =
+               PdfWriter.render([
+                 %{size: {100, 100}, boxes: [Map.put(rectangle, :link_quad_points, quad)]}
+               ])
+    end
+
     fractional = %{
       type: :link_region,
       x: 11.3525,
