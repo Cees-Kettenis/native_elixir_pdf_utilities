@@ -498,6 +498,27 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     assert {:ok, "Two"} = Text.extract(second)
   end
 
+  test "ordinary PDF resource names may use the optional-content keyword" do
+    for fonts <- ["<< /OC 15 0 R >>", "18 0 R"] do
+      source =
+        three_page_pdf(
+          "/Resources << /Font #{fonts} >> /Contents 19 0 R",
+          [
+            {16, "<< /Type /OCG /Name (Unused) >>"},
+            {18, "<< /OC 15 0 R >>"},
+            {19, stream("BT /OC 12 Tf 20 100 Td (Visible) Tj ET")}
+          ],
+          "/OCProperties << /OCGs [16 0 R] >>"
+        )
+
+      assert {:ok, picked} = Transform.pick_pages(source, [1])
+      assert {:ok, "Visible"} = Text.extract(picked)
+      assert {:ok, merged} = Merge.merge([source])
+      assert {:ok, [first | _]} = Split.by_page(merged)
+      assert {:ok, "Visible"} = Text.extract(first)
+    end
+  end
+
   test "preserves direct named annotations in direct and indirect arrays" do
     annotations =
       "[<< /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >> " <>

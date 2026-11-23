@@ -71,7 +71,12 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
                PdfValidator.validate_artwork_import(input, :all, :pages)
     end
 
-    for resource <- [%{"Type" => missing}, %{"OC" => missing}, missing] do
+    for resource <- [
+          %{"Type" => missing},
+          %{"OC" => missing},
+          missing,
+          %{"XObject" => %{"Form" => %{"OC" => missing}}}
+        ] do
       input = %{context | pages: [%{page | resources: resource}]}
 
       assert {:error, {:invalid_pdf_input, %{stage: :resolution}}} =

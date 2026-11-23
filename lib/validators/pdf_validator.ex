@@ -1034,7 +1034,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           for {page, index} <- Enum.with_index(context.pages, 1),
               selected == :all or MapSet.member?(selected, index) do
             annotations = if kind == :pages, do: page.dictionary["Annots"]
-            [page.resources, page.dictionary["Group"], annotations]
+            [{:resources, page.resources}, page.dictionary["Group"], annotations]
           end
 
         # Annotation page pointers and link destinations can lead back into
@@ -1059,6 +1059,32 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         charge_reader_budget(:max_work, 1)
 
         case value do
+          {role, entry} when role in [:resources, :resource_names] ->
+            # Resource names (including /OC and /Type) belong to the local
+            # resource dictionary. Only the objects they name describe artwork.
+            with {:ok, dictionary} <- resolve(document, entry, opts) do
+              children =
+                case {role, dictionary} do
+                  {:resources, resources} when is_map(resources) ->
+                    Enum.map(resources, fn
+                      {key, names}
+                      when key in ~w(Font XObject ExtGState ColorSpace Pattern Shading Properties) ->
+                        {:resource_names, names}
+
+                      {_key, value} ->
+                        value
+                    end)
+
+                  {:resource_names, names} when is_map(names) ->
+                    Map.values(names)
+
+                  _ ->
+                    [dictionary]
+                end
+
+              check_layer_dependencies(children ++ rest, document, seen, groups, opts)
+            end
+
           {:ref, ref} ->
             cond do
               MapSet.member?(groups, value) ->
@@ -1084,7 +1110,10 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                  {:ok, type} when type not in [{:name, "OCG"}, {:name, "OCMD"}] <-
                    resolve(document, dictionary["Type"], opts) do
               check_layer_dependencies(
-                Map.values(dictionary) ++ rest,
+                Enum.map(dictionary, fn
+                  {"Resources", resources} -> {:resources, resources}
+                  {_key, entry} -> entry
+                end) ++ rest,
                 document,
                 seen,
                 groups,
