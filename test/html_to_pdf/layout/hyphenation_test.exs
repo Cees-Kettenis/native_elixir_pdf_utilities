@@ -80,6 +80,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationTest do
     end)
   end
 
+  test "improper dictionary lists return public option diagnostics" do
+    for field <- [:patterns, :exceptions] do
+      dictionary = Map.put(%{provenance: %{source: "Local"}}, field, ["ab" | :invalid])
+
+      assert {:error, {:invalid_options, %{source: "en", stage: :options}}} =
+               NativeElixirPdfUtilities.HtmlToPdf.render("<p>Word</p>",
+                 hyphenation_dictionaries: %{"en" => dictionary}
+               )
+    end
+  end
+
   test "malformed dictionaries and words return shared actionable diagnostics" do
     valid = %{patterns: ["a1b"], provenance: %{source: "Authored"}}
 
@@ -620,6 +631,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HyphenationGlobalStateTest do
 
       assert diagnostic.message =~ Atom.to_string(limit)
     end
+
+    Limits.install(%{original | max_entries: 2})
+
+    assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+             HyphenationValidator.prepare_dictionaries(%{
+               "en" => Map.put(valid, :exceptions, ["a-b"])
+             })
+
+    assert message =~ "max_entries"
 
     Limits.install(original)
     assert {:ok, dictionaries} = HyphenationValidator.prepare_dictionaries(%{"en" => valid})

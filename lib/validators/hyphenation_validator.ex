@@ -175,11 +175,25 @@ defmodule NativeElixirPdfUtilities.Validators.HyphenationValidator do
         patterns = Map.get(dictionary, :patterns, [])
         exceptions = Map.get(dictionary, :exceptions, [])
 
-        unless is_list(patterns) and is_list(exceptions),
-          do: invalid("dictionary patterns and exceptions must be lists", tag)
+        limit = NativeElixirPdfUtilities.Limits.get(:max_entries)
 
-        entries = cost.entries + length(patterns) + length(exceptions)
-        HtmlValidator.check_render_resource(:max_entries, entries, :options)
+        entries =
+          Enum.reduce([patterns, exceptions], cost.entries, fn list, count ->
+            case NativeElixirPdfUtilities.Validators.CollectionValidator.bounded_length(
+                   list,
+                   limit - count
+                 ) do
+              {:ok, length} ->
+                count + length
+
+              :invalid ->
+                invalid("dictionary patterns and exceptions must be proper lists", tag)
+
+              :limit_exceeded ->
+                HtmlValidator.check_render_resource(:max_entries, limit + 1, :options)
+            end
+          end)
+
         cost = %{cost | entries: entries}
         cost = account_bytes(tag, cost)
         cost = Enum.reduce(Map.values(provenance), cost, &account_bytes/2)
