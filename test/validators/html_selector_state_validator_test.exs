@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidatorTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssSelector
 
   test "directionality resolves inherited auto text and text control values independently of CSS direction" do
+    assert HtmlSelectorStateValidator.direction(element("p"), []) == "ltr"
     parent = element("div", %{"dir" => "RTL"})
     assert HtmlSelectorStateValidator.direction(element("p"), [parent]) == "rtl"
 
@@ -17,7 +18,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidatorTest do
           {"... abc", "ltr"},
           {"... אבג", "rtl"},
           {"... العربية", "rtl"},
-          {"123", "rtl"}
+          {"123", "ltr"},
+          {"\u2067a\u2069א", "ltr"}
         ] do
       auto = %{
         element("div", %{"dir" => "auto"})

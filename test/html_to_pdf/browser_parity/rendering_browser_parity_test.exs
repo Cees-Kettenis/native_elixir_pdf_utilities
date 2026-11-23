@@ -3733,7 +3733,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
         assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
 
         if fixture_name == "html_stylesheet_selection.html" do
-          for caption <- ["Selected print styles", "Source order", "After selection"],
+          for caption <- ["Selected print styles", "Source order", "After selection", "123"],
               do: assert(text =~ caption)
 
           refute text =~ "Screen only"

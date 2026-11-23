@@ -120,8 +120,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlSelectorStateValidator do
 
         HtmlValidator.reserve_render_resource(:max_work, byte_size(text), :css)
 
-        TextBidiValidator.first_strong_direction(text) ||
-          inherited_direction(ancestors)
+        TextBidiValidator.first_strong_direction(text) || "ltr"
 
       node.tag == "input" and
           HtmlValidator.input_type(Map.get(attributes, "type", "text")) == "tel" ->

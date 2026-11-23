@@ -65,8 +65,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineBidiTest do
     positioned = InlineBidi.position(prepared, 0, &String.length(&1.text))
     assert Enum.map(positioned, & &1._bidi_x) == [0, 2, 5]
     assert Enum.map(List.last(positioned).bidi_characters, & &1.level) == [0, 0]
-    assert TextBidiValidator.first_strong_direction("\u2066א\u2069a") == "ltr"
-    assert TextBidiValidator.first_strong_direction("\u2066a\u2069א") == "rtl"
+    assert TextBidiValidator.first_strong_direction("\u2066א\u2069a") == "rtl"
+    assert TextBidiValidator.first_strong_direction("\u2066a\u2069א") == "ltr"
     assert TextBidiValidator.first_strong_direction("123") == nil
   end
 

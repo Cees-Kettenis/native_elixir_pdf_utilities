@@ -61,10 +61,6 @@ defmodule NativeElixirPdfUtilities.Validators.TextBidiValidator do
       end)
   end
 
-  @doc "Finds HTML auto direction from strong text outside Unicode isolate contents."
-  @spec first_strong_direction(binary()) :: binary() | nil
-  def first_strong_direction(text), do: first_strong(text, 0)
-
   @doc "Checks optional writer direction and per-scalar resolved levels against Unicode's fixed level bound."
   @spec valid_paint?(map()) :: boolean()
   def valid_paint?(box) do
@@ -82,7 +78,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextBidiValidator do
       end
   end
 
-  defp first_strong(text, depth) do
+  @doc "Finds the first strong character for HTML element directionality."
+  @spec first_strong_direction(binary()) :: binary() | nil
+  def first_strong_direction(text) do
     case text do
       "" ->
         nil
@@ -91,13 +89,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextBidiValidator do
         type = elem(NativeElixirPdfUtilities.HtmlToPdf.UnicodeTextData.properties(codepoint), 1)
 
         cond do
-          type in [:LRI, :RLI, :FSI] -> first_strong(remaining, depth + 1)
-          type == :PDI -> first_strong(remaining, max(0, depth - 1))
-          type == :B -> first_strong(remaining, 0)
-          depth != 0 -> first_strong(remaining, depth)
           type == :L -> "ltr"
           type in [:R, :AL] -> "rtl"
-          true -> first_strong(remaining, depth)
+          true -> first_strong_direction(remaining)
         end
     end
   end
