@@ -347,6 +347,34 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsGlobalStateTest do
     assert diagnostic.message =~ "max_work"
   end
 
+  test "source descriptors and inline diagnostics preserve exhausted CSS budgets" do
+    limits = Limits.effective()
+
+    for css <- ["@page{margin:0}", "@font-face{font-family:X;src:url(x.ttf)}"] do
+      Limits.install(%{limits | max_input_bytes: byte_size(css)})
+
+      assert {:error, {:resource_limit_exceeded, %{stage: :css}}} =
+               CssParser.prepare_source_stylesheet(css)
+    end
+
+    Limits.install(limits)
+    style = "display:invalid-table-role"
+    html = "<p style='#{style}'>Text</p>"
+    opts = [system_font_discovery: false]
+
+    {result, usage} =
+      NativeElixirPdfUtilities.Operation.run(HtmlToPdf, :render, fn ->
+        {HtmlToPdf.render(html, opts),
+         NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot()}
+      end)
+
+    assert {:error, {:invalid_css, %{source: ^style}}} = result
+    Limits.install(%{limits | max_input_bytes: usage.max_input_bytes - byte_size(style) - 1})
+
+    assert {:error, {:resource_limit_exceeded, %{stage: :css, operation: :render}}} =
+             HtmlToPdf.render(html, opts)
+  end
+
   test "source byte limits reject oversized UTF-8 before parsing" do
     Limits.install(%{Limits.effective() | max_input_bytes: 4})
     assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render("<p>é</p>")

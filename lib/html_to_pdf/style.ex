@@ -6074,8 +6074,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
   defp inline_style_error(style_source, _opts) do
     # HtmlCssSourceValidator admitted these sources before style execution.
-    {:ok, _declarations} = CssParser.parse_declarations_detailed(style_source)
-    CssValueValidator.declaration_error(style_source, CssParser.declaration_sources(style_source))
+    case CssParser.parse_declarations_detailed(style_source) do
+      {:ok, _declarations} ->
+        CssValueValidator.declaration_error(
+          style_source,
+          CssParser.declaration_sources(style_source)
+        )
+
+      {:error, detail} ->
+        detail
+    end
   end
 
   defp inline_style_sources(node) do

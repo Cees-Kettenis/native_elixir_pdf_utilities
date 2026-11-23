@@ -528,13 +528,20 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     {:ok, rules}
   end
 
+  defp source_block_declarations(block) do
+    case parse_declarations_input(block) do
+      {:ok, declarations} -> declarations
+      {:error, _} = error -> throw({:render_resource_limit, error})
+    end
+  end
+
   defp source_font_records(projected, projection, media) do
     @font_face_rule_regex
     |> Regex.scan(projected, return: :index)
     |> Enum.reduce_while({:ok, []}, fn [{offset, length}, {base, bytes}], {:ok, fonts} ->
       block = binary_part(projected, base, bytes)
 
-      {:ok, declarations} = parse_declarations_input(block)
+      declarations = source_block_declarations(block)
       records = source_declarations(block, declarations, base, projection, false)
 
       case CssFontFaceValidator.validate_authored(declarations) do
@@ -670,7 +677,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> Enum.reduce_while({:ok, []}, fn [{offset, length}, {base, bytes}], {:ok, pages} ->
       block = binary_part(projected, base, bytes)
 
-      {:ok, declarations} = parse_declarations_input(block)
+      declarations = source_block_declarations(block)
       records = source_declarations(block, declarations, base, projection)
 
       result =
