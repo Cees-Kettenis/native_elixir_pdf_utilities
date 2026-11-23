@@ -31,6 +31,25 @@ defmodule NativeElixirPdfUtilities.Pdf.StreamOperationLimitsTest do
     assert {:ok, _} = Reader.read(other)
   end
 
+  test "Flate output charges completed chunks before a later work denial", %{limits: limits} do
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, as: Budget
+    text = :binary.copy(:erlang.list_to_binary(Enum.to_list(0..255)), 128)
+    {document, reference, _} = stream_document(:zlib.compress(text), "FlateDecode")
+
+    decode = fn ->
+      Operation.run(__MODULE__, :read, fn ->
+        result = Reader.decoded_stream(document, reference)
+        {result, Budget.snapshot().max_work}
+      end)
+    end
+
+    assert {{:ok, ^text}, used} = decode.()
+    Limits.install(%{limits | max_work: used - 1})
+    assert {{:error, {:resource_limit_exceeded, _}}, charged} = decode.()
+    assert charged > used - byte_size(text)
+    assert charged < used
+  end
+
   test "standalone stream decoding admits the worker before resolving or decoding", %{
     limits: limits
   } do

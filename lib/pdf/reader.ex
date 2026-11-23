@@ -1281,7 +1281,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
 
     with {:ok, data} <- result,
          :ok <- PdfValidator.charge_reader_budget(:max_decoded_bytes, byte_size(data)),
-         :ok <- PdfValidator.charge_reader_budget(:max_work, byte_size(data)),
+         :ok <-
+           if(filter == "FlateDecode",
+             do: :ok,
+             else: PdfValidator.charge_reader_budget(:max_work, byte_size(data))
+           ),
          {:ok, data} <- apply_predictor(data, parameters, ref) do
       {:cont, {:ok, data}}
     else
@@ -1292,8 +1296,9 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   defp inflate(data, ref) do
     limit = PdfValidator.reader_decode_limit(byte_size(data))
 
-    case FlateValidator.inflate(data, 15, fn _status, size, _bytes ->
-           PdfValidator.validate_decoding_progress(size, limit, ref)
+    case FlateValidator.inflate(data, 15, fn _status, size, bytes ->
+           with :ok <- PdfValidator.validate_decoding_progress(size, limit, ref),
+                do: PdfValidator.charge_stream_work(bytes, ref)
          end) do
       :invalid_data ->
         error(:filter, :invalid_pdf_input, "FlateDecode data is invalid", object: ref)
