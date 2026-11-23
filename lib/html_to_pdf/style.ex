@@ -5,8 +5,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   This module applies defaults, inheritance, font resolution, and the CSS
   cascade for the supported text, generated-content, named-counter, selector,
   box, list, link, table, page-break, flexbox, grid, image, static form-control,
-  and embedded-font styling subset. Unsupported properties or invalid values
-  fail the render instead of being ignored.
+  and embedded-font styling subset. Syntax recovery can discard malformed
+  declarations or selector rules. Supported declarations that reach value
+  validation can still return a diagnostic.
   """
 
   alias NativeElixirPdfUtilities.HtmlToPdf.TextTransform

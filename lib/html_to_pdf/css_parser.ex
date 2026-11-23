@@ -92,7 +92,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                    )
 
   @doc """
-  Parses a CSS stylesheet into strict renderer rules.
+  Parses a stylesheet into renderer rules. Invalid selector rules and malformed
+  declarations are skipped at CSS syntax boundaries. Other valid rules survive.
   """
   @spec parse(String.t()) ::
           {:ok, stylesheet()}
