@@ -206,22 +206,31 @@ defmodule NativeElixirPdfUtilities.Text do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :extract_spans, fn ->
       with {:ok, request} <- TextValidator.validate_request(pdf_binary, opts, :extract_spans),
            {:ok, pdf_context} <- Reader.read_validated(request.pdf),
-           {:ok, text_context} <- TextValidator.prepare(pdf_context),
-           {:ok, pages} <- extract_pages(text_context, request.options.actual_text) do
-        pages =
-          if request.options.order == :visual do
-            Enum.map(pages, fn page ->
-              %{page | spans: visual_spans(page.spans, page.rotation)}
-            end)
-          else
-            pages
-          end
-
-        {:ok, %{page_count: length(pages), pages: pages}}
+           {:ok, spans} <- extract_context_spans(pdf_context, request.options) do
+        {:ok, spans}
       else
         {:error, _} = extraction_error -> text_error(extraction_error, :extract_spans)
       end
     end)
+  end
+
+  @doc false
+  @spec extract_context_spans(NativeElixirPdfUtilities.Validators.PdfValidator.context(), map()) ::
+          {:ok, text_document()} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def extract_context_spans(pdf_context, options) do
+    with {:ok, text_context} <- TextValidator.prepare(pdf_context),
+         {:ok, pages} <- extract_pages(text_context, options.actual_text) do
+      pages =
+        if options.order == :visual do
+          Enum.map(pages, fn page ->
+            %{page | spans: visual_spans(page.spans, page.rotation)}
+          end)
+        else
+          pages
+        end
+
+      {:ok, %{page_count: length(pages), pages: pages}}
+    end
   end
 
   @doc """

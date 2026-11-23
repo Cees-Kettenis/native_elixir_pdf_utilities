@@ -374,6 +374,20 @@ defmodule NativeElixirPdfUtilities.OutlinesGlobalStateTest do
     :ok
   end
 
+  test "outline detection and writing share one admitted input document" do
+    assert {:ok, pdf} = HtmlToPdf.render("<h1>Chapter</h1><p>Body text for this chapter</p>")
+    assert {:ok, [%{title: "Chapter"}] = expected} = Outlines.detect(pdf)
+    assert {:ok, updated} = Outlines.put(pdf, expected)
+    limits = Limits.effective()
+    Limits.install(%{limits | max_input_bytes: byte_size(pdf) - 1})
+    assert {:error, {:resource_limit_exceeded, _}} = Outlines.detect(pdf)
+    Limits.install(%{limits | max_input_bytes: byte_size(pdf)})
+    assert {:ok, ^expected} = Outlines.detect(pdf)
+    Limits.install(%{limits | max_input_bytes: byte_size(updated)})
+    assert {:ok, ^updated} = Outlines.automatic(pdf)
+    assert {:ok, ^expected} = Outlines.detect(updated)
+  end
+
   test "puts, gets, replaces, and removes nested outlines" do
     pdf = two_page_pdf()
 

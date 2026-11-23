@@ -11,8 +11,14 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineDetector do
   @doc false
   @spec detect(binary()) :: {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
   def detect(pdf) do
-    with {:ok, document} <- Text.extract_spans(pdf, order: :visual),
-         {:ok, headings} <- visual_headings(document.pages),
+    with {:ok, document} <- Text.extract_spans(pdf, order: :visual), do: from_spans(document)
+  end
+
+  @doc false
+  @spec from_spans(Text.text_document()) ::
+          {:ok, [map()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def from_spans(document) do
+    with {:ok, headings} <- visual_headings(document.pages),
          {:ok, items} <- OutlineValidator.normalize(nest(headings), length(document.pages)) do
       {:ok, items}
     end
