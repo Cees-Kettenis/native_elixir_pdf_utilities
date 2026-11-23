@@ -687,6 +687,26 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
     end
   end
 
+  # PNG admission has verified every chunk boundary and CRC. The native
+  # renderer uses the samples directly and has no need to inflate ICC profiles.
+  defp png_for_converter(<<_signature::64, chunks::binary>> = png) do
+    strip_png_profiles(chunks, png, [])
+  end
+
+  defp strip_png_profiles(chunks, segment, kept) do
+    case chunks do
+      <<length::32, "iCCP", _payload::binary-size(length), _crc::32, rest::binary>> ->
+        prefix = binary_part(segment, 0, byte_size(segment) - byte_size(chunks))
+        strip_png_profiles(rest, rest, [prefix | kept])
+
+      <<length::32, _type::32, _payload::binary-size(length), _crc::32, rest::binary>> ->
+        strip_png_profiles(rest, segment, kept)
+
+      <<>> ->
+        if kept == [], do: segment, else: IO.iodata_to_binary(Enum.reverse([segment | kept]))
+    end
+  end
+
   defp resource_bytes(data, mime, context, budget, depth, count, image_font_options) do
     case mime do
       "image/svg+xml" ->
@@ -730,7 +750,7 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
                   :ok
                 end),
              do:
-               {:ok, data, [], nil,
+               {:ok, png_for_converter(data), [], nil,
                 {image.width_px * image.height_px, max(image.decoded_stride, 4)}}
 
       "image/jpeg" ->

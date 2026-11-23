@@ -33,6 +33,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterSourcePreparationTest d
     assert image.data == :binary.copy(<<10, 20, 30>>, 2)
   end
 
+  test "nested PNG keeps its alpha samples and omits the unused compressed profile" do
+    pixel = fn _, _ -> [120, 90, 30, 128] end
+    png = PngFixture.build(1, 1, 6, 8, 0, pixel)
+    profile = PngFixture.chunk("iCCP", "test" <> <<0, 0>> <> :zlib.compress("test profile"))
+    profiled = PngFixture.build(1, 1, 6, 8, 0, pixel, chunks: profile)
+
+    source =
+      "<svg width='1' height='1'><image href='svg-resource:tile' width='1' height='1'/></svg>"
+
+    context = %{
+      mode: :inline,
+      resources: %{"svg-resource:tile" => %{data: profiled, media_type: "image/png"}}
+    }
+
+    assert {:ok, request} = SvgConverterValidator.prepare(source, [], nil, [], context)
+    assert request.source =~ Base.encode64(png)
+    refute request.source =~ Base.encode64(profiled)
+    assert {:ok, rendered} = SvgRasterizer.rasterize(source, [], nil, [], context)
+    assert {:ok, %{alpha_data: <<128>>}} = PngDecoder.decode(rendered, nil, false)
+  end
+
   test "extracted scenes support optional budgets and independently discovered text fonts" do
     source = "<svg width='24' height='24'><text y='18'>A</text></svg>"
     assert {:ok, scene, [_ | _] = fonts} = SvgScene.extract(source, nil, [], [])
