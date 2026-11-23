@@ -611,6 +611,14 @@ defmodule NativeElixirPdfUtilities.StampTest do
     assert diagnostic.stage == :overlay
   end
 
+  test "checks combined target and stamp size before parsing the page tree" do
+    pdf = "%PDF-1.7\n"
+    assert {:error, {:invalid_stamp, %{stage: :stamp}}} = Stamp.text(pdf, nil)
+    Limits.install(%{Limits.effective() | max_input_bytes: byte_size(pdf) + 2})
+    assert {:error, {:resource_limit_exceeded, %{stage: :limits}}} = Stamp.text(pdf, "Ada")
+    assert {:error, {:invalid_pdf_input, _}} = Stamp.text(pdf, "A")
+  end
+
   test "prepared stamps check source and expanded text bytes independently of PDF admission" do
     pdf = three_page_pdf(List.duplicate("x", 10), {300, 200})
     assert {:ok, context} = Reader.read_validated(pdf)

@@ -138,7 +138,8 @@ defmodule NativeElixirPdfUtilities.Stamp do
   end
 
   defp generated_text_stamp(pdf, text, options, kind, operation) do
-    with {:ok, target_context} <- Reader.read_validated(pdf),
+    with :ok <- StampValidator.admit_text_inputs(pdf, text),
+         {:ok, target_context} <- Reader.read_admitted(pdf),
          {:ok, text_plan} <- StampValidator.prepare_text(target_context, text, options, kind),
          {:ok, stamped} <- render_generated_stamp(target_context, text_plan) do
       {:ok, stamped}

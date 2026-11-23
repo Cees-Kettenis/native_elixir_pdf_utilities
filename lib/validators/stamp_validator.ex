@@ -55,6 +55,21 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   @doc false
+  @spec admit_text_inputs(term(), term()) :: :ok | {:error, {atom(), map()}}
+  def admit_text_inputs(pdf, text) do
+    with :ok <- PdfValidator.validate_input(pdf),
+         :ok <- validate_text_size(text) do
+      NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.reserve(
+        :max_input_bytes,
+        byte_size(pdf) + byte_size(text),
+        :limits,
+        module: __MODULE__,
+        operation: :stamp
+      )
+    end
+  end
+
+  @doc false
   @spec prepare_text(PdfValidator.context(), term(), term(), :text | :watermark) ::
           {:ok, map()} | {:error, {atom(), Diagnostics.diagnostic()}}
   def prepare_text(context, text, options, kind) do
@@ -165,15 +180,23 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   end
 
   defp validate_text(text) do
+    with :ok <- validate_text_size(text) do
+      if String.valid?(text) and String.trim(text) != "",
+        do: {:ok, text},
+        else: error(:stamp, :invalid_stamp, "stamp text must be a non-empty UTF-8 string")
+    end
+  end
+
+  defp validate_text_size(text) do
     cond do
-      not is_binary(text) or not String.valid?(text) or String.trim(text) == "" ->
+      not is_binary(text) ->
         error(:stamp, :invalid_stamp, "stamp text must be a non-empty UTF-8 string")
 
       byte_size(text) > Limits.get(:max_input_bytes) ->
         error(:limits, :resource_limit_exceeded, "stamp text exceeds the byte limit")
 
       true ->
-        {:ok, text}
+        :ok
     end
   end
 
