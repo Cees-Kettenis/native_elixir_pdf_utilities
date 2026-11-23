@@ -1121,6 +1121,22 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserGlobalStateTest do
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
   alias NativeElixirPdfUtilities.Validators.CssSelectorValidator
 
+  test "position fallbacks preserve the declaration or return its admission error" do
+    alias NativeElixirPdfUtilities.Limits
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    block = "top:2pt"
+    css = "@position-try --fallback {#{block}}"
+    required = byte_size(css) + byte_size(block)
+
+    for prepare <- [&CssParser.prepare_stylesheet/1, &CssParser.prepare_source_stylesheet/1] do
+      Limits.install(%{limits | max_input_bytes: required - 1})
+      assert {:error, {:resource_limit_exceeded, %{stage: :css}}} = prepare.(css)
+      Limits.install(%{limits | max_input_bytes: required})
+      assert {:ok, %{cascade: %{position_tries: %{"--fallback" => [_]}}}} = prepare.(css)
+    end
+  end
+
   test "descriptor readers preserve their error contracts across input limits" do
     alias NativeElixirPdfUtilities.Limits
     limits = Limits.effective()

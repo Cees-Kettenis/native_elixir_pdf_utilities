@@ -365,7 +365,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
   defp position_tries(records, active?) do
     for record <- records,
         active?.(record),
-        {:ok, declarations} <- [parse_declarations(record.declarations)],
+        declarations = source_block_declarations(record.declarations),
         into: %{} do
       {record.name,
        NativeElixirPdfUtilities.Validators.CssAnchorValidator.try_declarations(declarations)}
