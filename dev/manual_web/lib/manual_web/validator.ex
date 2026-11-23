@@ -166,7 +166,7 @@ defmodule ManualWeb.Validator do
   @spec read_token_source(term(), term()) :: {:ok, binary()} | {:error, detailed_error()}
   def read_token_source(upload, pasted_source) do
     case upload do
-      %Plug.Upload{} -> read_upload(upload, "tokenizer source", :tokenize)
+      %Plug.Upload{} -> read_upload(upload, "tokenizer source", :tokenize, :remaining_input)
       _ -> required_text(pasted_source, "upload a PDF or paste PDF syntax", :tokenize)
     end
   end

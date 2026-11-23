@@ -13,6 +13,8 @@ defmodule ManualWeb.Router do
   alias NativeElixirPdfUtilities.Info
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Merge
+  alias NativeElixirPdfUtilities.Operation
+  alias NativeElixirPdfUtilities.Validators.{PdfValidator, ResourceBudgetValidator}
   alias NativeElixirPdfUtilities.Outlines
   alias NativeElixirPdfUtilities.Split
   alias NativeElixirPdfUtilities.Stamp
@@ -252,20 +254,8 @@ defmodule ManualWeb.Router do
   end
 
   post "/svg-to-png" do
-    budget = NativeElixirPdfUtilities.Validators.HtmlValidator.new_image_budget()
-
-    with {:ok, svg} <- Validator.read_svg(conn.params["svg_file"], conn.params["svg"]),
-         {:ok, options} <- Validator.svg_options(conn.params),
-         {:ok, disposition} <- Validator.disposition(conn.params["disposition"]),
-         :ok <-
-           NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_image_source(
-             budget,
-             byte_size(svg)
-           ),
-         {:ok, png} <-
-           NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer.rasterize(svg, options, budget),
-         {:ok, _image} <-
-           NativeElixirPdfUtilities.HtmlToPdf.PngDecoder.decode(png, budget, false) do
+    with {:ok, png, disposition} <-
+           Operation.run(__MODULE__, :svg_to_png, fn -> convert_svg(conn.params) end) do
       conn
       |> security_headers()
       |> put_resp_header("content-type", "image/png")
@@ -351,11 +341,25 @@ defmodule ManualWeb.Router do
   end
 
   post "/tokenize" do
-    with {:ok, source} <-
-           Validator.read_token_source(conn.params["pdf"], conn.params["source"]),
-         tokens when is_list(tokens) <-
-           source |> Tokenizer.new() |> Tokenizer.tokenize_all_with_spans() do
-      send_html(conn, 200, Page.term_result("Tokenizer output", tokens))
+    with {:ok, html} <-
+           Operation.run(__MODULE__, :tokenize, fn ->
+             PdfValidator.with_reader_budget(fn ->
+               with {:ok, source} <-
+                      Validator.read_token_source(conn.params["pdf"], conn.params["source"]),
+                    :ok <-
+                      ResourceBudgetValidator.reserve(
+                        :max_input_bytes,
+                        byte_size(source),
+                        :limits,
+                        operation: :tokenize
+                      ),
+                    tokens when is_list(tokens) <-
+                      source |> Tokenizer.new() |> Tokenizer.tokenize_all_with_spans() do
+                 {:ok, Page.term_result("Tokenizer output", tokens)}
+               end
+             end)
+           end) do
+      send_html(conn, 200, html)
     else
       {:error, _} = operation_error -> send_error(conn, operation_error)
     end
@@ -363,6 +367,25 @@ defmodule ManualWeb.Router do
 
   match _ do
     send_html(conn, 404, Page.text_result("Not found", "No manual check exists at this path."))
+  end
+
+  defp convert_svg(params) do
+    budget = NativeElixirPdfUtilities.Validators.HtmlValidator.new_image_budget()
+
+    with {:ok, svg} <- Validator.read_svg(params["svg_file"], params["svg"]),
+         {:ok, options} <- Validator.svg_options(params),
+         {:ok, disposition} <- Validator.disposition(params["disposition"]),
+         :ok <-
+           NativeElixirPdfUtilities.Validators.HtmlValidator.reserve_image_source(
+             budget,
+             byte_size(svg)
+           ),
+         {:ok, png} <-
+           NativeElixirPdfUtilities.HtmlToPdf.SvgRasterizer.rasterize(svg, options, budget),
+         {:ok, _image} <-
+           NativeElixirPdfUtilities.HtmlToPdf.PngDecoder.decode(png, budget, false) do
+      {:ok, png, disposition}
+    end
   end
 
   defp extract_text_response(conn, pdf, mode) do

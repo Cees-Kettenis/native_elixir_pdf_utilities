@@ -682,3 +682,35 @@ defmodule ManualWeb.RouterTest do
     %Plug.Upload{path: path, filename: filename, content_type: "application/pdf"}
   end
 end
+
+defmodule ManualWeb.RouterBudgetTest do
+  use ExUnit.Case, async: false
+  alias NativeElixirPdfUtilities.Limits
+
+  test "manual conversion and tokenization enforce the request allowance and recover" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+
+    svg =
+      "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><rect width='2' height='2'/></svg>"
+
+    post = fn path, params ->
+      Plug.Test.conn(:post, path, params) |> ManualWeb.Router.call(ManualWeb.Router.init([]))
+    end
+
+    for {path, params} <- [
+          {"/svg-to-png", %{"svg" => svg}},
+          {"/tokenize", %{"source" => "/A /B"}}
+        ] do
+      Limits.install(%{original | max_operation_memory_bytes: 1})
+      assert %{status: 422, resp_body: error} = post.(path, params)
+      assert error =~ "max_operation_memory_bytes"
+      Limits.install(original)
+      assert %{status: 200} = post.(path, params)
+    end
+
+    Limits.install(%{original | max_entries: 1})
+    assert %{status: 422, resp_body: error} = post.("/tokenize", %{"source" => "/A /B"})
+    assert error =~ "max_entries"
+  end
+end
