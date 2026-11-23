@@ -201,6 +201,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PngDecoderGlobalStateTest do
     end)
   end
 
+  test "retained PNG data chunks share one entry allowance across images" do
+    alias NativeElixirPdfUtilities.Validators.{PngValidator, ResourceBudgetValidator}
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+    Limits.install(%{limits | max_entries: 4})
+    <<_signature::64, chunks::binary>> = PNG.solid_rgb(1, 1)
+
+    chunks =
+      :binary.replace(
+        chunks,
+        PNG.chunk("IEND", ""),
+        PNG.chunk("IDAT", "") <> PNG.chunk("IEND", "")
+      )
+
+    ResourceBudgetValidator.with_budget(fn ->
+      assert {:ok, %{idat: [_, _]}} = PngValidator.prepare(chunks)
+      assert {:ok, %{idat: [_, _]}} = PngValidator.prepare(chunks)
+
+      assert {:error, {:resource_limit_exceeded, %{message: message}}} =
+               PngValidator.prepare(chunks)
+
+      assert message =~ "max_entries"
+    end)
+  end
+
   test "working and final buffer budgets are checked before decompression" do
     old = Limits.effective()
     on_exit(fn -> Limits.install(old) end)

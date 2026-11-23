@@ -9,7 +9,9 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
   @doc false
   @spec prepare(binary()) :: {:ok, map()} | {:error, {atom(), map()}}
   def prepare(chunks) do
-    read_chunks(chunks, %{idat: [], phase: :header, palette: nil, transparency: nil})
+    HtmlValidator.with_render_budget(fn ->
+      read_chunks(chunks, %{idat: [], phase: :header, palette: nil, transparency: nil})
+    end)
   end
 
   @doc false
@@ -106,7 +108,9 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
         Diagnostics.error(
           :style,
           :resource_limit_exceeded,
-          "PNG dimensions exceed max_raster_dimension", source: "PNG")
+          "PNG dimensions exceed max_raster_dimension",
+          source: "PNG"
+        )
 
       true ->
         placements = if admission == true, do: 1, else: admission
@@ -203,6 +207,8 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
   defp read_chunks(chunks, state) do
     case chunks do
       <<length::32, type::binary-size(4), data::binary-size(length), crc::32, rest::binary>> ->
+        HtmlValidator.reserve_render_resource(:max_work, 1, :style)
+
         cond do
           not Regex.match?(~r/\A[A-Za-z]{2}[A-Z][A-Za-z]\z/, type) ->
             error("chunk type must contain letters with an uppercase reserved character")
@@ -306,6 +312,7 @@ defmodule NativeElixirPdfUtilities.Validators.PngValidator do
         if state.color_type == 3 and is_nil(state.palette) do
           error("indexed PNG requires PLTE before IDAT")
         else
+          HtmlValidator.reserve_render_resource(:max_entries, 1, :style)
           read_chunks(rest, %{state | phase: :data, idat: [data | state.idat]})
         end
 
