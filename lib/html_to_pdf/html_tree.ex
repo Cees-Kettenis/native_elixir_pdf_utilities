@@ -132,6 +132,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlTree do
   @doc false
   @spec close(t(), reference()) :: {t(), map()}
   def close(tree, id) do
+    tree =
+      case tree.pending_list_space do
+        {^id, spaces} ->
+          trailing = IO.iodata_to_binary(Enum.reverse(spaces))
+          nodes = Map.update!(tree.nodes, id, &Map.put(&1, :list_whitespace_end, trailing))
+          %{tree | nodes: nodes, pending_list_space: nil}
+
+        _ ->
+          tree
+      end
+
     node = fetch(tree, id)
     {%{tree | nodes: Map.update!(tree.nodes, id, &Map.put(&1, :projection, node))}, node}
   end

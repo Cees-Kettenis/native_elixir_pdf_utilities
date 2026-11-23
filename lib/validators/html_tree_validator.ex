@@ -67,17 +67,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlTreeValidator do
 
       valid? =
         valid? and
-          case Map.fetch(node, :list_whitespace_before) do
-            :error ->
-              true
+          Enum.all?([:list_whitespace_before, :list_whitespace_end], fn key ->
+            case Map.fetch(node, key) do
+              :error ->
+                true
 
-            {:ok, space} when is_binary(space) ->
-              HtmlValidator.reserve_render_resource(:max_work, byte_size(space), :html)
-              HtmlValidator.trim_ascii_whitespace(space) == ""
+              {:ok, space} when is_binary(space) ->
+                HtmlValidator.reserve_render_resource(:max_work, byte_size(space), :html)
+                HtmlValidator.trim_ascii_whitespace(space) == ""
 
-            _ ->
-              false
-          end
+              _ ->
+                false
+            end
+          end)
 
       if valid?,
         do: HtmlValidator.validate_attribute_order(node),

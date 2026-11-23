@@ -2063,6 +2063,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   element_style =
                     Map.merge(element_style, Map.take(node, [:_table_model, :_table_cell]))
 
+                  preserve_list_space? =
+                    tag in ~w(ul ol menu dir) and
+                      element_style.white_space in [:pre, :pre_wrap, :pre_line, :break_spaces]
+
                   with rendered_children when is_list(rendered_children) <-
                          if(
                            NativeElixirPdfUtilities.Validators.TemplateRendererContextValidator.source_completion?(
@@ -2102,7 +2106,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          ),
                        {:ok, styled_children, counters} <-
                          style_children(
-                           rendered_children,
+                           if(preserve_list_space?,
+                             do: list_source_children(rendered_children, node),
+                             else: rendered_children
+                           ),
                            control_text_style(node, element_style),
                            rules,
                            [node | ancestors],
@@ -2147,7 +2154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                       end
 
                     styled_children =
-                      if tag in ~w(ul ol menu dir),
+                      if tag in ~w(ul ol menu dir) and not preserve_list_space?,
                         do: inline_list_spacing(styled_children, element_style),
                         else: styled_children
 
@@ -5034,6 +5041,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
       margin: CssValueValidator.edges(font_size, 0.0, font_size, 0.0),
       padding: CssValueValidator.edges(0.0, 0.0, 0.0, 30.0)
     })
+  end
+
+  defp list_source_children(children, node) do
+    tail = for space <- List.wrap(node[:list_whitespace_end]), do: %{type: :text, text: space}
+
+    Enum.flat_map(children, fn child ->
+      case child[:list_whitespace_before] do
+        nil -> [child]
+        space -> [%{type: :text, text: space}, child]
+      end
+    end) ++ tail
   end
 
   defp inline_list_spacing(children, style) do

@@ -4751,7 +4751,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
                :soft_break
              ] or
                :maps.get(:hard_break, run, false) or
-               HtmlValidator.trim_ascii_whitespace(run.text) != ""
+               HtmlValidator.trim_ascii_whitespace(run.text) != "" or
+               (run.text != "" and
+                  case :maps.get(:white_space, run.style, :normal) do
+                    mode when mode in [:pre, :pre_wrap, :break_spaces] -> true
+                    :pre_line -> String.contains?(run.text, "\n")
+                    _ -> false
+                  end)
            end) do
         true ->
           metadata = Map.merge(%{flow_id: {:inline_flow, x, y}, fragment_lines: true}, metadata)
@@ -15345,7 +15351,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     terminal_newline? =
       case List.last(runs) do
         %{style: %{white_space: mode}, text: text}
-        when mode in [:pre, :pre_wrap, :break_spaces] ->
+        when mode in [:pre, :pre_wrap, :pre_line, :break_spaces] ->
           String.ends_with?(text, "\n")
 
         _ ->

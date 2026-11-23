@@ -237,6 +237,42 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.DisplayVisibilityTest do
     refute text =~ "Hidden"
   end
 
+  test "preserved list whitespace contributes line boxes before, between and after items" do
+    for mode <- ["pre", "break-spaces", "normal"], display <- ["inline", "list-item"] do
+      html =
+        "<style>body,p,ul{margin:0;padding:0;font:12pt/18pt 'DejaVu Sans'}ul{white-space:#{mode}}li{display:#{display};list-style:none}</style>" <>
+          "<ul>\n<li>A</li>\n\n<li>B</li>\n\n</ul><p>T</p>"
+
+      assert {:ok, pdf} = HtmlToPdf.render(html, margin: 0)
+      assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+      [a, b, t] = Enum.filter(spans, &(&1.text in ["A", "B", "T"]))
+
+      cond do
+        mode == "normal" ->
+          assert_in_delta b.y - a.y, if(display == "inline", do: 0, else: 18), 0.1
+
+        display == "inline" ->
+          assert_in_delta b.y - a.y, 36, 0.1
+          assert_in_delta t.y - b.y, 36, 0.1
+
+        true ->
+          assert_in_delta b.y - a.y, 54, 0.1
+          assert_in_delta t.y - b.y, 54, 0.1
+      end
+    end
+  end
+
+  test "a pre-line list starts with its first item when there is no leading whitespace" do
+    html =
+      "<style>body,ul,p{margin:0;padding:0;font:12pt/18pt sans-serif}li{list-style:none}</style>" <>
+        "<ul style='white-space:pre-line'><li>A</li>\n\n<li>B</li></ul>"
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, margin: 0)
+    assert {:ok, %{pages: [%{spans: [a, b]}]}} = Text.extract_spans(pdf)
+    assert {a.text, b.text} == {"A", "B"}
+    assert_in_delta b.y - a.y, 54, 0.1
+  end
+
   test "inline list items share their surrounding line and preserve the prepared marker" do
     alias NativeElixirPdfUtilities.HtmlToPdf.{HtmlParser, Style, Layout}
 
