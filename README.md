@@ -61,10 +61,14 @@ end
 ```
 
 Install the OTP `xmerl` application if your distribution packages it separately.
-SVG rendering and system font discovery load native libraries. On GNU/Linux the
-precompiled font-discovery library requires Fontconfig. Its published Linux
-binaries target glibc. For a musl deployment, provide a compatible build or
-use a glibc runtime image.
+SVG rendering (`resvg`) and system font discovery (`elixir_font_discovery`)
+both have precompiled binaries for x86-64 and ARM64 on macOS and glibc Linux,
+and for x86-64 on Windows (GNU and MSVC). When compiling dependencies, allow
+access to both projects’ GitHub release assets or prepopulate the
+RustlerPrecompiled cache for the target platform.
+
+On GNU/Linux, install the Fontconfig runtime library. For a musl deployment,
+provide a compatible build of `elixir_font_discovery` or use a glibc runtime image.
 
 ## License
 
