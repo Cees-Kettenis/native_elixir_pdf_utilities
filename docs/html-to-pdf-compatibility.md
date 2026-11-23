@@ -280,6 +280,11 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | `:outlines` | CSS-authored bookmarks | Omit or pass `nil` to use CSS. Pass `false` to disable bookmarks, `:headings` for visible headings, or a list for explicit bookmarks |
 | `:page_furniture` | Disabled | Header/footer templates and page-number tokens |
 
+A filesystem `:base_url` also resolves relative navigation links. For example,
+`href="guide.pdf"` can embed an absolute `file:` URI containing the local build
+directory in the PDF. Use absolute HTTPS links for published navigation and
+fragment links for destinations within the document.
+
 ### Page size and margins
 
 | Setting | Examples and limits |
