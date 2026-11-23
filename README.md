@@ -60,6 +60,12 @@ def deps do
 end
 ```
 
+Install the OTP `xmerl` application if your distribution packages it separately.
+SVG rendering and system font discovery load native libraries. On GNU/Linux the
+precompiled font-discovery library requires Fontconfig. Its published Linux
+binaries target glibc. For a musl deployment, provide a compatible build or
+use a glibc runtime image.
+
 ## License
 
 The library source is MIT licensed. Bundled DejaVu font files use the Bitstream
