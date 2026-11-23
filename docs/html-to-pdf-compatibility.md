@@ -271,6 +271,7 @@ Pass options to `HtmlToPdf.render/2` or `render_file/3`.
 | `:default_font` | `"DejaVu Sans"` | Family name or fallback list |
 | `:fonts` | `[]` | Font definitions with `:family` and `:path` or `:data` |
 | `:system_font_discovery` | `true` | Look up installed fonts |
+| `:hyphenation_dictionaries` | `%{}` | Supply language-specific patterns and exceptions for automatic hyphenation. See [Automatic hyphenation and tabs](html-to-pdf-examples.md#automatic-hyphenation-and-tabs). |
 | `:unsupported_glyphs` | `:replace` | Replace missing characters or use `:error` |
 | `:compress_streams` | `true` | Compress eligible PDF streams |
 | `:subset_fonts` | `true` | Embed only needed TrueType or CFF outlines when permitted |
