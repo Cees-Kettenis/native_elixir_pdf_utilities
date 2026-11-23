@@ -503,6 +503,11 @@ replace that read with `Process.get(:logo_png)` or a caller-side ETS lookup.
 
 ## Fonts and text
 
+CSS `text-transform: uppercase` uses Unicode uppercase mapping for Greek.
+It retains tonos, so `Αθήνα` prints as `ΑΘΉΝΑ`. Supply the intended uppercase
+text directly when Greek print spelling calls for accent removal or an added diaeresis.
+
+
 | Setting | Support |
 | --- | --- |
 | Default | DejaVu Sans; installed-font discovery enabled |
