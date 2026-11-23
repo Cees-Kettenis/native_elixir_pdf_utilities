@@ -1059,9 +1059,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         charge_reader_budget(:max_work, 1)
 
         case value do
-          {role, entry} when role in [:resources, :resource_names] ->
-            # Resource names (including /OC and /Type) belong to the local
-            # resource dictionary. Only the objects they name describe artwork.
+          {role, entry} when role in [:resources, :name_map] ->
+            # Resource and Type 3 glyph names can be /OC or /Type. Only the
+            # values in these name maps describe artwork.
             with {:ok, dictionary} <- resolve(document, entry, opts) do
               children =
                 case {role, dictionary} do
@@ -1069,13 +1069,13 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                     Enum.map(resources, fn
                       {key, names}
                       when key in ~w(Font XObject ExtGState ColorSpace Pattern Shading Properties) ->
-                        {:resource_names, names}
+                        {:name_map, names}
 
                       {_key, value} ->
                         value
                     end)
 
-                  {:resource_names, names} when is_map(names) ->
+                  {:name_map, names} when is_map(names) ->
                     Map.values(names)
 
                   _ ->
@@ -1112,6 +1112,7 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
               check_layer_dependencies(
                 Enum.map(dictionary, fn
                   {"Resources", resources} -> {:resources, resources}
+                  {"CharProcs", glyphs} when type == {:name, "Font"} -> {:name_map, glyphs}
                   {_key, entry} -> entry
                 end) ++ rest,
                 document,

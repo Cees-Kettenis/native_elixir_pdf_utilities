@@ -577,6 +577,67 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     end
   end
 
+  @tag :tmp_dir
+  test "Type 3 glyph names preserve their artwork across page imports", %{tmp_dir: dir} do
+    alias NativeElixirPdfUtilities.{Stamp, HtmlToPdf.PdfWriter}
+    alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
+
+    assert {:ok, blank} = PdfWriter.render([%{size: {144, 90}, boxes: []}])
+    glyph = "600 0 0 0 600 700 d1 0 0 600 700 re f"
+
+    source = fn glyphs, resources, paint ->
+      pdf([
+        {1,
+         "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [6 0 R] /D << /BaseState /OFF >> >> >>"},
+        {2, "<< /Type /Pages /Count 1 /Kids [3 0 R] >>"},
+        {3,
+         "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 144 90] /Resources << /Font << /F 4 0 R >> >> /Contents 5 0 R >>"},
+        {4,
+         "<< /Type /Font /Subtype /Type3 /FontBBox [0 0 600 700] /FontMatrix [.001 0 0 .001 0 0] /Encoding << /Type /Encoding /Differences [65 /OC] >> /FirstChar 65 /LastChar 65 /Widths [600] /CharProcs #{glyphs} /Resources << #{resources} >> >>"},
+        {5, stream("BT /F 18 Tf 12 20 Td (A) Tj ET")},
+        {6, "<< /Type /OCG /Name (Unused) >>"},
+        {7, stream(paint)},
+        {8, "<< /OC 7 0 R >>"}
+      ])
+    end
+
+    for glyphs <- ["<< /OC 7 0 R >>", "8 0 R"] do
+      source = source.(glyphs, "", glyph)
+
+      raster = fn pdf ->
+        PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: Path.join(dir, "glyph"))
+      end
+
+      assert [%{width: 144, pixels: pixels}] = expected = raster.(source)
+      assert binary_part(pixels, (65 * 144 + 16) * 3, 3) == <<0, 0, 0>>
+
+      for result <- [
+            Merge.merge([source]),
+            Transform.pick_pages(source, [1]),
+            Stamp.overlay(blank, source)
+          ] do
+        assert {:ok, output} = result
+        assert {:ok, %{pages: [_]}} = Reader.read(output)
+        assert raster.(output) == expected
+      end
+    end
+
+    layered =
+      source.(
+        "8 0 R",
+        "/Properties << /Layer 6 0 R >>",
+        "600 0 0 0 600 700 d1 /OC /Layer BDC 0 0 600 700 re f EMC"
+      )
+
+    for result <- [
+          Merge.merge([layered]),
+          Transform.pick_pages(layered, [1]),
+          Stamp.overlay(blank, layered)
+        ] do
+      assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} = result
+    end
+  end
+
   test "preserves direct named annotations in direct and indirect arrays" do
     annotations =
       "[<< /Subtype /Link /Rect [0 0 10 10] /Dest /Legacy >> " <>
