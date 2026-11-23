@@ -326,6 +326,10 @@ subset.
 | Spans | `colspan` and `rowspan`; rowspans stop at row-group boundaries |
 | Empty cells | `empty-cells: show/hide` in separate-border tables; ignored with collapsed borders |
 
+With `width: auto`, tables can take up the available inline width even when a
+browser would shrink a short table to its contents. Set an explicit table width
+when a compact printed table is required.
+
 Automatic tables can exceed their CSS `width` when cell contents need more space.
 The renderer preserves text size and does not shrink the page to fit; content
 beyond the page edge is clipped. Use a wider page or reduce content widths.
