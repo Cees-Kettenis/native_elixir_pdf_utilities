@@ -1982,6 +1982,33 @@ defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
     assert_error(Text.extract(pdf(invalid_dictionary)), :invalid_pdf_input, :resolution)
   end
 
+  test "visual extraction separates repositioned words while preserving source order and kerning" do
+    content = "BT /F1 12 Tf 1 0 0 1 100 100 Tm [(Ri) 40 (ght) 6500 (Le) -40 (ft)] TJ ET"
+
+    for angle <- [0, 90, 180, 270] do
+      pdf = page_pdf(content, rotate: angle)
+      assert {:ok, line} = Text.extract(pdf)
+      assert line =~ ~r/^Left +Right$/
+      assert Text.extract(pdf, layout: false) == {:ok, "RightLeft"}
+      assert {:ok, %{pages: [%{spans: source}]}} = Text.extract_spans(pdf)
+      assert Enum.map(source, & &1.text) == ["Ri", "ght", "Le", "ft"]
+      assert {:ok, %{pages: [%{spans: visual}]}} = Text.extract_spans(pdf, order: :visual)
+      assert visual == Enum.drop(source, 2) ++ Enum.take(source, 2)
+    end
+  end
+
+  test "visual extraction places an independently drawn word inside a forward positioning gap" do
+    content = """
+    BT /F1 12 Tf 1 0 0 1 10 100 Tm [(Left) -6500 (Right)] TJ
+    1 0 0 1 50 100 Tm (Middle) Tj ET
+    """
+
+    pdf = page_pdf(content)
+    assert {:ok, line} = Text.extract(pdf)
+    assert line =~ ~r/^Left +Middle +Right$/
+    assert Text.extract(pdf, layout: false) == {:ok, "LeftRight Middle"}
+  end
+
   test "visual order keeps joined operands together on mixed and zero-advance baselines" do
     content = """
     BT /F1 12 Tf 1 0 0 1 20 650 Tm (Last) Tj

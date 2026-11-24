@@ -221,13 +221,19 @@ defmodule NativeElixirPdfUtilities.Text do
     with {:ok, text_context} <- TextValidator.prepare(pdf_context),
          {:ok, pages} <- extract_pages(text_context, options.actual_text) do
       pages =
-        if options.order == :visual do
-          Enum.map(pages, fn page ->
-            %{page | spans: visual_spans(page.spans, page.rotation)}
-          end)
-        else
-          pages
-        end
+        Enum.map(pages, fn page ->
+          spans =
+            if options.order == :visual,
+              do: visual_spans(page.spans, page.rotation),
+              else: page.spans
+
+          spans =
+            if options.actual_text,
+              do: Enum.map(spans, &Map.delete(&1, :follows_replacement?)),
+              else: spans
+
+          %{page | spans: spans}
+        end)
 
       {:ok, %{page_count: length(pages), pages: pages}}
     end
@@ -378,13 +384,14 @@ defmodule NativeElixirPdfUtilities.Text do
         case {owns_replacement?, state.replacement} do
           {true, %{text: text, first: first, last: last} = replacement}
           when text != "" and not is_nil(first) ->
-            span = %{
-              first
-              | text: text,
+            span =
+              Map.merge(first, %{
+                text: text,
                 end_x: last.end_x,
                 end_y: last.end_y,
+                follows_replacement?: replacement.follows_replacement?,
                 joins_previous?: first.joins_previous? or replacement.follows_replacement?
-            }
+              })
 
             {:ok,
              %{
@@ -862,11 +869,15 @@ defmodule NativeElixirPdfUtilities.Text do
   end
 
   defp collect_run(position, runs) do
+    # Consecutive ActualText groups can carry a logical phrase across visually reordered glyphs.
+    follows_replacement? = Map.get(position.span, :follows_replacement?, false)
+
     case runs do
       [%{parts: [previous | _]} = run | rest]
       when position.span.joins_previous? and
              position.span.source_index == previous.span.source_index + 1 and
-             abs(position.y - run.y) <= 1.5 ->
+             abs(position.y - run.y) <= 1.5 and
+             (follows_replacement? or abs(position.x - previous.end_x) <= 1.5) ->
         [%{run | parts: [position | run.parts]} | rest]
 
       _ ->

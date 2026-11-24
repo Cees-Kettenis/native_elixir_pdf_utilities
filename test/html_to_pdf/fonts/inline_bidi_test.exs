@@ -144,6 +144,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InlineBidiTest do
     assert {:ok, text} = Text.extract(pdf, layout: false)
     assert text =~ "אב abc גד"
     assert text =~ "a ABC z"
+    assert {:ok, layout} = Text.extract(pdf)
+    assert Enum.map(String.split(layout, "\n"), &String.trim/1) == ["אב abc גד", "a ABC z", "אב"]
     assert {:ok, %{pages: [page]}} = Text.extract_spans(pdf)
     letters = Enum.filter(page.spans, &(&1.text in ["A", "B", "C"]))
     assert Enum.map(letters, & &1.text) == ["C", "B", "A"]
