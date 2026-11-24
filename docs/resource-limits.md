@@ -85,7 +85,7 @@ worker too; cancelling it stops its loader without blocking unrelated misses.
 | `max_work` | 1,000,000,000 | Scanned bytes, repeated parsing, lookups, substitutions, reference visits, layout searches and other explicitly counted processing steps |
 | `max_pages` | 10,000 | Input, generated and assembled document pages |
 | `max_numeric_magnitude` | 4,294,967,295 | Absolute numeric operands and derived coordinates |
-| `max_numeric_token_bytes` | 1,024 | Numeric text admitted before integer or floating-point conversion |
+| `max_numeric_token_bytes` | 1,024 | Bytes per numeric token before integer or floating-point conversion, including leading zeroes in decimal CMap section counts and character IDs |
 | `max_decompression_ratio` | 100 | Decoded-to-encoded PDF stream ratio |
 | `max_cache_bytes` | 100,000,000 | Retained font, discovery and layout measurement cache data |
 | `max_cache_entries` | 64 | Entries retained in a persistent cache between operations |

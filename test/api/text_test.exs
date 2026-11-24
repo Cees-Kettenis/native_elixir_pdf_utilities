@@ -3044,6 +3044,64 @@ defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
     assert {one_byte.text, one_byte.x, one_byte.end_x} == {"A", 10.0, 115.0}
   end
 
+  test "CMap decimal counts and character IDs obey the numeric token width before conversion" do
+    original = Limits.effective()
+    on_exit(fn -> Limits.install(original) end)
+    # The classic xref table also has ten-byte numeric fields.
+    Limits.install(%{original | max_numeric_token_bytes: 10})
+    codespace = "1 begincodespacerange <00> <FF> endcodespacerange "
+    unicode = "1 beginbfchar <01> <0041> endbfchar"
+    encoding = "1 begincidchar <01> 1 endcidchar"
+
+    font =
+      "<< /Type /Font /Subtype /Type0 /Encoding 9 0 R /DescendantFonts [8 0 R] /ToUnicode 7 0 R >>"
+
+    sections = [
+      {String.replace_leading(codespace, "1", "#") <> unicode, codespace <> encoding},
+      {codespace <> String.replace_leading(unicode, "1", "#"), codespace <> encoding},
+      {codespace <> "# beginbfrange <01> <01> <0041> endbfrange", codespace <> encoding},
+      {codespace <> unicode, String.replace_leading(codespace, "1", "#") <> encoding}
+    ]
+
+    cid_sections =
+      for {operator, range} <- [
+            {"cidchar", "<01>"},
+            {"cidrange", "<01> <01>"},
+            {"notdefchar", "<01>"},
+            {"notdefrange", "<01> <01>"}
+          ],
+          {count, cid} <- [{"#", "1"}, {"1", "#"}] do
+        {codespace <> unicode,
+         codespace <> "#{count} begin#{operator} #{range} #{cid} end#{operator}"}
+      end
+
+    for {cmap, cid_cmap} <- sections ++ cid_sections do
+      build = fn token ->
+        page_pdf("BT /F1 10 Tf <01> Tj ET",
+          font: font,
+          cmap: String.replace(cmap, "#", token),
+          extra_objects: [{9, stream_object("", String.replace(cid_cmap, "#", token))}]
+        )
+      end
+
+      valid = build.("0000000001")
+      assert {:ok, "A"} = Text.extract(valid)
+      assert {:ok, %{pages: [%{spans: [%{text: "A"}]}]}} = Text.extract_spans(valid)
+
+      over = build.("00000000001")
+
+      for {operation, result} <- [
+            extract: Text.extract(over),
+            extract_spans: Text.extract_spans(over)
+          ] do
+        assert {:error, {:resource_limit_exceeded, diagnostic}} = result
+        assert diagnostic.stage == :cmap and diagnostic.operation == operation
+        assert diagnostic.message =~ "max_numeric_token_bytes"
+        assert diagnostic.message =~ "page 1" and diagnostic.message =~ "font F1"
+      end
+    end
+  end
+
   test "validates supported Type0 Encoding CMap boundaries" do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)

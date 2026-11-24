@@ -1099,6 +1099,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             error
         end
     end
+  catch
+    {:pdf_reader_budget, {:error, {reason, diagnostic}}} ->
+      error(:cmap, reason, diagnostic.message, page: page, font: font)
   end
 
   defp parse_cid_cmap(stream, page, font) do
@@ -1154,6 +1157,9 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
             cmap_error
         end
     end
+  catch
+    {:pdf_reader_budget, {:error, {reason, diagnostic}}} ->
+      error(:cmap, reason, diagnostic.message, page: page, font: font)
   end
 
   defp strip_cmap_comments(stream) do
@@ -1330,7 +1336,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
       entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>/, section)
 
       valid? =
-        String.to_integer(count) == length(entries) and
+        PdfValidator.reader_integer(count) == length(entries) and
           cmap_section_consumed?(
             section,
             ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>/
@@ -1377,14 +1383,14 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
       entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}+(\d+)/, section)
 
       valid? =
-        String.to_integer(count) == length(entries) and
+        PdfValidator.reader_integer(count) == length(entries) and
           cmap_section_consumed?(section, ~r/<#{@cmap_hex_body}>#{@cmap_space}+\d+/)
 
       case valid? do
         true ->
           parsed =
             Enum.map(entries, fn [_, source, cid] ->
-              {hex_bytes(source), String.to_integer(cid)}
+              {hex_bytes(source), PdfValidator.reader_integer(cid)}
             end)
 
           case Enum.all?(parsed, fn {_source, cid} ->
@@ -1424,7 +1430,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
         )
 
       valid? =
-        String.to_integer(declared_count) == length(entries) and
+        PdfValidator.reader_integer(declared_count) == length(entries) and
           cmap_section_consumed?(
             section,
             ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>#{@cmap_space}*\d+/
@@ -1435,7 +1441,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           Enum.reduce_while(entries, {:ok, mappings}, fn [_, first, last, cid], {:ok, mappings} ->
             first = hex_bytes(first)
             last = hex_bytes(last)
-            cid = String.to_integer(cid)
+            cid = PdfValidator.reader_integer(cid)
 
             case byte_size(first) == byte_size(last) and first <= last do
               true ->
@@ -1489,7 +1495,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
                                                    {:ok, mappings, remaining} ->
       entries = Regex.scan(~r/<(#{@cmap_hex_body})>#{@cmap_space}*<(#{@cmap_hex_body})>/, section)
 
-      if String.to_integer(count) == length(entries) and
+      if PdfValidator.reader_integer(count) == length(entries) and
            cmap_section_consumed?(
              section,
              ~r/<#{@cmap_hex_body}>#{@cmap_space}*<#{@cmap_hex_body}>/
@@ -1533,7 +1539,7 @@ defmodule NativeElixirPdfUtilities.Validators.TextResourceValidator do
           section
         )
 
-      declared_count = String.to_integer(declared_count)
+      declared_count = PdfValidator.reader_integer(declared_count)
 
       section_valid? =
         declared_count == length(entries) and
