@@ -1033,8 +1033,8 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         roots =
           for {page, index} <- Enum.with_index(context.pages, 1),
               selected == :all or MapSet.member?(selected, index) do
-            annotations = if kind == :pages, do: page.dictionary["Annots"]
-            [{:resources, page.resources}, page.dictionary["Group"], annotations]
+            annotations = if kind == :pages, do: {:annotations, page.dictionary["Annots"]}
+            [page.resources, page.dictionary["Group"], annotations]
           end
 
         # Annotation page pointers and link destinations can lead back into
@@ -1059,30 +1059,16 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
         charge_reader_budget(:max_work, 1)
 
         case value do
-          {role, entry} when role in [:resources, :name_map] ->
-            # Resource and Type 3 glyph names can be /OC or /Type. Only the
-            # values in these name maps describe artwork.
-            with {:ok, dictionary} <- resolve(document, entry, opts) do
-              children =
-                case {role, dictionary} do
-                  {:resources, resources} when is_map(resources) ->
-                    Enum.map(resources, fn
-                      {key, names}
-                      when key in ~w(Font XObject ExtGState ColorSpace Pattern Shading Properties) ->
-                        {:name_map, names}
-
-                      {_key, value} ->
-                        value
-                    end)
-
-                  {:name_map, names} when is_map(names) ->
-                    Map.values(names)
-
-                  _ ->
-                    [dictionary]
-                end
-
+          {:annotations, entry} ->
+            with {:ok, annotations} <- resolve(document, entry, opts) do
+              children = Enum.map(List.wrap(annotations), &{:annotation, &1})
               check_layer_dependencies(children ++ rest, document, seen, groups, opts)
+            end
+
+          {:annotation, entry} ->
+            with {:ok, annotation} <- resolve(document, entry, opts),
+                 :ok <- check_artwork_membership(document, annotation, opts) do
+              check_layer_dependencies([entry | rest], document, seen, groups, opts)
             end
 
           {:ref, ref} ->
@@ -1094,7 +1080,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
                 check_layer_dependencies(rest, document, seen, groups, opts)
 
               true ->
-                with {:ok, resolved} <- resolve(document, value, opts) do
+                with {:ok, resolved, terminal, _depth} <-
+                       resolve_reference(document, ref, %{}, 0, opts),
+                     :ok <- check_stream_membership(document, terminal, resolved, opts) do
                   check_layer_dependencies(
                     [resolved | rest],
                     document,
@@ -1106,15 +1094,10 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
             end
 
           dictionary when is_map(dictionary) ->
-            with {:ok, nil} <- resolve(document, dictionary["OC"], opts),
-                 {:ok, type} when type not in [{:name, "OCG"}, {:name, "OCMD"}] <-
+            with {:ok, type} when type not in [{:name, "OCG"}, {:name, "OCMD"}] <-
                    resolve(document, dictionary["Type"], opts) do
               check_layer_dependencies(
-                Enum.map(dictionary, fn
-                  {"Resources", resources} -> {:resources, resources}
-                  {"CharProcs", glyphs} when type == {:name, "Font"} -> {:name_map, glyphs}
-                  {_key, entry} -> entry
-                end) ++ rest,
+                Map.values(dictionary) ++ rest,
                 document,
                 seen,
                 groups,
@@ -1131,6 +1114,39 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           _ ->
             check_layer_dependencies(rest, document, seen, groups, opts)
         end
+    end
+  end
+
+  # ISO 32000-1, 8.11.3.3: /OC denotes membership on annotations and on
+  # Form and Image XObjects. Elsewhere it can be an author-chosen name.
+  defp check_stream_membership(document, ref, dictionary, opts) do
+    case dictionary do
+      %{"OC" => _, "Subtype" => subtype} ->
+        with {:ok, subtype} <- resolve(document, subtype, opts) do
+          if subtype in [{:name, "Form"}, {:name, "Image"}] and
+               match?(%{stream: stream} when is_binary(stream), document.objects[ref]) do
+            check_artwork_membership(document, dictionary, opts)
+          else
+            :ok
+          end
+        end
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp check_artwork_membership(document, dictionary, opts) do
+    case dictionary do
+      %{"OC" => entry} ->
+        case resolve(document, entry, opts) do
+          {:ok, nil} -> :ok
+          {:ok, _membership} -> layer_import_error()
+          {:error, _} = error -> error
+        end
+
+      _ ->
+        :ok
     end
   end
 

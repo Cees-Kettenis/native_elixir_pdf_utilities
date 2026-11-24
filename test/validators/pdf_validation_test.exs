@@ -84,6 +84,45 @@ defmodule NativeElixirPdfUtilities.PdfValidationTest do
     end
   end
 
+  test "membership checks distinguish null, unresolved and malformed entries on their owners" do
+    assert {:ok, context} = PdfValidator.validate(shared_document())
+    context = put_in(context.catalog["OCProperties"], %{"OCGs" => []})
+    [page] = context.pages
+    ref = {:ref, {8, 0}}
+    missing = {:ref, {999, 0}}
+
+    for {subtype, membership, expected} <- [
+          {"Form", nil, :ok},
+          {"Image", {:ref, {9, 0}}, :ok},
+          {"Image", "invalid", :unsupported_pdf_feature},
+          {"Form", missing, :invalid_pdf_input},
+          {"application/octet-stream", 42, :ok}
+        ] do
+      stream = object(%{"Subtype" => {:name, subtype}, "OC" => membership}, "")
+
+      document = %{
+        context.document
+        | objects: Map.merge(context.document.objects, %{{8, 0} => stream, {9, 0} => object(nil)})
+      }
+
+      page = %{page | resources: %{"XObject" => %{"OC" => ref}}}
+
+      result =
+        PdfValidator.validate_artwork_import(%{context | document: document, pages: [page]})
+
+      case expected do
+        :ok ->
+          assert result == :ok
+
+        :unsupported_pdf_feature ->
+          assert {:error, {^expected, %{stage: :optional_content}}} = result
+
+        :invalid_pdf_input ->
+          assert {:error, {^expected, %{stage: :resolution}}} = result
+      end
+    end
+  end
+
   test "normalizes Contents and rejects missing, cyclic, and non-stream references" do
     document = %{
       objects: %{

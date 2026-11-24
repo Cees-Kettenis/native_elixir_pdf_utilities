@@ -693,6 +693,140 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
   end
 
   @tag :tmp_dir
+  test "page imports retain normal, rollover and down appearance states named OC", %{tmp_dir: dir} do
+    alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
+
+    paint = "0 0 1 rg 0 0 20 20 re f"
+    form = "/Subtype /Form /BBox [0 0 20 20] /Resources << >>"
+    states = "<< /OC 6 0 R /Off 7 0 R >>"
+
+    stamps =
+      for kind <- ~w(N R D),
+          indirect <- [false, true],
+          do: {kind, indirect, "/Subtype /Stamp", ""}
+
+    checkbox =
+      {"N", false, "/Subtype /Widget /FT /Btn /T (Consent) /V /OC",
+       "/AcroForm << /Fields [5 0 R] >>"}
+
+    for {kind, indirect, annotation, catalog} <- [checkbox | stamps] do
+      state_map = if indirect, do: "8 0 R", else: states
+      normal = if kind == "N", do: "", else: "/N 6 0 R"
+      appearance = "<< #{normal} /#{kind} #{state_map} >>"
+      ap = if indirect, do: "9 0 R", else: appearance
+
+      source =
+        layer_import_pdf(
+          "/Annots [5 0 R]",
+          [
+            {5, "<< #{annotation} /Rect [10 10 30 30] /F 4 /AS /OC /AP #{ap} >>"},
+            {6, stream(paint, form)},
+            {7, stream("", form)},
+            {8, states},
+            {9, appearance}
+          ],
+          catalog
+        )
+
+      assert {:ok, merged} = Merge.merge([source])
+      assert {:ok, picked} = Transform.pick_pages(source, [1])
+      assert {:ok, [split]} = Split.by_page(source)
+
+      for output <- [merged, picked, split] do
+        assert {:ok, context} = Reader.read_validated(output)
+        [page] = context.pages
+        assert {:ok, [annot]} = Reader.resolve(context.document, page.dictionary["Annots"])
+
+        assert {:ok, %{"AS" => {:name, "OC"}, "AP" => ap}} =
+                 Reader.resolve(context.document, annot)
+
+        assert {:ok, appearances} = Reader.resolve(context.document, ap)
+
+        assert {:ok, %{"OC" => on, "Off" => off}} =
+                 Reader.resolve(context.document, appearances[kind])
+
+        assert {:ok, ^paint} = Reader.decoded_stream(context.document, on)
+        assert {:ok, ""} = Reader.decoded_stream(context.document, off)
+      end
+
+      if kind == "N" do
+        raster = fn pdf -> PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: dir) end
+        assert [%{width: 100, pixels: pixels}] = expected = raster.(source)
+        # Older Poppler versions paint only direct state dictionaries.
+        unless indirect, do: assert(binary_part(pixels, (80 * 100 + 20) * 3, 3) == <<0, 0, 255>>)
+        for pdf <- [merged, picked, split], do: assert(raster.(pdf) == expected)
+      end
+    end
+  end
+
+  @tag :tmp_dir
+  test "spot inks named OC survive page assembly and artwork import", %{tmp_dir: dir} do
+    alias NativeElixirPdfUtilities.{HtmlToPdf.PdfWriter, Stamp, TestSupport.PdfVisualCompare}
+
+    tint = "<< /FunctionType 2 /Domain [0 1] /C0 [1] /C1 [0] /N 1 >>"
+    gain = "<< /FunctionType 2 /Domain [0 1] /C0 [0] /C1 [1] /N 1 >>"
+
+    device_n =
+      for attributes <- [
+            "/Colorants << /OC [/Separation /OC /DeviceGray 6 0 R] >>",
+            "/MixingHints << /PrintingOrder [/OC] /Solidities << /OC 1 >> >>",
+            "/MixingHints << /PrintingOrder [/OC] /DotGain << /OC 7 0 R >> >>"
+          ] do
+        {"/ColorSpace << /Spot [/DeviceN [/OC] /DeviceGray 6 0 R << #{attributes} >>] >>",
+         "/Spot cs 1 scn", tint, gain}
+      end
+
+    halftone =
+      {"/ExtGState << /G << /HT 6 0 R >> >>", "/G gs 0.5 g",
+       "<< /HalftoneType 5 /Default 7 0 R /OC 7 0 R >>",
+       "<< /HalftoneType 1 /Frequency 60 /Angle 45 /SpotFunction /Round >>"}
+
+    assert {:ok, blank} = PdfWriter.render([%{size: {100, 100}, boxes: []}])
+    raster = fn pdf -> PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: dir) end
+
+    for {resources, color, definition, function} <- [halftone | device_n] do
+      source =
+        layer_import_pdf("/Resources << #{resources} >> /Contents 5 0 R", [
+          {5, stream("#{color} 10 10 20 20 re f")},
+          {6, definition},
+          {7, function}
+        ])
+
+      assert [%{width: 100, pixels: pixels}] = expected = raster.(source)
+      refute binary_part(pixels, (80 * 100 + 20) * 3, 3) == <<255, 255, 255>>
+
+      for result <- [Merge.merge([source]), Stamp.overlay(blank, source)] do
+        assert {:ok, output} = result
+        assert raster.(output) == expected
+      end
+    end
+  end
+
+  test "membership on annotations and their appearance streams still protects layered artwork" do
+    for {on_annotation, on_form, paint} <- [
+          {"/OC 4 0 R", "", "0 0 20 20 re f"},
+          {"", "/OC << /Type /OCMD /OCGs 4 0 R >>", "0 0 20 20 re f"},
+          {"", "/Resources << /Properties << /OC 4 0 R >> >>", "/OC /OC BDC 0 0 20 20 re f EMC"}
+        ] do
+      source =
+        layer_import_pdf("/Annots 7 0 R", [
+          {5,
+           "<< /Subtype /Stamp /Rect [0 0 20 20] /AP << /N << /OC 6 0 R >> >> /AS /OC #{on_annotation} >>"},
+          {6, stream(paint, "/Subtype /Form /BBox [0 0 20 20] #{on_form}")},
+          {7, "[5 0 R]"}
+        ])
+
+      for result <- [
+            Merge.merge([source]),
+            Transform.pick_pages(source, [1]),
+            Split.by_page(source)
+          ] do
+        assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} = result
+      end
+    end
+  end
+
+  @tag :tmp_dir
   test "Type 3 glyph names preserve their artwork across page imports", %{tmp_dir: dir} do
     alias NativeElixirPdfUtilities.{Stamp, HtmlToPdf.PdfWriter}
     alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
@@ -1122,8 +1256,19 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     pdf(Enum.sort_by(objects, &elem(&1, 0)))
   end
 
-  defp stream(content) do
-    "<< /Length #{byte_size(content)} >>\nstream\n#{content}\nendstream"
+  defp layer_import_pdf(page_entries, objects, catalog_entries \\ "") do
+    pdf([
+      {1,
+       "<< /Type /Catalog /Pages 2 0 R #{catalog_entries} /OCProperties << /OCGs [4 0 R] /D << /BaseState /OFF >> >> >>"},
+      {2, "<< /Type /Pages /Count 1 /Kids [3 0 R] /Resources << >> >>"},
+      {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] #{page_entries} >>"},
+      {4, "<< /Type /OCG /Name (Layer) >>"}
+      | objects
+    ])
+  end
+
+  defp stream(content, entries \\ "") do
+    "<< #{entries} /Length #{byte_size(content)} >>\nstream\n#{content}\nendstream"
   end
 
   defp pdf(objects) do
