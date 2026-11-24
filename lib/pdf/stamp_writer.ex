@@ -1,7 +1,10 @@
 defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Pdf.ObjectMapping
+  alias NativeElixirPdfUtilities.Validators.OptionalContentValidator
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Pdf.IncrementalWriter
   @doc false
   @spec write(map()) :: {:ok, binary()} | {:error, {atom(), map()}}
@@ -14,8 +17,10 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
         opacity: opacity
       }
       when is_list(placements) and is_list(copied_objects) and is_number(opacity) ->
-        objects = build_objects(target_context, placements, copied_objects, opacity)
-        IncrementalWriter.write(target_context, objects)
+        with {:ok, objects} <-
+               build_objects(target_context, placements, copied_objects, opacity, plan) do
+          IncrementalWriter.write(target_context, objects)
+        end
 
       _ ->
         NativeElixirPdfUtilities.Diagnostics.error(
@@ -27,7 +32,7 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
     end
   end
 
-  defp build_objects(target_context, placements, copied_objects, opacity) do
+  defp build_objects(target_context, placements, copied_objects, opacity, plan) do
     first_id = target_context.document.trailer["Size"]
 
     {reference_map, next_id} =
@@ -107,8 +112,38 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
         ]
       end)
 
-    [{save_state_id, 0, {:stream, %{}, "q\n"}}] ++
-      copied ++ forms ++ graphics_state ++ page_entries
+    objects =
+      [{save_state_id, 0, {:stream, %{}, "q\n"}}] ++
+        copied ++ forms ++ graphics_state ++ page_entries
+
+    case Map.get(plan, :source_layers) do
+      nil ->
+        {:ok, objects}
+
+      layers ->
+        source = ObjectMapping.remap(layers, reference_map)
+
+        with {:ok, properties} <-
+               OptionalContentValidator.combine(List.wrap(plan.target_layers) ++ [source]),
+             {:ok, version} <-
+               PdfValidator.resolve(target_context.document, target_context.catalog["Version"]) do
+          {id, gen} = target_context.catalog_ref
+          catalog = Map.put(target_context.catalog, "OCProperties", properties)
+          # An incremental revision must announce newer features in the catalog
+          # since the target's original PDF header remains in place.
+          catalog =
+            case target_context.document.binary do
+              <<"%PDF-1.", minor, _::binary>>
+              when minor < ?7 and version not in [{:name, "1.7"}, {:name, "2.0"}] ->
+                Map.put(catalog, "Version", {:name, "1.7"})
+
+              _ ->
+                catalog
+            end
+
+          {:ok, [{id, gen, {:value, catalog}} | objects]}
+        end
+    end
   end
 
   defp copied_object_entries(copied_objects, reference_map) do
@@ -120,14 +155,13 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
         case parsed.stream do
           stream when is_binary(stream) ->
             {:stream,
-             NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(
+             ObjectMapping.remap(
                Map.delete(parsed.value, "Length"),
                reference_map
              ), stream}
 
           nil ->
-            {:value,
-             NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(parsed.value, reference_map)}
+            {:value, ObjectMapping.remap(parsed.value, reference_map)}
         end
 
       {id, generation, body}
@@ -149,12 +183,11 @@ defmodule NativeElixirPdfUtilities.Pdf.StampWriter do
           "FormType" => 1,
           "BBox" => source.crop_box,
           "Matrix" => source.normalization,
-          "Resources" =>
-            NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(source.resources, reference_map)
+          "Resources" => ObjectMapping.remap(source.resources, reference_map)
         }
         |> put_optional(
           "Group",
-          NativeElixirPdfUtilities.Pdf.ObjectMapping.remap(group, reference_map)
+          ObjectMapping.remap(group, reference_map)
         )
 
       {Map.fetch!(form_ids, source.page_number), 0, {:stream, dictionary, source.content}}

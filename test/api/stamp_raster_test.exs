@@ -16,7 +16,7 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
     {:ok, artifact_dir: directory}
   end
 
-  test "importing artwork diagnoses source layer settings and stamping preserves target visibility",
+  test "page imports preserve layer visibility and independently switchable artwork",
        %{
          artifact_dir: directory
        } do
@@ -44,7 +44,11 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
 
     layers =
       for {state, color} <- [{"OFF", <<255, 255, 255>>}, {"ON", <<0, 0, 255>>}] do
-        properties = %{"OCGs" => [layer], "D" => %{"BaseState" => {:name, state}}}
+        properties = %{
+          "OCGs" => [layer],
+          "D" => %{"Order" => [layer], "OFF" => if(state == "OFF", do: [layer], else: [])}
+        }
+
         entry = if state == "OFF", do: properties, else: {:ref, {config, 0}}
 
         assert {:ok, layered} =
@@ -69,21 +73,26 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
         assert binary_part(pixels, (80 * 100 + 20) * 3, 3) == <<255, 0, 0>>
         assert binary_part(pixels, (50 * 100 + 50) * 3, 3) == color
 
-        for {module, operation, result} <- [
-              {Merge, :merge, Merge.merge([blank, layered])},
-              {Transform, :pick_pages, Transform.pick_pages(layered, [2, 1])},
-              {Transform, :rotate_pages, Transform.rotate_pages(layered, 90)},
-              {Transform, :delete_pages, Transform.delete_pages(layered, [2])},
-              {Split, :split_by_page, Split.by_page(layered)},
-              {Stamp, :overlay_pdf, Stamp.overlay(blank, layered)}
+        assert {:ok, merged} = Merge.merge([blank, layered])
+        assert {:ok, picked} = Transform.pick_pages(layered, [2, 1])
+        assert {:ok, rotated} = Transform.rotate_pages(layered, 180)
+        assert {:ok, deleted} = Transform.delete_pages(layered, [2])
+        assert {:ok, [split, _]} = Split.by_page(layered)
+        assert {:ok, overlay} = Stamp.overlay(blank, layered)
+
+        for {output, index} <- [
+              {merged, 2},
+              {picked, 1},
+              {rotated, 0},
+              {deleted, 0},
+              {split, 0},
+              {overlay, 0}
             ] do
-          assert {:error, {:unsupported_pdf_feature, diagnostic}} = result
-          assert diagnostic.stage == :optional_content
-          assert diagnostic.reason == :unsupported_pdf_feature
-          assert diagnostic.module == module
-          assert diagnostic.operation == operation
-          assert diagnostic.message =~ "layer visibility"
-          if module == Merge, do: assert(diagnostic.source == "merge input 2")
+          pages = PdfVisualCompare.rasterize_pdf!(output, artifact_dir: directory)
+          assert binary_part(Enum.at(pages, index).pixels, 5050 * 3, 3) == color
+          assert {:ok, output_context} = Reader.read_validated(output)
+          assert %{"OCGs" => [group], "D" => default} = output_context.catalog["OCProperties"]
+          assert default["Order"] == [group]
         end
 
         assert {:ok, clean_page} = Transform.delete_pages(layered, [1])
@@ -102,7 +111,102 @@ defmodule NativeElixirPdfUtilities.StampRasterTest do
         layered
       end
 
-    assert {:error, {:unsupported_pdf_feature, %{source: "merge input 1"}}} = Merge.merge(layers)
+    [hidden, visible] = layers
+    assert {:ok, revised} = Stamp.overlay(blank, hidden)
+    assert {:ok, revised_context} = Reader.read_validated(revised)
+    assert revised_context.catalog["Version"] == {:name, "1.7"}
+
+    assert {:ok, newer} =
+             IncrementalWriter.write(context, [
+               {catalog_id, generation,
+                {:value, Map.put(context.catalog, "Version", {:name, "2.0"})}}
+             ])
+
+    assert {:ok, revised} = Stamp.overlay(newer, hidden)
+    assert {:ok, revised_context} = Reader.read_validated(revised)
+    assert revised_context.catalog["Version"] == {:name, "2.0"}
+    assert {:ok, combined} = Merge.merge(layers)
+    assert {:ok, overlay} = Stamp.overlay(hidden, visible)
+
+    for output <- [combined, overlay] do
+      assert {:ok, result} = Reader.read_validated(output)
+      assert %{"OCGs" => [off, on], "D" => default} = props = result.catalog["OCProperties"]
+      assert off != on
+      assert default["OFF"] == [off]
+      assert default["Order"] == [off, on]
+
+      for group <- [off, on] do
+        assert {:ok, %{"Type" => {:name, "OCG"}, "Name" => {:string, "Swatch"}}} =
+                 Reader.resolve(result.document, group)
+      end
+
+      {id, gen} = result.catalog_ref
+      switched = put_in(props["D"]["OFF"], [on])
+
+      assert {:ok, toggled} =
+               IncrementalWriter.write(result, [
+                 {id, gen, {:value, Map.put(result.catalog, "OCProperties", switched)}}
+               ])
+
+      painted = fn pdf ->
+        for page <- PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: directory),
+            do: binary_part(page.pixels, 5050 * 3, 3)
+      end
+
+      white = <<255, 255, 255>>
+      blue = <<0, 0, 255>>
+
+      if output == combined do
+        assert painted.(output) == [white, white, blue, white]
+        assert painted.(toggled) == [blue, white, white, white]
+      else
+        assert painted.(output) == [blue, blue]
+        assert painted.(toggled) == [blue, white]
+      end
+    end
+
+    assert {:ok, visible_context} = Reader.read_validated(visible)
+
+    assert {:ok, props} =
+             Reader.resolve(visible_context.document, visible_context.catalog["OCProperties"])
+
+    restricted_panel =
+      update_in(
+        props["D"],
+        &Map.merge(&1, %{"ListMode" => {:name, "VisiblePages"}, "Locked" => [layer]})
+      )
+
+    assert {:ok, restricted} =
+             IncrementalWriter.write(visible_context, [
+               {catalog_id, generation,
+                {:value, Map.put(visible_context.catalog, "OCProperties", restricted_panel)}}
+             ])
+
+    for result <- [Merge.merge([hidden, restricted]), Stamp.overlay(hidden, restricted)] do
+      assert {:ok, output} = result
+      assert {:ok, context} = Reader.read_validated(output)
+      assert %{"OCGs" => [off, on], "D" => config} = context.catalog["OCProperties"]
+      assert config["ListMode"] == {:name, "AllPages"}
+      assert config["Order"] == [off, on]
+      assert config["Locked"] == [on]
+      assert config["OFF"] == [off]
+    end
+
+    design_preset =
+      Map.put(props, "Configs", [%{"Name" => {:string, "Design"}, "Intent" => {:name, "Design"}}])
+
+    assert {:ok, design} =
+             IncrementalWriter.write(visible_context, [
+               {catalog_id, generation,
+                {:value, Map.put(visible_context.catalog, "OCProperties", design_preset)}}
+             ])
+
+    for result <- [Merge.merge([hidden, design]), Stamp.overlay(hidden, design)] do
+      assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content, message: message}}} =
+               result
+
+      assert message =~ "Intent"
+    end
 
     for entry <- [nil, {:ref, {config, 0}}] do
       assert {:ok, ordinary} =

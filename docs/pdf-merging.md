@@ -27,16 +27,20 @@ before all pages from the second. For only part of a document, use
 Resolved named links become explicit page links. Unresolved names remain in
 copied annotations and may not work. See [bookmark behavior](pdf-outlines.md#merge-and-transform-behavior).
 
+Optional-content layers retain their artwork, initial visibility and layer-panel
+controls. Layers with the same display name in different inputs remain independent.
+Choosing an alternate configuration from one input applies that preset and the
+defaults of the other inputs. Matching Layers panel modes are kept. When modes
+differ, the panel uses `AllPages` and lists the groups in the combined panel order.
+Each layer keeps its visibility and lock settings. Combining presets that require
+incompatible document-wide viewing intents returns a diagnostic.
+
 Merging creates a new PDF 1.7 document. It can retain unused source objects,
 so it is not a way to remove confidential content. Use
 [stamping](pdf-stamping.md) to add content while preserving a target document's
 metadata and form configuration.
 
 ## Errors and limits
-
-Unused layer definitions in the source catalog are supported. If a page resource
-or annotation refers to optional content, merging returns `:unsupported_pdf_feature`
-because the rebuilt catalog cannot preserve its layer visibility.
 
 An empty list returns `:empty_pdf_list`. Encrypted, malformed, or unsupported
 inputs return a [diagnostic](diagnostics.md). Reader and preparation failures

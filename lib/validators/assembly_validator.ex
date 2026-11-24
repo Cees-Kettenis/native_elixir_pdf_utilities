@@ -257,7 +257,8 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
 
     with {:ok, reachable} <-
            walk_references(
-             Enum.map(selected_pages, & &1.ref),
+             Enum.map(selected_pages, & &1.ref) ++
+               NativeElixirPdfUtilities.Pdf.ObjectMapping.references(source.input.layers),
              %{},
              source.objects,
              overrides,

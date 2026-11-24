@@ -802,7 +802,51 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     end
   end
 
-  test "membership on annotations and their appearance streams still protects layered artwork" do
+  test "a dangling layer-panel reference returns a merge diagnostic" do
+    alias NativeElixirPdfUtilities.Pdf.IncrementalWriter
+    source = layer_import_pdf("", [])
+    assert {:ok, context} = Reader.read_validated(source)
+    {id, gen} = context.catalog_ref
+    catalog = put_in(context.catalog, ["OCProperties", "D", "Order"], [{:ref, {99, 0}}])
+    assert {:ok, malformed} = IncrementalWriter.write(context, [{id, gen, {:value, catalog}}])
+
+    assert {:error, {:invalid_pdf_input, %{stage: :reference_remapping, message: message}}} =
+             Merge.merge([malformed])
+
+    assert message =~ "99 0"
+  end
+
+  @tag :tmp_dir
+  test "an unused layer resource keeps its catalog binding when a page is imported", %{
+    tmp_dir: dir
+  } do
+    alias NativeElixirPdfUtilities.{Stamp, TestSupport.PdfVisualCompare}
+
+    source =
+      layer_import_pdf(
+        "/Resources << /Properties << /Ghost 4 0 R >> >> /Contents 5 0 R",
+        [{5, stream("0 g 20 20 20 20 re f")}]
+      )
+
+    assert {:ok, picked} = Transform.pick_pages(source, [1])
+    assert {:ok, [split]} = Split.by_page(source)
+    assert {:ok, merged} = Merge.merge([source])
+    assert {:ok, overlay} = Stamp.overlay(source, source)
+    raster = fn pdf -> PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: dir) end
+    expected = raster.(source)
+
+    for output <- [merged, picked, split, overlay] do
+      assert raster.(output) == expected
+      assert {:ok, context} = Reader.read_validated(output)
+      assert %{"D" => %{"OFF" => hidden}, "OCGs" => groups} = context.catalog["OCProperties"]
+      assert hidden == groups and groups != []
+    end
+  end
+
+  @tag :tmp_dir
+  test "imported annotations and their appearance streams retain their layer visibility", %{
+    tmp_dir: dir
+  } do
     for {on_annotation, on_form, paint} <- [
           {"/OC 4 0 R", "", "0 0 20 20 re f"},
           {"", "/OC << /Type /OCMD /OCGs 4 0 R >>", "0 0 20 20 re f"},
@@ -816,13 +860,18 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
           {7, "[5 0 R]"}
         ])
 
-      for result <- [
-            Merge.merge([source]),
-            Transform.pick_pages(source, [1]),
-            Split.by_page(source)
-          ] do
-        assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} = result
+      assert {:ok, picked} = Transform.pick_pages(source, [1])
+      assert {:ok, [split]} = Split.by_page(source)
+      assert {:ok, merged} = Merge.merge([source])
+
+      raster = fn pdf ->
+        NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.rasterize_pdf!(pdf,
+          artifact_dir: dir
+        )
       end
+
+      expected = raster.(source)
+      for output <- [picked, split, merged], do: assert(raster.(output) == expected)
     end
   end
 
@@ -883,7 +932,10 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
           Transform.pick_pages(layered, [1]),
           Stamp.overlay(blank, layered)
         ] do
-      assert {:error, {:unsupported_pdf_feature, %{stage: :optional_content}}} = result
+      assert {:ok, output} = result
+
+      assert PdfVisualCompare.rasterize_pdf!(output, artifact_dir: dir) ==
+               PdfVisualCompare.rasterize_pdf!(layered, artifact_dir: dir)
     end
   end
 

@@ -24,7 +24,8 @@ defmodule NativeElixirPdfUtilities.Merge do
 
   Input page order determines output page order. Existing outlines are appended
   in input order and their local destinations are remapped to output pages.
-  Other catalog-level structures such as forms are not preserved.
+  Optional-content layers retain their visibility settings. Other catalog-level
+  structures such as forms are not preserved.
   """
   @spec merge([pdf_bin()]) ::
           {:ok, pdf_bin()} | {:error, {error_reason(), Diagnostics.diagnostic()}}

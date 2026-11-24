@@ -6,6 +6,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.Reader
   alias NativeElixirPdfUtilities.Pdf.ObjectMapping
+  alias NativeElixirPdfUtilities.Validators.OptionalContentValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.TransformValidator
   alias NativeElixirPdfUtilities.Validators.IncrementalValidator
@@ -138,7 +139,12 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
              length(target_pages)
            ),
          :ok <-
-           PdfValidator.validate_artwork_import(overlay_context, overlay_page_numbers, :overlay) do
+           PdfValidator.validate_artwork_import(
+             overlay_context,
+             overlay_page_numbers,
+             :overlay,
+             :preserve
+           ) do
       prepare_overlay_pages(
         target_context,
         target_pages,
@@ -702,7 +708,10 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
        ) do
     with {:ok, source_pages} <- source_pages(overlay_context, overlay_page_numbers),
          :ok <- validate_fit(target_pages, source_pages, overlay_page_numbers, fit),
-         {:ok, copied_objects} <- copied_resource_objects(overlay_context, source_pages),
+         {:ok, layers} <- OptionalContentValidator.prepare(overlay_context),
+         {:ok, target_layers} <-
+           if(layers, do: OptionalContentValidator.prepare(target_context), else: {:ok, nil}),
+         {:ok, copied_objects} <- copied_resource_objects(overlay_context, source_pages, layers),
          :ok <-
            validate_object_capacity(
              target_context,
@@ -737,6 +746,8 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
            %{
              target_context: target_context,
              overlay_context: overlay_context,
+             source_layers: layers,
+             target_layers: target_layers,
              placements: Enum.reverse(placements),
              copied_objects: copied_objects,
              opacity: opacity
@@ -826,7 +837,7 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
     end
   end
 
-  defp copied_resource_objects(context, source_pages) do
+  defp copied_resource_objects(context, source_pages, layers) do
     PdfValidator.with_reader_budget(fn ->
       page_refs = Map.new(context.pages, &{&1.ref, true})
 
@@ -843,20 +854,21 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
           end
         end)
 
-      case result do
-        {:ok, references} ->
-          objects =
-            references
-            |> Map.keys()
-            |> Enum.map(fn reference ->
-              {reference, Map.fetch!(context.document.objects, reference)}
-            end)
-            |> Enum.sort_by(fn {{object, generation}, _value} -> {object, generation} end)
+      with {:ok, seen} <- result,
+           {:ok, references} <-
+             if(layers,
+               do: collect_references(layers, context.document.objects, page_refs, seen),
+               else: {:ok, seen}
+             ) do
+        objects =
+          references
+          |> Map.keys()
+          |> Enum.map(fn reference ->
+            {reference, Map.fetch!(context.document.objects, reference)}
+          end)
+          |> Enum.sort_by(fn {{object, generation}, _value} -> {object, generation} end)
 
-          {:ok, objects}
-
-        {:error, _error} = reference_error ->
-          reference_error
+        {:ok, objects}
       end
     end)
   end

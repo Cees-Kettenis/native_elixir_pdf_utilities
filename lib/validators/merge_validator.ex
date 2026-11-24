@@ -12,6 +12,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
+  alias NativeElixirPdfUtilities.Validators.OptionalContentValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @typedoc "A parsed object retained for merge serialization."
@@ -43,6 +44,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           required(:pages) => [PdfValidator.ref()],
           required(:inherited) => inherited_pages(),
           required(:outlines) => [OutlineValidator.item()],
+          optional(:layers) => map() | nil,
           optional(:map) => %{optional(PdfValidator.ref()) => non_neg_integer()}
         }
 
@@ -125,7 +127,9 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
 
         object_by_ref = Map.new(objects, &{{&1.obj, &1.gen}, &1})
 
-        with :ok <- PdfValidator.validate_artwork_import(pdf_context, selection),
+        with :ok <-
+               PdfValidator.validate_artwork_import(pdf_context, selection, :pages, :preserve),
+             {:ok, layers} <- OptionalContentValidator.prepare(pdf_context),
              :ok <- validate_serializable_objects(objects),
              {:ok, objects} <-
                normalize_named_link_destinations(
@@ -140,6 +144,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
              objects: objects,
              pages: Enum.map(pages, & &1.ref),
              inherited: inherited,
+             layers: layers,
              outlines: outlines
            }}
         end
@@ -768,11 +773,15 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   defp validate_reference_remapping(inputs) do
     Enum.reduce_while(inputs, {:ok, inputs}, fn input, {:ok, inputs} ->
       missing_reference =
-        Enum.find_value(input.objects, fn object ->
-          object
-          |> object_references()
-          |> Enum.find(fn ref -> not Map.has_key?(input.map, ref) end)
-        end)
+        Enum.find(
+          NativeElixirPdfUtilities.Pdf.ObjectMapping.references(Map.get(input, :layers)),
+          &(not Map.has_key?(input.map, &1))
+        ) ||
+          Enum.find_value(input.objects, fn object ->
+            object
+            |> object_references()
+            |> Enum.find(fn ref -> not Map.has_key?(input.map, ref) end)
+          end)
 
       case missing_reference do
         nil ->

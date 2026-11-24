@@ -1,6 +1,8 @@
 defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Pdf.ObjectMapping
+  alias NativeElixirPdfUtilities.Validators.OptionalContentValidator
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
   alias NativeElixirPdfUtilities.Pdf.OutlineBuilder
   alias NativeElixirPdfUtilities.Validators.AssemblyValidator
@@ -35,6 +37,20 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
         maximum_copied_id + 1
       )
 
+    catalogs =
+      for input <- inputs,
+          layers = Map.get(input, :layers),
+          do: ObjectMapping.remap(layers, input.map)
+
+    layer_entry =
+      with {:ok, properties} when is_map(properties) <- OptionalContentValidator.combine(catalogs),
+           {:ok, encoded} <- InfoCodec.serialize_value(properties) do
+        [" /OCProperties ", encoded]
+      else
+        {:ok, nil} -> []
+        error -> throw({:assembly_output_limit, error})
+      end
+
     {pieces, offsets, position} = add_piece([], pdf_header(), %{}, 0)
 
     {pieces, offsets, position} =
@@ -54,7 +70,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
         position,
         catalog_object_id,
         0,
-        render_catalog_object(pages_object_id, outline_objects.root_ref)
+        render_catalog_object(pages_object_id, outline_objects.root_ref, layer_entry)
       )
 
     {pieces, offsets, position} =
@@ -140,7 +156,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
     ["<< /Type /Pages /Kids [ ", kids, " ] /Count ", Integer.to_string(length(page_ids)), " >>\n"]
   end
 
-  defp render_catalog_object(pages_object_id, outline_root_ref) do
+  defp render_catalog_object(pages_object_id, outline_root_ref, layer_entry) do
     outline_entry =
       case outline_root_ref do
         nil ->
@@ -155,6 +171,7 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
       Integer.to_string(pages_object_id),
       " 0 R",
       outline_entry,
+      layer_entry,
       " >>\n"
     ]
   end

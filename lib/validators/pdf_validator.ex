@@ -994,17 +994,24 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
     end)
   end
 
-  @doc "Checks selected artwork and retained annotations before discarding the source layer configuration."
+  @doc "Checks selected artwork and retained annotations against the layer configuration available to the output."
   @spec validate_artwork_import(context()) :: :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   @spec validate_artwork_import(context(), :all | Enumerable.t()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   @spec validate_artwork_import(context(), :all | Enumerable.t(), :pages | :overlay) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
-  def validate_artwork_import(context, selection \\ :all, kind \\ :pages) do
+  @spec validate_artwork_import(
+          context(),
+          :all | Enumerable.t(),
+          :pages | :overlay,
+          :preserve | :discard
+        ) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_artwork_import(context, selection \\ :all, kind \\ :pages, layers \\ :discard) do
     case context do
       %{catalog: %{"OCProperties" => entry}} ->
         with_reader_budget(fn ->
-          with_reference_resolution([], fn opts ->
+          with_reference_resolution([preserve_layers: layers == :preserve], fn opts ->
             with {:ok, properties} <- resolve(context.document, entry, opts) do
               case properties do
                 nil ->
@@ -1074,7 +1081,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
           {:ref, ref} ->
             cond do
               MapSet.member?(groups, value) ->
-                layer_import_error()
+                if opts[:preserve_layers],
+                  do: check_layer_dependencies(rest, document, seen, groups, opts),
+                  else: layer_import_error()
 
               MapSet.member?(seen, ref) ->
                 check_layer_dependencies(rest, document, seen, groups, opts)
@@ -1094,7 +1103,9 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
             end
 
           dictionary when is_map(dictionary) ->
-            with {:ok, type} when type not in [{:name, "OCG"}, {:name, "OCMD"}] <-
+            preserve = opts[:preserve_layers]
+
+            with {:ok, type} when type != {:name, "OCG"} and (preserve or type != {:name, "OCMD"}) <-
                    resolve(document, dictionary["Type"], opts) do
               check_layer_dependencies(
                 Map.values(dictionary) ++ rest,
@@ -1137,16 +1148,25 @@ defmodule NativeElixirPdfUtilities.Validators.PdfValidator do
   end
 
   defp check_artwork_membership(document, dictionary, opts) do
-    case dictionary do
-      %{"OC" => entry} ->
-        case resolve(document, entry, opts) do
-          {:ok, nil} -> :ok
-          {:ok, _membership} -> layer_import_error()
-          {:error, _} = error -> error
-        end
+    if is_map(dictionary) and Map.has_key?(dictionary, "OC") do
+      preserve = opts[:preserve_layers]
 
-      _ ->
-        :ok
+      with {:ok, membership} <- resolve(document, dictionary["OC"], opts) do
+        case membership do
+          nil ->
+            :ok
+
+          %{"Type" => type} when preserve ->
+            with {:ok, name} <- resolve(document, type, opts) do
+              if name in [{:name, "OCG"}, {:name, "OCMD"}], do: :ok, else: layer_import_error()
+            end
+
+          _ ->
+            layer_import_error()
+        end
+      end
+    else
+      :ok
     end
   end
 

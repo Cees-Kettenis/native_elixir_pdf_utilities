@@ -1,9 +1,8 @@
 # Selecting, rotating, and splitting pages
 
 `Transform` changes which pages appear in a PDF. `Split` returns separate PDFs.
-Both accept PDF binaries and return new binaries. Sources may declare optional
-layers. If the selected pages have resources or annotations that refer to optional
-content, the operation returns `:unsupported_pdf_feature`.
+Both accept PDF binaries and return new binaries. Selected pages keep their optional-content layers,
+including their visibility settings and layer-panel controls.
 
 ```elixir
 alias NativeElixirPdfUtilities.{Split, Transform}

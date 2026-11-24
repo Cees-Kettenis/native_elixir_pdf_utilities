@@ -85,10 +85,11 @@ equal counts. `:pages` selects the target pages and defaults to `:all`.
 | `:stretch` | Scales width and height independently |
 
 `:opacity` defaults to `1.0` and fades the composed overlay, not the target.
-Only artwork and its resources are imported. Overlay annotations, bookmarks,
-metadata, and interactive forms are not copied. If the selected overlay artwork has resources that refer to optional content,
-the operation returns `:unsupported_pdf_feature`. Unused catalog layer definitions
-and layers on other source pages are supported. A layered PDF can still serve as the target.
+The overlay keeps its artwork, resources and optional-content layer settings.
+A hidden overlay layer stays hidden, and layers from the target and overlay keep
+their own identities. The same [layer configuration rules](pdf-merging.md#what-the-output-keeps)
+apply as for merging. Overlay annotations, bookmarks, metadata and interactive
+forms are omitted.
 
 ## Coordinates and page geometry
 
