@@ -117,6 +117,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
                  case: :lower
                ) == hash
       end
+
+      config = %{family: "Collection", data: source, collection_index: index}
+      assert {:ok, [font]} = Font.load_configured_faces([config])
+      assert font.data == data
+
+      assert {:ok, pdf} =
+               HtmlToPdf.render("<p style='font-family:Collection'>Hx0</p>",
+                 fonts: [config],
+                 system_font_discovery: false
+               )
+
+      assert pdf =~ "/BaseFont /#{font.pdf_name} "
+      assert Text.extract(pdf, layout: false) == {:ok, "Hx0"}
     end
 
     manifest = Paths.fixture("fonts/woff2-edge-fonts.json") |> File.read!() |> :json.decode()
@@ -132,6 +145,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2Test do
                |> File.read!()
                |> FontContainerValidator.prepare()
     end
+  end
+
+  test "an unselected face must reference its glyf and loca in global outline order" do
+    source = FontCorpus.path("selected-collection.woff2") |> File.read!()
+    [_, {glyf, _}] = :binary.matches(source, <<255, "glyf">>)
+    [_, {loca, _}] = :binary.matches(source, <<255, "loca">>)
+    reversed = source |> replace(glyf + 1, "loca") |> replace(loca + 1, "glyf")
+
+    assert {:error, {:invalid_font, diagnostic}} = Woff2Validator.prepare(reversed, 0)
+    assert diagnostic.stage == :font
+    assert diagnostic.message =~ "directory pairing"
   end
 
   test "all triplet sizes, composite programs and asymmetric hmtx transforms agree with FontTools" do
@@ -187,16 +211,44 @@ end
 defmodule NativeElixirPdfUtilities.HtmlToPdf.Woff2GlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.TestSupport.FontCorpus
-  alias NativeElixirPdfUtilities.{Limits}
+  alias NativeElixirPdfUtilities.Limits
 
   alias NativeElixirPdfUtilities.Validators.{
-    FontContainerValidator
+    FontContainerValidator,
+    ResourceBudgetValidator,
+    Woff2Validator
   }
 
   setup do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     :ok
+  end
+
+  test "shared collection faces charge for the selected tables within the operation's work limit" do
+    source = FontCorpus.path("selected-collection.woff2") |> File.read!()
+
+    # The third face repeats the first. All three use the same literal Brotli payload.
+    [{first, first_work}, {second, second_work}, {repeat, repeat_work}] =
+      for index <- 0..2 do
+        ResourceBudgetValidator.with_budget(fn ->
+          assert {:ok, _, tables} = Woff2Validator.prepare(source, index)
+          {tables, ResourceBudgetValidator.snapshot().max_work}
+        end)
+      end
+
+    assert {repeat, repeat_work} == {first, first_work}
+    assert length(first) > length(second)
+    assert first_work - second_work == length(first) - length(second)
+
+    limits = Limits.effective()
+    Limits.install(%{limits | max_work: first_work - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = Woff2Validator.prepare(source, 2)
+    assert diagnostic.stage == :font and diagnostic.message =~ "max_work"
+    assert {:ok, _, ^second} = Woff2Validator.prepare(source, 1)
+
+    Limits.install(%{limits | max_work: first_work})
+    assert {:ok, _, ^first} = Woff2Validator.prepare(source, 2)
   end
 
   test "decompression and reconstruction obey shared size and work limits" do

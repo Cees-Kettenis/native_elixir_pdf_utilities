@@ -39,7 +39,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
 
         FontValidator.check(:max_decoded_bytes, total)
         FontValidator.reserve(:max_work, count)
-        {records, bytes, decoded_size} = directory(bytes, count, [], 0)
+        {records, bytes, decoded_size} = directory(bytes, count, [], 0, 0)
         records = List.to_tuple(records)
         {faces, bytes} = faces(bytes, flavor, count)
 
@@ -58,21 +58,16 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
         )
 
         {compressed, _} = read(bytes, compressed_size, "compressed font data")
+        {scaler, indices} = Enum.at(faces, index)
+        FontValidator.reserve(:max_work, length(indices))
 
         case BrotliValidator.decompress(compressed, decoded_size) do
           {:ok, decoded} ->
-            {payloads, <<>>} =
-              Enum.map_reduce(Tuple.to_list(records), decoded, fn record, bytes ->
-                {payload, bytes} = read(bytes, record.length, record.tag)
-                {Map.put(record, :data, payload), bytes}
-              end)
-
-            {scaler, indices} = Enum.at(faces, index)
-
             tables =
               Map.new(indices, fn i ->
-                r = Enum.at(payloads, i)
-                {r.tag, r}
+                record = elem(records, i)
+                payload = binary_part(decoded, record.offset, record.length)
+                {record.tag, Map.put(record, :data, payload)}
               end)
 
             {:ok, scaler, reconstruct(tables)}
@@ -86,7 +81,7 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
     end)
   end
 
-  defp directory(bytes, left, records, decoded_size) do
+  defp directory(bytes, left, records, decoded_size, outline_number) do
     if left == 0 do
       {Enum.reverse(records), bytes, decoded_size}
     else
@@ -116,8 +111,19 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
 
       size = decoded_size + length
       FontValidator.check(:max_decoded_bytes, size)
-      record = %{tag: tag, original: original, length: length, transformed: transformed}
-      directory(bytes, left - 1, [record | records], size)
+      # Each glyf must be paired with the next global outline entry, even across shared faces.
+      outline_number = if tag in ["glyf", "loca"], do: outline_number + 1, else: outline_number
+
+      record = %{
+        tag: tag,
+        original: original,
+        length: length,
+        transformed: transformed,
+        offset: decoded_size,
+        outline_number: outline_number
+      }
+
+      directory(bytes, left - 1, [record | records], size, outline_number)
     end
   end
 
@@ -213,15 +219,8 @@ defmodule NativeElixirPdfUtilities.Validators.Woff2Validator do
         g = elem(records, glyf)
         l = elem(records, loca)
 
-        paired =
-          (glyf + 1)..(tuple_size(records) - 1)//1
-          |> Enum.find(fn index -> elem(records, index).tag in ["glyf", "loca"] end)
-
-        unless g.transformed == l.transformed and paired == loca,
+        unless g.transformed == l.transformed and l.outline_number == g.outline_number + 1,
           do: invalid("WOFF2 glyf and loca transforms or directory pairing differ", "directory")
-
-        # Requiring the next global outline member to be this loca already
-        # gives a fixed one-to-one pair, including every shared collection face.
       end
     end)
 
