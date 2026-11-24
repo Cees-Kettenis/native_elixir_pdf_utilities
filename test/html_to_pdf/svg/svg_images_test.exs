@@ -8,7 +8,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{ResourceContext, SvgRasterizer}
   alias NativeElixirPdfUtilities.Validators.HtmlValidator
-  alias NativeElixirPdfUtilities.TestSupport.PngFixture
+  alias NativeElixirPdfUtilities.TestSupport.{JpegFixture, PngFixture, SvgPublicWorkflow}
 
   setup do
     limits = Limits.effective()
@@ -279,6 +279,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgImagesTest do
 
       assert stage in [:html, :style, :layout]
       assert message != ""
+    end
+  end
+
+  test "embedded JPEGs obey the source dimension limit even in a smaller SVG", %{
+    limits: limits,
+    png: png
+  } do
+    Limits.install(%{limits | max_raster_dimension: 8})
+    html = "<svg width='4' height='2'><image href='photo' width='4' height='2'/></svg>"
+
+    for {width, height} <- [{9, 8}, {8, 9}] do
+      jpeg = JpegFixture.baseline(width, height)
+
+      assert {:error, {:resource_limit_exceeded, diagnostic}} =
+               HtmlToPdf.render(html, assets: %{"photo" => {:bytes, jpeg}})
+
+      assert diagnostic.stage == :style
+      assert diagnostic.message =~ "max_raster_dimension"
+    end
+
+    for bytes <- [JpegFixture.baseline(8, 8), png] do
+      assert {:ok, pdf} = HtmlToPdf.render(html, assets: %{"photo" => {:bytes, bytes}})
+      assert :ok = SvgPublicWorkflow.assert_image(pdf)
     end
   end
 

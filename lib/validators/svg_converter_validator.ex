@@ -756,6 +756,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgConverterValidator do
       "image/jpeg" ->
         case HtmlValidator.jpeg_metadata(data) do
           {:ok, image} ->
+            HtmlValidator.check_render_resource(
+              :max_raster_dimension,
+              max(image.width_px, image.height_px),
+              :style
+            )
+
             with :ok <-
                    HtmlValidator.reserve_render_resource(
                      :max_raster_pixels,
