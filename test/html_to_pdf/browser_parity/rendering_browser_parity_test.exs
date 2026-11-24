@@ -2401,6 +2401,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     html_curved_border_sides.html
     html_curved_border_sides_selected.html
     html_datalist_visible_closed.html
+    html_display_contents_controls.html
     html_default_picker_auto.html
     html_dialog_initial.html
     html_disabled_range_datalist_ticks.html

@@ -4261,6 +4261,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
         authored =
           with {:ok, style} <- authored,
+               style =
+                 NativeElixirPdfUtilities.Validators.CssDisplayValidator.element_display(
+                   style,
+                   node,
+                   ancestors
+                 ),
                {:ok, style} <- HtmlTableValidator.prepare_presentation_style(node, style),
                do:
                  {:ok,

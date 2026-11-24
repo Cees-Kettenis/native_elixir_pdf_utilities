@@ -32,6 +32,11 @@ or the closed body of a disclosure can be skipped. Visible inert content still
 loads its images. Named template replacement validates the resources of the
 source content it replaces.
 
+On ordinary HTML containers, `display: contents` removes the wrapper box and
+keeps its children visible. On a textarea, input, select, iframe, image or
+HTML-hosted SVG, it suppresses the element and its printed content. Suppressed
+controls produce no PDF widget. An eager image still requires a valid source.
+
 ### Forms
 
 Text inputs, textareas, checkboxes, radios and supported selects become editable

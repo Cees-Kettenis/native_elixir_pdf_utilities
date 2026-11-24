@@ -5,6 +5,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ControlSemanticsBrowserParityTest d
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
   @moduletag :browser_parity
 
+  test "display: contents suppresses replaced controls and keeps ordinary container text" do
+    stats =
+      PdfVisualCompare.assert_browser_match!(
+        Paths.fixture("html_to_pdf/browser_parity/html_display_contents_controls.html"),
+        artifact_dir: "tmp/browser_parity/html_display_contents_controls",
+        render_opts: [forms: :static],
+        max_changed_ratio: 0.01,
+        max_average_delta: 0.01
+      )
+
+    assert stats.page_count == 1
+  end
+
   test "visible datalist fallback and closed initial suggestions match untouched Chromium" do
     stats =
       PdfVisualCompare.assert_browser_match!(

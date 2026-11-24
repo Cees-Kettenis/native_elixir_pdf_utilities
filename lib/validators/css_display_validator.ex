@@ -187,6 +187,30 @@ defmodule NativeElixirPdfUtilities.Validators.CssDisplayValidator do
     end
   end
 
+  @doc "Computes display: contents for HTML controls, replaced elements and CSS-box SVG roots."
+  @spec element_display(map(), map(), [map()]) :: map()
+  def element_display(style, node, ancestors) do
+    case style.display do
+      :contents ->
+        case {Map.get(node, :namespace, :html), node.tag} do
+          {:html, tag}
+          when tag in ~w(br wbr meter progress canvas embed object audio iframe img video frame frameset input textarea select) ->
+            %{style | display: :none}
+
+          {:svg, "svg"} ->
+            if match?([%{namespace: :svg} | _], ancestors),
+              do: style,
+              else: %{style | display: :none}
+
+          _ ->
+            style
+        end
+
+      _ ->
+        style
+    end
+  end
+
   @doc "Preserves forced invisibility independently of a descendant's computed visibility override."
   @spec compute_style(map()) :: map()
   def compute_style(style) do

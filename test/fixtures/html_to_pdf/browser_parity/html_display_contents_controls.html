@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><style>
+@page { size: 210pt 110pt; margin: 0 }
+html, body { margin: 0; padding: 0 }
+body { padding: 10pt; font: 12pt/18pt "DejaVu Sans" }
+.contents { display: contents }
+p { margin: 0 }
+</style></head><body>
+<p>Before</p>
+<textarea class="contents" name="memo">Hidden textarea</textarea>
+<select class="contents" name="choice"><option>Hidden option</option></select>
+<input class="contents" name="entry" value="Hidden input">
+<iframe class="contents" srcdoc="<p>Hidden frame</p><input name='inner' value='Hidden field'>"></iframe>
+<img class="contents" src="assets/iframe-bars.png" alt="Hidden image">
+<svg class="contents" width="48" height="24"><rect width="48" height="24" fill="red"/></svg>
+<div class="contents"><p>Container text</p></div>
+<p>After</p>
+</body></html>
