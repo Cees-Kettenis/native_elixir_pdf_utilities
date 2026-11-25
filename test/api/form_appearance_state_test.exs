@@ -86,6 +86,54 @@ defmodule NativeElixirPdfUtilities.FormAppearanceStateTest do
     end
   end
 
+  test "a selected checkbox requires an appearance with nonzero area" do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<input type=checkbox name=Consent checked><p><input name=notes value=Keep></p>"
+             )
+
+    assert {:ok, context} = Reader.read_validated(pdf)
+    assert {:ok, form} = FormValidator.inspect_document(context)
+    [widget] = Enum.find(form.fields, &(&1.name == "Consent")).widgets
+    {:ref, {id, gen}} = widget.normal[widget.appearance_state]
+    appearance = context.document.objects[{id, gen}]
+
+    for {matrix, bbox, valid?} <- [
+          {[1, 1, 1, 1, 0, 0], [0, 0, 10, 10], false},
+          {[0.5, -1, -1.5, 3, 0, 0], [0, 0, 10, 10], false},
+          {[1, 1, 0, 1, 0, 0], [0, 0, 10, 0], false},
+          {[1, 1, 0, 1, 0, 0], [0, 0, 10, 10], true},
+          {[1, 2, 2, 1, 0, 0], [0, 0, 10, 10], true},
+          {[100_000_001.0, 100_000_000.0, 100_000_000.0, 99_999_999.0, 0, 0], [0, 0, 1, 1], true}
+        ] do
+      dictionary = Map.merge(appearance.value, %{"Matrix" => matrix, "BBox" => bbox})
+
+      assert {:ok, input} =
+               IncrementalWriter.write(context, [
+                 {id, gen, {:stream, dictionary, appearance.stream}}
+               ])
+
+      if valid? do
+        assert {:ok, flattened} = Forms.flatten(input, fields: ["Consent"])
+        assert {:ok, [%{name: "notes", read_only: false}]} = Forms.fields(flattened)
+      else
+        for {operation, result} <- [
+              {:flatten, Forms.flatten(input)},
+              {:fill, Forms.fill(input, %{"Consent" => true}, flatten: true)}
+            ] do
+          assert {:error, {:unsupported_form, diagnostic}} = result
+          assert diagnostic.operation == operation and diagnostic.stage == :forms
+          assert diagnostic.message =~ "degenerate" and diagnostic.source =~ "on page 1"
+        end
+
+        assert {:ok, partial} = Forms.flatten(input, fields: ["notes"])
+        assert {:ok, [%{name: "Consent", value: true, read_only: false}]} = Forms.fields(partial)
+        assert {:ok, edited} = Forms.fill(partial, %{"Consent" => false})
+        assert {:ok, [%{value: false}]} = Forms.fields(edited)
+      end
+    end
+  end
+
   test "flattening preserves indirect layer identity and diagnoses unresolved or invalid membership" do
     assert {:ok, pdf} = HtmlToPdf.render("<input name=customer value=Ada>")
     assert {:ok, context} = Reader.read_validated(pdf)

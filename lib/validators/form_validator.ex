@@ -494,7 +494,8 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
         height = Enum.max(ys) - min_y
         [left, bottom, right, top] = widget.rect
 
-        if width > 0 and height > 0 do
+        if width > 0 and height > 0 and x0 != x1 and y0 != y1 and
+             invertible_appearance_matrix?(a, b, c, d) do
           sx = (right - left) / width
           sy = (top - bottom) / height
           placement_matrix = [sx, 0, 0, sy, left - sx * min_x, bottom - sy * min_y]
@@ -526,12 +527,28 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
             appearance_geometry_error(widget)
           end
         else
-          error(:unsupported_form, "appearance has a degenerate BBox or Matrix")
+          Diagnostics.error(
+            :forms,
+            :unsupported_form,
+            "appearance has a degenerate BBox or Matrix",
+            source: "widget #{inspect(widget.ref)} on page #{widget.page}"
+          )
         end
       end
     end
   rescue
     ArithmeticError -> appearance_geometry_error(widget)
+  end
+
+  # Compare a*d and b*c exactly for the admitted PDF numbers. A floating-point
+  # product can round a narrow, invertible shear to the same value on both sides.
+  defp invertible_appearance_matrix?(a, b, c, d) do
+    [{an, ad}, {bn, bd}, {cn, cd}, {dn, dd}] =
+      Enum.map([a, b, c, d], fn number ->
+        if is_integer(number), do: {number, 1}, else: Float.ratio(number)
+      end)
+
+    an * dn * bd * cd != bn * cn * ad * dd
   end
 
   # NoRotate keeps the upper-left corner fixed in default user space (PDF 12.5.3).

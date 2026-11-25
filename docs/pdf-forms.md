@@ -197,7 +197,7 @@ and field-tree entries. Other fields remain editable.
 | Hidden / NoView widgets | Removed without painting |
 | Print flag | Screen visibility wins: print-only widgets omitted; screen-only widgets become page content |
 | Invisible flag | Does not hide Widget annotations |
-| Missing / degenerate visible appearance | Returns an error |
+| Missing / degenerate visible appearance | Returns an error if the selected widget lacks an appearance or its bounding box or transform collapses the artwork to a line or point |
 
 Earlier values and attachments can remain in PDF history. Flattening is not secure redaction.
 
