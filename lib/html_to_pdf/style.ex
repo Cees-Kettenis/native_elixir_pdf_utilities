@@ -172,13 +172,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   """
   @spec compute_detailed(term(), [render_option()]) ::
           {:ok, styled_tree()}
-          | {:error,
-             {:invalid_css
-              | :invalid_document
-              | :invalid_options
-              | :unsupported_html
-              | :unsupported_glyph
-              | :resource_limit_exceeded, map()}}
+          | {:error, NativeElixirPdfUtilities.HtmlToPdf.detailed_error_reason()}
   def compute_detailed(dom, opts \\ []) do
     budget =
       case ResourceContext.current() do
@@ -192,13 +186,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   @doc false
   @spec compute_detailed(term(), [render_option()], HtmlValidator.image_budget()) ::
           {:ok, styled_tree()}
-          | {:error,
-             {:invalid_css
-              | :invalid_document
-              | :invalid_options
-              | :unsupported_html
-              | :unsupported_glyph
-              | :resource_limit_exceeded, map()}}
+          | {:error, NativeElixirPdfUtilities.HtmlToPdf.detailed_error_reason()}
   def compute_detailed(dom, opts, image_budget) do
     compute_styles(dom, opts, image_budget, :caller)
   end
