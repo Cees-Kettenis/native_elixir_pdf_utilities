@@ -9,8 +9,12 @@ defmodule NativeElixirPdfUtilities.Validators.SvgPrintGeometryValidator do
   @path_geometry ~w(x y x1 y1 x2 y2 width height rx ry points)
   @shape_effects ~w(id transform opacity filter mask clip-path visibility style)
 
+  @doc "Checks whether the SVG source contains a print geometry property name."
+  @spec selected?(String.t()) :: boolean()
   def selected?(source), do: String.contains?(source, @extensions)
 
+  @doc "Validates the value of a recognized print geometry property and returns its original text."
+  @spec prepare(String.t(), String.t()) :: {:ok, String.t()} | :error
   def prepare(property, source) do
     parsed =
       case property do
@@ -28,6 +32,8 @@ defmodule NativeElixirPdfUtilities.Validators.SvgPrintGeometryValidator do
     end
   end
 
+  @doc "Rewrites supported stroke and marker geometry in the SVG tree and reports unsupported geometry."
+  @spec normalize(map()) :: {:ok, map()} | {:error, {:invalid_document, Diagnostics.diagnostic()}}
   def normalize(root) do
     definitions =
       root

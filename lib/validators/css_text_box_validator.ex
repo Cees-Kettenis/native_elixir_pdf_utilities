@@ -7,6 +7,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssTextBoxValidator do
   @over %{"text" => :text, "cap" => :cap, "ex" => :ex}
   @under %{"text" => :text, "alphabetic" => :alphabetic}
 
+  @doc "Parses text-box, line-fit-edge and text-fit declarations into computed style fields."
+  @spec prepare(String.t(), String.t()) :: {:ok, map()} | :error
   def prepare(property, value) do
     tokens = value |> String.downcase(:ascii) |> String.split()
 

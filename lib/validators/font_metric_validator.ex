@@ -150,6 +150,18 @@ defmodule NativeElixirPdfUtilities.Validators.FontMetricValidator do
     end
   end
 
+  @doc "Returns the script size and signed baseline shift in em units, applying any font-face overrides."
+  @spec script_metrics(
+          map(),
+          :subscript | :superscript,
+          %{
+            required(:y_size) => number(),
+            required(:y_offset) => number(),
+            optional(atom()) => term()
+          }
+          | nil
+        ) ::
+          {float(), float()}
   def script_metrics(font, key, metrics) do
     {size_key, position_key, direction} =
       case key do
