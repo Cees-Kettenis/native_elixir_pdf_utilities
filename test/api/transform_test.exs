@@ -430,6 +430,92 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     assert link_target_pages(first, 1) == []
   end
 
+  test "chained local destinations follow their source pages and keep independent actions in order" do
+    source =
+      three_page_pdf(
+        "/Annots [16 0 R]",
+        [
+          {16, "<< /Subtype /Link /A << /S /URI /URI (https://example.org/) /Next 17 0 R >> >>"},
+          {17,
+           "[18 0 R << /S /GoToR /F (other.pdf) /D (chapter) >> 18 0 R << /S /GoTo /D /First >>]"},
+          {18, "<< /S 19 0 R /D 20 0 R >>"},
+          {19, "/GoTo"},
+          {20, "<63686170746572>"}
+        ],
+        "/Names << /Dests << /Names [(chapter) [5 0 R /XYZ 10 20 null]] >> >> /Dests << /First [3 0 R /Fit] >>"
+      )
+
+    check = fn pdf, link_page, chapter ->
+      assert {:ok, context} = Reader.read_validated(pdf)
+      owner = Enum.at(context.pages, link_page - 1)
+      [annotation] = owner.dictionary["Annots"]
+
+      assert {:ok, %{"A" => %{"URI" => {:string, "https://example.org/"}, "Next" => next}}} =
+               Reader.resolve(context.document, annotation)
+
+      assert {:ok, actions} = Reader.resolve(context.document, next)
+
+      remote = %{
+        "S" => {:name, "GoToR"},
+        "F" => {:string, "other.pdf"},
+        "D" => {:string, "chapter"}
+      }
+
+      self_jump = %{"S" => {:name, "GoTo"}, "D" => [{:ref, owner.ref}, {:name, "Fit"}]}
+
+      if chapter do
+        assert [shared, ^remote, duplicate, ^self_jump] = actions
+        assert {:ref, _} = shared
+        assert duplicate == shared
+        target = Enum.at(context.pages, chapter - 1).ref
+
+        assert {:ok, %{"D" => [{:ref, ^target}, {:name, "XYZ"}, 10, 20, nil]}} =
+                 Reader.resolve(context.document, shared)
+      else
+        assert actions == [remote, self_jump]
+      end
+    end
+
+    assert {:ok, merged} = Merge.merge([source, source])
+    check.(merged, 1, 3)
+    check.(merged, 4, 6)
+    assert {:ok, reordered} = Transform.pick_pages(merged, [6, 4, 1])
+    check.(reordered, 2, 1)
+    check.(reordered, 3, nil)
+    assert {:ok, [short, full]} = Split.by_ranges(source, [1..1, 1..3])
+    check.(short, 1, nil)
+    check.(full, 1, 3)
+  end
+
+  test "selection removes an unavailable follow-on jump and preserves the link that owns it" do
+    for destination <- ["/Missing", "[5 0 R /Fit]"], direct <- [true, false] do
+      action =
+        "<< /S /URI /URI (guide.html) /Next [<< /S /GoTo /D #{destination} /Next << /S /URI /URI (after-jump) >> >>] >>"
+
+      link = "<< /Subtype /Link /A #{action} >>"
+
+      source =
+        three_page_pdf(if(direct, do: "/Annots [#{link}]", else: "/Annots [16 0 R]"), [{16, link}])
+
+      assert {:ok, output} = Transform.pick_pages(source, [1])
+      assert {:ok, context} = Reader.read_validated(output)
+      [annotation] = hd(context.pages).dictionary["Annots"]
+      assert {:ok, %{"A" => action}} = Reader.resolve(context.document, annotation)
+      assert action == %{"S" => {:name, "URI"}, "URI" => {:string, "guide.html"}}
+    end
+  end
+
+  test "a chained action with an unresolvable action type returns its resolution diagnostic" do
+    source =
+      three_page_pdf("/Annots [16 0 R]", [
+        {16, "<< /Subtype /Link /A << /S /URI /URI (guide) /Next << /S 17 0 R >> >> >>"},
+        {17, "17 0 R"}
+      ])
+
+    assert {:error, {:invalid_pdf_input, %{operation: :merge, stage: :resolution}}} =
+             Merge.merge([source])
+  end
+
   test "an omitted or null Dest keeps the named GoTo action through page imports" do
     for {entry, target} <- [
           {"", 3},

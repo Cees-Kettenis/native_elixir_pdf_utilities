@@ -24,7 +24,7 @@ before all pages from the second. For only part of a document, use
 | Bookmarks, in input order, with updated page targets | Original document signatures |
 | External URI links and resolvable internal page links | Source destination dictionaries and name trees |
 
-Resolved named links become explicit page links. Unresolved names remain in
+Resolved named links become explicit page links, including jumps later in a link’s action sequence. Unresolved names remain in
 copied annotations and may not work. See [bookmark behavior](pdf-outlines.md#merge-and-transform-behavior).
 
 Optional-content layers retain their artwork, initial visibility and layer-panel

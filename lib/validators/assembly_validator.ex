@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
 
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Validators.LinkActionValidator
   alias NativeElixirPdfUtilities.Validators.MergeValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
@@ -116,21 +117,16 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
        ) do
     selected_refs = Map.new(selected_pages, &{&1.ref, true})
 
+    links = %{selected: selected_refs, pages: all_page_refs, actions: %{}, annotations: %{}}
+
     selected_pages
     |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, %{}}, fn {page, output_number}, {:ok, overrides} ->
+    |> Enum.reduce_while({:ok, %{}, links}, fn {page, output_number}, {:ok, overrides, links} ->
       inherited = Map.fetch!(inheritances, page.ref)
       dictionary = Map.fetch!(object_values, page.ref)
 
       with {:ok, annotations} <- PdfValidator.optional_entry(document, dictionary, "Annots", nil),
-           {:ok, annotations} <-
-             sanitized_annotations(
-               document,
-               object_values,
-               annotations,
-               selected_refs,
-               all_page_refs
-             ) do
+           {:ok, annotations, links} <- LinkActionValidator.select(document, annotations, links) do
         rotation =
           Integer.mod((inherited.rotate_value || 0) + Map.get(rotations, output_number, 0), 360)
 
@@ -147,108 +143,25 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
           )
           |> put_or_delete("Annots", annotations)
 
-        {:cont, {:ok, Map.put(overrides, page.ref, dictionary)}}
+        {:cont, {:ok, Map.put(overrides, page.ref, dictionary), links}}
       else
         {:error, _error} = page_error -> {:halt, page_error}
       end
     end)
+    |> case do
+      {:ok, overrides, links} ->
+        actions = Map.reject(links.actions, fn {_ref, value} -> value == :omit end)
+        {:ok, overrides |> Map.merge(links.annotations) |> Map.merge(actions)}
+
+      error ->
+        error
+    end
   end
 
   defp rotation_value(original, rotation, rotations, output_number) do
     case is_nil(original) and not Map.has_key?(rotations, output_number) and rotation == 0 do
       true -> nil
       false -> rotation
-    end
-  end
-
-  defp sanitized_annotations(
-         document,
-         object_values,
-         annotations,
-         selected_refs,
-         all_page_refs
-       ) do
-    case annotations do
-      nil ->
-        {:ok, nil}
-
-      annotations when is_list(annotations) ->
-        annotations
-        |> Enum.reduce_while({:ok, []}, fn annotation, {:ok, kept} ->
-          case keep_annotation?(
-                 document,
-                 object_values,
-                 annotation,
-                 selected_refs,
-                 all_page_refs
-               ) do
-            {:ok, true} -> {:cont, {:ok, [annotation | kept]}}
-            {:ok, false} -> {:cont, {:ok, kept}}
-            {:error, _error} = annotation_error -> {:halt, annotation_error}
-          end
-        end)
-        |> case do
-          {:ok, []} -> {:ok, nil}
-          {:ok, kept} -> {:ok, Enum.reverse(kept)}
-          {:error, _error} = annotation_error -> annotation_error
-        end
-
-      _ ->
-        error(:annotations, :invalid_pdf_input, "page Annots entry must resolve to an array")
-    end
-  end
-
-  defp keep_annotation?(document, object_values, annotation, selected_refs, all_page_refs) do
-    resolved =
-      case annotation do
-        {:ref, ref} ->
-          case Map.fetch(object_values, ref) do
-            {:ok, value} -> {:ok, value}
-            :error -> PdfValidator.resolve(document, annotation)
-          end
-
-        annotation ->
-          PdfValidator.resolve(document, annotation)
-      end
-
-    case resolved do
-      {:ok, dictionary} when is_map(dictionary) ->
-        case PdfValidator.resolved_name?(document, Map.get(dictionary, "Subtype"), "Link") do
-          true -> link_destination_status(document, dictionary, selected_refs, all_page_refs)
-          false -> {:ok, true}
-          error -> error
-        end
-
-      _ ->
-        error(:annotations, :invalid_pdf_input, "page annotation must resolve to a dictionary")
-    end
-  end
-
-  defp link_destination_status(document, dictionary, selected_refs, all_page_refs) do
-    case PdfValidator.link_destination(document, dictionary) do
-      :none ->
-        {:ok, true}
-
-      {:ok, {_location, [{:ref, ref} | _rest]}} ->
-        cond do
-          Map.has_key?(selected_refs, ref) ->
-            {:ok, true}
-
-          Map.has_key?(all_page_refs, ref) ->
-            {:ok, false}
-
-          true ->
-            error(:annotations, :invalid_pdf_input, "link destination references an unknown page")
-        end
-
-      {:ok, {_location, {kind, _value}}} when kind in [:name, :string, :hex] ->
-        {:ok, false}
-
-      {:ok, _} ->
-        error(:annotations, :invalid_pdf_input, "link destination is malformed")
-
-      {:error, _} = error ->
-        error
     end
   end
 
