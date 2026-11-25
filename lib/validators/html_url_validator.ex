@@ -38,7 +38,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
 
   @doc "Admits an absolute initial input URL without granting resource access."
   @spec absolute_input_url?(binary()) :: boolean()
-  def absolute_input_url?(source) do
+  @spec absolute_input_url?(binary(), (non_neg_integer() -> :ok)) :: boolean()
+  def absolute_input_url?(source, reserve_work \\ fn _ -> :ok end) do
     source = normalize_reference(source)
 
     case Regex.run(~r/\A([A-Za-z][A-Za-z0-9+.-]*):(.*)\z/s, source) do
@@ -50,7 +51,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
             # Special schemes accept missing slashes and treat backslashes as
             # slashes. Authority syntax is WHATWG, not URI.new/1's RFC grammar.
             rest = rest |> String.replace("\\", "/") |> String.trim_leading("/")
-            valid_input_authority?(hd(String.split(rest, ["/", "?", "#"], parts: 2)), :special)
+
+            valid_input_authority?(
+              hd(String.split(rest, ["/", "?", "#"], parts: 2)),
+              :special,
+              reserve_work
+            )
 
           scheme == "file" ->
             rest = String.replace(rest, "\\", "/")
@@ -62,7 +68,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
                 # A Windows drive-letter authority is reparsed as a path.
                 Regex.match?(~r/\A[A-Za-z][:|]\z/, authority) or
                   (not String.contains?(authority, "@") and
-                     valid_input_authority?(authority, :file))
+                     valid_input_authority?(authority, :file, reserve_work))
 
               _ ->
                 true
@@ -73,7 +79,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
 
             valid_input_authority?(
               hd(String.split(authority, ["/", "?", "#"], parts: 2)),
-              :opaque
+              :opaque,
+              reserve_work
             )
 
           true ->
@@ -88,7 +95,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
     ArgumentError -> false
   end
 
-  defp valid_input_authority?(authority, kind) do
+  defp valid_input_authority?(authority, kind, reserve_work) do
     host_port = authority |> String.split("@") |> List.last()
     credentials? = String.contains?(authority, "@")
 
@@ -169,7 +176,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlValidator do
             # https://url.spec.whatwg.org/#concept-domain-to-ascii
             {:ok, String.downcase(decoded, :ascii)}
           else
-            NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator.domain(decoded)
+            NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator.domain(decoded, reserve_work)
           end
 
         case domain_result do

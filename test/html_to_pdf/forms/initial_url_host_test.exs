@@ -65,6 +65,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialUrlHostTest do
     end
 
     assert :error = HtmlUrlIdnaValidator.domain("xn--bn32g")
+    assert HtmlUrlValidator.absolute_input_url?("http://xn--bcher-kva.é/")
     refute HtmlUrlValidator.absolute_input_url?(<<255>>)
     assert :error = HtmlUrlIdnaValidator.domain(<<255>>)
     assert :error = HtmlUrlIdnaValidator.domain("")
@@ -138,15 +139,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialUrlHostTest do
   end
 
   test "constraint invalid URL values render without granting resource access" do
-    for value <- ["custom://[invalid", "http://a\u200cb/", "http://bücher.example/"] do
+    for {value, mismatch?} <- [
+          {"custom://[invalid", true},
+          {"http://a\u200cb/", true},
+          {"http://bücher.example/", false},
+          {"http://xn--bcher-kva.é/", false}
+        ] do
       html = "<input type=url value='#{value}'>"
       assert {:ok, dom} = HtmlParser.parse_detailed(html)
       assert {:ok, %{children: [node]}} = Style.compute_detailed(dom, forms: :static)
       state = node.style._form_control.initial_state
       assert state.value == value
 
-      assert state.constraint_validation.checks.type_mismatch ==
-               (value != "http://bücher.example/")
+      assert state.constraint_validation.checks.type_mismatch == mismatch?
 
       assert {:ok, _} =
                NativeElixirPdfUtilities.HtmlToPdf.render(html,
@@ -156,5 +161,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.InitialUrlHostTest do
                  end
                )
     end
+  end
+
+  test "an internationalized URL retains its authored value in the reopened PDF field" do
+    value = "https://xn--rsum-bpad.é/"
+
+    assert {:ok, pdf} =
+             NativeElixirPdfUtilities.HtmlToPdf.render(
+               "<input type=url name=website value='#{value}'>"
+             )
+
+    assert {:ok, [%{name: "website", value: ^value}]} = NativeElixirPdfUtilities.Forms.fields(pdf)
   end
 end

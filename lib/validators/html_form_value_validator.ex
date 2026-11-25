@@ -72,15 +72,19 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlFormValueValidator do
     {state, compile, match_work} =
       case request.operation do
         :url ->
-          work = byte_size(request.source)
+          # The worker owns this counter. The parent charges its final receipt once.
+          work = :counters.new(1, [])
 
-          if work > limits.max_work,
-            do: throw({:form_limit, :max_work})
+          reserve_work = fn units ->
+            if units > limits.max_work - :counters.get(work, 1),
+              do: throw({:form_limit, :max_work})
 
-          {if(HtmlUrlValidator.absolute_input_url?(request.source),
-             do: :valid_url,
-             else: :invalid_url
-           ), work, 0}
+            :counters.add(work, 1, units)
+          end
+
+          reserve_work.(byte_size(request.source))
+          valid? = HtmlUrlValidator.absolute_input_url?(request.source, reserve_work)
+          {if(valid?, do: :valid_url, else: :invalid_url), :counters.get(work, 1), 0}
 
         :pattern ->
           case HtmlPatternSyntaxValidator.prepare_execution(request.source, limits) do

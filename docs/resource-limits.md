@@ -97,6 +97,10 @@ preparation starts a budget when no enclosing one exists. Cache-retention checks
 apply to the cache's lifetime; exceeding them evicts entries rather than failing
 an otherwise valid document.
 
+Initial URL form values charge their source bytes to `max_work`. When validating
+an internationalized host requires Punycode decoding, the same budget also
+covers the characters traversed to insert each decoded character.
+
 Persistent caches need a separate retained-entry ceiling because their metadata
 outlives operation workers, including negative discovery results with tiny byte
 payloads. All persistent cache types reuse the same setting. Temporary layout

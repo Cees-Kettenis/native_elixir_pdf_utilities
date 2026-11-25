@@ -31,7 +31,8 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator do
 
   @doc "Validates and maps a domain for initial URL admission without DNS or resource access."
   @spec domain(binary()) :: {:ok, binary()} | :error
-  def domain(source) do
+  @spec domain(binary(), (non_neg_integer() -> :ok)) :: {:ok, binary()} | :error
+  def domain(source, reserve_work \\ fn _ -> :ok end) do
     if String.valid?(source) do
       mapped =
         Enum.reduce_while(String.to_charlist(source), [], fn codepoint, output ->
@@ -60,7 +61,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator do
             decoded =
               case label do
                 "xn--" <> payload ->
-                  case decode_punycode(payload) do
+                  case decode_punycode(payload, reserve_work) do
                     {:ok, value} ->
                       if Enum.any?(value, &(&1 > 127)), do: {:ok, value}, else: :error
 
@@ -194,7 +195,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator do
 
   # RFC 3492 section 6.2. Only decoding is needed for validity; all arithmetic
   # bounds below follow the maximum Unicode scalar, not a configurable budget.
-  defp decode_punycode(payload) do
+  defp decode_punycode(payload, reserve_work) do
     # Punycode preserves every basic ASCII code point before its final
     # delimiter, including '_' under the relaxed URL STD3 profile. Only the
     # encoded suffix uses the a-z/0-9 digit alphabet checked below.
@@ -211,31 +212,33 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlUrlIdnaValidator do
              binary_part(payload, offset + 1, byte_size(payload) - offset - 1)}
         end
 
-      decode_punycode(encoded, basic, 128, 0, 72)
+      decode_punycode(encoded, basic, length(basic) + 1, 128, 0, 72, reserve_work)
     else
       :error
     end
   end
 
-  defp decode_punycode(encoded, output, codepoint, index, bias) do
+  defp decode_punycode(encoded, output, count, codepoint, index, bias, reserve_work) do
     if encoded == "" do
       {:ok, output}
     else
-      count = length(output) + 1
-
       with {:ok, next_index, remaining} <-
              punycode_integer(encoded, index, 1, 36, bias, 0x10FFFF * count),
            next_codepoint = codepoint + div(next_index, count),
            true <- next_codepoint <= 0x10FFFF and next_codepoint not in 0xD800..0xDFFF do
         next_bias = punycode_bias(next_index - index, count, index == 0)
         insertion = rem(next_index, count)
+        # List.insert_at/3 traverses and copies the prefix before this position.
+        reserve_work.(insertion)
 
         decode_punycode(
           remaining,
           List.insert_at(output, insertion, next_codepoint),
+          count + 1,
           next_codepoint,
           insertion + 1,
-          next_bias
+          next_bias,
+          reserve_work
         )
       else
         _ -> :error

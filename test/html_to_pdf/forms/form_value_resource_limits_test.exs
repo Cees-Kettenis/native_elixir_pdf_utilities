@@ -48,6 +48,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueResourceLimitsTest do
              FormValueBackend.run(%{request | limits: limits, values: List.duplicate("aaaab", 4)})
   end
 
+  test "encoded hostname labels charge each insertion prefix, including work before invalidity" do
+    # The decoded labels are “bücher” and “café”. Their inserted characters
+    # have one and three preceding characters respectively. “résumé” inserts twice.
+    for {source, state, extra} <- [
+          {"https://xn--bcher-kva.xn--caf-dma.é/", :valid_url, 4},
+          {"https://xn--rsum-bpad.é/", :valid_url, 6},
+          {"file://xn--bcher-kva.xn--caf-dma.%C3%A9/", :valid_url, 4},
+          {"https://xn--bcher-kva.xn--caf-dma.é%23/", :invalid_url, 4},
+          {"https://xn--bcher-kva.example/", :valid_url, 0},
+          {"https://bücher.example/", :valid_url, 0}
+        ] do
+      assert {:ok, request} = HtmlFormValueValidator.prepare(:url, source, [])
+      cost = byte_size(source) + extra
+      limits = %{request.limits | max_work: cost}
+
+      assert {:ok, ^state, %{compile: ^cost, matches: 0}} =
+               FormValueBackend.run(%{request | limits: limits})
+
+      assert {:limit, :max_work} =
+               FormValueBackend.run(%{request | limits: %{limits | max_work: cost - 1}})
+    end
+  end
+
   test "worker heap enforcement counts shared binaries without changing caller flags" do
     assert {:ok, request} = HtmlFormValueValidator.prepare(:pattern, "a+", ["aaa"])
     caller = Process.info(self(), :max_heap_size)
@@ -254,6 +277,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FormValueResourceLimitsGlobalStateT
 
     for {operation, source, values, state} <- [
           {:url, "https://example.test", [], :valid_url},
+          {:url, "https://xn--bcher-kva.é/", [], :valid_url},
           {:pattern, "a", [], :matched},
           {:pattern, "(a)+", [], :matched},
           {:pattern, "[", [], :invalid_pattern}
