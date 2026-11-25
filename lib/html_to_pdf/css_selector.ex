@@ -23,12 +23,32 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssSelector do
            %{
              owner: owner_identity(node, pseudo),
              pseudo: pseudo,
+             location: selector_location(selector),
              paint_ready: CssPseudoValidator.paint_ready?(pseudo)
            }
          ],
          else: []
     end)
-    |> Enum.uniq()
+    |> Enum.uniq_by(& &1.owner)
+  end
+
+  defp selector_location(selector) do
+    case selector do
+      %{location: location, css_origin: {:svg_text, children}} ->
+        NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator.svg_style_location(
+          children,
+          location
+        )
+
+      %{location: location, css_origin: {line, column}} ->
+        %{
+          line: line + location.line - 1,
+          column: if(location.line == 1, do: column + location.column - 1, else: location.column)
+        }
+
+      _ ->
+        Map.get(selector, :location, %{})
+    end
   end
 
   defp selected_pseudo_condition?(selector, context, ancestors) do

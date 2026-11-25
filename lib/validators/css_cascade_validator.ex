@@ -373,7 +373,9 @@ defmodule NativeElixirPdfUtilities.Validators.CssCascadeValidator do
         rules =
           Enum.map(entry.prepared.rules, fn rule ->
             Map.put(rule, :layer, qualify.(Map.get(rule, :layer, [])))
-            |> Map.merge(Map.take(entry, [:shadow_scope_id, :shadow_host_id, :shadow_depth]))
+            |> Map.merge(
+              Map.take(entry, [:shadow_scope_id, :shadow_host_id, :shadow_depth, :css_origin])
+            )
             |> Map.put(
               :implicit_scope_root_id,
               Map.get(entry, :scope_owner_id, get_in(entry, [:node, :parent_id]))

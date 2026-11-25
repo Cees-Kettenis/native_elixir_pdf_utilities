@@ -3,6 +3,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
   alias NativeElixirPdfUtilities.HtmlToPdf.RenderCache
 
   alias NativeElixirPdfUtilities.Validators.{
+    CssPseudoValidator,
     CssAliasValidator,
     CssFunctionValidator,
     CssMixinValidator,
@@ -157,9 +158,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
   defp flatten_rule(rule, context, state) do
     prelude = HtmlValidator.trim_css_whitespace(rule.selectors)
 
-    rule_at =
-      context.origin + rule.offset + byte_size(rule.selectors) -
-        byte_size(String.trim_leading(rule.selectors))
+    rule_at = context.origin + rule.offset + leading_whitespace(rule.selectors)
 
     body_at = context.origin + rule.offset + byte_size(rule.selectors) + 1
     child = %{context | origin: body_at, depth: context.depth + 1}
@@ -380,14 +379,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
                 do: Enum.map(parsed_selectors, &Map.put(&1, :language_dependent, true)),
                 else: parsed_selectors
 
-            leading = byte_size(rule.selectors) - byte_size(String.trim_leading(rule.selectors))
+            parsed_selectors = locate_gated_selectors(parsed_selectors, prelude, rule_at)
 
             child =
               Map.merge(child, %{
                 parent: selector,
                 scope_top: false,
                 parsed_selectors: parsed_selectors,
-                selector_offset: context.origin + rule.offset + leading,
+                selector_offset: rule_at,
                 selector_length: byte_size(prelude)
               })
 
@@ -418,6 +417,44 @@ defmodule NativeElixirPdfUtilities.Validators.CssStylesheetValidator do
           _ ->
             state
         end
+    end
+  end
+
+  defp leading_whitespace(source, count \\ 0) do
+    case source do
+      <<byte, rest::binary>> when byte in [32, 9, 10, 12, 13] ->
+        leading_whitespace(rest, count + 1)
+
+      _ ->
+        count
+    end
+  end
+
+  # Nesting and alias expansion preserve the order of the authored selector list.
+  defp locate_gated_selectors(selectors, prelude, rule_at) do
+    gated? = fn selector ->
+      pseudo = List.last(selector.parts).pseudo_element
+
+      pseudo != nil and not CssPseudoValidator.paint_ready?(pseudo)
+    end
+
+    if Enum.any?(selectors, gated?) do
+      branches = CssSyntaxValidator.split(prelude, ",")
+
+      {located, _end} =
+        Enum.zip(selectors, branches)
+        |> Enum.map_reduce(rule_at, fn {selector, branch}, offset ->
+          selector =
+            if gated?.(selector),
+              do: Map.put(selector, :selector_offset, offset + leading_whitespace(branch)),
+              else: selector
+
+          {selector, offset + byte_size(branch) + 1}
+        end)
+
+      located
+    else
+      selectors
     end
   end
 

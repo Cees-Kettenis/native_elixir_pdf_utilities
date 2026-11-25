@@ -253,6 +253,14 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
          do: {:ok, selected}
   end
 
+  @doc "Selects active CSS and retains the original byte ranges removed by conditional rules."
+  @spec select_rule_spans(String.t(), context() | nil | :unpositioned, map()) ::
+          {:ok, String.t(), [{non_neg_integer(), non_neg_integer()}]}
+  def select_rule_spans(css, context, namespaces) do
+    aliases = CssAliasValidator.definitions(css, :media)
+    select_media(css, context, 0, :spans, 0, aliases, namespaces)
+  end
+
   @doc false
   @spec project_source_rules(
           String.t(),
@@ -387,7 +395,24 @@ defmodule NativeElixirPdfUtilities.Validators.PrintMediaValidator do
 
               {projected, [record | children], next_chain}
             else
-              {selected, [], next_chain}
+              cuts =
+                cond do
+                  mode != :spans ->
+                    []
+
+                  not (rule.block and active) ->
+                    [{origin + rule.offset, byte_size(rule.source)}]
+
+                  true ->
+                    closing =
+                      if rule.closed,
+                        do: [{origin + body_at + byte_size(rule.declarations), 1}],
+                        else: []
+
+                    [{origin + rule.offset, body_at - rule.offset} | children] ++ closing
+                end
+
+              {selected, cuts, next_chain}
             end
           else
             if rule.kind == :rule and rule.block and not definition_rule?(selector) do

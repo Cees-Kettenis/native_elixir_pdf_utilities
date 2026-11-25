@@ -185,8 +185,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidator do
                  ] ++ control_parts())
 
   @doc "Keeps selected pseudo-elements gated until their layout and painting implementation is ready."
-  @spec validate_paint([map()], map()) :: :ok | {:error, {atom(), map()}}
-  def validate_paint(owners, node) do
+  @spec validate_paint([map()]) :: :ok | {:error, {atom(), map()}}
+  def validate_paint(owners) do
     case Enum.find(owners, &(not &1.paint_ready)) do
       nil ->
         :ok
@@ -199,16 +199,14 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidator do
             pseudo -> pseudo |> Atom.to_string() |> String.replace("_", "-")
           end
 
-        source = Map.get(node, :source, %{})
-
         NativeElixirPdfUtilities.Diagnostics.error(
           :css,
           :not_implemented,
           "::#{name} selects an originating element, but its layout and painting are not implemented yet",
           module: __MODULE__,
           source: "::" <> name,
-          line: Map.get(source, :line),
-          column: Map.get(source, :column)
+          line: Map.get(owner.location, :line),
+          column: Map.get(owner.location, :column)
         )
     end
   end

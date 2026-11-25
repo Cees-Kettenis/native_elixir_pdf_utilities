@@ -198,6 +198,63 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
     assert nodes["host"].font_style == :italic
   end
 
+  test "matched pseudo-element diagnostics locate the authored selector in its own source" do
+    alias NativeElixirPdfUtilities.HtmlToPdf
+    body = "<details><summary>Disclosure</summary>Body</details>"
+
+    css = """
+    /* é */
+    @page {margin:0}
+    @media screen {details::details-content {color:red}}
+    @media print {
+      p.missing,
+        details::details-content {color:blue}
+    }
+    """
+
+    for {html, opts, expected} <- [
+          {"<!doctype html>\n<style>" <> css <> "</style>\n" <> body, [], {7, 5}},
+          {body, [stylesheets: [css: css]], {6, 5}},
+          {"<style>/*é*/details::details-content{color:red}</style>\n" <> body, [], {1, 13}},
+          {"<svg><style>/* &amp; */<!--gap--><![CDATA[details::details-content{color:red}]]></style></svg>" <>
+             body, [], {1, 43}},
+          {"<svg><style><![CDATA[/* first */\r\n  details::details-content{color:red}]]></style></svg>" <>
+             body, [], {2, 3}},
+          {"<svg><style>/*&amp;*/details::details-content{color:red}</style></svg>" <> body, [],
+           {1, 22}},
+          {body, [stylesheets: [css: "@layer x {\r  details:first-line{color:red}}"]], {2, 3}}
+        ] do
+      assert {:error, {:not_implemented, diagnostic}} = HtmlToPdf.render(html, opts)
+      assert {diagnostic.line, diagnostic.column} == expected
+      assert diagnostic.stage == :css and diagnostic.operation == :render
+      assert diagnostic.source in ["::details-content", "::first-line"]
+    end
+
+    assert {:ok, "%PDF-" <> _} = HtmlToPdf.render("<p>Text</p>", stylesheets: [css: css])
+
+    # The source-aware parser uses the same matched branch, including in an unclosed media block.
+    css = "@media print {\n p.missing,\n /*x*/.é::first-line {color:red}"
+
+    for parse <- [
+          &CssParser.prepare_stylesheet/1,
+          &CssParser.prepare_source_stylesheet/1
+        ] do
+      assert {:ok, %{rules: [%{selectors: [_, selector]}]}} = parse.(css)
+      assert %{line: 3, column: 7} = selector.location
+    end
+  end
+
+  test "synthetic SVG style text keeps CSS-relative coordinates when it has no matching source" do
+    location = %{line: 1, column: 1, offset: 0}
+
+    for child <- [%{text: "x"}, %{text: "x", source: %{text: "y", line: 5, column: 6}}] do
+      assert NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator.svg_style_location(
+               [child],
+               location
+             ) == location
+    end
+  end
+
   test "pseudo-element owner identities are selected while later painting stays explicitly gated" do
     alias NativeElixirPdfUtilities.HtmlToPdf.CssSelector
 

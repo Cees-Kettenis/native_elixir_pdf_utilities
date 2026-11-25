@@ -49,7 +49,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           required(:parts) => [selector_part()],
           required(:specificity) => {non_neg_integer(), non_neg_integer(), non_neg_integer()},
           optional(:language_dependent) => true,
-          optional(:tree_dependent) => true
+          optional(:tree_dependent) => true,
+          optional(:location) => %{
+            offset: non_neg_integer(),
+            line: pos_integer(),
+            column: pos_integer()
+          }
         }
   @type attribute_operator :: :equals | :includes | :dash_match | :prefix | :suffix | :substring
   @type rule :: %{
@@ -146,7 +151,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           RenderCache.fetch_stylesheet(
             {:parsed, css, PrintMediaValidator.cache_context(css, media_context), attribute_mode},
             fn ->
-              with {:ok, active_css, namespaces} <- active_stylesheet(css, media_context),
+              projection = source_projection(css)
+
+              with {:ok, active_css, media_cuts} <-
+                     PrintMediaValidator.select_rule_spans(
+                       projection.text,
+                       media_context,
+                       projection.namespaces
+                     ),
                    {:ok, font_faces} <- parse_font_faces(active_css, css),
                    {:ok, page_options} <- parse_page_rules(active_css, css),
                    {:ok, publishing_pages} <- CssPageValidator.rules(active_css),
@@ -154,10 +166,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
                      NativeElixirPdfUtilities.Validators.CssCounterStyleValidator.prepare(
                        active_css
                      ) do
-                parsed_css = active_css |> strip_font_face_rules() |> strip_page_rules()
+                {font_free, font_cuts} = strip_rule_spans(active_css, @font_face_rule_regex)
+                {parsed_css, page_cuts} = strip_rule_spans(font_free, @page_rule_regex)
 
                 {:ok, rules, cascade} =
-                  parse_rules(parsed_css, namespaces, media_context, attribute_mode)
+                  parse_rules(parsed_css, projection, media_context, attribute_mode, [
+                    page_cuts,
+                    font_cuts,
+                    media_cuts
+                  ])
 
                 with {:ok, registrations} <-
                        CssPropertyRegistrationValidator.prepare(
@@ -342,10 +359,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
           if at < finish, do: total + bytes, else: total
         end)
 
+    original_finish = max(original_offset, original_finish)
+
     case Map.get(projection, :descriptor) do
       nil ->
         prefix = binary_part(projection.original, 0, original_offset)
-        lines = String.split(prefix, "\n", trim: false)
+        lines = String.split(prefix, ~r/\r\n|\r|\n/, trim: false)
 
         %{
           text:
@@ -513,7 +532,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     rules =
       sources
       |> Enum.with_index(fn source, order ->
-        {:ok, rule} = parse_rule(source, order, projection.namespaces)
+        {:ok, rule} = parse_rule(source, order, &source_record(projection, &1, 0))
         base = source.body_offset
         records = source_declarations(source.declarations, rule.declarations, base, projection)
 
@@ -892,8 +911,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     Regex.replace(@page_rule_regex, css, "")
   end
 
-  defp strip_font_face_rules(css) do
-    Regex.replace(@font_face_rule_regex, css, "")
+  defp strip_rule_spans(css, regex) do
+    cuts = for [span] <- Regex.scan(regex, css, return: :index, capture: :first), do: span
+
+    {parts, cursor} =
+      Enum.map_reduce(cuts, 0, fn {at, length}, cursor ->
+        {binary_part(css, cursor, at - cursor), at + length}
+      end)
+
+    {IO.iodata_to_binary([parts, binary_part(css, cursor, byte_size(css) - cursor)]), cuts}
   end
 
   defp parse_font_faces(css, diagnostic_css) do
@@ -1036,7 +1062,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     end
   end
 
-  defp parse_rules(css, namespaces, media, attribute_mode) do
+  defp parse_rules(css, projection, media, attribute_mode, cuts) do
     settings = stylesheet_settings(css, media, [])
 
     settings =
@@ -1045,28 +1071,77 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         else: settings
 
     {:ok, cascade} =
-      CssStylesheetValidator.prepare(css, namespaces, settings)
+      CssStylesheetValidator.prepare(css, projection.namespaces, settings)
 
-    {:ok, rules} = sources_to_rules(cascade.rules, namespaces)
-    {:ok, rules, cascade}
-  end
+    sources = Enum.filter(cascade.rules, &Map.get(&1, :condition_active, true))
 
-  defp sources_to_rules(sources, namespaces) do
+    offsets =
+      for source <- sources, %{selector_offset: offset} <- source.parsed_selectors, do: offset
+
+    locations = selector_locations(offsets, projection, cuts)
+
     rules =
       sources
-      |> Enum.filter(&Map.get(&1, :condition_active, true))
       |> Enum.with_index(fn source, order ->
-        {:ok, rule} = parse_rule(source, order, namespaces)
+        {:ok, rule} = parse_rule(source, order, &Map.fetch!(locations, &1))
         rule
       end)
 
-    {:ok, rules}
+    {:ok, rules, cascade}
+  end
+
+  # Resolve distinct positions in order so repeated selectors never rescan a CSS prefix.
+  defp selector_locations(offsets, projection, cut_lists) do
+    if offsets == [] do
+      %{}
+    else
+      offsets = offsets |> Enum.uniq() |> Enum.sort()
+
+      gaps =
+        Enum.map(cut_lists, fn cuts ->
+          {gaps, _removed} =
+            Enum.map_reduce(cuts, 0, fn {at, size}, removed ->
+              {{at - removed, size}, removed + size}
+            end)
+
+          gaps
+        end)
+
+      original =
+        Enum.reduce(gaps ++ [projection.gaps], offsets, fn gaps, offsets ->
+          {mapped, _} =
+            Enum.map_reduce(offsets, {gaps, 0}, fn offset, {remaining, removed} ->
+              {before, after_offset} = Enum.split_while(remaining, fn {at, _} -> at <= offset end)
+              removed = Enum.reduce(before, removed, fn {_, size}, count -> count + size end)
+              {offset + removed, {after_offset, removed}}
+            end)
+
+          mapped
+        end)
+
+      HtmlValidator.reserve_render_resource(
+        :max_work,
+        List.last(original) + length(offsets),
+        :css
+      )
+
+      {positions, _} =
+        Enum.map_reduce(original, {0, 1, 1}, fn offset, {start, line, column} ->
+          segment = binary_part(projection.original, start, offset - start)
+          lines = String.split(segment, ~r/\r\n|\r|\n/)
+          line = line + length(lines) - 1
+          column = if(length(lines) == 1, do: column, else: 1) + String.length(List.last(lines))
+          {%{offset: offset, line: line, column: column}, {offset, line, column}}
+        end)
+
+      Map.new(Enum.zip(offsets, positions))
+    end
   end
 
   defp parse_rule(
          %{declarations: declaration_source, parsed_selectors: selectors} = source,
          order,
-         _namespaces
+         locate
        ) do
     HtmlValidator.reserve_render_resource(
       :max_input_bytes,
@@ -1087,6 +1162,19 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         :css_namespaces
       ])
       |> Map.reject(fn {_key, value} -> value == [] end)
+
+    selectors =
+      Enum.map(selectors, fn
+        %{selector_offset: offset} = selector ->
+          source = locate.(offset)
+
+          selector
+          |> Map.delete(:selector_offset)
+          |> Map.put(:location, Map.take(source, [:offset, :line, :column]))
+
+        selector ->
+          selector
+      end)
 
     {:ok, Map.merge(%{selectors: selectors, declarations: declarations, order: order}, metadata)}
   end

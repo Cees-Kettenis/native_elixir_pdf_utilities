@@ -375,6 +375,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                          |> Enum.map(fn style ->
                            %{
                              css: Enum.map_join(style.children, "", & &1.text),
+                             css_origin: stylesheet_origin(style),
                              base_url: Keyword.get(opts, :base_url),
                              trusted_local_resources: false,
                              shadow_scope_id: scope,
@@ -3134,7 +3135,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
               rules,
               style
             )
-            |> NativeElixirPdfUtilities.Validators.CssPseudoValidator.validate_paint(node)
+            |> NativeElixirPdfUtilities.Validators.CssPseudoValidator.validate_paint()
         end
 
       with :ok <- paint_validation,
@@ -5695,6 +5696,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
             node,
             %{
               css: Enum.map_join(node.children, "", & &1.text),
+              css_origin: stylesheet_origin(node),
               source_kind: :embedded,
               scope_owner_id: :maps.get(:parent_id, node, nil),
               base_url: base_url,
@@ -5704,6 +5706,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         end)
 
       {:ok, configured_entries ++ embedded_entries}
+    end
+  end
+
+  defp stylesheet_origin(node) do
+    case node do
+      %{namespace: :svg, children: children} -> {:svg_text, children}
+      %{children: [%{source: %{line: line, column: column}} | _]} -> {line, column}
+      _ -> nil
     end
   end
 
@@ -6256,7 +6266,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
                   :shadow_depth,
                   :scopes,
                   :container_queries,
-                  :implicit_scope_root_id
+                  :implicit_scope_root_id,
+                  :css_origin
                 ])
               )
 

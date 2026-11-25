@@ -47,12 +47,12 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidatorTest do
 
       if owner.pseudo in [:marker | CssPseudoValidator.control_parts()] do
         assert owner.paint_ready
-        assert :ok = CssPseudoValidator.validate_paint([owner], node)
+        assert :ok = CssPseudoValidator.validate_paint([owner])
       else
         refute owner.paint_ready
 
         assert {:error, {:not_implemented, diagnostic}} =
-                 CssPseudoValidator.validate_paint([owner], node)
+                 CssPseudoValidator.validate_paint([owner])
 
         assert diagnostic.stage == :css and
                  diagnostic.source == selector |> String.split("(") |> hd()
@@ -91,7 +91,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidatorTest do
     node = %{tag: "p", attributes: %{}, _selector_id: make_ref()}
     assert [owner] = CssSelector.pseudo_owners(selectors, node, [], %{})
     assert owner.paint_ready
-    assert :ok = CssPseudoValidator.validate_paint([owner], node)
+    assert :ok = CssPseudoValidator.validate_paint([owner])
   end
 
   test "first-letter prefix and suffix retain nested ownership and control parts reject inapplicable inputs" do
@@ -107,7 +107,7 @@ defmodule NativeElixirPdfUtilities.Validators.CssPseudoValidatorTest do
       assert owner.owner == {node._selector_id, {:first_letter, child}}
 
       assert {:error, {:not_implemented, diagnostic}} =
-               CssPseudoValidator.validate_paint([owner], node)
+               CssPseudoValidator.validate_paint([owner])
 
       assert diagnostic.source == "::first-letter::#{child}"
     end

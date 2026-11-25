@@ -643,6 +643,50 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlCssSourceValidator do
     {decoded, segments}
   end
 
+  @doc "Maps a position in concatenated SVG style text through character references and CDATA."
+  @spec svg_style_location([map()], map()) :: map()
+  def svg_style_location(children, location) do
+    {point, _} =
+      Enum.reduce_while(children, {location, location.offset}, fn child, {point, offset} ->
+        size = byte_size(child.text)
+
+        case child do
+          _ when offset >= size ->
+            {:cont, {point, offset - size}}
+
+          %{source: %{text: raw, line: line, column: column}} ->
+            context =
+              if String.starts_with?(raw, "<![CDATA[") and String.ends_with?(raw, "]]>"),
+                do: :cdata,
+                else: :text
+
+            {decoded, segments} = decoded_segments(raw, 0, context)
+
+            if decoded == child.text do
+              mapping = descriptor(decoded, raw, child, segments, 0)
+              position = map_validated_span(mapping, offset, 0)
+
+              {:halt,
+               {%{
+                  line: line + position.line - 1,
+                  column:
+                    if(position.line == 1,
+                      do: column + position.column - 1,
+                      else: position.column
+                    )
+                }, offset}}
+            else
+              {:halt, {point, offset}}
+            end
+
+          _ ->
+            {:halt, {point, offset}}
+        end
+      end)
+
+    point
+  end
+
   defp descriptor(css, original, node, segments, origin) do
     with_mapper(%{
       provenance: :original_html,
