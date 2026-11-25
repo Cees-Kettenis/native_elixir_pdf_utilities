@@ -339,8 +339,21 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
       end
     end)
     |> case do
-      {ordered, _, _} -> {:ok, ordered}
-      error -> error
+      {ordered, _, _} ->
+        if Enum.any?(ordered, &Map.get(&1, :layer)) do
+          # Page resources can be inherited, with a shared indirect Properties
+          # dictionary. Add layer names to a page-local copy in the writer.
+          with {:ok, entry} <-
+                 PdfValidator.optional_entry(document, hd(ordered).resources, "Properties", %{}),
+               {:ok, properties} <- PdfValidator.dictionary(document, entry) do
+            {:ok, Enum.map(ordered, &put_in(&1.resources["Properties"], properties))}
+          end
+        else
+          {:ok, ordered}
+        end
+
+      error ->
+        error
     end
   end
 
@@ -459,7 +472,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
           do: normal,
           else: widget.normal[widget.appearance_state]
 
-      with :ok <- flatten_layer(document, widget.dictionary),
+      with {:ok, layer} <- flatten_layer(document, widget.dictionary),
            {:ok, frame, painted_rect} <-
              annotation_frame(document, placement.page, widget.flags, widget.rect),
            {:ok, stream} <- PdfValidator.validate_stream(document, normal),
@@ -501,6 +514,7 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
                 {:ok,
                  Map.merge(placement, %{
                    stream: stream.ref,
+                   layer: layer,
                    painted_rect: painted_rect,
                    matrix: placement_matrix
                  })}
@@ -545,20 +559,28 @@ defmodule NativeElixirPdfUtilities.Validators.FormValidator do
   end
 
   defp flatten_layer(document, dictionary) do
-    case Map.get(dictionary, "OC") do
-      nil ->
-        :ok
+    membership = dictionary["OC"]
 
-      membership ->
-        with {:ok, group} <- PdfValidator.resolve(document, membership) do
-          if is_nil(group),
-            do: :ok,
-            else:
-              error(
-                :unsupported_form,
-                "flattening this widget would discard its optional-content visibility"
-              )
-        end
+    with {:ok, group} <- PdfValidator.resolve(document, membership) do
+      case group do
+        nil ->
+          {:ok, nil}
+
+        %{"Type" => type} ->
+          with {:ok, type} <- PdfValidator.resolve(document, type) do
+            if type == {:name, "OCMD"} or
+                 (type == {:name, "OCG"} and match?({:ref, _}, membership)),
+               do: {:ok, membership},
+               else:
+                 error(
+                   :unsupported_form,
+                   "widget OC requires an indirect group or a membership dictionary"
+                 )
+          end
+
+        _ ->
+          error(:unsupported_form, "widget OC requires an optional-content dictionary")
+      end
     end
   end
 

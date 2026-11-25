@@ -80,7 +80,8 @@ defmodule NativeElixirPdfUtilities.Forms do
 
   Uses current screen appearances. Hidden and NoView widgets are removed without
   painting. The Print flag does not affect flattening, so print-only widgets are
-  omitted and screen-only widgets become ordinary page content.
+  omitted and screen-only widgets become page content. Flattened appearances retain
+  their optional-content membership when a layer controls visibility.
   """
   @spec flatten(binary(), keyword()) ::
           {:ok, binary()} | {:error, {atom(), Diagnostics.diagnostic()}}

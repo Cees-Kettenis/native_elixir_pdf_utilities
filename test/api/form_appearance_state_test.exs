@@ -86,7 +86,7 @@ defmodule NativeElixirPdfUtilities.FormAppearanceStateTest do
     end
   end
 
-  test "flattening a layer-controlled widget preserves the original form through a diagnostic" do
+  test "flattening preserves indirect layer identity and diagnoses unresolved or invalid membership" do
     assert {:ok, pdf} = HtmlToPdf.render("<input name=customer value=Ada>")
     assert {:ok, context} = Reader.read_validated(pdf)
     assert {:ok, %{fields: [%{widgets: [widget]}]}} = FormValidator.inspect_document(context)
@@ -120,8 +120,102 @@ defmodule NativeElixirPdfUtilities.FormAppearanceStateTest do
     end
 
     assert {:ok, [%{value: "Ada"}]} = Forms.fields(source)
-    assert {:error, {:unsupported_form, %{operation: :flatten}}} = Forms.flatten(source)
+    assert {:ok, flat} = Forms.flatten(source)
+    assert {:ok, []} = Forms.fields(flat)
+    assert {:ok, written} = Reader.read_validated(flat)
+    assert written.catalog["OCProperties"] == layers
+    assert hd(written.pages).resources["Properties"]["NEPUForm1"] == member
+
+    for invalid <- [7, %{"Type" => {:name, "OCG"}}, %{"Type" => {:name, "Unknown"}}] do
+      assert {:ok, input} =
+               IncrementalWriter.write(context, [
+                 {id, generation, {:value, Map.put(widget.dictionary, "OC", invalid)}}
+               ])
+
+      assert {:error, {:unsupported_form, %{operation: :flatten}}} = Forms.flatten(input)
+    end
+
     assert {:ok, _} = Forms.flatten(pdf)
+  end
+
+  @tag :tmp_dir
+  test "selected and filled widgets keep layer policies, page properties and other editable fields",
+       %{tmp_dir: dir} do
+    assert {:ok, pdf} =
+             HtmlToPdf.render(
+               "<input name=price value=100><p>Footer</p><input name=notes value=Keep>",
+               page_size: {220, 160},
+               margin: 5
+             )
+
+    assert {:ok, ctx} = Reader.read_validated(pdf)
+    assert {:ok, form} = FormValidator.inspect_document(ctx)
+    field = Enum.find(form.fields, &(&1.name == "price"))
+    [widget] = field.widgets
+    {:ref, {id, gen}} = widget.ref
+    [page] = ctx.pages
+    {page_id, page_gen} = page.ref
+    {cat_id, cat_gen} = ctx.catalog_ref
+    next = ctx.document.trailer["Size"]
+    group = {:ref, {next, 0}}
+    policy = %{"Type" => {:name, "OCMD"}, "OCGs" => [group], "P" => {:name, "AnyOff"}}
+    properties = %{"NEPUForm1" => group}
+    {:ok, resources} = Reader.resolve(ctx.document, page.resources)
+
+    page_dict =
+      Map.put(
+        page.dictionary,
+        "Resources",
+        Map.put(resources, "Properties", {:ref, {next + 2, 0}})
+      )
+
+    raster = fn bytes ->
+      NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.rasterize_pdf!(bytes,
+        artifact_dir: Path.join(dir, "layer")
+      )
+    end
+
+    for membership <- [group, policy, {:ref, {next + 1, 0}}] do
+      images =
+        for initial <- ["ON", "OFF"] do
+          layers = %{
+            "OCGs" => [group],
+            "D" => %{"BaseState" => {:name, initial}, "Order" => [group]}
+          }
+
+          assert {:ok, source} =
+                   IncrementalWriter.write(ctx, [
+                     {next, 0,
+                      {:value, %{"Type" => {:name, "OCG"}, "Name" => {:string, "Prices"}}}},
+                     {next + 1, 0, {:value, policy}},
+                     {next + 2, 0, {:value, properties}},
+                     {id, gen, {:value, Map.put(widget.dictionary, "OC", membership)}},
+                     {page_id, page_gen, {:value, page_dict}},
+                     {cat_id, cat_gen, {:value, Map.put(ctx.catalog, "OCProperties", layers)}}
+                   ])
+
+          assert {:ok, filled} = Forms.fill(source, %{"price" => "250"})
+          assert {:ok, partial} = Forms.flatten(source, fields: ["price"])
+          assert {:ok, updated} = Forms.fill(source, %{"price" => "250"}, flatten: true)
+
+          for {original, output} <- [{source, partial}, {filled, updated}] do
+            assert {:ok, [%{name: "notes", value: "Keep"}]} = Forms.fields(output)
+            assert {:ok, _} = Forms.fill(output, %{"notes" => "Still editable"})
+            assert {:ok, result} = Reader.read_validated(output)
+            assert result.catalog["OCProperties"] == layers
+
+            assert hd(result.pages).resources["Properties"] ==
+                     Map.put(properties, "NEPUForm2", membership)
+
+            assert raster.(output) == raster.(original)
+          end
+
+          raster.(updated)
+        end
+
+      assert [on, off] = images
+      refute on == off
+    end
   end
 
   test "missing cyclic and incorrectly typed appearance states return actionable diagnostics" do

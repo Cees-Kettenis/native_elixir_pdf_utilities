@@ -417,17 +417,21 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
       |> Enum.reduce({[], next}, fn {{page_id, page_gen}, placements}, {objects, id} ->
         first = hd(placements)
 
-        {resources, invocations} =
+        {resources, invocations, _next_name} =
           placements
           |> Enum.reject(&is_nil(&1.stream))
-          |> Enum.reduce({first.resources, []}, fn placement, {resources, commands} ->
+          |> Enum.reduce({first.resources, [], 1}, fn placement,
+                                                      {resources, commands, next_name} ->
             xobjects = resources["XObject"]
 
-            name =
-              Stream.iterate(1, &(&1 + 1))
+            {name, index} =
+              Stream.iterate(next_name, &(&1 + 1))
               |> Enum.find_value(fn index ->
                 name = "NEPUForm#{index}"
-                if Map.has_key?(xobjects, name), do: nil, else: name
+
+                unless Map.has_key?(xobjects, name) or
+                         (placement.layer != nil and Map.has_key?(resources["Properties"], name)),
+                       do: {name, index}
               end)
 
             resources =
@@ -440,7 +444,14 @@ defmodule NativeElixirPdfUtilities.Pdf.FormWriter do
               end)
               |> Enum.intersperse(" ")
 
-            {resources, [commands, "q ", matrix, " cm /", name, " Do Q\n"]}
+            paint = ["q ", matrix, " cm /", name, " Do Q\n"]
+
+            if placement.layer do
+              resources = put_in(resources, ["Properties", name], placement.layer)
+              {resources, [commands, "/OC /", name, " BDC\n", paint, "EMC\n"], index + 1}
+            else
+              {resources, [commands, paint], index + 1}
+            end
           end)
 
         annots = Enum.reject(first.annots, &MapSet.member?(removed, &1))
