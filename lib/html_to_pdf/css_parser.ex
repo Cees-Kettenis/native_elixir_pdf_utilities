@@ -927,13 +927,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
     |> Regex.scan(css, capture: ["declarations"])
     |> List.flatten()
     |> Enum.reduce_while({:ok, []}, fn block, {:ok, acc} ->
-      case parse_font_face(block) do
-        {:ok, font_face} ->
-          {:cont, {:ok, [font_face | acc]}}
+      with {:ok, declarations} <- parse_declarations_detailed(block),
+           {:ok, face} <- CssFontFaceValidator.validate(declarations) do
+        {:cont, {:ok, [face | acc]}}
+      else
+        {:error, %{property: property, index: index}} ->
+          {message, source} = font_face_descriptor_error(block, property, index)
 
-        {:error, {message, source}} ->
           {:halt,
            {:error, {:invalid_css, font_face_error_detail(diagnostic_css, message, source)}}}
+
+        {:error, {_reason, _diagnostic}} = error ->
+          {:halt, error}
       end
     end)
     |> then(fn result ->
@@ -942,18 +947,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParser do
         error -> error
       end
     end)
-  end
-
-  defp parse_font_face(block) do
-    {:ok, declarations} = parse_declarations_detailed(block)
-
-    case CssFontFaceValidator.validate(declarations) do
-      {:ok, face} ->
-        {:ok, face}
-
-      {:error, %{property: property, index: index}} ->
-        {:error, font_face_descriptor_error(block, property, index)}
-    end
   end
 
   defp font_face_descriptor_error(block, property, index) do

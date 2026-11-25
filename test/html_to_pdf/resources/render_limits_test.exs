@@ -430,6 +430,54 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsGlobalStateTest do
     assert {:error, :resource_limit_exceeded} = CssParser.parse_declarations("color:red")
   end
 
+  test "font-face declarations preserve the CSS diagnostic one byte below their input allowance" do
+    block = ~s|font-family: Demo; src: url("demo.ttf");|
+    css = "@font-face{#{block}}"
+    required = byte_size(css) + byte_size(block)
+    limits = Limits.effective()
+
+    Limits.install(%{limits | max_input_bytes: required - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = CssParser.parse_detailed(css)
+    assert %{stage: :css, reason: :resource_limit_exceeded} = diagnostic
+    assert diagnostic.message =~ "max_input_bytes"
+    assert {:error, {:resource_limit_exceeded, ^diagnostic}} = CssParser.font_faces(css)
+    assert {:error, :resource_limit_exceeded} = CssParser.parse(css)
+
+    Limits.install(%{limits | max_input_bytes: required})
+    assert {:ok, []} = CssParser.parse_detailed(css)
+    assert {:ok, [%{family: "Demo"}]} = CssParser.font_faces(css)
+  end
+
+  @tag :tmp_dir
+  test "font-face admission returns a render diagnostic and preserves an existing PDF", %{
+    tmp_dir: dir
+  } do
+    alias NativeElixirPdfUtilities.TestSupport.Paths
+
+    html = "<p>Receipt</p>"
+    block = "font-family: Demo; src: url(DejaVuSans.ttf);"
+    css = "@font-face{#{block}}"
+    opts = [stylesheets: [{:css, css}], base_url: Paths.project("priv/fonts/dejavu")]
+    input = Path.join(dir, "receipt.html")
+    output = Path.join(dir, "receipt.pdf")
+    File.write!(input, html)
+    assert :ok = HtmlToPdf.render_file(input, output, opts)
+    assert "%PDF-" <> _ = original = File.read!(output)
+
+    required = byte_size(html) + byte_size(css) + byte_size(block)
+    Limits.install(%{Limits.effective() | max_input_bytes: required - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, opts)
+    assert %{stage: :css, reason: :resource_limit_exceeded, operation: :render} = diagnostic
+    assert diagnostic.message =~ "max_input_bytes"
+
+    assert {:error, {:resource_limit_exceeded, file_diagnostic}} =
+             HtmlToPdf.render_file(input, output, opts)
+
+    assert file_diagnostic.stage == :css
+    assert file_diagnostic.message == diagnostic.message
+    assert File.read!(output) == original
+  end
+
   test "aggregate CSS source budgets include separate stylesheet entries" do
     Limits.install(%{Limits.effective() | max_input_bytes: 26})
 
