@@ -122,6 +122,28 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert String.split(text) == ~w(Alpha Beta Public section Details)
   end
 
+  test "boxless headings anchor their outline to visible text after pagination" do
+    html = """
+    <p>Cover</p><h1 style="display:contents"><span style="visibility:hidden">Secret</span>
+    <span style="display:block;break-before:page">Chapter <em>one</em></span></h1>
+    <h2>Details</h2><h1 style="display:contents"><span hidden>Omit</span></h1>
+    <h1 style="display:contents">Chapter<br><em>one</em></h1>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+
+    assert {:ok,
+            [
+              %{title: "Chapter one", page: 2, children: [%{title: "Details", page: 2}]},
+              %{title: "Chapter one", page: 2, children: []}
+            ]} = Outlines.get(pdf)
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+
+    assert Enum.map(String.split(text, "\f"), &String.split/1) ==
+             [~w(Cover), ~w(Chapter one Details Chapter one)]
+  end
+
   test "preserves heading line breaks in semantic outline titles" do
     html = "<h1>Quarterly <span>sales</span><br><strong>Regional</strong> <em>report</em></h1>"
 

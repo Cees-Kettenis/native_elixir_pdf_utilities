@@ -1,4 +1,5 @@
 defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
+  alias NativeElixirPdfUtilities.HtmlToPdf.StyledText
   alias NativeElixirPdfUtilities.HtmlToPdf.UnicodeGrapheme
   alias NativeElixirPdfUtilities.Validators.NativeGlyphSourceValidator
 
@@ -2035,7 +2036,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     heading =
       case block do
         %{outline_anchor: heading} -> heading
-        block -> outline_heading(block)
+        block -> StyledText.heading_anchor(block)
       end
 
     case heading do
@@ -2050,23 +2051,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
           {page_breaks, [first | rest]} ->
             page_breaks ++ [Map.put(first, :outline_anchor, heading) | rest]
         end
-    end
-  end
-
-  defp outline_heading(block) do
-    case block do
-      %{type: :element, tag: <<"h", level>>, children: children}
-      when level in ?1..?6 and is_list(children) ->
-        title =
-          children |> descendant_text(:bookmark) |> String.replace(~r/\s+/u, " ") |> String.trim()
-
-        case title do
-          "" -> nil
-          title -> %{title: title, level: Map.get(block.style, :heading_level, level - ?0)}
-        end
-
-      _ ->
-        nil
     end
   end
 
@@ -2145,34 +2129,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         item
       end
 
-    case outline_heading(child) do
+    case StyledText.heading_anchor(child) do
       nil -> item
       heading -> Map.put(item, :outline_anchor, heading)
     end
-  end
-
-  defp descendant_text(children, purpose) do
-    Enum.map_join(children, "", fn child ->
-      case child do
-        %{style: %{display: :none}} ->
-          ""
-
-        %{type: :text, text: text, style: style} when purpose == :bookmark ->
-          if NativeElixirPdfUtilities.HtmlToPdf.Visibility.hidden?(style), do: "", else: text
-
-        %{type: :text, text: text} ->
-          text
-
-        %{type: :element, tag: "br"} ->
-          " "
-
-        %{children: nested} when is_list(nested) ->
-          descendant_text(nested, purpose)
-
-        _ ->
-          ""
-      end
-    end)
   end
 
   defp do_layout_block(block, x, y, width) do
@@ -16494,7 +16454,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
             child_runs =
               case element do
                 %{tag: <<"h", level>>} when level in ?1..?6 ->
-                  case outline_heading(element) do
+                  case StyledText.heading_anchor(element) do
                     nil ->
                       child_runs
 
@@ -16770,7 +16730,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
         run =
           case element do
             %{tag: <<"h", level>>} when level in ?1..?6 ->
-              case outline_heading(element) do
+              case StyledText.heading_anchor(element) do
                 nil -> run
                 heading -> Map.put(run, :outline_anchor, Map.put(heading, :id, make_ref()))
               end
@@ -16823,7 +16783,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case NativeElixirPdfUtilities.Validators.CssBaselineValidator.resolve(
            style,
            parent_style,
-           fn -> descendant_text(children, :baseline) end
+           fn -> StyledText.descendant_text(children, :baseline) end
          ) do
       {:ok, resolved} -> resolved
       error -> layout_value(error)
@@ -17525,6 +17485,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
       line_height: Map.fetch!(style, :line_height),
       color: Map.fetch!(style, :color)
     }
+
+    box =
+      case style do
+        %{_contents_heading: anchor} ->
+          if String.trim(plan.text) == "", do: box, else: Map.put(box, :outline_anchor, anchor)
+
+        _ ->
+          box
+      end
 
     box =
       case style do

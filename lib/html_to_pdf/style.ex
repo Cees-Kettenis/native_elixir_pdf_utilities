@@ -10,6 +10,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
   validation can still return a diagnostic.
   """
 
+  alias NativeElixirPdfUtilities.HtmlToPdf.StyledText
   alias NativeElixirPdfUtilities.HtmlToPdf.TextTransform
   alias NativeElixirPdfUtilities.HtmlToPdf.CounterState
   alias NativeElixirPdfUtilities.HtmlToPdf.CssParser
@@ -2355,7 +2356,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
                     result =
                       if element_style.display == :contents do
-                        {:ok, rendered_children}
+                        {:ok, StyledText.contents_children(element)}
                       else
                         if :maps.get(:namespace, node, nil) == :mathml and
                              MathLayoutValidator.independent_math_context?(ancestors) do
