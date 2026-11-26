@@ -227,7 +227,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
 
                    {:ok,
                     %{
-                      embedded: Enum.uniq_by(fallback, &font_key/1),
+                      embedded: distinct_faces(fallback),
                       fallback: fallback,
                       system_font_discovery:
                         Keyword.get(prepared_opts, :system_font_discovery, true)
@@ -1038,10 +1038,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     ]
   end
 
-  defp font_key(font) do
-    {String.downcase(font.family), font.weight, font.style, Map.get(font, :weight_range),
-     Map.get(font, :width), Map.get(font, :width_range), Map.get(font, :oblique),
-     Map.get(font, :unicode_range), if(Map.get(font, :css_face), do: font.id)}
+  @doc false
+  @spec distinct_faces([embedded_font()]) :: [embedded_font()]
+  def distinct_faces(faces) do
+    Enum.uniq_by(faces, fn font ->
+      {String.downcase(font.family), font.weight, font.style, Map.get(font, :weight_range),
+       Map.get(font, :width), Map.get(font, :width_range), Map.get(font, :oblique),
+       Map.get(font, :unicode_range), if(Map.get(font, :css_face), do: font.id)}
+    end)
   end
 
   defp load_font(font, ordinal \\ nil) do

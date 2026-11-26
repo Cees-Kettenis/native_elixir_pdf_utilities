@@ -6,6 +6,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScopedCompositionBrowserParityTest 
   @moduletag :browser_parity
 
   test "same-named shadow fonts retain declaration scope and inherited metrics" do
+    assets =
+      Map.new(~w(DejaVuSans.ttf DejaVuSansMono.ttf DejaVuSans-Bold.ttf), fn name ->
+        {"../../../../priv/fonts/dejavu/#{name}",
+         {:file, Paths.project("priv/fonts/dejavu/#{name}")}}
+      end)
+
+    width_faces =
+      Map.new(~w(sans mono), fn face ->
+        path = "fonts/selected-container-#{face}.ttf"
+        {"../../#{path}", {:file, Paths.fixture(path)}}
+      end)
+
     stats =
       NativeElixirPdfUtilities.TestSupport.PdfVisualCompare.assert_browser_match!(
         Paths.fixture("html_to_pdf/browser_parity/shadow_scoped_fonts.html"),
@@ -21,18 +33,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ScopedCompositionBrowserParityTest 
             "<style>@font-face{font-family:ScopedMono;src:url(../../../../priv/fonts/dejavu/DejaVuSansMono.ttf)}@font-face{font-family:ScopedBold;src:url(../../../../priv/fonts/dejavu/DejaVuSans-Bold.ttf)}</style></head>"
           )
         end,
-        render_opts: [
-          assets:
-            Map.new(~w(DejaVuSans.ttf DejaVuSansMono.ttf DejaVuSans-Bold.ttf), fn name ->
-              {"../../../../priv/fonts/dejavu/#{name}",
-               {:file, Paths.project("priv/fonts/dejavu/#{name}")}}
-            end)
-        ],
+        render_opts: [assets: Map.merge(assets, width_faces)],
+        regions: [expanded_font: {14, 104, 125, 24}],
         max_changed_ratio: 0.01,
         max_average_delta: 0.01
       )
 
     assert stats.page_count == 1
+    assert stats.embedded_fonts.chromium =~ "ContainerMono"
   end
 
   test "dormant original resources and controls validate before the range is removed" do

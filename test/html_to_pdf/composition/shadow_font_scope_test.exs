@@ -25,17 +25,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ShadowFontScopeTest do
       }
     ]
 
-    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
-    assert {:ok, styled} = Style.compute_detailed(dom, opts)
-    assert {:ok, resolved} = FontFallback.resolve(styled, :error)
-
-    nodes =
-      Stream.unfold(resolved.children, fn
-        [] -> nil
-        [node | rest] -> {node, Map.get(node, :children, []) ++ rest}
-      end)
-      |> Enum.filter(&(Map.get(&1, :type) == :text and String.trim(&1.text) != ""))
-      |> Map.new(&{&1.text, &1.style.font_face})
+    nodes = text_faces(html, opts)
 
     assert nodes["Mono"].data == mono
     assert nodes["Serif"].data == serif
@@ -46,6 +36,41 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ShadowFontScopeTest do
 
     refute Font.text_width("iiii", nodes["Mono"], 12) ==
              Font.text_width("iiii", nodes["Serif"], 12)
+  end
+
+  test "document and shadow font families retain their distinct width faces" do
+    sans = File.read!(Paths.fixture("fonts/selected-container-sans.ttf"))
+    mono = File.read!(Paths.fixture("fonts/selected-container-mono.ttf"))
+
+    opts = [
+      system_font_discovery: false,
+      assets: %{"sans.ttf" => {:bytes, sans}, "mono.ttf" => {:bytes, mono}}
+    ]
+
+    document = """
+    <style>
+    @font-face {font-family:Demo;src:url(sans.ttf);font-stretch:75%}
+    @font-face {font-family:Demo;src:url(mono.ttf);font-stretch:125%}
+    p {font-family:Demo;font-stretch:125%}
+    </style><p>Hx</p>
+    """
+
+    empty = "<div><template shadowrootmode=open></template></div>"
+
+    local = """
+    <div><template shadowrootmode=open><style>
+    @font-face {font-family:Demo;src:url(mono.ttf);font-stretch:75%}
+    @font-face {font-family:Demo;src:url(sans.ttf);font-stretch:125%}
+    p {font-family:Demo;font-stretch:125%}
+    </style><p>xH</p></template></div>
+    """
+
+    outer = text_faces(document, opts)["Hx"]
+    assert outer.data == mono
+    assert text_faces(document <> empty, opts)["Hx"].id == outer.id
+    faces = text_faces(document <> local, opts)
+    assert faces["Hx"].id == outer.id
+    assert faces["xH"].data == sans
   end
 
   test "cloned shadow roots keep same-named faces in their fresh destination scopes" do
@@ -85,5 +110,18 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ShadowFontScopeTest do
       assert clone.node_id != clone.cloned_from_node_id
       assert clone.style.font_face.data == if(clone.text == "Mono clone", do: mono, else: bold)
     end
+  end
+
+  defp text_faces(html, opts) do
+    assert {:ok, dom} = HtmlParser.parse_document_detailed(html)
+    assert {:ok, styled} = Style.compute_detailed(dom, opts)
+    assert {:ok, resolved} = FontFallback.resolve(styled, :error)
+
+    Stream.unfold(resolved.children, fn
+      [] -> nil
+      [node | rest] -> {node, Map.get(node, :children, []) ++ rest}
+    end)
+    |> Enum.filter(&(Map.get(&1, :type) == :text and String.trim(&1.text) != ""))
+    |> Map.new(&{&1.text, &1.style.font_face})
   end
 end

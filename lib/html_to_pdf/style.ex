@@ -5991,7 +5991,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
 
             {scope,
              %{
-               embedded: Enum.uniq_by(faces, &{String.downcase(&1.family), &1.weight, &1.style}),
+               embedded: Font.distinct_faces(faces),
                fallback: faces
              }}
           end)
@@ -5999,7 +5999,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Style do
         {:ok,
          %{
            registry
-           | embedded: Enum.uniq_by(global, &{String.downcase(&1.family), &1.weight, &1.style}),
+           | embedded: Font.distinct_faces(global),
              fallback: global
          }
          |> Map.put(:scoped, scopes)}
