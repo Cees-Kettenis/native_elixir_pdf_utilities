@@ -95,12 +95,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
     HtmlValidator.with_render_budget(fn ->
       invocation = Process.get({__MODULE__, :invocation})
 
-      HtmlValidator.reserve_render_resource(
-        :max_work,
-        map_size(tree.nodes) * (Limits.get(:max_depth) + 1) +
-          byte_size(tree.nodes[tree.root].source.text),
-        :html
-      )
+      tree_work = reserve_tree_work(tree)
 
       with :ok <- require_invocation(invocation, tree),
            mapped =
@@ -149,6 +144,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
           invocation: invocation.id,
           kind: :insertion_plan,
           tree: tree,
+          tree_work: tree_work,
           context: context,
           consumed: false,
           limits: Limits.effective(),
@@ -320,6 +316,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
           invocation: invocation.id,
           kind: :candidate_projection,
           tree: tree,
+          tree_work: plan.tree_work,
           plan: handle,
           context: context,
           consumed: false,
@@ -454,7 +451,8 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
   defp issue_renderer_policy(handle, tree, candidate, prepare, consumer) do
     resource_context = ResourceContext.current()
     limits = Limits.effective()
-    source = Process.get({__MODULE__, :invocation}).handles[handle].context.source
+    plan = Process.get({__MODULE__, :invocation}).handles[handle]
+    source = plan.context.source
 
     with :ok <- ResourceValidator.validate_context(resource_context) do
       FontValidator.with_budget(fn ->
@@ -480,6 +478,7 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
             invocation: invocation.id,
             kind: :renderer_policy,
             tree: tree,
+            tree_work: plan.tree_work,
             plan: handle,
             candidate: candidate,
             context: evidence,
@@ -609,16 +608,31 @@ defmodule NativeElixirPdfUtilities.Validators.TemplatePatchValidator do
         )
   end
 
-  defp live_entry(handle, tree) do
-    HtmlValidator.reserve_render_resource(
-      :max_work,
-      map_size(tree.nodes) * (Limits.get(:max_depth) + 1) +
-        byte_size(tree.nodes[tree.root].source.text),
-      :html
-    )
+  # The node table can retain a closed subtree in each ancestor's projection.
+  # Count those copies once when issuing a plan, including template fragments.
+  defp reserve_tree_work(tree) do
+    base = map_size(tree.nodes) + byte_size(tree.nodes[tree.root].source.text)
+    HtmlValidator.reserve_render_resource(:max_work, base, :html)
 
+    Enum.reduce(tree.nodes, base, fn {_id, node}, work ->
+      reserve_projection_work(Map.get(node, :projection), work)
+    end)
+  end
+
+  defp reserve_projection_work(node, work) do
+    if is_nil(node) do
+      work
+    else
+      HtmlValidator.reserve_render_resource(:max_work, 1, :html)
+      work = Enum.reduce(Map.get(node, :children, []), work + 1, &reserve_projection_work/2)
+      reserve_projection_work(Map.get(node, :content), work)
+    end
+  end
+
+  defp live_entry(handle, tree) do
     invocation = Process.get({__MODULE__, :invocation})
     entry = if invocation && is_reference(handle), do: Map.get(invocation.handles, handle)
+    if entry, do: HtmlValidator.reserve_render_resource(:max_work, entry.tree_work, :html)
     budget = NativeElixirPdfUtilities.Validators.ResourceBudgetValidator.snapshot()
 
     counters_valid? =

@@ -575,6 +575,40 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateExecutionGlobalStateTest do
 
   @opts [system_font_discovery: false, compress_streams: false]
 
+  test "template work depends on the document even when the depth ceiling is raised" do
+    alias NativeElixirPdfUtilities.Operation
+    alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
+
+    limits = Limits.effective()
+    on_exit(fn -> Limits.install(limits) end)
+
+    html = "<body><?marker name='A'><template for='A'><p>Hello</p></template></body>"
+    Limits.install(%{limits | max_depth: 100})
+    assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+    assert {:ok, "Hello"} = Text.extract(pdf)
+
+    measure = fn ->
+      Operation.run(__MODULE__, :render, fn ->
+        {HtmlToPdf.render(html, @opts), ResourceBudgetValidator.snapshot().max_work}
+      end)
+    end
+
+    assert {{:ok, ^pdf}, work} = measure.()
+
+    for depth <- [100, 101] do
+      Limits.install(%{limits | max_depth: depth, max_work: work})
+      assert {{:ok, ^pdf}, ^work} = measure.()
+    end
+
+    Limits.install(%{limits | max_depth: 101, max_work: work - 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.message =~ "max_work"
+
+    Limits.install(%{limits | max_depth: 1})
+    assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, @opts)
+    assert diagnostic.message =~ "max_depth"
+  end
+
   test "a changed preparation policy cannot activate even with permissive counters" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
