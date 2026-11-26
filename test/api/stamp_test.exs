@@ -4,6 +4,7 @@ defmodule NativeElixirPdfUtilities.StampTest do
   alias NativeElixirPdfUtilities.HtmlToPdf
   alias NativeElixirPdfUtilities.Info
   alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.Operation
   alias NativeElixirPdfUtilities.Outlines
   alias NativeElixirPdfUtilities.Pdf.IncrementalWriter
   alias NativeElixirPdfUtilities.Pdf.Reader
@@ -11,6 +12,7 @@ defmodule NativeElixirPdfUtilities.StampTest do
   alias NativeElixirPdfUtilities.Stamp
   alias NativeElixirPdfUtilities.Text
   alias NativeElixirPdfUtilities.Transform
+  alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
   alias NativeElixirPdfUtilities.Validators.StampValidator
 
   setup do
@@ -40,6 +42,51 @@ defmodule NativeElixirPdfUtilities.StampTest do
 
     Limits.install(%{Limits.effective() | max_numeric_magnitude: huge})
     assert {:error, {:invalid_options, %{stage: :options}}} = Stamp.text(pdf, "Test", size: huge)
+  end
+
+  test "stamp operations report the work limit when resolving a page resource" do
+    target =
+      pdf([
+        {1, "<< /Type /Catalog /Pages 2 0 R >>"},
+        {2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Resources << /XObject 4 0 R >> >>"},
+        {4, "<< >>"}
+      ])
+
+    read_work =
+      Operation.run(__MODULE__, :measure_read, fn ->
+        assert {:ok, _} = Reader.read_validated(target)
+        ResourceBudgetValidator.snapshot().max_work
+      end)
+
+    defaults = Limits.effective()
+
+    for {operation, cap, stamp} <- [
+          {:stamp_text, read_work, fn -> Stamp.text(target, "Test") end},
+          {:watermark, read_work, fn -> Stamp.watermark(target, "Test") end},
+          {:page_numbers, read_work, fn -> Stamp.page_numbers(target) end},
+          {:overlay_pdf, 2 * read_work, fn -> Stamp.overlay(target, target) end}
+        ] do
+      Limits.install(%{defaults | max_work: cap})
+
+      assert {:error,
+              {:resource_limit_exceeded,
+               %{
+                 reason: :resource_limit_exceeded,
+                 stage: :limits,
+                 operation: ^operation,
+                 module: Stamp,
+                 source: "page 1",
+                 message: message
+               }}} = stamp.()
+
+      assert message =~ "max_work"
+      assert message =~ "object 4 0"
+
+      Limits.install(defaults)
+      assert {:ok, stamped} = stamp.()
+      assert {:ok, 1} = Info.page_count(stamped)
+    end
   end
 
   test "tiny and excessive page scales return stamp geometry diagnostics" do

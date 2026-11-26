@@ -476,50 +476,52 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
           page_error(page_number, "has invalid stamping geometry: #{diagnostic.message}", reason)
       end
     else
-      false -> page_error(page_number, "has an invalid effective page box")
-      _error -> page_error(page_number, "has malformed stamping geometry or resources")
+      false ->
+        page_error(page_number, "has an invalid effective page box")
+
+      {:error, {:resource_limit_exceeded, diagnostic}} ->
+        {:error,
+         {:resource_limit_exceeded,
+          Diagnostics.with_context(diagnostic, source: "page #{page_number}")}}
+
+      _error ->
+        page_error(page_number, "has malformed stamping geometry or resources")
     end
   rescue
     ArithmeticError -> page_error(page_number, "has unrepresentable stamping geometry")
   end
 
   defp resolved_rotation(document, value) do
-    case PdfValidator.resolve(document, value || 0) do
-      {:ok, rotation} when is_integer(rotation) and rem(rotation, 90) == 0 ->
+    with {:ok, rotation} <- PdfValidator.resolve(document, value || 0) do
+      if is_integer(rotation) and rem(rotation, 90) == 0 do
         {:ok, Integer.mod(rotation, 360)}
-
-      _ ->
+      else
         :error
+      end
     end
   end
 
   defp resolved_user_unit(document, dictionary) do
-    case PdfValidator.optional_entry(document, dictionary, "UserUnit", 1) do
-      {:ok, value} ->
-        with {:ok, value} <- PdfValidator.float_number(value), true <- value > 0 do
-          {:ok, value}
-        else
-          _ -> :error
-        end
-
-      _ ->
-        :error
+    with {:ok, raw_unit} <- PdfValidator.optional_entry(document, dictionary, "UserUnit", 1),
+         {:ok, unit} <- PdfValidator.float_number(raw_unit) do
+      if unit > 0, do: {:ok, unit}, else: :error
     end
   end
 
   defp resolved_resources(document, value) do
-    case PdfValidator.resolve(document, value) do
-      {:ok, nil} ->
-        {:ok, %{}}
+    with {:ok, resolved} <- PdfValidator.resolve(document, value) do
+      case resolved do
+        nil ->
+          {:ok, %{}}
 
-      {:ok, resources} when is_map(resources) ->
-        with {:ok, resources} <- materialize_resource_category(document, resources, "XObject"),
-             {:ok, resources} <- materialize_resource_category(document, resources, "ExtGState") do
-          {:ok, resources}
-        end
+        resources when is_map(resources) ->
+          with {:ok, resources} <- materialize_resource_category(document, resources, "XObject") do
+            materialize_resource_category(document, resources, "ExtGState")
+          end
 
-      _ ->
-        :error
+        _ ->
+          :error
+      end
     end
   end
 
@@ -529,9 +531,8 @@ defmodule NativeElixirPdfUtilities.Validators.StampValidator do
         {:ok, resources}
 
       value ->
-        case PdfValidator.dictionary(document, value) do
-          {:ok, dictionary} -> {:ok, Map.put(resources, category, dictionary)}
-          {:error, _error} -> :error
+        with {:ok, dictionary} <- PdfValidator.dictionary(document, value) do
+          {:ok, Map.put(resources, category, dictionary)}
         end
     end
   end
