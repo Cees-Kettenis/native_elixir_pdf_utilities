@@ -93,10 +93,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ColumnLayout do
     HtmlValidator.reserve_render_resource(:max_entries, count, :columns)
     column_width = max((width - gap * (count - 1)) / count, 0.0)
     page_capacity = NativeElixirPdfUtilities.HtmlToPdf.Hyphenator.fragmentainer_height()
-    height = Layout.resolve_content_size(style, :height, Map.get(style, :_containing_height), nil)
+
+    height =
+      Layout.resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
 
     maximum =
-      Layout.resolve_content_size(
+      Layout.resolved_content_size(
         Map.put(style, :height, Map.get(style, :max_height)),
         :height,
         Map.get(style, :_containing_height),

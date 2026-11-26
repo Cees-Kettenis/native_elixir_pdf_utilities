@@ -149,8 +149,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RegionLayout do
       %{display: :block, width: width, height: height}
       when is_number(width) and is_number(height) ->
         with {:ok, style} <- CssLengthValidator.resolve_edges(style) do
-          width = Layout.resolve_content_size(style, :width, nil, width)
-          height = Layout.resolve_content_size(style, :height, nil, height)
+          width = Layout.resolved_content_size(style, :width, nil, width)
+          height = Layout.resolved_content_size(style, :height, nil, height)
           if width > 0 and height > 0, do: {:ok, width, height}, else: unsupported_frame()
         end
 

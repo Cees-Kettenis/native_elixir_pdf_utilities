@@ -57,7 +57,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ExclusionLayout do
 
   defp bounds(style, x, top, width) do
     padding = Map.get(style, :padding, @zero)
-    height = Layout.resolve_content_size(style, :height, Map.get(style, :_containing_height), nil)
+
+    height =
+      Layout.resolved_content_size(style, :height, Map.get(style, :_containing_height), nil)
 
     %{
       x: x - padding.left,
@@ -71,9 +73,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ExclusionLayout do
   defp rectangle(style, bounds) do
     with {:ok, style} <- CssLengthValidator.resolve_edges(style, bounds.width),
          width when is_number(width) <-
-           Layout.resolve_content_size(style, :width, bounds.width, nil),
+           Layout.resolved_content_size(style, :width, bounds.width, nil),
          height when is_number(height) <-
-           Layout.resolve_content_size(style, :height, bounds.height, nil),
+           Layout.resolved_content_size(style, :height, bounds.height, nil),
          offsets = Map.get(style, :offsets, @zero),
          margin = Map.get(style, :margin, @zero),
          padding = Map.get(style, :padding, @zero),

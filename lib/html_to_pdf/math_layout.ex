@@ -154,7 +154,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
             end
 
           width =
-            Layout.resolve_content_size(
+            Layout.resolved_content_size(
               prepared.style,
               :width,
               Map.get(prepared, :available_inline_size),
@@ -1105,10 +1105,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
     below = margin.bottom + padding.bottom + border.bottom
 
     available = Map.get(style, :_math_available_inline_size)
-    content_width = Layout.resolve_content_size(style, :width, available, measured.width)
+    content_width = Layout.resolved_content_size(style, :width, available, measured.width)
 
     content_height =
-      Layout.resolve_content_size(style, :height, nil, measured.ascent + measured.descent)
+      Layout.resolved_content_size(style, :height, nil, measured.ascent + measured.descent)
 
     background =
       if Map.get(style, :background_color) not in [nil, :transparent] or
@@ -1158,12 +1158,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.MathLayout do
     )
     |> Map.put(
       :min_content_width,
-      Layout.resolve_content_size(style, :width, available, measured.min_content_width) +
+      Layout.resolved_content_size(style, :width, available, measured.min_content_width) +
         left + right
     )
     |> Map.put(
       :max_content_width,
-      Layout.resolve_content_size(style, :width, available, measured.max_content_width) +
+      Layout.resolved_content_size(style, :width, available, measured.max_content_width) +
         left + right
     )
   end

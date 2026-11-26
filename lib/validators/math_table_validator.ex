@@ -1025,10 +1025,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
                  max(
                    preferred,
-                   Layout.resolve_content_size(
+                   Layout.resolved_content_size(
                      cell.prepared.style,
                      :width,
-                     Layout.resolve_content_size(style, :width, available_inline_size, nil),
+                     Layout.resolved_content_size(style, :width, available_inline_size, nil),
                      preferred
                    )
                  ) + edges.left + edges.right
@@ -1054,10 +1054,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
           required =
             max(
               preferred,
-              Layout.resolve_content_size(
+              Layout.resolved_content_size(
                 cell.prepared.style,
                 :width,
-                Layout.resolve_content_size(style, :width, available_inline_size, nil),
+                Layout.resolved_content_size(style, :width, available_inline_size, nil),
                 preferred
               )
             ) + edges.left + edges.right - horizontal_spacing * (span - 1)
@@ -1084,7 +1084,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
     target =
       max(
-        Layout.resolve_content_size(
+        Layout.resolved_content_size(
           style,
           :width,
           available_inline_size,
@@ -1093,13 +1093,13 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
         minimum
       )
 
-    table_basis = Layout.resolve_content_size(style, :width, available_inline_size, nil)
+    table_basis = Layout.resolved_content_size(style, :width, available_inline_size, nil)
 
     constrained_columns =
       MapSet.new(cells, fn cell ->
         if Map.get(cell.prepared, :colspan, 1) == 1 and
              Map.get(cell.prepared.style, :width) not in [nil, :auto] and
-             Layout.resolve_content_size(cell.prepared.style, :width, table_basis, nil) != nil,
+             Layout.resolved_content_size(cell.prepared.style, :width, table_basis, nil) != nil,
            do: cell.prepared.column,
            else: nil
       end)
@@ -1184,7 +1184,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
               Map.put(
                 row_box.style,
                 :height,
-                Layout.resolve_content_size(row_box.style, :height, nil, 0.0)
+                Layout.resolved_content_size(row_box.style, :height, nil, 0.0)
               )
 
             %{
@@ -1211,10 +1211,10 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
             minimum_height =
               max(
                 intrinsic_height,
-                Layout.resolve_content_size(
+                Layout.resolved_content_size(
                   cell.prepared.style,
                   :height,
-                  Layout.resolve_content_size(style, :height, nil, nil),
+                  Layout.resolved_content_size(style, :height, nil, nil),
                   cell.measured.ascent + cell.measured.descent
                 ) + edges.top + edges.bottom
               )
@@ -1249,7 +1249,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
 
     target_height =
       max(
-        Layout.resolve_content_size(style, :height, nil, natural_height + spacing_height) -
+        Layout.resolved_content_size(style, :height, nil, natural_height + spacing_height) -
           spacing_height,
         natural_height
       )
@@ -1420,7 +1420,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       min_content_width:
         max(
           minimum + spacing_width,
-          Layout.resolve_content_size(
+          Layout.resolved_content_size(
             style,
             :width,
             available_inline_size,
@@ -1430,7 +1430,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathTableValidator do
       max_content_width:
         max(
           minimum + spacing_width,
-          Layout.resolve_content_size(
+          Layout.resolved_content_size(
             style,
             :width,
             available_inline_size,

@@ -465,12 +465,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssBackground do
 
       {width, height} ->
         w =
-          if width == :auto, do: :auto, else: Layout.resolve_size_value(width, area.width, style)
+          if width == :auto, do: :auto, else: Layout.resolved_size_value(width, area.width, style)
 
         h =
           if height == :auto,
             do: :auto,
-            else: Layout.resolve_size_value(height, area.height, style)
+            else: Layout.resolved_size_value(height, area.height, style)
 
         case {w, h} do
           {:auto, :auto} -> {nw, nh}

@@ -73,7 +73,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FloatLayout do
     {minimum, maximum} = intrinsic.(%{block | style: style}, available)
 
     content =
-      Layout.resolve_content_size(style, :width, width, max(minimum, min(maximum, available)))
+      Layout.resolved_content_size(style, :width, width, max(minimum, min(maximum, available)))
 
     border_width = content + decorations
     outer_width = border_width + margin.left + margin.right
@@ -138,7 +138,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FloatLayout do
       margin = Map.get(block.style, :margin, %{left: 0.0, right: 0.0})
       padding = Map.get(block.style, :padding, %{left: 0.0, right: 0.0})
       border = Map.get(block.style, :border_widths, %{left: 0.0, right: 0.0})
-      preferred = Layout.resolve_content_size(block.style, :width, width, nil)
+      preferred = Layout.resolved_content_size(block.style, :width, width, nil)
 
       minimum =
         if is_number(preferred),
@@ -332,7 +332,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FloatLayout do
             nil
           else
             height =
-              Layout.resolve_content_size(
+              Layout.resolved_content_size(
                 style,
                 :height,
                 Map.get(style, :_containing_height),

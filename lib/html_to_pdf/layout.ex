@@ -8924,18 +8924,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     size =
       if match?({:css_intrinsic_size, _}, value),
         do: resolve_intrinsic_size(value, property, available_size, style, default),
-        else: resolve_size_value(value, available_size, style)
+        else: resolved_size_value(value, available_size, style)
 
     size = size || default
 
     apply_size_constraints(style, property, size, available_size)
   end
 
-  @doc "Resolves a validator-prepared CSS box content dimension with the shared min/max and box-sizing rules."
+  @doc """
+  Resolves a prepared CSS content dimension in points, applying min/max and box-sizing rules.
+
+  Returns a number, `nil` for an unresolved dimension, or
+  `{:error, {reason, diagnostic}}` when the calculation fails.
+  """
   @spec resolve_content_size(map(), :width | :height, number() | nil, number() | nil) ::
-          number() | nil
+          number() | nil | {:error, Diagnostics.detailed_error()}
   def resolve_content_size(style, property, available_size, default) do
     resolved_content_size(style, property, available_size, default)
+  catch
+    {:render_resource_limit, {:error, _} = error} -> error
   end
 
   defp editor_intrinsic_size(style, property, default) do
@@ -8953,7 +8960,17 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp resolved_content_size(style, property, available_size, default) do
+  # Layout callers propagate sizing failures to the enclosing render operation
+  # before using a measurement in arithmetic or applying a fallback.
+  @doc false
+  @spec resolved_content_size(
+          map(),
+          :width | :height | :min_height | :max_height,
+          number() | nil,
+          number() | nil
+        ) ::
+          number() | nil
+  def resolved_content_size(style, property, available_size, default) do
     default = editor_intrinsic_size(style, property, default)
 
     default =
@@ -8984,9 +9001,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  @doc "Resolves a prepared paint or layout size against its containing axis and selected style."
-  @spec resolve_size_value(term(), number() | nil, map()) :: number() | nil
+  @doc """
+  Resolves a prepared paint or layout size against its containing axis in points.
+
+  Returns a number, `nil` for an unresolved size, or
+  `{:error, {reason, diagnostic}}` when the calculation fails.
+  """
+  @spec resolve_size_value(term(), number() | nil, map()) ::
+          number() | nil | {:error, Diagnostics.detailed_error()}
   def resolve_size_value(value, available_size, style \\ %{}) do
+    resolved_size_value(value, available_size, style)
+  catch
+    {:render_resource_limit, {:error, _} = error} -> error
+  end
+
+  @doc false
+  @spec resolved_size_value(term(), number() | nil, map()) :: number() | nil
+  def resolved_size_value(value, available_size, style \\ %{}) do
     case value do
       {:css_size_math, _} = calculation ->
         case NativeElixirPdfUtilities.Validators.CssSizingValidator.resolve_math(
@@ -9000,7 +9031,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
       {:min, sizes} when is_list(sizes) ->
         sizes
-        |> Enum.map(&resolve_size_value(&1, available_size, style))
+        |> Enum.map(&resolved_size_value(&1, available_size, style))
         |> then(fn sizes -> if Enum.any?(sizes, &is_nil/1), do: nil, else: Enum.min(sizes) end)
 
       {:percent, ratio} when is_number(available_size) ->
@@ -9050,7 +9081,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
 
     if match?({:css_intrinsic_size, _}, value),
       do: resolve_intrinsic_size(value, property, available_size, style, nil),
-      else: resolve_size_value(value, available_size, style)
+      else: resolved_size_value(value, available_size, style)
   end
 
   defp resolve_intrinsic_size(value, property, available_size, style, default) do
@@ -18468,7 +18499,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
   defp resolve_background_size(size, available) do
     case size do
       :auto -> :auto
-      size -> resolve_size_value(size, available)
+      size -> resolved_size_value(size, available)
     end
   end
 

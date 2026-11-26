@@ -857,7 +857,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
 
     width =
       if Map.get(style, :_math_width_set, false) or Map.get(style, :width) != nil do
-        {:ok, Layout.resolve_content_size(style, :width, row.available_inline_size, nil)}
+        {:ok, Layout.resolved_content_size(style, :width, row.available_inline_size, nil)}
       else
         case Map.get(attributes, "width") do
           nil ->
@@ -1265,7 +1265,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                 width = max(width, 0.0)
 
                 width =
-                  Layout.resolve_content_size(
+                  Layout.resolved_content_size(
                     style,
                     :width,
                     Map.get(
@@ -1277,7 +1277,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
                   )
 
                 height =
-                  Layout.resolve_content_size(
+                  Layout.resolved_content_size(
                     style,
                     :height,
                     nil,
@@ -2354,7 +2354,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
         tag in ~w(mfrac msqrt mroot mpadded mphantom mmultiscripts mtr mtd) or
         tag in @script_elements
 
-    used_width = if owner?, do: Layout.resolve_content_size(style, :width, available, nil)
+    used_width = if owner?, do: Layout.resolved_content_size(style, :width, available, nil)
 
     child_basis = if used_width == nil, do: available, else: used_width
 
@@ -2440,7 +2440,7 @@ defmodule NativeElixirPdfUtilities.Validators.MathLayoutValidator do
       Map.get(context, :available_content_width, Map.get(context, :available_inline_size))
 
     used_width =
-      if math_formatting?, do: Layout.resolve_content_size(style, :width, available, nil)
+      if math_formatting?, do: Layout.resolved_content_size(style, :width, available, nil)
 
     # Native descendants use their real token owner's content width. The source
     # owner itself retains its original enclosing context for CSS paint placement.
