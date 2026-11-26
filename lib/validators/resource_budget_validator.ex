@@ -31,20 +31,27 @@ defmodule NativeElixirPdfUtilities.Validators.ResourceBudgetValidator do
   @spec reserve(Limits.key(), non_neg_integer(), atom(), keyword()) ::
           :ok | {:error, {atom(), Diagnostics.diagnostic()}}
   def reserve(limit, amount, stage, context \\ []) do
+    reserve_counter(limit, limit, amount, stage, context)
+  end
+
+  @doc "Reserves a distinct subtotal against an existing ceiling without consuming another resource."
+  @spec reserve_counter(atom(), Limits.key(), non_neg_integer(), atom(), keyword()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def reserve_counter(counter_name, limit, amount, stage, context) do
     scope =
       case :erlang.get(@scope) do
         :undefined -> nil
         scope -> scope
       end
 
-    counter = {scope, limit}
+    counter = {scope, counter_name}
     previous = if scope != nil, do: :erlang.get(counter), else: :undefined
     total = if previous == :undefined, do: amount, else: previous + amount
     maximum = Limits.get(limit)
 
     if total <= maximum do
       if scope != nil and amount != 0 do
-        if previous == :undefined, do: Process.put(scope, [limit | Process.get(scope, [])])
+        if previous == :undefined, do: Process.put(scope, [counter_name | Process.get(scope, [])])
         :erlang.put(counter, total)
       end
 

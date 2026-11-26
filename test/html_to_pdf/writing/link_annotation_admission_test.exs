@@ -2,14 +2,50 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LinkAnnotationAdmissionTest do
   use ExUnit.Case, async: false
 
   alias NativeElixirPdfUtilities.HtmlToPdf.PdfWriter
-  alias NativeElixirPdfUtilities.Limits
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits, Operation}
   alias NativeElixirPdfUtilities.Pdf.Reader
-  alias NativeElixirPdfUtilities.Validators.{HtmlValidator, WriterValidator}
+
+  alias NativeElixirPdfUtilities.Validators.{
+    HtmlValidator,
+    ResourceBudgetValidator,
+    WriterValidator
+  }
 
   setup do
     original = Limits.effective()
     on_exit(fn -> Limits.install(original) end)
     %{limits: original}
+  end
+
+  test "raising the output allowance preserves a link rendered at the source byte limit", ctx do
+    uri = "https://example.com/"
+    html = ~s(<p><a href="#{uri}">Hello</a></p>)
+    opts = [system_font_discovery: false]
+
+    {{:ok, expected}, source_bytes} =
+      Operation.run(__MODULE__, :render, fn ->
+        {HtmlToPdf.render(html, opts), ResourceBudgetValidator.snapshot().max_input_bytes}
+      end)
+
+    assert byte_size(expected) < source_bytes - 1
+
+    for output <- [source_bytes - 1, source_bytes, source_bytes + 1, ctx.limits.max_output_bytes] do
+      Limits.install(%{ctx.limits | max_input_bytes: source_bytes, max_output_bytes: output})
+      assert {:ok, ^expected} = HtmlToPdf.render(html, opts)
+      assert {:ok, %{document: document, pages: [page]}} = Reader.read_validated(expected)
+      [link] = page.dictionary["Annots"]
+      assert {:ok, %{"A" => %{"URI" => {:string, ^uri}}}} = Reader.resolve(document, link)
+    end
+
+    for {key, bytes} <- [
+          max_input_bytes: byte_size(html) - 1,
+          max_output_bytes: byte_size(expected) - 1
+        ] do
+      Limits.install(Map.put(ctx.limits, key, bytes))
+      assert {:error, {:resource_limit_exceeded, diagnostic}} = HtmlToPdf.render(html, opts)
+      assert diagnostic.operation == :render
+      assert diagnostic.message =~ Atom.to_string(key)
+    end
   end
 
   test "annotation bytes include literal escapes and accumulate before serialization", ctx do

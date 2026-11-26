@@ -16,6 +16,7 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.OutlineValidator
   alias NativeElixirPdfUtilities.Validators.PdfFormValidator
+  alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @doc "Admits a generated PDF collection before allocating its entries."
@@ -58,11 +59,18 @@ defmodule NativeElixirPdfUtilities.Validators.WriterValidator do
     bytes = IO.iodata_length(parts) + uri_bytes
     HtmlValidator.reserve_render_resource(:max_output_bytes, bytes, :writer)
 
-    if Limits.get(:max_input_bytes) < Limits.get(:max_output_bytes) do
-      HtmlValidator.reserve_render_resource(:max_input_bytes, bytes, :writer)
+    # Link dictionaries will be part of a readable PDF. Bound their combined
+    # size before escaping the URI, independently of bytes read from the caller.
+    case ResourceBudgetValidator.reserve_counter(
+           :link_annotation_bytes,
+           :max_input_bytes,
+           bytes,
+           :writer,
+           module: __MODULE__
+         ) do
+      :ok -> :ok
+      error -> throw({:render_resource_limit, error})
     end
-
-    :ok
   end
 
   defp escaped_uri_bytes(text, bytes) do
