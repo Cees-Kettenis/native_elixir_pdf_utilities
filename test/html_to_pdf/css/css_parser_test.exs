@@ -165,6 +165,16 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
 
   test "attribute selectors share identifier and string escape decoding" do
     for {source, expected} <- [
+          # Selectors 4 (22 January 2026), sections 6.3 and 16.
+          {~S|[title="abc"i]|, {:equals, "title", "abc", :insensitive}},
+          {~S|[x='ok'S]|, {:equals, "x", "ok", :sensitive}},
+          {~S|[x='o\'k'\69]|, {:equals, "x", "o'k", :insensitive}},
+          {~S|[x="\6f k"\73]|, {:equals, "x", "ok", :sensitive}},
+          {~S|[x=oki]|, {:equals, "x", "oki"}},
+          {~S|[x=ends]|, {:equals, "x", "ends"}},
+          {~S|[x=ok\69]|, {:equals, "x", "oki"}},
+          {~S|[x=\6f i]|, {:equals, "x", "oi"}},
+          {~S|[x=\6f  i]|, {:equals, "x", "o", :insensitive}},
           {~S|[data-\6b ind=\41 ctive]|, {:equals, "data-kind", "Active"}},
           {~S|[data-kind="\41 ctive"]|, {:equals, "data-kind", "Active"}},
           {~S|[data-kind='a\,b\"c']|, {:equals, "data-kind", "a,b\"c"}},
@@ -537,7 +547,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssParserTest do
           "[title=abc q]",
           "[title=abc is]",
           "[title=abc i s]",
-          "[title=\"abc\"i]",
+          ~S|[title="abc"is]|,
+          ~S|[title='abc'q]|,
+          ~S|[title="abc"i s]|,
           "[title!=abc]",
           "[title==abc]",
           "[title^abc]",

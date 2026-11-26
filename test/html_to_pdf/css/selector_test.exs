@@ -120,6 +120,21 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SelectorTest do
            ].color == {0, 0, 1}
   end
 
+  test "compact attribute flags match within namespaces and selector conditions" do
+    css = """
+    @namespace xml "http://www.w3.org/XML/1998/namespace";
+    div:has(svg[xml|lang="en"i]) { color:blue }
+    div:has(svg[xml|lang='en's]) { color:red }
+    @supports selector([data-kind="ok"i]) {
+      p, [data-kind='ok'i] { font-weight:bold }
+    }
+    """
+
+    nodes = styles("<div id='owner'><svg xml:lang='EN'></svg></div><p id='plain'>Text</p>", css)
+    assert nodes["owner"].color == {0, 0, 1}
+    assert nodes["plain"].font_weight == 700
+  end
+
   test "namespaces are local to each stylesheet and do not apply to bare attributes" do
     css =
       "@namespace h 'http://www.w3.org/1999/xhtml';@namespace s url(http://www.w3.org/2000/svg);h|p{color:red}s|text{color:blue}|p{font-weight:bold}*|p[data-x]{font-style:italic}"

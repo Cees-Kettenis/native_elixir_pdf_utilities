@@ -136,10 +136,6 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                           "su"
                         )
   @css_escape_regex ~r/\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|([^\n\r\f0-9a-fA-F]))/u
-  @css_attribute_selector_regex Regex.compile!(
-                                  "\\A\\[[ \\t\\r\\n\\f]*(?<name>#{@css_identifier_pattern})(?:[ \\t\\r\\n\\f]*(?<operator>[~|^$*]?=)[ \\t\\r\\n\\f]*(?<value>\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*'|#{@css_identifier_pattern})(?:[ \\t\\r\\n\\f]+(?<flag>#{@css_identifier_pattern}))?)?[ \\t\\r\\n\\f]*\\](?<rest>.*)\\z",
-                                  "su"
-                                )
 
   @css_simple_pseudo_regex Regex.compile!(
                              "\\A:(?<keyword>#{@css_identifier_pattern})(?<rest>.*)\\z",
@@ -157,6 +153,12 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidator do
                               "u"
                             )
   @css_string_pattern "(?:\"(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^\"\\\\\\r\\n\\f])*\"|'(?:#{@css_escape_pattern}|\\\\(?:\\r\\n|[\\n\\r\\f])|[^'\\\\\\r\\n\\f])*')"
+  # Consume the entire value token before looking for the optional flag. A
+  # string ends at its closing quote; an identifier can include a trailing i or s.
+  @css_attribute_selector_regex Regex.compile!(
+                                  "\\A\\[[ \\t\\r\\n\\f]*(?<name>#{@css_identifier_pattern})(?:[ \\t\\r\\n\\f]*(?<operator>[~|^$*]?=)[ \\t\\r\\n\\f]*(?<value>(?>#{@css_string_pattern}|#{@css_identifier_pattern}))(?:[ \\t\\r\\n\\f]*(?<flag>#{@css_identifier_pattern}))?)?[ \\t\\r\\n\\f]*\\](?<rest>.*)\\z",
+                                  "su"
+                                )
   # Consume an unterminated comment once, rather than retrying every opener.
   @css_comment_pattern "/\\*(?:[^*]|\\*(?!/))*(?:\\*/|\\z)"
   @css_syntax_unit_regex Regex.compile!(

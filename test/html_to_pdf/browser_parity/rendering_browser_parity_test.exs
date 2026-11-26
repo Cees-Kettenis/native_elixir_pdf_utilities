@@ -1475,7 +1475,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
          {"independent variable line height", {20, 741, 555, 12}},
          {"independent shorthand line height", {20, 753, 555, 12}},
          {"defaulted inherited line height", {350, 753, 220, 12}},
-         {"literal custom property defaults", {350, 525, 200, 12}}
+         {"literal custom property defaults", {350, 525, 200, 12}},
+         {"compact attribute flags", {351, 549, 145, 12}}
        ],
        max_changed_ratio: 0.01,
        max_average_delta: 0.03
