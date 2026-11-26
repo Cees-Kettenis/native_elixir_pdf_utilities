@@ -2763,7 +2763,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     end
 
     if fixture_name == "generated_content_counters.html" do
-      # CSS Counter Styles 3 (2021-07-27), §§2, 3.1.7 and 6.1.
+      # CSS Counter Styles 3 (2021-07-27), §§2, 3.1.7, 3.6 and 6.1.
       for file <- ["native.pdf", "chromium.pdf"] do
         assert {:ok, text} =
                  NativeElixirPdfUtilities.Text.extract_file(Path.join(artifact_dir, file))
@@ -2775,6 +2775,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
               "[A]Firstbracket",
               "[2]Fallbackbracket",
               "01)Inheritedpad",
+              "00XZeropadded",
               "Printedmetadatatitle"
             ],
             do: assert(text =~ label)

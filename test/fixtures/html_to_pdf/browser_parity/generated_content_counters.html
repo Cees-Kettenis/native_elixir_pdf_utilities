@@ -43,6 +43,7 @@
       @counter-style bracket { system:fixed; symbols:'A'; prefix:'['; suffix:']'; }
       @counter-style padded { system:extends decimal-leading-zero; suffix:')'; }
       @counter-style repeated { system:symbolic; symbols:'a' 'b'; }
+      @counter-style zero-fixed { system:FIXED; symbols:'X'; pad:'0' 3; suffix:' '; }
       .publishing { counter-reset:chapter 2; margin:6pt 0; }
       .publishing::before { content:counter(chapter,binary) ' / ' counter(chapter,repeated) ' '; }
       .nested { counter-reset:chapter 3; }
@@ -73,6 +74,7 @@
       <div class="missing">Attribute content</div>
       <ol style="list-style:bracket inside"><li>First bracket</li><li>Fallback bracket</li></ol>
       <ol style="list-style:padded inside"><li>Inherited pad</li></ol>
+      <ol style="list-style:zero-fixed inside"><li>Zero padded</li></ol>
     </main>
   </body>
 </html>

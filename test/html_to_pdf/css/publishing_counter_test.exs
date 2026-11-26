@@ -44,6 +44,29 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PublishingCounterTest do
     assert CounterStyle.format("lower-greek", 25, %{}) == "αα"
   end
 
+  test "equivalent fixed counter descriptors produce the same printed marker and position" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf, Text}
+
+    positions =
+      for {system, pad} <- [{"fixed", "3 '0'"}, {"FIXED", "3 '0'"}, {"fixed", "'0' 3"}] do
+        html = """
+        <style>@counter-style Labels {system:#{system};symbols:'X';pad:#{pad};suffix:' '}
+        @counter-style inherited {system:ExTeNdS Labels}
+        ol{list-style-type:inherited}</style><ol><li>Item</li></ol>
+        """
+
+        assert {:ok, pdf} = HtmlToPdf.render(html)
+        assert {:ok, "00X Item"} = Text.extract(pdf)
+        assert {:ok, %{pages: [%{spans: spans}]}} = Text.extract_spans(pdf)
+        Enum.map(spans, &Map.take(&1, [:text, :x, :y, :end_x, :end_y]))
+      end
+
+    assert length(Enum.uniq(positions)) == 1
+
+    assert {:ok, %{pad: {2, "★"}}} =
+             CssCounterStyleValidator.definition("system:FiXeD 1;symbols:'X';pad:★ 2")
+  end
+
   test "fixed negatives, inherited digits and generated bullets retain their symbols" do
     html = """
     <style>
@@ -91,6 +114,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.PublishingCounterTest do
           "system:fixed a;symbols:'a'",
           "range:5 1;symbols:'a'",
           "pad:-1 'a';symbols:'a'",
+          "pad:'a' -1;symbols:'a'",
+          "pad:'a';symbols:'a'",
+          "pad:'a' 'b';symbols:'a'",
+          "pad:2 3;symbols:'a'",
           "additive-symbols:1 'a',2 'b';system:additive",
           "unknown:a"
         ] do

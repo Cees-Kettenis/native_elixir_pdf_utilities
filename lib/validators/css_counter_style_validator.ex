@@ -3,6 +3,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCounterStyleValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.{CssSyntaxValidator, HtmlValidator}
 
+  @text_symbol Regex.compile!(
+                 "\\A(?:#{HtmlValidator.css_string_pattern()}|#{HtmlValidator.css_identifier_pattern()})\\z",
+                 "u"
+               )
+
   @doc "Prepares visual counter-style definitions from a selected stylesheet."
   @spec prepare(String.t()) :: {:ok, map()} | {:error, term()}
   def prepare(css) do
@@ -120,7 +125,11 @@ defmodule NativeElixirPdfUtilities.Validators.CssCounterStyleValidator do
   end
 
   defp descriptor(property, source) do
-    tokens = HtmlValidator.split_css_tokens(source)
+    tokens =
+      case {property, HtmlValidator.split_css_tokens(source)} do
+        {"system", [keyword | arguments]} -> [String.downcase(keyword, :ascii) | arguments]
+        {_, tokens} -> tokens
+      end
 
     strings =
       Enum.map(tokens, fn token ->
@@ -189,20 +198,8 @@ defmodule NativeElixirPdfUtilities.Validators.CssCounterStyleValidator do
       {"fallback", [name], _} ->
         if identifier?(name), do: {:ok, %{fallback: name}}, else: :error
 
-      {"pad", [n, _], [_, symbol]} ->
-        case NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(n, :integer) do
-          {:ok, n} when n >= 0 ->
-            HtmlValidator.check_render_resource(
-              :max_output_bytes,
-              n * max(byte_size(symbol), 1),
-              :css
-            )
-
-            {:ok, %{pad: {n, symbol}}}
-
-          _ ->
-            :error
-        end
+      {"pad", [left, right], [left_text, right_text]} ->
+        with :error <- pad(left, right, right_text), do: pad(right, left, left_text)
 
       {"range", ["auto"], _} ->
         {:ok, %{range: :auto}}
@@ -254,6 +251,22 @@ defmodule NativeElixirPdfUtilities.Validators.CssCounterStyleValidator do
 
       _ ->
         :error
+    end
+  end
+
+  defp pad(width, symbol, symbol_text) do
+    with true <- Regex.match?(@text_symbol, symbol),
+         {:ok, n} when is_integer(n) and n >= 0 <-
+           NativeElixirPdfUtilities.Validators.CssMathValidator.prepare_scalar(width, :integer) do
+      HtmlValidator.check_render_resource(
+        :max_output_bytes,
+        n * max(byte_size(symbol_text), 1),
+        :css
+      )
+
+      {:ok, %{pad: {n, symbol_text}}}
+    else
+      _ -> :error
     end
   end
 end
