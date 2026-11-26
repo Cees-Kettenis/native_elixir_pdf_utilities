@@ -87,6 +87,14 @@ pages. [Page transforms and splitting](pdf-page-transforms.md) keep bookmarks
 for retained pages. A removed destination with retained children becomes a
 grouping item; an item with neither is dropped.
 
+A bookmark that turns layers on or off, or toggles them (`SetOCGState`), keeps
+its action and targets the corresponding layers in the output. Layer names may
+repeat across inputs. A layer switch can share an action sequence with a local
+page jump or URI link. If a jump in that sequence targets a page you omit,
+or the sequence includes an unsupported action, page assembly returns a
+diagnostic. `Outlines.get/1` continues to report a
+switch-only bookmark with `:page` set to `nil`.
+
 Updates preserve page content by appending a revision. Previous bookmarks
 remain in earlier file bytes, and existing signatures may be affected.
 Unsupported bookmark actions are read as destinationless titles.

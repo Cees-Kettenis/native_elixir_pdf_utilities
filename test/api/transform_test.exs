@@ -903,6 +903,176 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
   end
 
   @tag :tmp_dir
+  test "bookmarks switch only their own initially hidden layer after page assembly", %{
+    tmp_dir: dir
+  } do
+    alias NativeElixirPdfUtilities.{Outlines, Pdf.IncrementalWriter, TestSupport.PdfVisualCompare}
+
+    source =
+      layer_bookmark_pdf("8 0 R", [
+        {8, "<< /S /SetOCGState /State 9 0 R /PreserveRB false >>"},
+        {9, "[/ON 4 0 R]"}
+      ])
+
+    assert {:ok, [public_item]} = Outlines.get(source)
+
+    assert public_item == %{
+             title: "Show dimensions",
+             page: nil,
+             view: :fit,
+             open: true,
+             children: []
+           }
+
+    assert {:ok, merged} = Merge.merge([source, source])
+    assert {:ok, [split]} = Split.by_ranges(source, [1..1])
+    assert {:ok, rotated} = Transform.rotate_pages(source, 180)
+    assert {:ok, picked} = Transform.pick_pages(source, [1])
+    assert {:ok, kept} = Transform.delete_pages(source, [])
+
+    for output <- [merged, split, rotated, picked, kept] do
+      assert {:ok, ctx} = Reader.read_validated(output)
+      %{"OCGs" => groups, "D" => %{"OFF" => hidden, "Order" => []}} = ctx.catalog["OCProperties"]
+      assert groups == Enum.uniq(groups)
+      assert hidden == groups
+      assert {:ok, %{"First" => first}} = Reader.dictionary(ctx.document, ctx.catalog["Outlines"])
+
+      last_next =
+        Enum.zip(ctx.pages, groups)
+        |> Enum.reduce(first, fn {page, group}, bookmark ->
+          assert page.resources["Properties"]["Dimensions"] == group
+          assert {:ok, item} = Reader.dictionary(ctx.document, bookmark)
+
+          assert {:ok, %{"S" => {:name, "SetOCGState"}, "State" => state, "PreserveRB" => false}} =
+                   Reader.dictionary(ctx.document, item["A"])
+
+          assert {:ok, [{:name, "ON"}, ^group]} = Reader.resolve(ctx.document, state)
+          item["Next"]
+        end)
+
+      assert last_next == nil
+    end
+
+    assert {:ok, ctx} = Reader.read_validated(merged)
+    {id, gen} = ctx.catalog_ref
+    raster = fn pdf -> PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: dir) end
+    [blank, same_blank] = raster.(merged)
+    assert same_blank == blank
+
+    for {group, index} <- Enum.with_index(ctx.catalog["OCProperties"]["OCGs"]) do
+      catalog = update_in(ctx.catalog, ["OCProperties", "D", "OFF"], &List.delete(&1, group))
+      assert {:ok, switched} = IncrementalWriter.write(ctx, [{id, gen, {:value, catalog}}])
+      pages = raster.(switched)
+      assert Enum.at(pages, 1 - index) == blank
+      assert binary_part(Enum.at(pages, index).pixels, (75 * 100 + 25) * 3, 3) == <<255, 0, 0>>
+    end
+  end
+
+  test "layer action sequences retain their order, local destinations and repeated references" do
+    source =
+      layer_bookmark_pdf("<< /S /GoTo /D /drawing /Next 10 0 R >>", [
+        {8,
+         "<< /S 9 0 R /State [/ON 4 0 R /OFF 4 0 R /Toggle 4 0 R] /Next << /S /URI /URI (guide) >> >>"},
+        {9, "/SetOCGState"},
+        {10, "[8 0 R 8 0 R]"}
+      ])
+
+    assert {:ok, result} = Transform.pick_pages(source, [1])
+    assert {:ok, ctx} = Reader.read_validated(result)
+    assert {:ok, %{"First" => first}} = Reader.dictionary(ctx.document, ctx.catalog["Outlines"])
+    assert {:ok, item} = Reader.dictionary(ctx.document, first)
+    [page] = ctx.pages
+    assert %{"D" => [{:ref, dest}, {:name, "Fit"}], "Next" => next} = item["A"]
+    assert {:ok, [switch, again]} = Reader.resolve(ctx.document, next)
+    assert dest == page.ref and again == switch
+    [group] = ctx.catalog["OCProperties"]["OCGs"]
+    assert {:ok, action} = Reader.dictionary(ctx.document, switch)
+
+    assert action["State"] == [
+             {:name, "ON"},
+             group,
+             {:name, "OFF"},
+             group,
+             {:name, "Toggle"},
+             group
+           ]
+
+    assert action["Next"]["URI"] == {:string, "https://example.com/guide"}
+  end
+
+  test "selecting pages cannot hide the loss of a shared bookmark action" do
+    # Filtering the link drops its jump to the omitted page. The bookmark
+    # shares the same action object and must preserve its entire sequence.
+    source =
+      pdf([
+        {1,
+         "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R /OCProperties << /OCGs [4 0 R] /D << /OFF [4 0 R] >> >> >>"},
+        {2, "<< /Type /Pages /Count 2 /Kids [3 0 R 5 0 R] /MediaBox [0 0 100 100] >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /Annots [9 0 R] >>"},
+        {4, "<< /Type /OCG /Name (Dimensions) >>"},
+        {5, "<< /Type /Page /Parent 2 0 R >>"},
+        {6, "<< /Type /Outlines /First 7 0 R /Last 7 0 R >>"},
+        {7, "<< /Title (Jump and reveal) /Parent 6 0 R /A 8 0 R >>"},
+        {8, "<< /S /SetOCGState /State [/ON 4 0 R] /Next << /S /GoTo /D [5 0 R /Fit] >> >>"},
+        {9, "<< /Type /Annot /Subtype /Link /Rect [0 0 20 20] /A 8 0 R >>"}
+      ])
+
+    assert {:ok, _reordered} = Transform.pick_pages(source, [2, 1])
+
+    assert {:error, {:unsupported_pdf_feature, %{stage: :page_dependencies, message: message}}} =
+             Transform.pick_pages(source, [1])
+
+    assert message =~ "not selected"
+  end
+
+  test "a non-layer bookmark keeps its existing destinationless import behavior" do
+    source = layer_bookmark_pdf("<< /S /Named /N /Print >>", [])
+    assert {:ok, merged} = Merge.merge([source])
+    assert {:ok, ctx} = Reader.read_validated(merged)
+    assert {:ok, %{"First" => first}} = Reader.dictionary(ctx.document, ctx.catalog["Outlines"])
+    assert {:ok, bookmark} = Reader.dictionary(ctx.document, first)
+    assert bookmark["Title"] == {:string, "Show dimensions"}
+    refute Map.has_key?(bookmark, "A")
+    refute Map.has_key?(bookmark, "Dest")
+  end
+
+  test "a layer switch with a malformed named jump returns its destination diagnostic" do
+    source =
+      layer_bookmark_pdf(
+        "<< /S /SetOCGState /State [/ON 4 0 R] /Next << /S /GoTo /D /bad >> >>",
+        []
+      )
+
+    assert {:error, {:invalid_pdf_input, %{message: "named destination is malformed"}}} =
+             Merge.merge([source])
+  end
+
+  test "unrepresentable layer bookmarks return a diagnostic and preserve public outline inspection" do
+    alias NativeElixirPdfUtilities.Outlines
+
+    for {action, reason} <- [
+          {"<< /S /SetOCGState /State [/ON 4 0 R] /Next << /S /GoTo /D (missing) >> >>",
+           :unsupported_pdf_feature},
+          {"<< /S /SetOCGState /State [/ON 4 0 R] /Next << /S /GoTo /D null >> >>",
+           :unsupported_pdf_feature},
+          {"<< /S /SetOCGState /State [/ON 4 0 R] /Next << /S /Named /N /Print >> >>",
+           :unsupported_pdf_feature},
+          {"<< /S /SetOCGState /State [/ON 4 0 R] /Next [1] >>", :unsupported_pdf_feature},
+          {"<< /S /SetOCGState /State [/ON 3 0 R] >>", :invalid_pdf_input},
+          {"<< /S /SetOCGState /State [/ON] >>", :invalid_pdf_input},
+          {"<< /S /SetOCGState /State [/ON 4 0 R] /PreserveRB /Wrong >>", :invalid_pdf_input}
+        ] do
+      source = layer_bookmark_pdf(action, [])
+      assert {:ok, [%{page: nil}]} = Outlines.get(source)
+
+      assert {:error, {^reason, %{reason: ^reason, operation: :merge, message: message}}} =
+               Merge.merge([source])
+
+      assert message =~ "bookmark"
+    end
+  end
+
+  @tag :tmp_dir
   test "an unused layer resource keeps its catalog binding when a page is imported", %{
     tmp_dir: dir
   } do
@@ -1392,6 +1562,21 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
       ] ++ extra_objects
 
     pdf(Enum.sort_by(objects, &elem(&1, 0)))
+  end
+
+  defp layer_bookmark_pdf(action, extra) do
+    pdf([
+      {1,
+       "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R /OCProperties << /OCGs [4 0 R] /D << /OFF [4 0 R] /Order [] >> >> /Dests << /drawing [3 0 R /Fit] /bad 17 >> /URI << /Base (https://example.com/) >> >>"},
+      {2, "<< /Type /Pages /Count 1 /Kids [3 0 R] >>"},
+      {3,
+       "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 5 0 R /Resources << /Properties << /Dimensions 4 0 R >> >> >>"},
+      {4, "<< /Type /OCG /Name (Dimensions) >>"},
+      {5, stream("/OC /Dimensions BDC 1 0 0 rg 20 20 20 20 re f EMC")},
+      {6, "<< /Type /Outlines /First 7 0 R /Last 7 0 R /Count 1 >>"},
+      {7, "<< /Title (Show dimensions) /Parent 6 0 R /A #{action} >>"}
+      | extra
+    ])
   end
 
   defp layer_import_pdf(page_entries, objects, catalog_entries \\ "") do

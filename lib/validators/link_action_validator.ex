@@ -8,6 +8,16 @@ defmodule NativeElixirPdfUtilities.Validators.LinkActionValidator do
   @spec normalize(PdfValidator.document(), map(), [MergeValidator.object_context()]) ::
           {:ok, [MergeValidator.object_context()]} | {:error, {atom(), map()}}
   def normalize(document, catalog, objects) do
+    with {:ok, objects, []} <- normalize(document, catalog, objects, []), do: {:ok, objects}
+  end
+
+  @doc false
+  @spec normalize(PdfValidator.document(), map(), [MergeValidator.object_context()], [
+          OutlineValidator.imported_item()
+        ]) ::
+          {:ok, [MergeValidator.object_context()], [OutlineValidator.imported_item()]}
+          | {:error, {atom(), map()}}
+  def normalize(document, catalog, objects, outlines) do
     with {:ok, base} <- catalog_uri_base(document, catalog) do
       state = %{catalog: catalog, names: nil, base: base, actions: %{}}
 
@@ -17,16 +27,34 @@ defmodule NativeElixirPdfUtilities.Validators.LinkActionValidator do
           {override(object, value), state}
         end)
 
+      {outlines, state} = normalize_bookmarks(document, outlines, state)
+
       {:ok,
        Enum.map(objects, fn object ->
          case Map.fetch(state.actions, {object.obj, object.gen}) do
            {:ok, value} -> override(object, value)
            :error -> object
          end
-       end)}
+       end), outlines}
     end
   catch
     {:link_error, error} -> error
+  end
+
+  defp normalize_bookmarks(document, items, state) do
+    Enum.map_reduce(items, state, fn item, state ->
+      {children, state} = normalize_bookmarks(document, item.children, state)
+      item = %{item | children: children}
+
+      case item do
+        %{layer_action: action} ->
+          {action, state} = rewrite_action(document, action, state, 0)
+          {%{item | layer_action: action}, state}
+
+        _ ->
+          {item, state}
+      end
+    end)
   end
 
   defp override(object, value) do

@@ -44,7 +44,7 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
           required(:objects) => [object_context()],
           required(:pages) => [PdfValidator.ref()],
           required(:inherited) => inherited_pages(),
-          required(:outlines) => [OutlineValidator.item()],
+          required(:outlines) => [OutlineValidator.imported_item()],
           optional(:layers) => map() | nil,
           optional(:map) => %{optional(PdfValidator.ref()) => non_neg_integer()}
         }
@@ -132,14 +132,16 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
                PdfValidator.validate_artwork_import(pdf_context, selection, :pages, :preserve),
              {:ok, layers} <- OptionalContentValidator.prepare(pdf_context),
              :ok <- validate_serializable_objects(objects),
-             {:ok, objects} <-
+             {:ok, inherited} <- prepare_page_inheritances(document, pages, object_by_ref),
+             {:ok, outlines} <-
+               OutlineValidator.extract(pdf_context, MapSet.new(get_in(layers, ["OCGs"]) || [])),
+             {:ok, objects, outlines} <-
                LinkActionValidator.normalize(
                  document,
                  Map.get(pdf_context, :catalog, %{}),
-                 objects
-               ),
-             {:ok, inherited} <- prepare_page_inheritances(document, pages, object_by_ref),
-             {:ok, outlines} <- OutlineValidator.extract(pdf_context) do
+                 objects,
+                 outlines
+               ) do
           {:ok,
            %{
              objects: objects,
@@ -253,8 +255,8 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
   defp validate_combined_outlines(inputs, page_count) do
     outlines = Enum.flat_map(inputs, &Map.get(&1, :outlines, []))
 
-    case OutlineValidator.normalize(outlines, page_count) do
-      {:ok, _outlines} ->
+    case OutlineValidator.validate_imported(outlines, page_count) do
+      :ok ->
         :ok
 
       {:error, {reason, diagnostic}} ->
@@ -560,7 +562,10 @@ defmodule NativeElixirPdfUtilities.Validators.MergeValidator do
     Enum.reduce_while(inputs, {:ok, inputs}, fn input, {:ok, inputs} ->
       missing_reference =
         Enum.find(
-          NativeElixirPdfUtilities.Pdf.ObjectMapping.references(Map.get(input, :layers)),
+          NativeElixirPdfUtilities.Pdf.ObjectMapping.references([
+            Map.get(input, :layers),
+            Map.get(input, :outlines)
+          ]),
           &(not Map.has_key?(input.map, &1))
         ) ||
           Enum.find_value(input.objects, fn object ->

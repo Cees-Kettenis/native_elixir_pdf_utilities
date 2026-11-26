@@ -18,12 +18,7 @@ defmodule NativeElixirPdfUtilities.Validators.OptionalContentValidator do
       entry ->
         PdfValidator.with_reader_budget(fn ->
           PdfValidator.with_reference_resolution([], fn opts ->
-            read = fn value ->
-              case PdfValidator.resolve(context.document, value, opts) do
-                {:ok, resolved} -> resolved
-                error -> throw({:layer_error, error})
-              end
-            end
+            read = &layer_value(context.document, &1, opts)
 
             case read.(entry) do
               nil ->
@@ -79,6 +74,145 @@ defmodule NativeElixirPdfUtilities.Validators.OptionalContentValidator do
     end
   catch
     {:layer_error, result} -> result
+  end
+
+  @typep destination_lookup :: (tuple() -> {:ok, list() | nil} | {:error, {atom(), map()}})
+
+  @doc false
+  @spec bookmark_action(PdfValidator.document(), map(), MapSet.t() | nil, destination_lookup()) ::
+          {:ok, map()} | {:error, {atom(), map()}}
+  def bookmark_action(document, item, groups, resolve_destination) do
+    if groups && is_nil(item["Dest"]) && item["A"] do
+      PdfValidator.with_reader_budget(fn ->
+        kinds =
+          bookmark_actions(
+            document,
+            [item["A"]],
+            groups,
+            resolve_destination,
+            %{},
+            %{}
+          )
+
+        cond do
+          not Map.has_key?(kinds, :switch) ->
+            {:ok, %{}}
+
+          Map.has_key?(kinds, :unsupported) ->
+            Diagnostics.error(
+              :outlines,
+              :unsupported_pdf_feature,
+              "layer bookmark contains an unsupported action or unresolved destination",
+              module: __MODULE__
+            )
+
+          true ->
+            {:ok, %{layer_action: item["A"]}}
+        end
+      end)
+    else
+      {:ok, %{}}
+    end
+  catch
+    {:layer_error, result} -> result
+  end
+
+  # Only /Next links actions. Retain shared indirect actions once and leave
+  # their references intact for the ordinary assembly remapper.
+  defp bookmark_actions(document, pending, groups, resolve_destination, seen, kinds) do
+    case pending do
+      [] ->
+        kinds
+
+      [value | rest] ->
+        PdfValidator.charge_reader_budget(:max_work, 1)
+
+        if match?({:ref, _}, value) and Map.has_key?(seen, value) do
+          bookmark_actions(document, rest, groups, resolve_destination, seen, kinds)
+        else
+          seen = if match?({:ref, _}, value), do: Map.put(seen, value, true), else: seen
+
+          {pending, kinds} =
+            case layer_value(document, value) do
+              actions when is_list(actions) ->
+                {actions ++ rest, kinds}
+
+              action when is_map(action) ->
+                kind = bookmark_action_kind(document, action, groups, resolve_destination)
+                {List.wrap(action["Next"]) ++ rest, Map.put(kinds, kind, true)}
+
+              _ ->
+                {rest, Map.put(kinds, :unsupported, true)}
+            end
+
+          bookmark_actions(document, pending, groups, resolve_destination, seen, kinds)
+        end
+    end
+  end
+
+  defp bookmark_action_kind(document, action, groups, resolve_destination) do
+    case layer_value(document, action["S"]) do
+      {:name, "SetOCGState"} ->
+        validate_switch(document, action, groups)
+        :switch
+
+      {:name, "GoTo"} ->
+        case layer_value(document, action["D"]) do
+          [{:ref, _} | _] ->
+            :portable
+
+          {kind, _} = name when kind in [:name, :string, :hex] ->
+            case resolve_destination.(name) do
+              {:ok, nil} -> :unsupported
+              {:ok, _} -> :portable
+              error -> throw({:layer_error, error})
+            end
+
+          _ ->
+            :unsupported
+        end
+
+      {:name, "URI"} ->
+        :portable
+
+      _ ->
+        :unsupported
+    end
+  end
+
+  defp validate_switch(document, action, groups) do
+    state = array(layer_value(document, action["State"]))
+
+    status =
+      Enum.reduce(state, :start, fn operand, status ->
+        PdfValidator.charge_reader_budget(:max_work, 1)
+
+        cond do
+          MapSet.member?(groups, operand) and status != :start ->
+            :has_group
+
+          status != :needs_group and
+              layer_value(document, operand) in [{:name, "ON"}, {:name, "OFF"}, {:name, "Toggle"}] ->
+            :needs_group
+
+          true ->
+            invalid(
+              "bookmark State requires an ON, OFF or Toggle operator followed by registered layer references"
+            )
+        end
+      end)
+
+    if status == :needs_group, do: invalid("bookmark State operator requires a layer reference")
+
+    unless layer_value(document, Map.get(action, "PreserveRB", true)) in [true, false, nil],
+      do: invalid("bookmark PreserveRB must be a boolean")
+  end
+
+  defp layer_value(document, value, opts \\ []) do
+    case PdfValidator.resolve(document, value, opts) do
+      {:ok, resolved} -> resolved
+      error -> throw({:layer_error, error})
+    end
   end
 
   defp configuration(value, read, known) do

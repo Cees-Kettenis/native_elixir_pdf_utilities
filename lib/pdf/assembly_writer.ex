@@ -179,18 +179,30 @@ defmodule NativeElixirPdfUtilities.Pdf.AssemblyWriter do
   defp merged_outlines(inputs) do
     {outlines, _page_offset} =
       Enum.reduce(inputs, {[], 0}, fn input, {outlines, page_offset} ->
-        input_outlines = offset_outline_pages(Map.get(input, :outlines, []), page_offset)
+        input_outlines = remap_outlines(Map.get(input, :outlines, []), page_offset, input.map)
         {outlines ++ input_outlines, page_offset + length(input.pages)}
       end)
 
     outlines
   end
 
-  defp offset_outline_pages(items, page_offset) do
+  defp remap_outlines(items, page_offset, reference_map) do
     Enum.map(items, fn item ->
       page = if is_nil(item.page), do: nil, else: item.page + page_offset
 
-      %{item | page: page, children: offset_outline_pages(item.children, page_offset)}
+      item = %{
+        item
+        | page: page,
+          children: remap_outlines(item.children, page_offset, reference_map)
+      }
+
+      case item do
+        %{layer_action: action} ->
+          %{item | layer_action: ObjectMapping.remap(action, reference_map)}
+
+        _ ->
+          item
+      end
     end)
   end
 

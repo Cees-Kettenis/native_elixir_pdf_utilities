@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator
+  alias NativeElixirPdfUtilities.Validators.OptionalContentValidator
   alias NativeElixirPdfUtilities.Validators.InfoValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   alias NativeElixirPdfUtilities.Validators.IncrementalValidator
@@ -37,15 +38,34 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
           required(:children) => [item()]
         }
 
+  @typedoc false
+  @type imported_item :: %{
+          required(:title) => String.t(),
+          required(:page) => pos_integer() | nil,
+          required(:view) => view(),
+          required(:open) => boolean(),
+          required(:children) => [imported_item()],
+          optional(:layer_action) => PdfValidator.value()
+        }
+
   @doc """
   Validates and normalizes a caller-provided outline tree.
   """
   @spec normalize(term(), non_neg_integer()) ::
           {:ok, [item()]} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def normalize(input, page_count) do
+  def normalize(input, page_count), do: normalize(input, page_count, @item_keys)
+
+  @doc false
+  @spec validate_imported([imported_item()], non_neg_integer()) ::
+          :ok | {:error, {atom(), Diagnostics.diagnostic()}}
+  def validate_imported(items, page_count) do
+    with {:ok, _items} <- normalize(items, page_count, [:layer_action | @item_keys]), do: :ok
+  end
+
+  defp normalize(input, page_count, keys) do
     case is_list(input) and is_integer(page_count) and page_count >= 0 do
       true ->
-        case normalize_items(input, page_count, 1, %{items: 0, title_bytes: 0}, []) do
+        case normalize_items(input, page_count, 1, %{items: 0, title_bytes: 0, keys: keys}, []) do
           {:ok, items, _budget} -> {:ok, items}
           {:error, _error} = outline_error -> outline_error
         end
@@ -62,7 +82,12 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   """
   @spec extract(PdfValidator.context()) ::
           {:ok, [item()]} | {:error, {atom(), Diagnostics.diagnostic()}}
-  def extract(context) do
+  def extract(context), do: extract(context, nil)
+
+  @doc false
+  @spec extract(PdfValidator.context(), MapSet.t() | nil) ::
+          {:ok, [imported_item()]} | {:error, {atom(), Diagnostics.diagnostic()}}
+  def extract(context, layer_groups) do
     case context do
       %{document: document, catalog: catalog, pages: pages}
       when is_map(document) and is_map(catalog) and is_list(pages) ->
@@ -87,7 +112,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
                      page_lookup,
                      named_destinations,
                      1,
-                     %{items: 0, title_bytes: 0, seen: %{}},
+                     %{items: 0, title_bytes: 0, seen: %{}, layer_groups: layer_groups},
                      []
                    ) do
               {:ok, items}
@@ -105,7 +130,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
   end
 
   @doc false
-  @spec remap_for_selection([item()], [pos_integer()]) :: [item()]
+  @spec remap_for_selection([imported_item()], [pos_integer()]) :: [imported_item()]
   def remap_for_selection(items, selected_page_numbers) do
     page_map =
       selected_page_numbers
@@ -171,7 +196,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
       end
 
     with {:ok, input} <- normalized_input,
-         true <- Enum.all?(Map.keys(input), &(&1 in @item_keys)),
+         true <- Enum.all?(Map.keys(input), &(&1 in budget.keys)),
          {:ok, title, budget} <- normalize_title(Map.get(input, :title), budget),
          {:ok, page} <- normalize_page(Map.get(input, :page), page_count),
          {:ok, view} <- normalize_view(Map.get(input, :view, :fit)),
@@ -352,6 +377,13 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
                    decode_title(document, Map.get(dictionary, "Title"), budget),
                  {:ok, page, view} <-
                    outline_destination(document, dictionary, page_lookup, named_destinations),
+                 {:ok, layer_fields} <-
+                   OptionalContentValidator.bookmark_action(
+                     document,
+                     dictionary,
+                     budget.layer_groups,
+                     &resolve_named_destination(document, &1, named_destinations)
+                   ),
                  {:ok, first, last} <- child_bounds(dictionary),
                  budget = %{budget | seen: Map.put(budget.seen, current_ref, true)},
                  {:ok, children, budget} <-
@@ -386,7 +418,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
                 named_destinations,
                 depth,
                 budget,
-                [item | items]
+                [Map.merge(item, layer_fields) | items]
               )
             else
               {:error, _error} = outline_error -> outline_error
@@ -821,7 +853,8 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
       original_page = item.page
       page = if is_nil(original_page), do: nil, else: Map.get(page_map, original_page)
 
-      case not is_nil(original_page) and is_nil(page) and children == [] do
+      case not is_nil(original_page) and is_nil(page) and children == [] and
+             not Map.has_key?(item, :layer_action) do
         true -> remapped
         false -> [%{item | page: page, children: children} | remapped]
       end

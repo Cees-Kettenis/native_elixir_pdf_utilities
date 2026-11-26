@@ -9,7 +9,7 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineBuilder do
 
   @doc false
   @spec build(
-          [OutlineValidator.item()],
+          [OutlineValidator.imported_item()],
           (pos_integer() -> {non_neg_integer(), non_neg_integer()}),
           non_neg_integer()
         ) ::
@@ -120,11 +120,14 @@ defmodule NativeElixirPdfUtilities.Pdf.OutlineBuilder do
   end
 
   defp maybe_put_destination(dictionary, item, page_resolver) do
-    case item.page do
-      nil ->
+    case item do
+      %{layer_action: action} ->
+        Map.put(dictionary, "A", action)
+
+      %{page: nil} ->
         dictionary
 
-      page ->
+      %{page: page} ->
         page_ref = page_resolver.(page)
 
         Map.put(dictionary, "Dest", [

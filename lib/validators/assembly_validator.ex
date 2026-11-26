@@ -1,6 +1,7 @@
 defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
   @moduledoc false
 
+  alias NativeElixirPdfUtilities.Pdf.ObjectMapping
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Diagnostics
   alias NativeElixirPdfUtilities.Validators.LinkActionValidator
@@ -168,11 +169,11 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
   defp reachable_objects(source, overrides, selected_pages) do
     selected_refs = Map.new(selected_pages, &{&1.ref, true})
 
-    with {:ok, reachable} <-
+    with {:ok, bookmark_refs} <- bookmark_dependencies(source, selected_refs),
+         {:ok, reachable} <-
            walk_references(
-             Enum.map(selected_pages, & &1.ref) ++
-               NativeElixirPdfUtilities.Pdf.ObjectMapping.references(source.input.layers),
-             %{},
+             Enum.map(selected_pages, & &1.ref) ++ ObjectMapping.references(source.input.layers),
+             bookmark_refs,
              source.objects,
              overrides,
              selected_refs,
@@ -191,6 +192,28 @@ defmodule NativeElixirPdfUtilities.Validators.AssemblyValidator do
         end)
 
       {:ok, prepared}
+    end
+  end
+
+  # Check the original bookmark graph before applying filtered annotation actions:
+  # they can share an indirect action whose next page has been removed.
+  defp bookmark_dependencies(source, selected_refs) do
+    case ObjectMapping.references(source.input.outlines) do
+      [] ->
+        {:ok, %{}}
+
+      refs ->
+        with {:ok, seen} <-
+               walk_references(
+                 refs,
+                 selected_refs,
+                 source.objects,
+                 %{},
+                 selected_refs,
+                 source.all_page_refs
+               ) do
+          {:ok, Map.drop(seen, Map.keys(selected_refs))}
+        end
     end
   end
 

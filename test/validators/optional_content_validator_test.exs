@@ -4,6 +4,15 @@ defmodule NativeElixirPdfUtilities.Validators.OptionalContentValidatorTest do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Validators.OptionalContentValidator, as: Layers
 
+  test "standalone link normalization still accepts an empty object list" do
+    assert {:ok, []} =
+             NativeElixirPdfUtilities.Validators.LinkActionValidator.normalize(
+               %{objects: %{}},
+               %{},
+               []
+             )
+  end
+
   test "indirect presets, application rules and layer panel controls remain scoped to their groups" do
     g = {:ref, {4, 2}}
     other = {:ref, {15, 0}}
