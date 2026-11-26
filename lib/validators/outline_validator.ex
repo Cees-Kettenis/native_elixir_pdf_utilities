@@ -38,7 +38,7 @@ defmodule NativeElixirPdfUtilities.Validators.OutlineValidator do
           required(:children) => [item()]
         }
 
-  @typedoc false
+  @typedoc "An outline item imported from a PDF, including its layer action when present."
   @type imported_item :: %{
           required(:title) => String.t(),
           required(:page) => pos_integer() | nil,

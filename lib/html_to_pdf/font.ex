@@ -151,7 +151,13 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Font do
     FontValidator.prepare_configs(fonts)
   end
 
-  @doc "Loads only explicit caller static TrueType, WOFF or collection configurations, without system discovery."
+  @doc """
+  Loads font faces from caller-supplied paths or font data.
+
+  Supports TrueType fonts, OpenType fonts with CFF or CFF2 outlines, WOFF and
+  WOFF2 fonts, and individual faces from font collections. Only the configured
+  sources are searched.
+  """
   @spec load_configured_faces(term()) :: {:ok, [embedded_font()]} | {:error, {atom(), map()}}
   def load_configured_faces(configs) do
     FontValidator.with_budget(fn ->
