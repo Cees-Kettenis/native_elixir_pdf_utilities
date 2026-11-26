@@ -3,7 +3,7 @@ defmodule NativeElixirPdfUtilities.PackageContentsTest do
 
   alias NativeElixirPdfUtilities.TestSupport.Paths
 
-  test "Hex packages retain temporal picker assets and the notices for bundled data" do
+  test "Hex package includes runtime files and licenses and excludes development files" do
     directory =
       Paths.project("tmp/package-contents-#{System.unique_integer([:positive, :monotonic])}")
 
@@ -28,11 +28,27 @@ defmodule NativeElixirPdfUtilities.PackageContentsTest do
     files = Map.new(files, fn {path, bytes} -> {List.to_string(path), bytes} end)
 
     for path <- ~w(
+          mix.exs
+          lib/html_to_pdf.ex
+          LICENSE
           priv/html_to_pdf/temporal/calendar_icon.svg
           priv/html_to_pdf/temporal/time_icon.svg
           priv/html_to_pdf/temporal/LICENSE.chromium
           priv/html_to_pdf/temporal/README.md
           priv/fonts/brotli/dictionary.bin
+          priv/fonts/dejavu/DejaVuSans.ttf
+          priv/fonts/dejavu/DejaVuSans-Bold.ttf
+          priv/fonts/dejavu/DejaVuSans-Oblique.ttf
+          priv/fonts/dejavu/DejaVuSans-BoldOblique.ttf
+          priv/fonts/dejavu/DejaVuSansMono.ttf
+          priv/fonts/dejavu/DejaVuSansMono-Bold.ttf
+          priv/fonts/dejavu/DejaVuSansMono-Oblique.ttf
+          priv/fonts/dejavu/DejaVuSansMono-BoldOblique.ttf
+          priv/fonts/dejavu/LICENSE.txt
+          priv/fonts/dejavu/LICENSE-2.37.txt
+          priv/fonts/stix/STIXTwoMath-Regular.ttf
+          priv/fonts/stix/OFL.txt
+          priv/fonts/stix/token-ink-metrics.bin
           priv/licenses/brotli-MIT.txt
           priv/licenses/cff-character-mappings-MIT.txt
           priv/licenses/icu-78-quotation-LICENSE.txt
@@ -41,5 +57,11 @@ defmodule NativeElixirPdfUtilities.PackageContentsTest do
       assert Map.fetch(files, path) == {:ok, File.read!(Paths.project(path))},
              "Hex archive omitted or changed #{path}"
     end
+
+    excluded_directories =
+      ~w(.git/ .github/ .quality/ _build/ ci/ cover/ deps/ dev/ doc/ docs/development/ scripts/ test/ tmp/)
+
+    assert [] == Enum.filter(Map.keys(files), &String.starts_with?(&1, excluded_directories))
+    refute Map.has_key?(files, "AGENTS.md")
   end
 end
