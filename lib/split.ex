@@ -32,7 +32,7 @@ defmodule NativeElixirPdfUtilities.Split do
           {:ok, [binary()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def by_page(pdf) do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :split_by_page, fn ->
-      with {:ok, context} <- Reader.read_validated(pdf),
+      with {:ok, context} <- Reader.read_for_import(pdf),
            {:ok, inputs} <- SplitValidator.prepare_each_page(context),
            {:ok, outputs} <- write_outputs(inputs) do
         {:ok, outputs}
@@ -53,7 +53,7 @@ defmodule NativeElixirPdfUtilities.Split do
           {:ok, [binary()]} | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def by_ranges(pdf, ranges) do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :split_by_ranges, fn ->
-      with {:ok, context} <- Reader.read_validated(pdf),
+      with {:ok, context} <- Reader.read_for_import(pdf),
            {:ok, inputs} <- SplitValidator.prepare_ranges(context, ranges),
            {:ok, outputs} <- write_outputs(inputs) do
         {:ok, outputs}
@@ -75,7 +75,7 @@ defmodule NativeElixirPdfUtilities.Split do
           | {:error, {error_reason(), Diagnostics.diagnostic()}}
   def after_page(pdf, page_number) do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :split_after_page, fn ->
-      with {:ok, context} <- Reader.read_validated(pdf),
+      with {:ok, context} <- Reader.read_for_import(pdf),
            {:ok, inputs} <- SplitValidator.prepare_after_page(context, page_number),
            {:ok, [before_pdf, after_pdf]} <- write_outputs(inputs) do
         {:ok, {before_pdf, after_pdf}}

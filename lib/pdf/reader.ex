@@ -11,6 +11,7 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Tokenizer
   alias NativeElixirPdfUtilities.Validators.FlateValidator
+  alias NativeElixirPdfUtilities.Validators.OptionalContentValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
   import Bitwise
 
@@ -139,14 +140,19 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
   @spec read_validated(binary()) ::
           {:ok, PdfValidator.context()}
           | {:error, {error_reason(), Diagnostics.diagnostic()}}
-  def read_validated(pdf), do: read_validated(pdf, :new)
+  def read_validated(pdf), do: read_validated(pdf, :new, false)
 
   @doc false
   @spec read_admitted(binary()) ::
           {:ok, PdfValidator.context()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
-  def read_admitted(pdf), do: read_validated(pdf, :admitted)
+  def read_admitted(pdf), do: read_validated(pdf, :admitted, false)
 
-  defp read_validated(pdf, admission) do
+  @doc false
+  @spec read_for_import(binary(), :new | :admitted) ::
+          {:ok, PdfValidator.context()} | {:error, {error_reason(), Diagnostics.diagnostic()}}
+  def read_for_import(pdf, admission \\ :new), do: read_validated(pdf, admission, true)
+
+  defp read_validated(pdf, admission, import?) do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :read, fn ->
       PdfValidator.with_reader_budget(fn ->
         with {:ok, probe} <- probe(pdf, admission),
@@ -158,6 +164,11 @@ defmodule NativeElixirPdfUtilities.Pdf.Reader do
              xref = probe.xref,
              trailer = probe.trailer,
              {:ok, objects} <- load_objects(pdf, xref),
+             objects =
+               if(import?,
+                 do: OptionalContentValidator.import_objects(objects, xref, trailer),
+                 else: objects
+               ),
              {:ok, context} <-
                PdfValidator.validate(
                  %{

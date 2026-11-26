@@ -51,7 +51,7 @@ defmodule NativeElixirPdfUtilities.Merge do
     inputs
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, []}, fn {input, index}, {:ok, prepared} ->
-      with {:ok, context} <- Reader.read_validated(input),
+      with {:ok, context} <- Reader.read_for_import(input),
            {:ok, assembly_input} <- MergeValidator.prepare(context) do
         {:cont, {:ok, [assembly_input | prepared]}}
       else

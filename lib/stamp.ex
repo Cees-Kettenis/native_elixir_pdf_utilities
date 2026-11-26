@@ -103,7 +103,7 @@ defmodule NativeElixirPdfUtilities.Stamp do
     NativeElixirPdfUtilities.Operation.run(__MODULE__, :overlay_pdf, fn ->
       with :ok <- StampValidator.admit_overlay_inputs(pdf, overlay_pdf),
            {:ok, target_context} <- Reader.read_admitted(pdf),
-           {:ok, overlay_context} <- Reader.read_admitted(overlay_pdf),
+           {:ok, overlay_context} <- Reader.read_for_import(overlay_pdf, :admitted),
            {:ok, plan} <- StampValidator.prepare_overlay(target_context, overlay_context, options),
            {:ok, stamped} <- StampWriter.write(plan) do
         {:ok, stamped}

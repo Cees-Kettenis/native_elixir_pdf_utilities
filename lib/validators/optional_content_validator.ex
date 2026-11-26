@@ -2,11 +2,194 @@ defmodule NativeElixirPdfUtilities.Validators.OptionalContentValidator do
   @moduledoc false
 
   alias NativeElixirPdfUtilities.Diagnostics
+  alias NativeElixirPdfUtilities.Limits
   alias NativeElixirPdfUtilities.Pdf.InfoCodec
+  alias NativeElixirPdfUtilities.Pdf.ObjectMapping
   alias NativeElixirPdfUtilities.Validators.AssemblyValidator
   alias NativeElixirPdfUtilities.Validators.PdfValidator
 
   @array_keys ~w(ON OFF Order AS RBGroups Locked)
+
+  # ISO 32000-1, table 99. Apply the deleted-member exception before page
+  # resources are inherited and before any importer validates its object graph.
+  @doc false
+  @spec import_objects(map(), map(), map()) :: map()
+  def import_objects(objects, xref, trailer) do
+    {updated, detached} =
+      Enum.reduce(objects, {objects, MapSet.new()}, fn {ref, object}, {updated, detached} ->
+        if Enum.member?(object.tokens, {:name, "OCGs"}) do
+          {value, detached} = normalize_memberships(object.value, detached, objects, xref)
+
+          if value === object.value do
+            {updated, detached}
+          else
+            tail =
+              if object.stream, do: [:stream, {:stream_data, object.stream}, :endstream], else: []
+
+            object = %{object | value: value, tokens: value_tokens(value, tail)}
+            {Map.put(updated, ref, object), detached}
+          end
+        else
+          {updated, detached}
+        end
+      end)
+
+    # An indirect membership array may also be referenced by an unrelated
+    # field. Leave that original object (and its strict validation) intact.
+    if MapSet.size(detached) == 0 do
+      updated
+    else
+      unused = retain_referenced(trailer, detached, updated)
+
+      unused =
+        Enum.reduce(updated, unused, fn {ref, object}, unused ->
+          if MapSet.member?(detached, ref),
+            do: unused,
+            else: retain_referenced(object.value, unused, updated)
+        end)
+
+      Map.drop(updated, MapSet.to_list(unused))
+    end
+  end
+
+  defp retain_referenced(value, unused, objects) do
+    {:cont, unused} =
+      ObjectMapping.reduce_references_while(value, unused, fn ref, remaining ->
+        if MapSet.member?(remaining, ref) do
+          {:cont, retain_referenced(objects[ref].value, MapSet.delete(remaining, ref), objects)}
+        else
+          {:cont, remaining}
+        end
+      end)
+
+    unused
+  end
+
+  defp normalize_memberships(value, detached, objects, xref) do
+    case value do
+      dict when is_map(dict) ->
+        {dict, detached} =
+          Enum.reduce(dict, {dict, detached}, fn {key, child}, {dict, detached} ->
+            {child, detached} = normalize_memberships(child, detached, objects, xref)
+            {Map.put(dict, key, child), detached}
+          end)
+
+        case dict do
+          %{"Type" => type, "OCGs" => members} ->
+            if match?({{:name, "OCMD"}, _}, member_value(type, objects, xref, [])) do
+              normalize_groups(dict, members, detached, objects, xref)
+            else
+              {dict, detached}
+            end
+
+          _ ->
+            {dict, detached}
+        end
+
+      array when is_list(array) ->
+        Enum.map_reduce(array, detached, &normalize_memberships(&1, &2, objects, xref))
+
+      other ->
+        {other, detached}
+    end
+  end
+
+  defp normalize_groups(dict, members, detached, objects, xref) do
+    {value, path} = member_value(members, objects, xref, [])
+
+    case value do
+      groups when is_list(groups) ->
+        {live, detached} =
+          Enum.reduce(groups, {[], detached}, fn group, {live, detached} ->
+            PdfValidator.charge_reader_budget(:max_work, 1)
+
+            case member_value(group, objects, xref, []) do
+              {nil, path} -> {live, Enum.into(path, detached)}
+              _ -> {[group | live], detached}
+            end
+          end)
+
+        live = Enum.reverse(live)
+
+        if live == groups and live != [] do
+          {dict, detached}
+        else
+          dict = if live == [], do: Map.delete(dict, "OCGs"), else: Map.put(dict, "OCGs", live)
+          {dict, Enum.into(path, detached)}
+        end
+
+      nil ->
+        {Map.delete(dict, "OCGs"), Enum.into(path, detached)}
+
+      _ ->
+        {dict, detached}
+    end
+  end
+
+  # Keep unresolved values for ordinary graph validation. Only an older
+  # generation of a freed or reused slot establishes that a member was deleted.
+  defp member_value(value, objects, xref, path) do
+    case value do
+      {:ref, {id, generation} = ref} ->
+        case objects do
+          %{^ref => %{value: next}} ->
+            PdfValidator.charge_reader_budget(:max_work, 1)
+
+            if length(path) < Limits.get(:max_depth) and ref not in path,
+              do: member_value(next, objects, xref, [ref | path]),
+              else: {value, []}
+
+          _ ->
+            case xref[id] do
+              {kind, _, current}
+              when kind in [:free, :uncompressed] and id > 0 and generation >= 0 and
+                     generation < current ->
+                {nil, path}
+
+              _ ->
+                {value, []}
+            end
+        end
+
+      _ ->
+        {value, path}
+    end
+  end
+
+  # Rebuild only changed dictionaries from parsed values, without re-tokenizing
+  # binary strings or streams. The remaining object tokens stay byte-for-byte intact.
+  defp value_tokens(value, tail) do
+    case value do
+      dict when is_map(dict) ->
+        [
+          :dict_start
+          | Enum.reduce(dict, [:dict_end | tail], fn {k, v}, rest ->
+              [{:name, k} | value_tokens(v, rest)]
+            end)
+        ]
+
+      array when is_list(array) ->
+        [:lbracket | List.foldr(array, [:rbracket | tail], &value_tokens/2)]
+
+      {:ref, {id, gen}} ->
+        [{:int, id}, {:int, gen}, :R | tail]
+
+      {:hex, bytes} ->
+        [{:hex_string, bytes} | tail]
+
+      v when is_integer(v) ->
+        [{:int, v} | tail]
+
+      v when is_float(v) ->
+        [{:real, v} | tail]
+
+      nil ->
+        [:null | tail]
+
+      token ->
+        [token | tail]
+    end
+  end
 
   @doc "Prepares the catalog configuration, retaining indirect references to the original layer objects."
   @spec prepare(map()) :: {:ok, map() | nil} | {:error, {atom(), map()}}

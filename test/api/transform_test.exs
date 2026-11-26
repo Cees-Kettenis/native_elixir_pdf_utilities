@@ -888,6 +888,101 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
     end
   end
 
+  @tag :tmp_dir
+  test "page imports ignore deleted membership groups and preserve live layer switching", %{
+    tmp_dir: dir
+  } do
+    alias NativeElixirPdfUtilities.{
+      HtmlToPdf.PdfWriter,
+      Pdf.IncrementalWriter,
+      Stamp,
+      TestSupport.PdfVisualCompare
+    }
+
+    assert {:ok, blank} = PdfWriter.render([%{size: {100, 100}, boxes: []}])
+
+    pixel = fn pdf ->
+      [page] = PdfVisualCompare.rasterize_pdf!(pdf, artifact_dir: dir)
+      binary_part(page.pixels, (75 * 100 + 25) * 3, 3)
+    end
+
+    for {members, has_live?} <- [
+          {"[null 4 0 R 6 0 R]", true},
+          {"8 0 R", true},
+          {"10 0 R", true},
+          {"[6 0 R 9 0 R]", false},
+          {"6 0 R", false}
+        ],
+        initially_off? <- [true, false] do
+      source = edited_layer_pdf(members, initially_off?)
+      assert {:ok, merged} = Merge.merge([source])
+      assert {:ok, picked} = Transform.pick_pages(source, [1])
+      assert {:ok, [split]} = Split.by_page(source)
+      assert {:ok, overlay} = Stamp.overlay(blank, source)
+
+      for output <- [merged, picked, split, overlay] do
+        assert {:ok, ctx} = Reader.read_validated(output)
+        properties = ctx.catalog["OCProperties"]
+        assert {:ok, properties} = Reader.dictionary(ctx.document, properties)
+        assert {:ok, [group]} = Reader.resolve(ctx.document, properties["OCGs"])
+
+        assert pixel.(output) ==
+                 if(has_live? and initially_off?, do: <<255, 255, 255>>, else: <<255, 0, 0>>)
+
+        {id, gen} = ctx.catalog_ref
+
+        config = %{
+          "BaseState" => {:name, "ON"},
+          "OFF" => if(initially_off?, do: [], else: [group])
+        }
+
+        catalog = Map.put(ctx.catalog, "OCProperties", Map.put(properties, "D", config))
+        assert {:ok, switched} = IncrementalWriter.write(ctx, [{id, gen, {:value, catalog}}])
+
+        assert pixel.(switched) ==
+                 if(has_live? and not initially_off?, do: <<255, 255, 255>>, else: <<255, 0, 0>>)
+      end
+    end
+  end
+
+  test "an old layer reference cannot bind to a reused object number" do
+    source = edited_layer_pdf("[4 0 R 6 0 R]", false)
+    {:ok, original} = Reader.read_validated(source)
+    offset = String.pad_leading(Integer.to_string(byte_size(source)), 10, "0")
+    revision = source <> "6 1 obj\n(unrelated replacement)\nendobj\n"
+
+    reused =
+      revision <>
+        "xref\n0 1\n0000000000 65535 f \n6 1\n#{offset} 00001 n \ntrailer\n<< /Size 11 /Root 1 0 R /Prev #{original.document.xref_offset} >>\nstartxref\n#{byte_size(revision)}\n%%EOF\n"
+
+    assert {:ok, merged} = Merge.merge([reused])
+    assert {:ok, ctx} = Reader.read_validated(merged)
+    [page] = ctx.pages
+
+    assert {:ok, membership} =
+             Reader.dictionary(ctx.document, page.resources["Properties"]["Switch"])
+
+    assert membership["OCGs"] == ctx.catalog["OCProperties"]["OCGs"]
+    assert membership["Private"] == [0, 0.5, {:string, "x"}, {:hex, <<0xAC>>}, nil]
+  end
+
+  test "membership cleanup preserves diagnostics for missing and required objects" do
+    alias NativeElixirPdfUtilities.{HtmlToPdf.PdfWriter, Stamp}
+    assert {:ok, blank} = PdfWriter.render([%{size: {100, 100}, boxes: []}])
+
+    for {members, extra} <- [
+          {"[4 0 R 99 0 R]", ""},
+          {"[4 0 R 6 1 R]", ""},
+          {"[10 0 R]", ""},
+          {"[6 0 R]", "/Required 6 0 R"},
+          {"8 0 R", "/Required 8 0 R"}
+        ] do
+      source = edited_layer_pdf(members, false, extra)
+      assert {:error, {:invalid_pdf_input, _}} = Merge.merge([source])
+      assert {:error, {:invalid_pdf_input, _}} = Stamp.overlay(blank, source)
+    end
+  end
+
   test "a dangling layer-panel reference returns a merge diagnostic" do
     alias NativeElixirPdfUtilities.Pdf.IncrementalWriter
     source = layer_import_pdf("", [])
@@ -1562,6 +1657,42 @@ defmodule NativeElixirPdfUtilities.TransformGlobalStateTest do
       ] ++ extra_objects
 
     pdf(Enum.sort_by(objects, &elem(&1, 0)))
+  end
+
+  # Append a real xref revision freeing object 6. Object 9 is an indirect null.
+  defp edited_layer_pdf(members, off?, extra \\ "") do
+    state = if off?, do: "/OFF [4 0 R]", else: ""
+
+    catalog = fn groups ->
+      "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [#{groups}] /D << #{state} >> >> >>"
+    end
+
+    source =
+      pdf([
+        {1, catalog.("4 0 R 6 0 R")},
+        {2,
+         "<< /Type /Pages /Count 1 /Kids [3 0 R] /Resources << /Properties << /Switch 7 0 R >> >> >>"},
+        {3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 5 0 R >>"},
+        {4, "<< /Type /OCG /Name (Live) >>"},
+        {5,
+         stream(
+           "/OC /Switch BDC 1 0 0 rg 20 20 20 20 re f EMC",
+           "/Private << /Type /OCMD /OCGs [6 0 R] >> /Other << /Type /Example /OCGs [4 0 R] >>"
+         )},
+        {6, "<< /Type /OCG /Name (Deleted) >>"},
+        {7,
+         "<< /Type /OCMD /OCGs #{members} /P /AnyOn #{extra} /Private [0 0.5 (x) <AC> null] >>"},
+        {8, if(members in ["8 0 R", "10 0 R"], do: "[4 0 R 6 0 R]", else: "null")},
+        {9, "null"},
+        {10, %{"[10 0 R]" => "10 0 R", "10 0 R" => "8 0 R"} |> Map.get(members, "null")}
+      ])
+
+    {:ok, ctx} = Reader.read_validated(source)
+    offset = String.pad_leading(Integer.to_string(byte_size(source)), 10, "0")
+    revision = source <> "1 0 obj\n#{catalog.("4 0 R")}\nendobj\n"
+
+    revision <>
+      "xref\n0 2\n0000000006 65535 f \n#{offset} 00000 n \n6 1\n0000000000 00001 f \ntrailer\n<< /Size 11 /Root 1 0 R /Prev #{ctx.document.xref_offset} >>\nstartxref\n#{byte_size(revision)}\n%%EOF\n"
   end
 
   defp layer_bookmark_pdf(action, extra) do
