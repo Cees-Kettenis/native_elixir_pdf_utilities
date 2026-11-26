@@ -23,20 +23,24 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Visibility do
     end
   end
 
+  @doc false
+  @spec hidden?(map()) :: boolean()
+  def hidden?(style) do
+    case style do
+      %{_force_hidden: true} -> true
+      %{visibility: visibility} -> visibility in [:hidden, :force_hidden, :collapse]
+      _ -> false
+    end
+  end
+
   @doc "Marks only artwork owned by the element; independently visible descendants keep their own paint."
   @spec mark(map(), map()) :: map()
   def mark(box, style) do
-    case style do
-      %{_force_hidden: true} ->
-        Process.put(@key, true)
-        Map.put(box, :_css_hidden_artwork, true)
-
-      %{visibility: visibility} when visibility in [:hidden, :force_hidden, :collapse] ->
-        Process.put(@key, true)
-        Map.put(box, :_css_hidden_artwork, true)
-
-      _ ->
-        box
+    if hidden?(style) do
+      Process.put(@key, true)
+      Map.put(box, :_css_hidden_artwork, true)
+    else
+      box
     end
   end
 

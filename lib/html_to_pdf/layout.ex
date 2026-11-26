@@ -2057,7 +2057,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case block do
       %{type: :element, tag: <<"h", level>>, children: children}
       when level in ?1..?6 and is_list(children) ->
-        title = children |> outline_text() |> String.replace(~r/\s+/u, " ") |> String.trim()
+        title =
+          children |> descendant_text(:bookmark) |> String.replace(~r/\s+/u, " ") |> String.trim()
 
         case title do
           "" -> nil
@@ -2150,14 +2151,26 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     end
   end
 
-  defp outline_text(children) do
+  defp descendant_text(children, purpose) do
     Enum.map_join(children, "", fn child ->
       case child do
-        %{style: %{display: :none}} -> ""
-        %{type: :text, text: text} -> text
-        %{type: :element, tag: "br"} -> " "
-        %{children: nested} when is_list(nested) -> outline_text(nested)
-        _ -> ""
+        %{style: %{display: :none}} ->
+          ""
+
+        %{type: :text, text: text, style: style} when purpose == :bookmark ->
+          if NativeElixirPdfUtilities.HtmlToPdf.Visibility.hidden?(style), do: "", else: text
+
+        %{type: :text, text: text} ->
+          text
+
+        %{type: :element, tag: "br"} ->
+          " "
+
+        %{children: nested} when is_list(nested) ->
+          descendant_text(nested, purpose)
+
+        _ ->
+          ""
       end
     end)
   end
@@ -16810,7 +16823,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Layout do
     case NativeElixirPdfUtilities.Validators.CssBaselineValidator.resolve(
            style,
            parent_style,
-           fn -> outline_text(children) end
+           fn -> descendant_text(children, :baseline) end
          ) do
       {:ok, resolved} -> resolved
       error -> layout_value(error)

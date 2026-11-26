@@ -95,6 +95,33 @@ defmodule NativeElixirPdfUtilities.OutlinesTest do
     assert {:ok, [%{title: "Parent", children: []}]} = Outlines.get(pdf)
   end
 
+  test "heading bookmarks follow text visibility across descendants and page breaks" do
+    html = """
+    <h1>Alpha<span style="visibility:hidden">Secret</span> <em>Beta</em></h1>
+    <h2 style="visibility:hidden">Omit</h2>
+    <h2 style="visibility:collapse">Collapsed</h2>
+    <h2 style="visibility:force-hidden"><span style="visibility:visible">Forced</span></h2>
+    <h2 style="break-before:page;visibility:hidden">Hidden <span style="visibility:visible">Public <b>section</b></span></h2>
+    <h3>Details</h3>
+    """
+
+    assert {:ok, pdf} = HtmlToPdf.render(html, outlines: :headings)
+
+    assert {:ok,
+            [
+              %{
+                title: "Alpha Beta",
+                page: 1,
+                children: [
+                  %{title: "Public section", page: 2, children: [%{title: "Details", page: 2}]}
+                ]
+              }
+            ]} = Outlines.get(pdf)
+
+    assert {:ok, text} = NativeElixirPdfUtilities.Text.extract(pdf)
+    assert String.split(text) == ~w(Alpha Beta Public section Details)
+  end
+
   test "preserves heading line breaks in semantic outline titles" do
     html = "<h1>Quarterly <span>sales</span><br><strong>Regional</strong> <em>report</em></h1>"
 
