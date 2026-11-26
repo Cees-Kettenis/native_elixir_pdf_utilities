@@ -24,6 +24,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.Visibility do
   end
 
   @doc false
+  @compile {:inline, hidden?: 1}
   @spec hidden?(map()) :: boolean()
   def hidden?(style) do
     case style do
