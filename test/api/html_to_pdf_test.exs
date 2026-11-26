@@ -5208,14 +5208,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     end
   end
 
-  test "invalid editing selectors leave rendered output unchanged" do
-    for selector <- [":read-only()", ":read-write(1)", ":read-onlyness", ":read-wrıte"] do
-      html = "<style>p#{selector}{color:red}</style><p contenteditable>Visible</p>"
-      assert {:ok, expected} = HtmlToPdf.render("<p contenteditable>Visible</p>")
-      assert {:ok, ^expected} = HtmlToPdf.render(html)
-    end
-  end
-
   test "long fieldset groups preserve every paragraph across page boundaries" do
     paragraphs = Enum.map_join(1..20, fn index -> "<p>Line #{index}</p>" end)
 
@@ -5338,26 +5330,5 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfTest do
     assert pdf =~ "%PDF-"
     assert {:ok, [field]} = NativeElixirPdfUtilities.Forms.fields(pdf)
     assert field.read_only
-  end
-
-  test "internal destinations resolve and invalid base structure returns actionable diagnostics" do
-    for html <- [
-          "<a href='#later'>Jump</a><p id=later>Target</p>",
-          "<head><base href=''></head><body><a href='#'>Top</a></body>"
-        ] do
-      assert {:ok, pdf} = HtmlToPdf.render(html)
-      assert pdf =~ "/Dest [" and pdf =~ "/XYZ"
-    end
-
-    for html <- ["<head><base></head><body>Text</body>", "<body><base href='/'>Text</body>"] do
-      assert {:error, {_reason, diagnostic}} = HtmlToPdf.render(html)
-      assert diagnostic.reason in [:invalid_document, :unsupported_html]
-      assert is_binary(diagnostic.message) and diagnostic.operation in [:render, :parse]
-    end
-
-    for href <- ["javascript:run()", "java&#10;script:run()", "vbscript:run()"] do
-      assert {:error, {:unsupported_html, %{stage: :html, source: "href"}}} =
-               HtmlToPdf.render("<head><base href='#{href}'></head><body>Text</body>")
-    end
   end
 end

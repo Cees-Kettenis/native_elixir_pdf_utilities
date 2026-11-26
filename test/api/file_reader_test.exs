@@ -29,6 +29,11 @@ defmodule NativeElixirPdfUtilities.FileReaderTest do
     File.write!(path, "")
     assert {:ok, ""} = FileReader.read(path, 1)
     assert {:error, :enoent} = FileReader.read(Path.join(root, "missing"), 1)
+    assert {:error, {:invalid_options, _}} = FileReader.read(nil, 1)
+
+    assert {:error, {:invalid_document, _}} =
+             FileValidator.validate_info(%File.Stat{type: :directory}, 10, path)
+
     assert {:error, {:invalid_options, %{stage: :file}}} = FileReader.read(path, 0)
 
     assert {:error, {:invalid_document, %{stage: :file, source: ^root}}} =

@@ -5,9 +5,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontLimitsTest do
 
   import ExUnit.CaptureLog
 
-  alias NativeElixirPdfUtilities.{FileReader, HtmlToPdf, Limits}
+  alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
   alias NativeElixirPdfUtilities.HtmlToPdf.{AssetLoader, Font, FontCache, SystemFontCache}
-  alias NativeElixirPdfUtilities.Validators.{FileValidator, FontValidator, LimitsValidator}
+  alias NativeElixirPdfUtilities.Validators.{FontValidator, LimitsValidator}
 
   setup do
     original = Limits.effective()
@@ -19,24 +19,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontLimitsTest do
     end)
 
     {:ok, path: path}
-  end
-
-  test "bounded regular file reads handle exact limits, empty files and invalid inputs", %{
-    path: path
-  } do
-    File.write!(path, "1234")
-    assert {:ok, "1234"} = FileReader.read(path, 4)
-    assert {:error, {:resource_limit_exceeded, diagnostic}} = FileReader.read(path, 3)
-    assert diagnostic.source == path
-    assert diagnostic.stage == :file
-    File.write!(path, "")
-    assert {:ok, ""} = FileReader.read(path, 1)
-    assert {:error, :enoent} = FileReader.read(path <> "missing", 1)
-    assert {:error, {:invalid_options, _}} = FileReader.read(nil, 1)
-    assert {:error, {:invalid_options, _}} = FileReader.read(path, 0)
-
-    assert {:error, {:invalid_document, _}} =
-             FileValidator.validate_info(%File.Stat{type: :directory}, 10, path)
   end
 
   test "cold and cached font snapshots report exhausted shared input as a limit", %{path: path} do

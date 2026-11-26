@@ -642,6 +642,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           "PRINT",
           "only print",
           "print /*note*/ and (width:800px)",
+          "print /*note*/ and (width: 800px)",
           "(400px < width <= 800px)",
           "(1000px >= width > 400px)",
           "(800px = width)",
@@ -673,6 +674,7 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           "unknown-medium",
           "not print nonsense",
           "only (width:800px)",
+          "only (width: 800px)",
           "(400px < width > 800px)",
           "(bad < width < 800px)",
           "(bad = width)",
@@ -749,7 +751,14 @@ defmodule NativeElixirPdfUtilities.Validators.HtmlValidatorTest do
           {"50dvmax", 400},
           {"50vmin", 300},
           {"50vmax", 400},
-          {"0px", 0}
+          {"0px", 0},
+          {"0", 0},
+          {"calc(100vw - 20px - 10px)", 770},
+          {"min(50vw, 200px)", 200},
+          {"max(20px, 40px)", 40},
+          {"clamp(20px, 50vw, 200px)", 200},
+          {"calc((100vw - 20px) / 2)", 390},
+          {"calc(2*20px + 10px*3)", 70}
         ] do
       assert {:ok, value} = PrintMediaValidator.source_length(length, context)
       assert_in_delta value, expected, 0.000001

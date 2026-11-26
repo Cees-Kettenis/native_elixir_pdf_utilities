@@ -2138,34 +2138,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert body.tag == "tbody"
   end
 
-  test "parse preserves invalid scope for Auto recovery only on table headers" do
-    assert {:ok, dom} =
-             HtmlParser.parse("""
-             <table>
-               <tr>
-                 <th scope="col">Column</th>
-                 <th scope="row">Row</th>
-                 <th scope="rowgroup">Row group</th>
-                 <th scope="colgroup">Column group</th>
-               </tr>
-             </table>
-             """)
-
-    [table] = dom.children
-    [row] = table.children
-
-    assert Enum.map(row.children, & &1.attributes["scope"]) ==
-             ~w(col row rowgroup colgroup)
-
-    assert {:ok, invalid_scope} =
-             HtmlParser.parse("<table><tr><th scope=\"column\">Auto</th></tr></table>")
-
-    assert hd(hd(hd(invalid_scope.children).children).children).attributes["scope"] == "column"
-
-    assert tree_content(HtmlParser.parse("<table><tr><td scope=\"col\">Bad</td></tr></table>")) ==
-             {:error, :unsupported_html}
-  end
-
   test "parse accepts column groups, column spans, and strict table ordering" do
     assert {:ok, dom} =
              HtmlParser.parse("""
@@ -2866,9 +2838,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlParserTest do
     assert Enum.map(row.children, & &1.attributes["scope"]) ==
              ~w(col row rowgroup colgroup)
 
-    assert {:ok,
-            %{children: [%{children: [%{children: [%{attributes: %{"scope" => "column"}}]}]}]}} =
-             HtmlParser.parse("<table><tr><th scope=\"column\">Bad</th></tr></table>")
+    for caption <- ["Bad", "Auto"] do
+      assert {:ok,
+              %{children: [%{children: [%{children: [%{attributes: %{"scope" => "column"}}]}]}]}} =
+               HtmlParser.parse("<table><tr><th scope=\"column\">#{caption}</th></tr></table>")
+    end
 
     assert HtmlParser.parse("<table><tr><td scope=\"col\">Bad</td></tr></table>") ==
              {:error, :unsupported_html}

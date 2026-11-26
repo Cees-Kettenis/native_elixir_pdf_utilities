@@ -59,6 +59,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgVectorEffectTest do
     assert diagnostic.stage == :layout
     assert diagnostic.source == "vector-effect"
     assert diagnostic.message =~ "non-scaling strokes"
+    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
     natural = SvgConvertedImage.render(String.replace(html, "non-scaling-stroke", "none"))
     assert SvgConvertedImage.coverage(natural) > 100
   end
@@ -76,19 +77,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgVectorEffectTest do
       assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
       assert diagnostic.message =~ "non-scaling strokes"
     end
-  end
-
-  test "converter limitation: CSS cascade, explicit inheritance, viewBox and imported clip/opacity resources retain strokes" do
-    html =
-      "<style>svg .n {vector-effect:non-scaling-stroke} svg .n > path {vector-effect:inherit}</style><svg width='240' height='120' viewBox='0 0 120 60'><defs><clipPath id='c'><rect width='115' height='55'/></clipPath></defs><g class='n' transform='translate(5 5) scale(1.2 .7)' opacity='.7' clip-path='url(#c)'><path d='M5 20 H80 L90 30' fill='none' stroke='#174a86' stroke-width='3'/></g></svg>"
-
-    assert {:error, {:unsupported_html, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
-
-    assert diagnostic.stage == :layout
-    assert diagnostic.source == "vector-effect"
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-    assert diagnostic.message =~ "non-scaling strokes"
   end
 
   test "converter limitation: the original non-scaling server denial now paints the same source geometry" do

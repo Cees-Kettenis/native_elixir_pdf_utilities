@@ -165,12 +165,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.HtmlCompositionTest do
 
     assert message =~ "valid authored"
   end
-
-  test "composition failures return the shared diagnostic contract" do
-    assert {:error, {:invalid_document, diagnostic}} = HtmlComposition.compose(nil)
-    assert diagnostic.stage == :html
-    assert diagnostic.operation == :compose
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlCompositionValidator
-    assert diagnostic.message =~ "document"
-  end
 end

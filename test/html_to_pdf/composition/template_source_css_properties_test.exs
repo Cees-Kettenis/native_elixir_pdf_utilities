@@ -83,24 +83,27 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     {"grid-template-columns", "minmax(1fr, 2fr)"},
     {"grid-template-rows", "repeat(0, 1pt)"}
   ]
-  for {property, value} <- @cases do
-    @tag :source_property_batch_original
-    test "unmatched original #{property} permits parser-time replacement" do
-      declaration = unquote(property) <> ":" <> unquote(value)
+  @tag :source_property_batch_original
+  test "unmatched original properties permit parser-time replacement" do
+    assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
+
+    resolver = fn reference ->
+      send(self(), {:unexpected_dormant_asset, reference})
+      {:error, :missing}
+    end
+
+    opts = Keyword.put(@opts, :asset_resolver, resolver)
+
+    for {property, value} <- @cases do
+      declaration = property <> ":" <> value
 
       html =
         "<style>.absent{#{declaration}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
-      resolver = fn reference ->
-        send(self(), {:unexpected_dormant_asset, reference})
-        {:error, :missing}
-      end
-
-      assert {:ok, pdf} = HtmlToPdf.render(html, Keyword.put(@opts, :asset_resolver, resolver))
-      assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
-      assert pdf == expected
-      assert {:ok, "Good"} = Text.extract(pdf)
-      refute_received {:unexpected_dormant_asset, _}
+      assert {:ok, pdf} = HtmlToPdf.render(html, opts)
+      assert pdf == expected, declaration
+      assert Text.extract(pdf) == {:ok, "Good"}, declaration
+      refute_received {:unexpected_dormant_asset, _}, declaration
     end
   end
 
@@ -128,18 +131,23 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
     assert Enum.all?(records, &(&1.selection.basis == :inactive_media))
   end
 
-  for {property, value} <- @invalid_cases do
-    test "inactive malformed #{property} has actionable exact source diagnostics" do
-      declaration = unquote(property) <> ":" <> unquote(value)
+  test "inactive malformed properties have exact source diagnostics" do
+    for {property, value} <- @invalid_cases do
+      declaration = property <> ":" <> value
 
       html =
         "<style>@media screen{p{#{declaration}}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
-      assert {:error, {:invalid_css, diagnostic}} = HtmlToPdf.render(html, @opts)
-      assert diagnostic.reason == :invalid_css and diagnostic.stage == :css
-      assert diagnostic.source == declaration
-      assert diagnostic.line == 1 and is_integer(diagnostic.column)
-      assert diagnostic.message != ""
+      case HtmlToPdf.render(html, @opts) do
+        {:error, {:invalid_css, diagnostic}} ->
+          assert diagnostic.reason == :invalid_css and diagnostic.stage == :css, declaration
+          assert diagnostic.source == declaration, declaration
+          assert diagnostic.line == 1 and is_integer(diagnostic.column), declaration
+          assert diagnostic.message != "", declaration
+
+        result ->
+          flunk("#{declaration} expected an invalid CSS diagnostic, got #{inspect(result)}")
+      end
     end
   end
 
