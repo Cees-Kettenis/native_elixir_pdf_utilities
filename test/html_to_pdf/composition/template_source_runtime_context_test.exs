@@ -175,6 +175,9 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
   end
 
   test "unmatched and inactive source stays symbolic while MathML owners execute independently" do
+    assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
+    assert {:ok, "Good"} = Text.extract(expected)
+
     for css <- [
           ".absent{width:2rem}",
           "@media screen{mi{font-size:125%}}",
@@ -184,9 +187,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceRuntimeContextTest do
         "<style>#{css}</style><body><?start name='A'><math><mspace width='2em'></mspace></math><?end?><template for='A'><p>Good</p></template></body>"
 
       assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
-      assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
-      assert pdf == expected
-      assert {:ok, "Good"} = Text.extract(pdf)
+      assert pdf == expected, css
     end
   end
 

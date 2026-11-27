@@ -7,30 +7,25 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceFlexMathCssTest do
   alias NativeElixirPdfUtilities.Validators.{HtmlValidator, MathLayoutValidator}
   @opts [system_font_discovery: false, compress_streams: false]
 
-  for declaration <- [
-        "flex:1 1 2em",
-        "flex:1 2 calc(1rem + 2pt)",
-        "display:inline math",
-        "display:block math",
-        "display:math"
-      ] do
-    test "unapplied #{declaration} permits original replacement" do
-      for selector <- [".absent", "@media screen{p"] do
-        declaration = unquote(declaration)
+  test "unmatched and inactive flex and Math declarations permit original replacement" do
+    declarations = [
+      "flex:1 1 2em",
+      "flex:1 2 calc(1rem + 2pt)",
+      "display:inline math",
+      "display:block math",
+      "display:math"
+    ]
 
-        rule =
-          if selector == ".absent",
-            do: ".absent{#{declaration}}",
-            else: "@media screen{p{#{declaration}}}"
+    assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
+    assert {:ok, "Good"} = Text.extract(expected)
 
-        html =
-          "<style>#{rule}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
+    for declaration <- declarations,
+        rule <- [".absent{#{declaration}}", "@media screen{p{#{declaration}}}"] do
+      html =
+        "<style>#{rule}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
-        assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
-        assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
-        assert pdf == expected
-        assert {:ok, "Good"} = Text.extract(pdf)
-      end
+      assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
+      assert pdf == expected, rule
     end
   end
 

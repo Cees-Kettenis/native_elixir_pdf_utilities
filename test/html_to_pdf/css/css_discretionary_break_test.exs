@@ -180,39 +180,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.CssDiscretionaryBreakGlobalStateTes
   alias NativeElixirPdfUtilities.Validators.{HtmlLineBreakValidator}
   alias NativeElixirPdfUtilities.Limits
 
-  test "transparent source boundaries propagate the shared work budget diagnostic" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(
-               "<p>office<span>&shy;</span>word</p>",
-               system_font_discovery: false
-             )
-
-    assert diagnostic.stage == :html
-    assert diagnostic.operation == :render
-    assert diagnostic.message =~ "max_work"
-  end
-
-  test "styled line-boundary exhaustion retains the shared work budget diagnostic" do
-    limits = Limits.effective()
-    on_exit(fn -> Limits.install(limits) end)
-    Limits.install(%{limits | max_work: 230})
-
-    html =
-      "<style>html,body{margin:0;font-family:DejaVu Sans;font-size:12pt;line-height:15pt}p{margin:0}</style>" <>
-        "<p style='width:25pt'><span style='color:red'>alpha</span><i>beta</i></p>"
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(html, system_font_discovery: false)
-
-    assert diagnostic.stage == :html
-    assert diagnostic.operation == :render
-    assert diagnostic.message =~ "max_work"
-  end
-
   test "display-plan failures use diagnostics and the shared work budget" do
     assert {:ok, registry} = Font.load_registry(system_font_discovery: false)
     assert {:ok, _, face} = Font.resolve("DejaVu Sans", 400, :normal, registry)

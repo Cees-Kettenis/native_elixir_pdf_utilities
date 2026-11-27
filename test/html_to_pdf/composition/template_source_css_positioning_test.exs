@@ -11,14 +11,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPositioningTest do
   @positions "object-position:right 1em bottom calc(25% + 1ch);background-position:right 2rem top"
 
   test "unmatched and inactive original positions allow replacement without invented image or font owners" do
+    assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
+    assert {:ok, "Good"} = Text.extract(expected)
+
     for css <- [".absent{#{@positions}}", "@media screen{p{#{@positions}}}"] do
       html =
         "<style>#{css}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
       assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
-      assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
-      assert pdf == expected
-      assert {:ok, "Good"} = Text.extract(pdf)
+      assert pdf == expected, css
     end
   end
 
@@ -73,13 +74,14 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPositioningTest do
   end
 
   test "unapplied background shorthand reuses its supported color grammar without inherited color" do
+    assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
+
     for value <- ["#ddd", "none", "currentColor", "var(--missing)"] do
       html =
         "<style>.absent{background:#{value}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
       assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
-      assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
-      assert pdf == expected
+      assert pdf == expected, value
     end
 
     declaration = "background:invalid-color"
@@ -92,6 +94,8 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPositioningTest do
   end
 
   test "unapplied edge longhands keep canonical length and keyword policy" do
+    assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
+
     for declaration <- [
           "margin-bottom:6pt",
           "margin-left:-2em",
@@ -104,8 +108,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPositioningTest do
         "<style>.absent{#{declaration}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
       assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
-      assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
-      assert pdf == expected
+      assert pdf == expected, declaration
     end
 
     for declaration <- ["padding-top:-1em", "border-left-width:25%", "margin-right:2bananas"] do

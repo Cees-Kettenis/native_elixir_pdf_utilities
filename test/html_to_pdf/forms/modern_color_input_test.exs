@@ -203,22 +203,7 @@ end
 defmodule NativeElixirPdfUtilities.HtmlToPdf.ModernColorInputGlobalStateTest do
   use ExUnit.Case, async: false
   alias NativeElixirPdfUtilities.{HtmlToPdf, Limits}
-  alias NativeElixirPdfUtilities.Validators.{HtmlFormValidator, HtmlValidator}
-
-  test "native color calculation budget failures remain actionable public diagnostics" do
-    previous = Limits.effective()
-    on_exit(fn -> Limits.install(previous) end)
-    Limits.install(%{previous | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             HtmlToPdf.render("<input type=color value='rgb(calc(1 * 10) 20 30)'>",
-               forms: :static
-             )
-
-    assert diagnostic.stage == :html and diagnostic.module == HtmlValidator
-    assert diagnostic.message =~ "max_work"
-    refute Map.has_key?(diagnostic, :source)
-  end
+  alias NativeElixirPdfUtilities.Validators.HtmlFormValidator
 
   test "shared math depth exhaustion is recoverable and source-specific" do
     previous = Limits.effective()

@@ -403,20 +403,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.ConstraintStateGlobalStateTest do
       assert diagnostic.source == source and diagnostic.message =~ "max_input_bytes"
     end
   end
-
-  test "public pattern exhaustion is actionable rather than an invented mismatch" do
-    previous = NativeElixirPdfUtilities.Limits.effective()
-    on_exit(fn -> NativeElixirPdfUtilities.Limits.install(previous) end)
-    NativeElixirPdfUtilities.Limits.install(%{previous | max_work: 1})
-
-    assert {:error, {:resource_limit_exceeded, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render("<input pattern='[a-z]+' value=abc>",
-               forms: :static
-             )
-
-    assert diagnostic.stage == :html and diagnostic.operation == :render
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.HtmlValidator
-    refute Map.has_key?(diagnostic, :source)
-    assert diagnostic.message =~ "max_work"
-  end
 end

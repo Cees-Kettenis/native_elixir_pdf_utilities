@@ -46,25 +46,31 @@ defmodule NativeElixirPdfUtilities.HtmlToPdfLimitsTest do
     end
   end
 
-  test "itemref lookup consumes the existing shared work budget before asset resolution" do
+  test "HTML source work exhaustion returns a public diagnostic before asset resolution" do
     limits = Limits.effective()
     on_exit(fn -> Limits.install(limits) end)
     Limits.install(%{limits | max_work: 1})
     owner = self()
 
     resolver = fn request ->
-      send(owner, {:metadata_budget_asset, request})
-      :not_found
+      send(owner, {:budget_asset, request})
+      {:ok, PngFixture.solid_rgb(1, 1)}
     end
 
-    html = "<div itemscope itemref=last>Item</div><p id=last>Target</p><img src=denied>"
+    html = "<img src=sample.png>"
 
     assert {:error, {:resource_limit_exceeded, diagnostic}} =
              HtmlToPdf.render(html, asset_resolver: resolver)
 
     assert diagnostic.stage == :html and diagnostic.reason == :resource_limit_exceeded
-    assert is_atom(diagnostic.operation) and diagnostic.message =~ "max_work"
-    refute_received {:metadata_budget_asset, _}
+    assert diagnostic.module == HtmlValidator and diagnostic.operation == :render
+    assert diagnostic.message =~ "max_work"
+    refute Map.has_key?(diagnostic, :source)
+    refute_received {:budget_asset, _}
+
+    Limits.install(limits)
+    assert {:ok, _pdf} = HtmlToPdf.render(html, asset_resolver: resolver)
+    assert_received {:budget_asset, _}
   end
 
   test "inactive templates count nodes and nesting against the unchanged limits" do

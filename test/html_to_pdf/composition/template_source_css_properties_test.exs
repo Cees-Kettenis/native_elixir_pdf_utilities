@@ -87,8 +87,11 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
   test "unmatched original properties permit parser-time replacement" do
     assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
 
+    assert {:ok, "Good"} = Text.extract(expected)
+    owner = self()
+
     resolver = fn reference ->
-      send(self(), {:unexpected_dormant_asset, reference})
+      send(owner, {:unexpected_dormant_asset, reference})
       {:error, :missing}
     end
 
@@ -102,7 +105,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
 
       assert {:ok, pdf} = HtmlToPdf.render(html, opts)
       assert pdf == expected, declaration
-      assert Text.extract(pdf) == {:ok, "Good"}, declaration
       refute_received {:unexpected_dormant_asset, _}, declaration
     end
   end
@@ -193,14 +195,15 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.TemplateSourceCssPropertiesTest do
   end
 
   test "new source token families keep cascade keywords and unavailable substitutions symbolic until application" do
+    assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
+
     for {property, _} <- @cases do
       for value <- ["inherit", "var(--missing)"] do
         html =
           "<style>.absent{#{property}:#{value}}</style><body><?marker name='A'><template for='A'><p>Good</p></template></body>"
 
         assert {:ok, pdf} = HtmlToPdf.render(html, @opts)
-        assert {:ok, expected} = HtmlToPdf.render("<p>Good</p>", @opts)
-        assert pdf == expected
+        assert pdf == expected, "#{property}:#{value}"
       end
     end
   end
