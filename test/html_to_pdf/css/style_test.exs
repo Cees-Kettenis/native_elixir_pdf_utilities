@@ -5188,79 +5188,37 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.StyleTest do
     assert second.style.color == {0.2, 0.4, 0.6}
   end
 
-  test "compute gives inline style declarations the highest priority" do
-    dom = %{
-      type: :document,
-      children: [
-        %{
-          type: :element,
-          tag: "style",
-          attributes: %{},
-          children: [%{type: :text, text: "#intro { color: blue; }"}]
-        },
+  test "cascade resolves normal and important inline colors against ID selectors" do
+    cases = [
+      {"normal", "blue", "red", {1, 0, 0}},
+      {"sheet_important", "blue !important", "red", {0, 0, 1}},
+      {"both_important", "blue !important", "red !important", {1, 0, 0}}
+    ]
+
+    css = Enum.map_join(cases, "\n", fn {id, color, _, _} -> "##{id} {color: #{color}}" end)
+
+    style = %{
+      type: :element,
+      tag: "style",
+      attributes: %{},
+      children: [%{type: :text, text: css}]
+    }
+
+    paragraphs =
+      Enum.map(cases, fn {id, _, color, _} ->
         %{
           type: :element,
           tag: "p",
-          attributes: %{"id" => "intro", "style" => "color: red"},
-          children: [%{type: :text, text: "Inline"}]
+          attributes: %{"id" => id, "style" => "color: " <> color},
+          children: [%{type: :text, text: id}]
         }
-      ]
-    }
+      end)
 
-    assert {:ok, styled_tree} = Style.compute(dom, [])
-    [paragraph] = styled_tree.children
+    assert {:ok, styled_tree} =
+             Style.compute(%{type: :document, children: [style | paragraphs]}, [])
 
-    assert paragraph.style.color == {1, 0, 0}
-  end
-
-  test "compute gives important stylesheet declarations priority over normal inline declarations" do
-    dom = %{
-      type: :document,
-      children: [
-        %{
-          type: :element,
-          tag: "style",
-          attributes: %{},
-          children: [%{type: :text, text: "#intro { color: blue !important; }"}]
-        },
-        %{
-          type: :element,
-          tag: "p",
-          attributes: %{"id" => "intro", "style" => "color: red"},
-          children: [%{type: :text, text: "Stylesheet important"}]
-        }
-      ]
-    }
-
-    assert {:ok, styled_tree} = Style.compute(dom, [])
-    [paragraph] = styled_tree.children
-
-    assert paragraph.style.color == {0, 0, 1}
-  end
-
-  test "compute gives important inline declarations priority over important stylesheet declarations" do
-    dom = %{
-      type: :document,
-      children: [
-        %{
-          type: :element,
-          tag: "style",
-          attributes: %{},
-          children: [%{type: :text, text: "#intro { color: blue !important; }"}]
-        },
-        %{
-          type: :element,
-          tag: "p",
-          attributes: %{"id" => "intro", "style" => "color: red !important"},
-          children: [%{type: :text, text: "Inline important"}]
-        }
-      ]
-    }
-
-    assert {:ok, styled_tree} = Style.compute(dom, [])
-    [paragraph] = styled_tree.children
-
-    assert paragraph.style.color == {1, 0, 0}
+    assert Enum.map(styled_tree.children, &{&1.attributes["id"], &1.style.color}) ==
+             Enum.map(cases, fn {id, _, _, expected} -> {id, expected} end)
   end
 
   test "compute applies flex container and item declarations" do

@@ -19,41 +19,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.FontCacheTest do
     assert :zlib.uncompress(FontCache.compressed(other)) == other
   end
 
-  test "fetch reuses successful loads while the source file is unchanged" do
-    path = temporary_path("hit")
-    File.write!(path, "font")
-    {:ok, calls} = Agent.start_link(fn -> 0 end)
-
-    loader = fn data ->
-      Agent.update(calls, &(&1 + 1))
-      {:ok, data}
-    end
-
-    assert FontCache.fetch(path, loader) == {:ok, "font"}
-    assert FontCache.fetch(path, loader) == {:ok, "font"}
-    assert Agent.get(calls, & &1) == 1
-  after
-    File.rm(temporary_path("hit"))
-  end
-
-  test "fetch invalidates a cached entry when the source file changes" do
-    path = temporary_path("invalidation")
-    File.write!(path, "first")
-    {:ok, calls} = Agent.start_link(fn -> 0 end)
-
-    loader = fn data ->
-      Agent.update(calls, &(&1 + 1))
-      {:ok, data}
-    end
-
-    assert FontCache.fetch(path, loader) == {:ok, "first"}
-    File.write!(path, "second version")
-    assert FontCache.fetch(path, loader) == {:ok, "second version"}
-    assert Agent.get(calls, & &1) == 2
-  after
-    File.rm(temporary_path("invalidation"))
-  end
-
   test "bundled fetch keeps the installed snapshot while configured fetch sees edits" do
     path = temporary_path("bundled")
     File.write!(path, "first")

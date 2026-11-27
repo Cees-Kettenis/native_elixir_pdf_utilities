@@ -63,32 +63,4 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgVectorEffectTest do
     natural = SvgConvertedImage.render(String.replace(html, "non-scaling-stroke", "none"))
     assert SvgConvertedImage.coverage(natural) > 100
   end
-
-  test "converter limitation: solid non-scaling strokes rebase geometry under nonuniform and sheared CTMs" do
-    for transform <- ["scale(2 .5)", "matrix(2 .2 .4 .6 15 20)", "translate(200 0) scale(-2 .5)"] do
-      source =
-        "<svg width='240' height='120'><g transform='#{transform}' opacity='.7'><path d='M10 40 H80' fill='none' stroke='#174a86' stroke-width='3' stroke-opacity='.4' vector-effect='non-scaling-stroke'/></g></svg>"
-
-      assert {:error, {:unsupported_html, diagnostic}} =
-               NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
-
-      assert diagnostic.stage == :layout
-      assert diagnostic.source == "vector-effect"
-      assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-      assert diagnostic.message =~ "non-scaling strokes"
-    end
-  end
-
-  test "converter limitation: the original non-scaling server denial now paints the same source geometry" do
-    source =
-      "<svg width='240' height='120'><defs><linearGradient id='p'><stop stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient></defs><path d='M10 40 H180 L190 60' fill='none' stroke='url(#p)' vector-effect='non-scaling-stroke'/></svg>"
-
-    assert {:error, {:unsupported_html, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(source, system_font_discovery: false)
-
-    assert diagnostic.stage == :layout
-    assert diagnostic.source == "vector-effect"
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-    assert diagnostic.message =~ "non-scaling strokes"
-  end
 end

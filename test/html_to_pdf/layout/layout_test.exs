@@ -6085,7 +6085,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.LayoutTest do
     assert {:ok, layout_tree} = Layout.layout(styled_tree, page_size: {100, 100}, margin: 10)
     [text] = layout_tree.boxes
     assert text.text == "R"
-    assert text.x > 10.0
+    assert text.x > 70.0 and text.x < 90.0
   end
 
   test "layout vertically aligns table cell content within taller rows" do

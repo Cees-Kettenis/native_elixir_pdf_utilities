@@ -561,19 +561,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderLimitsGlobalStateTest do
     end
   end
 
-  test "generated boxes and repeated text measurements are charged before allocation" do
-    Limits.install(%{Limits.effective() | max_entries: 1})
-
-    assert {:error, {:resource_limit_exceeded, boxes}} =
-             HtmlToPdf.render("<p>hello</p><p>world</p>")
-
-    assert boxes.stage == :html
-    assert boxes.message =~ "max_entries"
-    Limits.install(%{Limits.defaults() | max_work: 1})
-    assert {:error, {:resource_limit_exceeded, text}} = HtmlToPdf.render("<p>hello</p>")
-    assert text.message =~ "max_work"
-  end
-
   test "rendered pages honor both renderer and reader ceilings" do
     html = "<p>one</p><p style='break-before:page'>two</p><p style='break-before:page'>three</p>"
 

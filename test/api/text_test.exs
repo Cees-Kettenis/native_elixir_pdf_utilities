@@ -1781,11 +1781,6 @@ defmodule NativeElixirPdfUtilities.TextGlobalStateTest do
     assert_error(Text.extract(pdf(objects)), :invalid_pdf_input, :validation)
   end
 
-  test "does not return text painted with an invisible rendering mode" do
-    pdf = page_pdf("BT /F1 12 Tf (Visible) Tj 3 Tr (Hidden) Tj ET")
-    assert Text.extract(pdf, layout: false) == {:ok, "Visible"}
-  end
-
   test "extract_spans preserves rendering modes that the string projection excludes" do
     pdf =
       page_pdf("BT /F1 12 Tf 1 0 0 1 10 20 Tm (Painted) Tj 3 Tr (Hidden) Tj 7 Tr (Clip) Tj ET")

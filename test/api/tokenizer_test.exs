@@ -351,12 +351,15 @@ defmodule NativeElixirPdfUtilities.TokenizerTest do
   end
 
   test "a stray dictionary close does not retain an earlier stream length" do
-    assert toks("<< /Length 1 >> >>") == [
+    assert toks("<< /Length 1 >> >> stream\nABC\nendstream") == [
              :dict_start,
              {:name, "Length"},
              {:int, 1},
              :dict_end,
-             :dict_end
+             :dict_end,
+             :stream,
+             {:stream_data, "ABC"},
+             :endstream
            ]
   end
 

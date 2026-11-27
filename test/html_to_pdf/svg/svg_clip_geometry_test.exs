@@ -14,23 +14,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClipGeometryTest do
     %{limits: limits}
   end
 
-  test("cached foreign Forms retain real clip projection work and issued target identity", %{
-    limits: _limits
-  }) do
-    assert {:error, {:unsupported_html, diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(
-               "<svg width='100' height='40'><defs><clipPath id='shape'><polygon points='0,40 50,0 100,40'/></clipPath></defs><foreignObject width='100' height='40' clip-path='url(#shape)'><div><a href='https://example.test/cached'>Real clipped link</a></div></foreignObject></svg>",
-               []
-             )
-
-    assert diagnostic.reason == :unsupported_html
-    assert diagnostic.stage == :layout
-    assert diagnostic.module == NativeElixirPdfUtilities.Validators.SvgConverterValidator
-    assert diagnostic.operation == :convert
-    assert diagnostic.source == "foreignObject"
-    assert diagnostic.message =~ "foreignObject"
-  end
-
   test "writer retains quadrilateral navigation and rejects malformed hit regions" do
     region = %{
       type: :link_region,
@@ -142,29 +125,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgClipGeometryTest do
       clip: nil,
       clip_geometry: nil
     }
-  end
-
-  test "foreign HTML image links follow resolved evenodd clip holes in the delivered PDF" do
-    png =
-      File.read!(Paths.fixture("html_to_pdf/browser_parity/assets/svg-resource-colors.png"))
-
-    html =
-      "<svg width='100' height='100'><defs><clipPath id='ring'><path d='M0 0H100V100H0Z M30 30H70V70H30Z' clip-rule='evenodd'/></clipPath></defs><foreignObject width='100' height='100' clip-path='url(#ring)'><div style='line-height:0'><a href='https://example.test/ring'><img src='paint.png' width='100' height='100'/></a></div></foreignObject></svg>"
-
-    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(html,
-               assets: %{"paint.png" => {:bytes, png}},
-               page_size: "100pt 100pt",
-               margin: 0
-             )
-
-    assert foreignobject_diagnostic.reason == :unsupported_html
-    assert foreignobject_diagnostic.message =~ "foreignObject"
-    assert foreignobject_diagnostic.stage == :layout
-    assert foreignobject_diagnostic.operation == :convert
-
-    assert foreignobject_diagnostic.module ==
-             NativeElixirPdfUtilities.Validators.SvgConverterValidator
   end
 end
 

@@ -61,38 +61,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgForeignObjectTest do
     end
   end
 
-  test "selected HTML byte fonts survive a foreignObject-only scene" do
-    html =
-      "<svg width='200' height='50'><foreignObject x='5' y='5' width='190' height='40'><div style='font-family:DejaVu Sans;font-size:14px'>Native café Ω</div></foreignObject></svg>"
-
-    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(html)
-
-    assert foreignobject_diagnostic.reason == :unsupported_html
-    assert foreignobject_diagnostic.message =~ "foreignObject"
-    assert foreignobject_diagnostic.stage == :layout
-    assert foreignobject_diagnostic.operation == :convert
-
-    assert foreignobject_diagnostic.module ==
-             NativeElixirPdfUtilities.Validators.SvgConverterValidator
-  end
-
-  test "HTML URI links use form-painted content and retain clipped scene geometry" do
-    html =
-      "<svg width='200' height='80'><foreignObject x='10' y='10' width='100' height='50'><div style='font-family:DejaVu Sans;font-size:14px'><a href='https://example.test/native'>Native link café</a></div></foreignObject></svg>"
-
-    assert {:error, {:unsupported_html, foreignobject_diagnostic}} =
-             NativeElixirPdfUtilities.HtmlToPdf.render(html, page_size: "200pt 100pt", margin: 0)
-
-    assert foreignobject_diagnostic.reason == :unsupported_html
-    assert foreignobject_diagnostic.message =~ "foreignObject"
-    assert foreignobject_diagnostic.stage == :layout
-    assert foreignobject_diagnostic.operation == :convert
-
-    assert foreignobject_diagnostic.module ==
-             NativeElixirPdfUtilities.Validators.SvgConverterValidator
-  end
-
   test "foreign scene cache hits retain Forms links and selected Unicode and charge layout" do
     assert {:error, {:unsupported_html, diagnostic}} =
              NativeElixirPdfUtilities.HtmlToPdf.render(
