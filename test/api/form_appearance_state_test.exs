@@ -16,7 +16,9 @@ defmodule NativeElixirPdfUtilities.FormAppearanceStateTest do
     }
 
     alias NativeElixirPdfUtilities.Validators.ResourceBudgetValidator, as: Budget
-    assert {:ok, dom} = HtmlParser.parse_document_detailed("<input name=customer value=Ada>")
+
+    # An empty field exercises interactive readback without glyph work that depends on the font cache.
+    assert {:ok, dom} = HtmlParser.parse_document_detailed("<input name=customer>")
     assert {:ok, styled} = Style.compute_detailed(dom)
     assert {:ok, styled} = FontFallback.resolve(styled, :replace)
     assert {:ok, layout} = Layout.layout(styled)
@@ -40,7 +42,7 @@ defmodule NativeElixirPdfUtilities.FormAppearanceStateTest do
     assert Map.take(standalone, [:max_work, :max_entries]) ==
              Map.take(inside_worker, [:max_work, :max_entries])
 
-    assert {:ok, [%{value: "Ada"}]} = Forms.fields(pdf)
+    assert {:ok, [%{name: "customer", value: ""}]} = Forms.fields(pdf)
   end
 
   test "flatten preserves direct and referenced checkbox artwork" do
