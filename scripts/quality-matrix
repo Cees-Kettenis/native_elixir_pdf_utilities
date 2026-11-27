@@ -282,6 +282,7 @@ run_container() {
     --env "MIX_HOME=${cache_root}/mix" \
     --env "XDG_CACHE_HOME=${cache_root}/cache" \
     --env PERFORMANCE_BASELINE_REPORT \
+    --env SVG_DISCREPANCY_REPEATS \
     --env "BROWSER_PARITY_CACHE=${BROWSER_PARITY_CACHE-/workspace/${quality_root}/browser-reference-cache/elixir-${version}}" \
     --env "BROWSER_PARITY_TOOLCHAIN=${image_id}" \
     --env "PERFORMANCE_BASELINE_KEY=${PERFORMANCE_BASELINE_KEY:-elixir-${version}.json}" \

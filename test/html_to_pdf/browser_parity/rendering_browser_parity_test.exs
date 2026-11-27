@@ -9,8 +9,6 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
   alias NativeElixirPdfUtilities.TestSupport.PdfVisualCompare
 
-  @moduletag :browser_parity
-
   @fixtures_dir Paths.fixture("html_to_pdf/browser_parity")
 
   @furniture_image "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iNDAiIGZpbGw9IiMxZDRlZDgiLz48L3N2Zz4="
@@ -27,6 +25,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   </div>
   """
 
+  @tag :browser_parity
   test "browser comparisons disable JavaScript in each fresh browser context" do
     fixture = Path.expand("tmp/browser_parity/script_mode_reference.html")
     File.mkdir_p!(Path.dirname(fixture))
@@ -67,6 +66,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   end
 
   @tag :body_margin_applicability
+  @tag :browser_parity
   test "body hints follow original attribute order with inert trailing sides" do
     for name <- [
           "html_body_margin_primary",
@@ -89,6 +89,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   end
 
   @tag :document_fallback
+  @tag :browser_parity
   test "canvas fallback and light-tree styles match the original scripting-disabled source" do
     for fixture <- [
           "html_canvas_fallback.html",
@@ -108,6 +109,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   end
 
   @tag :document_language_context
+  @tag :browser_parity
   test "composed language uses original logical parents and shadow hosts" do
     stats =
       PdfVisualCompare.assert_browser_match!(
@@ -122,6 +124,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   end
 
   @tag :until_found_initial
+  @tag :browser_parity
   test "hidden-until-found uses its initial no-script print boxes" do
     for name <- [
           "html_until_found_initial",
@@ -160,6 +163,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   end
 
   @tag :noninput_attribute_applicability
+  @tag :browser_parity
   test "ordinary and non-input controls retain inactive authored boolean metadata" do
     fixture = Path.join(@fixtures_dir, "html_noninput_attribute_applicability.html")
 
@@ -191,6 +195,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   end
 
   @tag :input_attribute_applicability
+  @tag :browser_parity
   test "input state ignores inactive attributes while authored selectors still apply" do
     fixture = Path.join(@fixtures_dir, "html_input_attribute_applicability.html")
 
@@ -4869,6 +4874,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     end
   end
 
+  @tag :browser_parity
   test "signed format-4 deltas retain Chromium parity" do
     fixture_path = Paths.fixture("fonts/wrapped-glyph.html")
     font_path = Paths.fixture("fonts/wrapped-glyph.ttf")
@@ -4917,6 +4923,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     if name == "html_disabled_range_controls.html", do: @tag(:range_controls)
     if name != "html_disabled_range_controls.html", do: @tag(:composed_resource_context)
 
+    @tag :browser_parity
     test "matches Chromium for #{@shared_fixture}", %{browser_reference: reference} do
       {_name, options} = List.keyfind(@fixture_thresholds, @shared_fixture, 0)
 
@@ -4930,6 +4937,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
   @tag range_controls: true
   @tag reference_fixture: "html_disabled_range_controls.html"
   @tag :shared_form_references
+  @tag :browser_parity
   test "disabled interactive ranges retain initial Chromium artwork and scalar fields", %{
     browser_reference: reference
   } do
@@ -4964,6 +4972,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
 
   @tag reference_fixture: "html_number_height_controls.html"
   @tag :shared_form_references
+  @tag :browser_parity
   test "interactive initial number heights match Chromium", %{browser_reference: reference} do
     stats =
       PdfVisualCompare.assert_browser_match!(
@@ -5022,6 +5031,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     @tag composed_resource_context: true
     @tag reference_fixture: fixture
     @tag :shared_form_references
+    @tag :browser_parity
     test "interactive initial numbers match Chromium for #{@number_fixture}", %{
       browser_reference: reference
     } do
@@ -5162,6 +5172,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.RenderingBrowserParityTest do
     @tag composed_resource_context: true
     @tag reference_fixture: fixture
     @tag :shared_form_references
+    @tag :browser_parity
     test "interactive initial choices match Chromium for #{@select_fixture}", %{
       browser_reference: reference
     } do

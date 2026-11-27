@@ -67,23 +67,30 @@ jobs:
         shell: bash
         env:
           JOB_CONTAINER_ID: ${{ job.container.id }}
+          SVG_INPUTS: ${{ hashFiles('lib/**/*svg*.ex', 'test/support/**', 'test/fixtures/html_to_pdf/svg/**', 'test/html_to_pdf/browser_parity/svg_converter_discrepancy_browser_parity_test.exs', 'test/test_helper.exs', 'mix.exs', 'mix.lock', 'ci/runtime-matrix.json', 'scripts/quality-matrix', '.github/workflows/ci.yml') }}
+          BASE_SHA: ${{ github.event.before || github.event.pull_request.base.sha }}
         run: |
           image_id="$(curl --fail --silent --show-error --unix-socket /var/run/docker.sock "http://localhost/containers/${JOB_CONTAINER_ID}/json" |
             elixir -e 'image = IO.read(:stdio, :eof) |> :json.decode() |> Map.fetch!("Image"); true = Regex.match?(~r/^sha256:[a-f0-9]{64}$/, image); IO.write(image)')"
           echo "BROWSER_PARITY_TOOLCHAIN=${image_id}" >> "${GITHUB_ENV}"
           echo "BROWSER_PARITY_CACHE=${GITHUB_WORKSPACE}/.quality/browser-reference-cache/elixir-${{ matrix.elixir }}" >> "${GITHUB_ENV}"
-          echo "cache-key=${image_id#sha256:}" >> "${GITHUB_OUTPUT}"
+          image_key="browser-references-v2-${{ matrix.elixir }}-${image_id#sha256:}-"
+          echo "image-key=${image_key}" >> "${GITHUB_OUTPUT}"
+          echo "base-key=${image_key}${SVG_INPUTS}-${BASE_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "head-key=${image_key}${SVG_INPUTS}-${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
 
       # Entries verify source bytes, resources, fonts and rendering options again
       # after restoration. The test cache evicts entries above 64 MiB per runtime.
       - name: Restore browser references
+        id: browser-references
         if: matrix.suite == 'parity'
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .quality/browser-reference-cache/elixir-${{ matrix.elixir }}
-          key: browser-references-v2-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-${{ github.sha }}
+          key: ${{ steps.browser-toolchain.outputs.head-key }}
           restore-keys: |
-            browser-references-v2-${{ matrix.elixir }}-${{ steps.browser-toolchain.outputs.cache-key }}-
+            ${{ steps.browser-toolchain.outputs.base-key }}
+            ${{ steps.browser-toolchain.outputs.image-key }}
 
       - name: Restore Mix and Dialyzer caches
         uses: actions/cache@v5
@@ -153,7 +160,16 @@ jobs:
       - name: Run Chromium browser parity tests
         id: browser-parity
         if: matrix.suite == 'parity'
+        env:
+          SVG_DISCREPANCY_REPEATS: ${{ steps.browser-references.outputs.cache-matched-key == steps.browser-toolchain.outputs.base-key && 'representative' || 'all' }}
         run: env -u MIX_TEST_PARTITION mix test.browser_parity --warnings-as-errors
+
+      - name: Save browser references
+        if: matrix.suite == 'parity' && steps.browser-references.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .quality/browser-reference-cache/elixir-${{ matrix.elixir }}
+          key: ${{ steps.browser-toolchain.outputs.head-key }}
 
       - name: Check performance against recorded baselines
         if: matrix.suite == 'checks' && matrix.canonical

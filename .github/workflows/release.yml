@@ -56,6 +56,11 @@ jobs:
 
           echo "notes_file=${notes_file}" >> "${GITHUB_OUTPUT}"
 
+      - name: Verify SVG capture repeatability on every supported runtime
+        env:
+          SVG_DISCREPANCY_REPEATS: all
+        run: ./scripts/quality-matrix --check parity test/html_to_pdf/browser_parity/svg_converter_discrepancy_browser_parity_test.exs
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -47,7 +47,7 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterDiscrepancyBrowserParit
     @scale scale
     @changed_ratio changed_ratio
     @average_delta average_delta
-    test "classifies original #{@name} at density #{@scale} through standalone Resvg and repeated Chromium captures" do
+    test "classifies original #{@name} at density #{@scale} against standalone Resvg and Chromium" do
       NativeElixirPdfUtilities.Limits.install(
         Map.put(NativeElixirPdfUtilities.Limits.effective(), :svg_raster_scale, @scale)
       )
@@ -77,7 +77,12 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterDiscrepancyBrowserParit
       </style></head><body>#{source}</body></html>
       """)
 
-      for attempt <- 1..2 do
+      repeat? =
+        @name == "fractional_pattern" or System.get_env("SVG_DISCREPANCY_REPEATS") == "all"
+
+      captures = if repeat?, do: 2, else: 1
+
+      for attempt <- 1..captures do
         compare = fn ->
           PdfVisualCompare.assert_browser_match!(fixture,
             artifact_dir: Path.join(root, "capture-#{attempt}"),
@@ -95,8 +100,10 @@ defmodule NativeElixirPdfUtilities.HtmlToPdf.SvgConverterDiscrepancyBrowserParit
         end
       end
 
-      assert File.read!(Path.join(root, "capture-1/chromium-svg-0.png")) ==
-               File.read!(Path.join(root, "capture-2/chromium-svg-0.png"))
+      if repeat? do
+        assert File.read!(Path.join(root, "capture-1/chromium-svg-0.png")) ==
+                 File.read!(Path.join(root, "capture-2/chromium-svg-0.png"))
+      end
     end
   end
 end

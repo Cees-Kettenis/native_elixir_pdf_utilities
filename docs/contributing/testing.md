@@ -31,6 +31,19 @@ performance measurements or the full matrix. Results, warnings and source
 snapshots are under `.quality/checks/<check>/logs/<run>/`. Restart affected
 checks after changing their inputs.
 
+All nine SVG converter discrepancy cases compare against Chromium on every run.
+The fractional-pattern case also captures twice and checks identical PNG bytes.
+Before publishing, run the repeat check for every case on both supported runtimes:
+
+```bash
+SVG_DISCREPANCY_REPEATS=all ./scripts/quality-matrix --check parity test/html_to_pdf/browser_parity/svg_converter_discrepancy_browser_parity_test.exs
+```
+
+The tag workflow runs this check before creating the GitHub release. Push and
+pull-request CI repeat every case unless the browser-reference archive for the
+base commit matches the current runtime image and SVG, dependency, fixture and
+capture-harness inputs. A missing archive selects all repeats.
+
 For changes beyond documentation, run focused checks while working and the full
 matrix before submitting a PR. Documentation-only changes, including edits limited
 to `@doc` and `@spec`, are exempt from all tests and the quality matrix when no
